@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 #include "tt_metal/common/thread_pool.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -13,8 +13,8 @@ namespace {
 TEST(ThreadPoolTest, StressDeviceBound) {
     // Enqueue enough tasks to saturate the thread pool.
     uint64_t NUM_ITERS = 1 << 18;
-    uint32_t num_threads = tt::Cluster::instance().number_of_user_devices();
-    auto thread_pool = create_device_bound_thread_pool(tt::Cluster::instance().number_of_user_devices());
+    uint32_t num_threads = MetalContext::instance().get_cluster().number_of_user_devices();
+    auto thread_pool = create_device_bound_thread_pool(MetalContext::instance().get_cluster().number_of_user_devices());
     // Increment this once for each task in the thread pool.
     // Use this to verify that tasks actually executed.
     std::atomic<uint64_t> counter = 0;
@@ -42,8 +42,8 @@ TEST(ThreadPoolTest, StressDeviceBound) {
 
 // Test that an exception generated in the thread pool is propagated to the main thread
 TEST(ThreadPoolTest, Exception) {
-    uint32_t num_threads = tt::Cluster::instance().number_of_user_devices();
-    auto thread_pool = create_device_bound_thread_pool(tt::Cluster::instance().number_of_user_devices());
+    uint32_t num_threads = MetalContext::instance().get_cluster().number_of_user_devices();
+    auto thread_pool = create_device_bound_thread_pool(MetalContext::instance().get_cluster().number_of_user_devices());
     auto exception_fn = []() { TT_THROW("Failed"); };
     thread_pool->enqueue(exception_fn);
     EXPECT_THROW(thread_pool->wait(), std::exception);

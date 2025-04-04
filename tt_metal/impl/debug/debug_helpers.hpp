@@ -9,8 +9,8 @@
 #include <tt-metalium/dev_msgs.h>
 #include <tt-metalium/core_descriptor.hpp>
 #include "hostdevcommon/dprint_common.h"
-#include "impl/dispatch/dispatch_core_manager.hpp"
-#include "llrt/tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -30,16 +30,19 @@ using CoreDescriptorSet = std::set<CoreDescriptor, CoreDescriptorComparator>;
 static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
     CoreDescriptorSet all_cores;
     // The set of all printable cores is Tensix + Eth cores
-    CoreCoord logical_grid_size = tt::Cluster::instance().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    CoreCoord logical_grid_size =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t x = 0; x < logical_grid_size.x; x++) {
         for (uint32_t y = 0; y < logical_grid_size.y; y++) {
             all_cores.insert({{x, y}, CoreType::WORKER});
         }
     }
-    for (const auto& logical_core : tt::Cluster::instance().get_active_ethernet_cores(device_id)) {
+    for (const auto& logical_core :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
-    for (const auto& logical_core : tt::Cluster::instance().get_inactive_ethernet_cores(device_id)) {
+    for (const auto& logical_core :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
 
@@ -50,8 +53,9 @@ static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
 // GetAllCores().
 static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
     CoreDescriptorSet dispatch_cores;
-    unsigned num_cqs = tt::tt_metal::dispatch_core_manager::instance().get_num_hw_cqs();
-    const auto& dispatch_core_config = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_config();
+    unsigned num_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
+    const auto& dispatch_core_config =
+        tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     tt::log_warning("Dispatch Core Type = {}", dispatch_core_type);
     for (auto logical_core : tt::get_logical_dispatch_cores(device_id, num_cqs, dispatch_core_config)) {
@@ -62,13 +66,16 @@ static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
 
 // Helper function to convert virtual core -> HalProgrammableCoreType. TODO: Remove when we fix core types.
 static tt::tt_metal::HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core, chip_id_t device_id) {
-    if (!tt::Cluster::instance().is_ethernet_core(virtual_core, device_id)) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, device_id)) {
         return tt::tt_metal::HalProgrammableCoreType::TENSIX;
     }
 
     // Eth pcores have a different address, but only active ones.
-    CoreCoord logical_core = tt::Cluster::instance().get_logical_ethernet_core_from_virtual(device_id, virtual_core);
-    auto active_ethernet_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
+    CoreCoord logical_core =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+            device_id, virtual_core);
+    auto active_ethernet_cores =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
     if (active_ethernet_cores.find(logical_core) != active_ethernet_cores.end()) {
         return tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     }
@@ -88,7 +95,9 @@ inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_c
 
 inline int GetNumRiscs(const CoreDescriptor& core) {
     if (core.type == CoreType::ETH) {
-        return (tt::Cluster::instance().arch() == tt::ARCH::BLACKHOLE) ? DPRINT_NRISCVS_ETH + 1 : DPRINT_NRISCVS_ETH;
+        return (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE)
+                   ? DPRINT_NRISCVS_ETH + 1
+                   : DPRINT_NRISCVS_ETH;
     } else {
         return DPRINT_NRISCVS;
     }

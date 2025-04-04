@@ -74,7 +74,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
 }
 
 inline int get_tt_npu_clock(tt::tt_metal::IDevice* device) {
-    return tt::Cluster::instance().get_device_aiclk(device->id());
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
 }
 
 template <typename T>

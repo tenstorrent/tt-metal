@@ -33,7 +33,7 @@
 #include "tools/profiler/event_metadata.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/arch.h>
 #include <umd/device/types/xy_pair.h>
@@ -58,13 +58,16 @@ void DeviceProfiler::readRiscProfilerResults(
     HalProgrammableCoreType CoreType;
     int riscCount;
 
-    if (tt::Cluster::instance().is_worker_core(worker_core, device_id)) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(worker_core, device_id)) {
         CoreType = HalProgrammableCoreType::TENSIX;
         riscCount = 5;
     } else {
-        auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
-        bool is_active_eth_core = active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
-                                      device_id, worker_core)) != active_eth_cores.end();
+        auto active_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        bool is_active_eth_core =
+            active_eth_cores.find(
+                tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+                    device_id, worker_core)) != active_eth_cores.end();
 
         CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
                                       : tt_metal::HalProgrammableCoreType::IDLE_ETH;
@@ -73,7 +76,9 @@ void DeviceProfiler::readRiscProfilerResults(
     }
     profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
-    uint32_t coreFlatID = tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id).at(worker_core);
+    uint32_t coreFlatID =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
+            worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
@@ -622,7 +627,8 @@ CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, con
     bool coord_is_translated =
         c.x >= hal_ref.get_virtual_worker_start_x() && c.y >= hal_ref.get_virtual_worker_start_y();
     if (device_architecture == tt::ARCH::WORMHOLE_B0 && coord_is_translated) {
-        const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
+        const metal_SocDescriptor& soc_desc =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
         // disable linting here; slicing is __intended__
         // NOLINTBEGIN
         return soc_desc.translate_coord_to(c, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
@@ -714,7 +720,7 @@ void DeviceProfiler::dumpResults(
     ZoneScoped;
 
     auto device_id = device->id();
-    device_core_frequency = tt::Cluster::instance().get_device_aiclk(device_id);
+    device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
 
     generateZoneSourceLocationsHashes();
 

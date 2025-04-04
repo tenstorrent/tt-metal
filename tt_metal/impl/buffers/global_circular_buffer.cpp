@@ -28,7 +28,7 @@
 #include "mesh_device.hpp"
 #include "reflection.hpp"
 #include "span.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.h>
 
 namespace tt::tt_metal {
@@ -152,7 +152,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         } else {
             if (device->using_slow_dispatch()) {
                 detail::WriteToBuffer(*cb_config_buffer.get_buffer(), cb_config_host_buffer);
-                tt::Cluster::instance().l1_barrier(device->id());
+                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
             } else {
                 EnqueueWriteBuffer(
                     device->command_queue(), *cb_config_buffer.get_buffer(), cb_config_host_buffer.data(), false);

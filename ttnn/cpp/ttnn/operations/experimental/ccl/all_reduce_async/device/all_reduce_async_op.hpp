@@ -80,7 +80,22 @@ struct AllReduceAsync {
     const tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+namespace ccl {
+namespace all_reduce_async_detail {
+AllReduceAsync create_all_reduce_async_struct(
+    const Tensor& input_tensor,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::vector<IDevice*>& devices,
+    const ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphores,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    bool enable_persistent_fabric_mode);
+
+}  // namespace all_reduce_async_detail
+}  // namespace ccl
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
     size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(

@@ -2,25 +2,54 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <emmintrin.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
 #include <algorithm>
 #include <cstdint>
-#include <functional>
-#include <random>
+#include <exception>
+#include <iomanip>
+#include <map>
+#include <memory>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "core_coord.hpp"
-#include "logger.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/command_queue_common.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
-#include "rtoptions.hpp"
-#include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/event.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/context/metal_context.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
-#include "tt_cluster.hpp"
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;
@@ -198,13 +227,18 @@ int main(int argc, char** argv) {
         uint32_t mcast_noc_addr_end_x = 0;
         uint32_t mcast_noc_addr_end_y = 0;
 
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-        void* host_pcie_base = (void*)tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
-        uint64_t dev_pcie_base = tt::Cluster::instance().get_pcie_base_addr_from_device(device->id());
+        chip_id_t mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+        void* host_pcie_base =
+            (void*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
+        uint64_t dev_pcie_base =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_pcie_base_addr_from_device(device->id());
         uint64_t pcie_offset = 1024 * 1024 * 50;  // beyond where FD will write...maybe
 
-        const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+        const metal_SocDescriptor& soc_d =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
         switch (source_mem_g) {
             case 0:
             default: {
@@ -374,7 +408,8 @@ int main(int argc, char** argv) {
                 uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 while (!done) {
                     if (hammer_write_reg_g) {
-                        tt::Cluster::instance().write_reg(&addr, tt_cxy_pair(device->id(), w), l1_unreserved_base);
+                        tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
+                            &addr, tt_cxy_pair(device->id(), w), l1_unreserved_base);
                     }
                     if (hammer_pcie_g) {
                         if (page == page_count_g) {
@@ -410,10 +445,10 @@ int main(int argc, char** argv) {
                 DispatchMemMap::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
-                    tt::Cluster::instance().read_core(
+                    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                         vec, sizeof(uint32_t), tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base);
                 } else {
-                    tt::Cluster::instance().write_core(
+                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
                         tt_cxy_pair(device->id(), w),
@@ -425,10 +460,10 @@ int main(int argc, char** argv) {
             auto start = std::chrono::system_clock::now();
             for (int i = 0; i < iterations_g; i++) {
                 if (source_mem_g == 4) {
-                    tt::Cluster::instance().read_core(
+                    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                         vec, page_size_g, tt_cxy_pair(device->id(), w), dispatch_l1_unreserved_base);
                 } else {
-                    tt::Cluster::instance().write_core(
+                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                         vec.data(),
                         vec.size() * sizeof(uint32_t),
                         tt_cxy_pair(device->id(), w),

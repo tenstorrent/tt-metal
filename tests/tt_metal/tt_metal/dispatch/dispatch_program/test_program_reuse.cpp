@@ -18,11 +18,48 @@
 //      EnqueueProgram(p, device)
 // This makes it non-trivial to share the host-setup code across tests.
 
-#include <cmath>
-
-#include "command_queue_fixture.hpp"
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/allocator.hpp>
-#include "tt_align.hpp"
+#include <cmath>
+#include <cstddef>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include "command_queue_fixture.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/semaphore.hpp>
+#include "span.hpp"
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
 struct CBConfig {
@@ -193,7 +230,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
         log_info(LogTest, "Running test on {}", device->id());
         EnqueueProgram(device->command_queue(), *program, false);
         Finish(device->command_queue());
-        tt::Cluster::instance().l1_barrier(device->id());
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
         for (const CoreCoord& core_coord : cr0) {
             const auto& virtual_core_coord = device->worker_core_from_logical_core(core_coord);

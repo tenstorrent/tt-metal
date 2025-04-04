@@ -176,6 +176,9 @@ on:
           - normalization.softmax.softmax
           - normalization.softmax.softmax_sharded
           - normalization.batch_norm.batch_norm
+          - normalization.generality.layernorm
+          - normalization.generality.softmax
+          - normalization.generality.softmax_fused
           - eltwise.unary.identity.identity
           - eltwise.unary.identity.identity_sharded
           - eltwise.unary.neg.neg

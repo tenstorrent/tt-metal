@@ -16,6 +16,8 @@
 #include "ttnn/config.hpp"
 #include "ttnn/distributed/types.hpp"
 
+#include <tracy/Tracy.hpp>
+
 namespace tt {
 
 namespace tt_metal {

@@ -3,20 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
-#include "device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/core_descriptor.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 // FIXME: ARCH_NAME specific
 #include "dev_mem_map.h"
+#include <tt-metalium/device.hpp>
+#include "device_fixture.hpp"
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include "impl/context/metal_context.hpp"
 
 namespace unit_tests::test_l1_banking_allocator {
 
 uint64_t get_alloc_limit(const tt::tt_metal::IDevice* device) {
-    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
+    const metal_SocDescriptor& soc_desc =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     auto dispatch_core_config = tt::tt_metal::get_dispatch_core_config();
     auto storage_core_bank_size =

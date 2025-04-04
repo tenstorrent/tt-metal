@@ -48,8 +48,6 @@ struct ProgramCommandSequence;
 }  // namespace tt_metal
 }  // namespace tt
 
-#include "vector_aligned.hpp"
-
 namespace tt::tt_metal::distributed {
 
 class MeshEvent;

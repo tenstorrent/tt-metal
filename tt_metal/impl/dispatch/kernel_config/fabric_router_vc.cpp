@@ -10,7 +10,7 @@
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/kernel_config/prefetch.hpp"
 #include "fabric_router_vc.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -21,8 +21,11 @@ void FabricRouterVC::GenerateDependentConfigs() {
     TT_ASSERT(
         upstream_kernels_.size() == downstream_kernels_.size(),
         "Fabric Router VC requires upstream.size() == downstream.size()");
-    const auto& control_plane = tt::Cluster::instance().get_control_plane();
-    TT_FATAL(control_plane, "Control plane is nullptr. Is fabric initialized yet?");
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = cluster.get_control_plane();
+    TT_FATAL(
+        cluster.get_fabric_config() != FabricConfig::DISABLED && control_plane,
+        "Control plane is nullptr. Is fabric initialized yet?");
 
     // Zip upstream and downstream kernels together
     for (int i = 0; i < upstream_kernels_.size(); ++i) {
@@ -37,13 +40,27 @@ void FabricRouterVC::GenerateDependentConfigs() {
         const auto& [dst_mesh_id, dst_chip_id] =
             control_plane->get_mesh_chip_id_from_physical_chip_id(ds_kernel->GetDeviceId());
         const auto& routers = control_plane->get_routers_to_chip(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id);
+        TT_ASSERT(
+            !routers.empty(),
+            "No routers for (mesh {}, chip {}) to (mesh {}, chip{})",
+            src_mesh_id,
+            src_chip_id,
+            dst_mesh_id,
+            dst_chip_id);
         const auto& [routing_plane, fabric_router] = routers.front();
 
-        const auto& routers_reversed =
+        const auto& routers_rev =
             control_plane->get_routers_to_chip(dst_mesh_id, dst_chip_id, src_mesh_id, src_chip_id);
-        const auto& [routing_plane_rev, fabric_router_rev] = routers_reversed.front();
-        bool valid_path{false};
+        TT_ASSERT(
+            !routers_rev.empty(),
+            "No routers for return path (mesh {}, chip {}) to (mesh {}, chip{})",
+            dst_mesh_id,
+            dst_chip_id,
+            src_mesh_id,
+            src_chip_id);
+        const auto& [routing_plane_rev, fabric_router_rev] = routers_rev.front();
 
+        bool valid_path{false};
         if (auto prefetch_us = dynamic_cast<PrefetchKernel*>(us_kernel);
             auto prefetch_ds = dynamic_cast<PrefetchKernel*>(ds_kernel)) {
             valid_path = true;
@@ -54,12 +71,11 @@ void FabricRouterVC::GenerateDependentConfigs() {
             valid_path = true;
         }
 
-        TT_FATAL(valid_path, "FabricRouterVC is not implemented for this path\n");
+        TT_FATAL(valid_path, "FabricRouterVC is not implemented for this path");
 
         // Downstream path. src -> dst
         us_kernel->UpdateArgsForFabric(fabric_router, src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id);
-        // Upstream path. dst -> src
-        ds_kernel->UpdateArgsForFabric(fabric_router_rev, dst_mesh_id, dst_chip_id, src_mesh_id, src_chip_id);
+        ds_kernel->UpdateArgsForFabric(fabric_router_rev, src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id);
     }
 }
 

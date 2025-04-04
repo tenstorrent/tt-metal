@@ -2,22 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <variant>
 #include <vector>
 
-#include "multi_command_queue_fixture.hpp"
-#include "random_program_fixture.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include "command_queue_fixture.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "dispatch_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/logger.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include "multi_command_queue_fixture.hpp"
+#include "random_program_fixture.hpp"
+#include <tt-metalium/trace_buffer.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/common/scoped_timer.hpp"
-#include <tt-metalium/host_api.hpp>
+#include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_metal {
 
