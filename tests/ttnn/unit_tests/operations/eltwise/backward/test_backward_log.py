@@ -22,7 +22,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
 )
 def test_bw_log_0(input_shapes, device):
     in_data, input_tensor = data_gen_with_val(input_shapes, device, True, val=0)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device, seed=1)
     tt_output_tensor_on_device = ttnn.log_bw(grad_tensor, input_tensor)
 
     golden_function = ttnn.get_golden_function(ttnn.log_bw)
@@ -41,8 +41,8 @@ def test_bw_log_0(input_shapes, device):
     ),
 )
 def test_bw_log(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=1)
     tt_output_tensor_on_device = ttnn.log_bw(grad_tensor, input_tensor)
 
     golden_function = ttnn.get_golden_function(ttnn.log_bw)

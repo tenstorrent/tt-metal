@@ -27,8 +27,8 @@ from models.utility_functions import skip_for_grayskull
     ),
 )
 def test_bw_unary_remainder(input_shapes, scalar, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.remainder_bw(grad_tensor, input_tensor, scalar)
 
@@ -48,9 +48,9 @@ def test_bw_unary_remainder(input_shapes, scalar, device):
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for binary remainder backward")
 def test_bw_binary_remainder(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 30, device, True)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -50, 50, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 30, device, True, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=1)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -50, 50, device, True, seed=2)
 
     tt_output_tensor_on_device = ttnn.remainder_bw(grad_tensor, input_tensor, other_tensor)
 

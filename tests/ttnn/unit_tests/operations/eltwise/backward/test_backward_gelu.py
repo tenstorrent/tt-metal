@@ -24,8 +24,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
     ),
 )
 def test_bw_gelu(input_shapes, approximate, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate)
 
@@ -45,8 +45,8 @@ def test_bw_gelu(input_shapes, approximate, device):
     ),
 )
 def test_bw_gelu_default(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.gelu_bw(grad_tensor, input_tensor)
 
@@ -73,8 +73,8 @@ def test_bw_gelu_default(input_shapes, device):
     ),
 )
 def test_bw_gelu_opt_output(input_shapes, approximate, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=1)
     input_grad = torch.zeros(input_shapes, dtype=torch.bfloat16)
     input_grad = ttnn.from_torch(
         input_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -103,8 +103,8 @@ def test_bw_gelu_opt_output(input_shapes, approximate, device):
     ),
 )
 def test_bw_gelu_default_opt_output(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=1)
     input_grad = torch.zeros(input_shapes, dtype=torch.bfloat16)
     input_grad = ttnn.from_torch(
         input_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG

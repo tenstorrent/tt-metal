@@ -21,8 +21,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
 #   self: zeros_like(grad)
 #   result: at::fill(self_t, 0)
 def test_bw_fill_zero(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True, seed=1)
     tt_output_tensor_on_device = ttnn.fill_zero_bw(grad_tensor, input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.fill_zero_bw)
     golden_tensor = golden_function(grad_data, in_data)

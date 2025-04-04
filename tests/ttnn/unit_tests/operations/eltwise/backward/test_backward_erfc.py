@@ -17,8 +17,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ),
 )
 def test_bw_erfc(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 110, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 199, device, required_grad=True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 110, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 199, device, required_grad=True, seed=1)
     pyt_y = torch.erfc(in_data)
 
     tt_output_tensor_on_device = ttnn.erfc_bw(grad_tensor, input_tensor)
