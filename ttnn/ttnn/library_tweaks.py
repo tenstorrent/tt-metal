@@ -7,6 +7,8 @@ from pathlib import Path
 from loguru import logger
 from importlib.metadata import version
 
+from .download_sfpi import download_sfpi
+
 
 def write_metal_version_to_file(version_file, metal_version):
     assert (
@@ -32,13 +34,13 @@ def prepare_dir_as_metal_home(ttnn_package_path, metal_home):
     version_file = metal_home / ".METAL_VERSION"
     current_version = version("ttnn").strip()
 
-    runtime_src = ttnn_package_path.parent / "runtime"
+    runtime_src = ttnn_package_path / "runtime" / "hw"
     assert (
         runtime_src.is_dir()
     ), f"{runtime_src} seems to not exist as a directory. This should have been packaged during wheel creation"
-    runtime_dest = metal_home / "runtime"
+    runtime_dest = metal_home / "runtime" / "hw"
 
-    tt_metal_src = ttnn_package_path.parent / "tt_metal"
+    tt_metal_src = ttnn_package_path / "tt_metal"
     tt_metal_dest = metal_home / "tt_metal"
 
     ttnn_src = ttnn_package_path
@@ -63,10 +65,19 @@ def prepare_dir_as_metal_home(ttnn_package_path, metal_home):
 
     write_metal_version_to_file(version_file, current_version)
 
-    # TODO: Assert these are ok, and that if the symlinks already exist then don't do anything
-    runtime_dest.symlink_to(runtime_src)
-    tt_metal_dest.symlink_to(tt_metal_src)
-    ttnn_dest.symlink_to(ttnn_src)
+    if not runtime_dest.exists():
+        runtime_dest.parent.mkdir(parents=True, exist_ok=True)  # mkdir runtime
+        runtime_dest.symlink_to(runtime_src)
+
+    if not tt_metal_dest.exists():
+        tt_metal_dest.symlink_to(tt_metal_src)
+
+    if not ttnn_dest.exists():
+        ttnn_dest.symlink_to(ttnn_src)
+
+    sfpi_json_path = ttnn_package_path / "build" / "lib" / "sfpi-version.json"
+    runtime_sfpi_dest = metal_home / "runtime"
+    download_sfpi(sfpi_json_path, runtime_sfpi_dest)
 
 
 def _is_non_existent_or_empty_env_var(env_var_name):
