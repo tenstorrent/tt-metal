@@ -176,6 +176,12 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     TT_FATAL(grid_size.height() > 0 && grid_size.width() > 0, "Invalid grid size");
 
+    auto compute_grid_size = device->compute_with_storage_grid_size();
+    if (compute_grid_size.height() < grid_size.height || compute_grid_size.width() < grid_size.width) {
+        GTEST_SKIP() << "Requested grid size of " << grid_size << " exceeds device's available compute grid of size "
+                     << compute_grid_size;
+    })
+
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     std::string artifacts_dir = std::string(tt_metal_home) + "/generated";
     std::string file_name =
@@ -360,7 +366,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     double tflops = 2.0 * m * k * n / 1e12 / inference_time_avg_s;
     int cycle_per_tile = get_cycles_per_tile_for_fidelity(math_fidelity);
     int num_cores_user_grid = grid_size.height() * grid_size.width();
-    auto compute_grid_size = device->compute_with_storage_grid_size();
+
     int num_cores_full_grid = compute_grid_size.x * compute_grid_size.y;
     const double dim_per_tile = (double)m * (double)k * (double)n / tile_h / tile_w;
     double ideal_cycle_full_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_full_grid;

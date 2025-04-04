@@ -171,6 +171,11 @@ def test_matmul_2d_host_perf(
     ARTIFACTS_DIR = TT_METAL_HOME / "generated"
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_report.csv"
 
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.y < grid_size[0] or compute_grid_size.x < grid_size[1]:
+        pytest.skip(
+            f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
+        )
     LoFi_cycle = 16
     HiFi2_cycle = LoFi_cycle * 2
     HiFi3_cycle = LoFi_cycle * 3
@@ -450,6 +455,11 @@ def test_matmul_2d_host_perf_out_of_box(
     ARTIFACTS_DIR = TT_METAL_HOME / "generated"
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_out_of_box_report.csv"
 
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.y < grid_size[0] or compute_grid_size.x < grid_size[1]:
+        pytest.skip(
+            f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
+        )
     LoFi_cycle = 16
     HiFi2_cycle = LoFi_cycle * 2
     HiFi3_cycle = LoFi_cycle * 3
@@ -549,7 +559,6 @@ def test_matmul_2d_host_perf_out_of_box(
                 elif math_fidelity == ttnn.MathFidelity.HiFi4:
                     cycle_per_tile = HiFi4_cycle
                 num_cores_user_grid = grid_size[0] * grid_size[1]
-                compute_grid_size = device.compute_with_storage_grid_size()
                 num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
                 ideal_cycle_full_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_full_grid
                 ideal_cycle_user_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_user_grid
