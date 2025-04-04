@@ -42,12 +42,12 @@ class Down2:
         )
         self.res2_conv1 = Conv(
             device,
-            conv_args.res[0],
+            conv_args.res["0"],
             parameters.res["1"]["0"],
         )
         self.res2_conv2 = Conv(
             device,
-            conv_args.res[3],
+            conv_args.res["3"],
             parameters.res["1"]["3"],
         )
 

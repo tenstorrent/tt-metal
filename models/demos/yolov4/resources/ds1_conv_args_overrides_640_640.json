@@ -1,0 +1,74 @@
+{
+    "c1": {
+        "act_block_h": 256,
+        "enable_split_reader": false,
+        "enable_act_double_buffer": false,
+        "deallocate_activation": true,
+        "reshard_if_not_optimal": false,
+        "shard_layout": null,
+        "transpose_shards": true
+    },
+    "c2": {
+        "act_block_h": null,
+        "enable_split_reader": false,
+        "enable_act_double_buffer": false,
+        "deallocate_activation": true,
+        "reshard_if_not_optimal": false,
+        "shard_layout": null,
+        "transpose_shards": false
+    },
+    "c3": {
+        "act_block_h": null,
+        "enable_split_reader": true,
+        "enable_act_double_buffer": true,
+        "deallocate_activation": false,
+        "reshard_if_not_optimal": false,
+        "shard_layout": "HEIGHT_SHARDED",
+        "transpose_shards": false
+    },
+    "c4": {
+        "act_block_h": null,
+        "enable_split_reader": true,
+        "enable_act_double_buffer": true,
+        "deallocate_activation": true,
+        "reshard_if_not_optimal": false,
+        "shard_layout": "HEIGHT_SHARDED",
+        "transpose_shards": false
+    },
+    "c5": {
+        "act_block_h": null,
+        "enable_split_reader": true,
+        "enable_act_double_buffer": true,
+        "deallocate_activation": false,
+        "reshard_if_not_optimal": false,
+        "shard_layout": "HEIGHT_SHARDED",
+        "transpose_shards": false
+    },
+    "c6": {
+        "act_block_h": 256,
+        "enable_split_reader": false,
+        "enable_act_double_buffer": false,
+        "deallocate_activation": true,
+        "reshard_if_not_optimal": false,
+        "shard_layout": "HEIGHT_SHARDED",
+        "transpose_shards": false
+    },
+    "c7": {
+        "act_block_h": null,
+        "enable_split_reader": true,
+        "enable_act_double_buffer": true,
+        "deallocate_activation": true,
+        "reshard_if_not_optimal": false,
+        "shard_layout": "HEIGHT_SHARDED",
+        "transpose_shards": false
+    },
+    "c8": {
+        "act_block_h": null,
+        "enable_split_reader": true,
+        "enable_act_double_buffer": true,
+        "deallocate_activation": true,
+        "reshard_if_not_optimal": false,
+        "shard_layout": "HEIGHT_SHARDED",
+        "transpose_shards": false
+    }
+}
