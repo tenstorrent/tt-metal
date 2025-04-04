@@ -863,12 +863,12 @@ size_t ControlPlane::get_num_active_fabric_routers(mesh_id_t mesh_id, chip_id_t 
     return num_routers;
 }
 
-std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction(
+std::set<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction(
     mesh_id_t mesh_id, chip_id_t chip_id, RoutingDirection routing_direction) const {
     for (const auto& [direction, eth_chans] :
          this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id]) {
         if (routing_direction == direction) {
-            return eth_chans;
+            return std::set<chan_id_t>(eth_chans.begin(), eth_chans.end());
         }
     }
     return {};

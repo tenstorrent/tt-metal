@@ -347,6 +347,8 @@ void DeviceProfiler::logPacketData(
         if (!ret.second) {
             return;
         }
+        // Reset the command subtype, in case it isn't set during the command.
+        this->current_dispatch_meta_data.cmd_subtype = "";
     }
 
     if (packet_type == kernel_profiler::TS_DATA) {
@@ -363,7 +365,21 @@ void DeviceProfiler::logPacketData(
                 } else if (zone_name.find("runtime_host_id_dispatch") != std::string::npos) {
                     this->current_dispatch_meta_data.worker_runtime_id = (uint32_t)data;
                     metaData["workers_runtime_id"] = this->current_dispatch_meta_data.worker_runtime_id;
+                } else if (zone_name.find("packed_data_dispatch") != std::string::npos) {
+                    this->current_dispatch_meta_data.cmd_subtype = fmt::format(
+                        "{}{}",
+                        data & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST ? "MCAST," : "",
+                        magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteType>(
+                            (data >> 1) << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT)));
+                    metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
+                } else if (zone_name.find("packed_large_data_dispatch") != std::string::npos) {
+                    this->current_dispatch_meta_data.cmd_subtype =
+                        fmt::format("{}", magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteLargeType>(data)));
+                    metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
                 }
+                std::string cmd_name = this->current_dispatch_meta_data.cmd_subtype != ""
+                                           ? this->current_dispatch_meta_data.cmd_subtype
+                                           : this->current_dispatch_meta_data.cmd_type;
                 tracy::TTDeviceEvent event = tracy::TTDeviceEvent(
                     this->current_dispatch_meta_data.worker_runtime_id,
                     this->current_zone_it->chip_id,
@@ -374,10 +390,7 @@ void DeviceProfiler::logPacketData(
                     this->current_zone_it->timestamp,
                     this->current_zone_it->line,
                     this->current_zone_it->file,
-                    fmt::format(
-                        "{}:{}",
-                        this->current_dispatch_meta_data.worker_runtime_id,
-                        this->current_dispatch_meta_data.cmd_type),
+                    fmt::format("{}:{}", this->current_dispatch_meta_data.worker_runtime_id, cmd_name),
                     this->current_zone_it->zone_phase);
                 device_events.erase(this->current_zone_it);
                 auto ret = device_events.insert(event);

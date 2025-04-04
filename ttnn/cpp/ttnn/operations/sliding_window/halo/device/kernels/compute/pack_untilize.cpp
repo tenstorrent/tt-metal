@@ -22,7 +22,7 @@ void MAIN {
 
     constexpr bool use_pack_untilize = tiles_per_row <= MAX_PACK_UNTILIZE_WIDTH;
 
-    if (use_pack_untilize) {
+    if constexpr (use_pack_untilize) {
         pack_untilize_init<tiles_per_row>(src_cb_id, out_cb_id0);
     } else {
         untilize_init(src_cb_id, out_cb_id0);
@@ -43,7 +43,7 @@ void MAIN {
         cb_pop_front(src_cb_id, tiles_per_block);
     }
 
-    if (use_pack_untilize) {
+    if constexpr (use_pack_untilize) {
         pack_untilize_uninit(out_cb_id0);
     }
 }
