@@ -8,10 +8,13 @@
 // issues
 #include <stdio.h>
 #include <cstring>
-#define MASK_64      0xFFFFFFFFFFFFFFC0
-#define OFFSET_64    0x000000000000003F
-#define MASK_16      0xFFFFFFFFFFFFFFF0
-#define OFFSET_16    0x000000000000000F
+
+constexpr uint64_t ALIGN_REQ_64 = 64;
+constexpr uint64_t MASK_64 = 0xFFFFFFFFFFFFFFC0;
+constexpr uint64_t OFFSET_64 = 0x000000000000003F;
+constexpr uint64_t ALIGN_REQ_16 = 16;
+constexpr uint64_t MASK_16 = 0xFFFFFFFFFFFFFFF0;
+constexpr uint64_t OFFSET_16 = 0x000000000000000F;
 
 namespace tt::data_movement::common {
 
