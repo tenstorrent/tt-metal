@@ -145,7 +145,6 @@ Result conv2d_DRAM(
         dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? input_height : input_width;
     uint32_t output_sliced_dim =
         dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
-    log_info("Slice Config : {}", dram_slice_config);
     TT_FATAL(dram_slice_config.num_slices > 1, " Number of slices should be greater than 1 for Conv2D DRAM Slicing");
     TT_FATAL(
         dram_slice_config.num_slices < output_sliced_dim,
@@ -253,21 +252,6 @@ Result conv2d_DRAM(
         uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
         uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
 
-        log_info(
-            tt::LogOp,
-            "Output slice: {} {} {} {}",
-            output_slice_height_start,
-            output_slice_height_end,
-            output_slice_width_start,
-            output_slice_width_end);
-        log_info(
-            tt::LogOp,
-            "Input slice: {} {} {} {}",
-            input_slice_height_start,
-            input_slice_height_end,
-            input_slice_width_start,
-            input_slice_width_end);
-        log_info(tt::LogOp, "Padding : {} {} {} {}", pad_top, pad_bottom, pad_left, pad_right);
         if (!conv_config.shard_layout.has_value()) {
             conv_config = determine_conv_config_for_auto_shard(
                 conv_config,
@@ -305,7 +289,7 @@ Result conv2d_DRAM(
                 1,
             }  // Step,
         );
-        log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
+        log_info(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
         auto conv_config_l1 = conv_config;
         conv_config_l1.reshard_if_not_optimal = true;
         conv_config_l1.output_layout = Layout::TILE;
@@ -339,7 +323,7 @@ Result conv2d_DRAM(
         sliced_output_tensor =
             ttnn::to_layout(sliced_output_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
         sliced_output_tensor = ttnn::reshape(
-            sliced_output_tensor, ttnn::Shape({1, output_slice_height, output_slice_width, out_channels}));
+            sliced_output_tensor, ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}));
         ttnn::experimental::slice_write(
             queue_id,
             sliced_output_tensor,

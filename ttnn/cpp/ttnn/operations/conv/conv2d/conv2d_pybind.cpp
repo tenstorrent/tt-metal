@@ -333,8 +333,6 @@ void py_bind_conv2d(py::module& module) {
         py::arg("num_slices"));
     py_conv_slice_config.def_readwrite("slice_type", &Conv2dSliceConfig::slice_type);
     py_conv_slice_config.def_readwrite("num_slices", &Conv2dSliceConfig::num_slices);
-    // py_conv_slice_config.def_readonly_static("SliceHeight",Conv2dSliceConfig::SliceType::HEIGHT);
-    // py_conv_slice_config.def_readonly_static("SliceWidth",Conv2dSliceConfig::SliceType::WIDTH);
     py::enum_<Conv2dSliceConfig::SliceType>(py_conv_slice_config, "SliceTypeEnum")
         .value("SliceHeight", Conv2dSliceConfig::SliceType::HEIGHT)
         .value("SliceWidth", Conv2dSliceConfig::SliceType::WIDTH);
