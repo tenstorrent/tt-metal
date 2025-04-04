@@ -109,7 +109,8 @@ ParallelConfig determine_parallel_config(
     // Currently, convolution requires multiples of the tile size for both shard height and width,
     // while pooling can accept any height and either a tile multiple or half a tile for width.
     // This approach needs to be modified when other shard dimensions are supported.
-    uint32_t effective_tile_height = is_shard_height_tile_multiple ? tt::constants::TILE_HEIGHT : 1;
+    // uint32_t effective_tile_height = is_shard_height_tile_multiple ? tt::constants::TILE_HEIGHT : 1;
+    uint32_t effective_tile_height = 1;
     uint32_t effective_tile_width = tt::constants::TILE_WIDTH;
     uint32_t out_nhw_ntiles = tt::div_up(batch_size * output_height * output_width, effective_tile_height);
     uint32_t input_channles_ntiles = tt::div_up(input_channels, effective_tile_width);
@@ -290,6 +291,7 @@ OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_o
         .num_cores_c = num_cores_c,
         .per_core_out_matrix_height_ntile = div_up(shard_shape[0], tt::constants::TILE_HEIGHT),
         .per_core_out_matrix_width_ntile = div_up(shard_shape[1], tt::constants::TILE_WIDTH),
+        .per_core_out_matrix_height = shard_shape[0],
     };
 }
 
@@ -548,6 +550,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
         if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED && input_tensor_.layout() == Layout::ROW_MAJOR) {
             round_up_size = 1;
         }
+        round_up_size = 1;
         uint32_t input_tensor_height_snapped_to_tile = tt::round_up(tensor_height, input_num_cores_nhw * round_up_size);
         TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
         uint32_t input_tensor_width_snapped_to_channels_alignment =

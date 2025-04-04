@@ -163,6 +163,7 @@ uint32_t SlidingWindowConfig::get_output_shard_y(bool snap_to_tile) const {
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded =
         tt::round_up(output_nhw, num_cores_nhw * (snap_to_tile ? tt::constants::TILE_HEIGHT : 1));
+    std::cout << "snap_to_tile: " << snap_to_tile << std::endl;
     log_debug(
         tt::LogOp,
         "output_nhw: {} output_nhw_padded: {} num_cores_nhw: {}",

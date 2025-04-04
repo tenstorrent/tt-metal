@@ -155,6 +155,7 @@ struct OptimizedConvParallelizationConfig {
     uint32_t num_cores_c = 1;
     uint32_t per_core_out_matrix_height_ntile = 1;
     uint32_t per_core_out_matrix_width_ntile = 1;
+    uint32_t per_core_out_matrix_height = 1;
 
     CoreCoord get_grid_size() const { return this->grid_size; }
 };

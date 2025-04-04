@@ -485,7 +485,7 @@ Result conv2d_L1(
             .dilation_hw = {dilation[0], dilation[1]},
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid,
-            .snap_to_tile = true,
+            .snap_to_tile = false,
         };
 
         bool bypass_halo =
@@ -510,7 +510,7 @@ Result conv2d_L1(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 0,
                 input_tensor_post_tm.memory_config(),
-                true,
+                false,
                 conv_config.in_place);
 
             if (conv_config.deallocate_activation) {

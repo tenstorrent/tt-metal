@@ -169,6 +169,9 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandl
         num_cb0_tilized_tiles,
         tilized_act_tile_size);
 
+    std::cout << "untilize_out: " << untilize_out << std::endl;
+    std::cout << "interm0_df: " << static_cast<int>(interm0_df) << std::endl;
+    std::cout << "out_df: " << static_cast<int>(out_df) << std::endl;
     if (untilize_out) {
         auto output_shard_shape = output.shard_spec().value().shape;
         std::tie(cb_indices.matmul_partials_cb, cb_matmul_partials) = tt::tt_metal::create_cb(
@@ -184,8 +187,12 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandl
             output_shard_shape[1] * output_shard_shape[0] < num_writer_output_tiles * TILE_HW;
 
         auto shard_shape = output.shard_spec().value().shape;
-        uint32_t aligned_output_stick_nbytes = out_tile_size;
-        uint32_t aligned_output_num_pages = num_writer_output_tiles;
+        // uint32_t aligned_output_stick_nbytes = out_tile_size;
+        // uint32_t aligned_output_num_pages = num_writer_output_tiles;
+        uint32_t aligned_output_stick_nbytes = shard_shape[1] * output.element_size();
+        uint32_t aligned_output_num_pages = shard_shape[0];
+        std::cout << "aligned_output_stick_nbytes: " << aligned_output_stick_nbytes
+                  << ", aligned_output_num_pages: " << aligned_output_num_pages << std::endl;
         std::tie(cb_indices.out0_cb, cb_output) = tt::tt_metal::create_cb(
             cb_indices.get_next_cb_index(),
             program,
@@ -199,12 +206,17 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandl
         if (interm0_df == out_df) {
             cb_indices.matmul_partials_cb = cb_indices.get_next_cb_index();
             cb_indices.out0_cb = cb_indices.get_next_cb_index();
+            auto shard_shape = output.shard_spec().value().shape;
+            uint32_t aligned_output_stick_nbytes = shard_shape[1] * output.element_size();
+            uint32_t aligned_output_num_pages = shard_shape[0];
+            std::cout << "aligned_output_stick_nbytes: " << aligned_output_stick_nbytes
+                      << ", aligned_output_num_pages: " << aligned_output_num_pages << std::endl;
             auto cb_tuple = tt::tt_metal::create_cb(
                 {cb_indices.matmul_partials_cb, cb_indices.out0_cb},
                 program,
                 core,
-                out_tile_size,
-                num_output_tiles,
+                aligned_output_stick_nbytes,
+                aligned_output_num_pages,
                 out_df,
                 output.is_sharded() ? output.buffer() : nullptr);
 
@@ -918,7 +930,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             num_cores_y,
             num_weight_slices_width);
         uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
-        total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
+        // total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
+        total_num_cores_per_weight_slice = act_matrix_height / parallelization_config.per_core_out_matrix_height;
         TT_FATAL(
             total_num_cores * per_core_out_matrix_height_ntiles >= act_matrix_height_ntiles,
             "total_num_cores {} * per_core_out_matrix_height_ntiles {} should be greater than or equal to "
@@ -1107,7 +1120,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t output_block_num_tiles =
         enable_subblock_padding ? (act_block_h_ntiles_padded * weight_block_w_ntiles) : writer_output_block_num_tiles;
 
-    uint32_t aligned_output_num_pages = writer_output_block_num_tiles;
+    // uint32_t aligned_output_num_pages = writer_output_block_num_tiles;
+    uint32_t aligned_output_num_pages = output.shard_spec().value().shape[0];
 
     std::vector<uint32_t> reader_rt_args;
     std::vector<uint32_t> reader_compile_time_args;
@@ -1461,7 +1475,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
         cb_indices.out0_cb,
         cb_indices.temp_sum_cb,
-        partials_cb_uses_output};
+        partials_cb_uses_output,
+        aligned_output_num_pages};
 
     auto writer_mcast_noc = tt::tt_metal::NOC::NOC_0;
     auto reader_noc =

@@ -40,14 +40,18 @@ inline void reblock_and_untilize(
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h,
+    uint32_t output_rows_h,
     uint32_t interm_cb_id,
     uint32_t out_cb_id) {
+    uint32_t TILE_SIZE = 32;
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
     uint32_t within_block_index = 0;
     for (uint32_t h = 0; h < out_subblock_h; h++) {
         uint32_t block_offset = 0;
-        cb_reserve_back(out_cb_id, out_block_w);
+        uint32_t out_sub_block_rows_h = output_rows_h <= TILE_SIZE ? output_rows_h : TILE_SIZE;
+        uint32_t rows_to_copy = out_sub_block_rows_h;
+        cb_reserve_back(out_cb_id, out_sub_block_rows_h);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < out_subblock_w; w++) {
@@ -56,11 +60,12 @@ inline void reblock_and_untilize(
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_untilize_dst<out_subblock_w, out_block_w>(out_cb_id, 1, n);
+            pack_untilize_dst<out_subblock_w, out_block_w>(out_cb_id, 1, n, rows_to_copy);
             tile_regs_release();
             block_offset += out_subblock_num_tiles;
         }
-        cb_push_back(out_cb_id, out_block_w);
+        cb_push_back(out_cb_id, out_sub_block_rows_h);
+        output_rows_h -= out_sub_block_rows_h;
         within_block_index += out_subblock_w;
     }
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
@@ -96,9 +101,10 @@ void MAIN {
     constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(23);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
     constexpr bool partials_cb_uses_output = get_compile_time_arg_val(26);
+    uint32_t output_rows_h = get_compile_time_arg_val(27);
 
 #ifdef WIDTH_SHARDED
-    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(27);
+    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(28);
 #endif
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
@@ -436,9 +442,19 @@ void MAIN {
 #endif
                 pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
                 copy_tile_to_dst_init_short(matmul_partials_cb);
+                uint32_t curr_tile_output_rows_h = 0;
+                uint32_t TILE_SIZE = 32;
+                TILE_SIZE = TILE_SIZE * out_subblock_h;
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
+                    curr_tile_output_rows_h = output_rows_h < TILE_SIZE ? output_rows_h : TILE_SIZE;
                     reblock_and_untilize<out_subblock_w, out_block_w>(
-                        in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, matmul_partials_cb, out_cb_id);
+                        in1_num_subblocks,
+                        out_subblock_num_tiles,
+                        out_subblock_h,
+                        curr_tile_output_rows_h,
+                        matmul_partials_cb,
+                        out_cb_id);
+                    output_rows_h -= curr_tile_output_rows_h;
                 }
                 pack_untilize_uninit(matmul_partials_cb);
             }
