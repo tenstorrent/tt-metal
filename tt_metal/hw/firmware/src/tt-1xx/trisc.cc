@@ -4,6 +4,7 @@
 
 // clang-format off
 #include "ckernel.h"
+#include "ckernel_debug.h"
 #include "firmware_common.h"
 #include "risc_common.h"
 #include <tensix.h>
@@ -60,6 +61,8 @@ const uint8_t thread_id = COMPILE_FOR_TRISC;
 volatile tt_l1_ptr uint8_t* const trisc_run =
     &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+
+volatile uint32_t dump_counter __attribute__((used)) = 1;
 }  // namespace ckernel
 
 #if !defined(UCK_CHLKC_MATH)
@@ -110,6 +113,7 @@ int main(int argc, char* argv[]) {
     *trisc_run = RUN_SYNC_MSG_DONE;
 
     DeviceProfilerInit();
+    dbg_init_runtime_dump();
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
@@ -154,6 +158,13 @@ int main(int argc, char* argv[]) {
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
         WAYPOINT("R");
+        for (uint32_t i = 1; i < 8; i++) {
+            dbg_write_runtime_dump(i, semaphore_read(i));
+        }
+        dbg_write_runtime_dump(8, dbg_read_debug_bus(DEBUG_BUS_DEBUG_TENSIX_IN_6_ID_EX_PC__29_0_WORD));
+        dbg_write_runtime_dump(9, dbg_read_debug_bus(DEBUG_BUS_DEBUG_TENSIX_IN_7_ID_EX_PC__29_0_WORD));
+        dbg_write_runtime_dump(10, dbg_read_debug_bus(DEBUG_BUS_DEBUG_TENSIX_IN_8_ID_EX_PC__29_0_WORD));
+        dbg_close_runtime_dump(1);
         int index =
             static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) + thread_id;
         uint32_t kernel_lma = (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
