@@ -101,29 +101,6 @@ run_t3000_llama3_70b_tests() {
   fi
 }
 
-# run_t3000_llama3_90b_tests() {
-#   # Record the start time
-#   fail=0
-#   start_time=$(date +%s)
-
-#   echo "LOG_METAL: Running run_t3000_llama3_90b_tests"
-
-#   # Run test_model (decode and prefill) for llama3 90B
-#   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-#   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
-#   LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_model_prefill.py --timeout 1800; fail+=$?
-#   # todo)) move the following test to nightly with a huge timeout value -- 3 hours?
-#   # LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/tests/test_model.py --timeout 3600 -k full ; fail+=$?
-
-#   # Record the end time
-#   end_time=$(date +%s)
-#   duration=$((end_time - start_time))
-#   echo "LOG_METAL: run_t3000_llama3_90b_tests $duration seconds to complete"
-#   if [[ $fail -ne 0 ]]; then
-#     exit 1
-#   fi
-# }
-
 run_t3000_llama3_accuracy_tests() {
   # Record the start time
   fail=0
@@ -225,9 +202,8 @@ run_t3000_llama3.2-90b-vision_freq_tests() {
   LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
   LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
   LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
-  # todo)) move the following test to nightly with a huge timeout value -- 3 hours?
-  # llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
-  # LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 7200 ; fail+=$?
+  # [INFO] the following test is moved to nightly with a huge timeout value
+  # models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py
 
   # Record the end time
   end_time=$(date +%s)

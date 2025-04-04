@@ -195,7 +195,5 @@ def main():
     generate_reference_outputs(total_length=args.total_length, output_file=args.output_file, hf_model_name=args.model)
 
 
-# python3 models/tt_transformers/tests/generate_reference_outputs.py --total_length 1024 --output_file llama90b.refpt
-
 if __name__ == "__main__":
     main()
