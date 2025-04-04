@@ -458,7 +458,7 @@ def test_tg_trace_rms_fuse(
 )
 @pytest.mark.parametrize("num_iters, warmup_iters", [[30, 5]])
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("trace_mode", [False])
+@pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
     [{"trace_region_size": 23887872}],
