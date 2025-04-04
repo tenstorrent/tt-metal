@@ -72,9 +72,10 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
     export_enum<DataType>(m_tensor);
     export_enum<StorageType>(m_tensor);
     export_enum<MathFidelity>(m_tensor);
-    export_enum<TensorMemoryLayout>(m_tensor);
     export_enum<ShardOrientation>(m_tensor);
     export_enum<ShardMode>(m_tensor);
+
+    export_serializable_enum<TensorMemoryLayout>(m_tensor);
 
     py::enum_<tt::tt_metal::BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)

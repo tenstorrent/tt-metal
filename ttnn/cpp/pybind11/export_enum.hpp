@@ -20,3 +20,19 @@ py::enum_<E> export_enum(const py::handle& scope, std::string name = "", Extra&&
 
     return enum_type;
 }
+
+template <typename E, typename... Extra>
+py::enum_<E> export_serializable_enum(const py::handle& scope, std::string name = "", Extra&&... extra) {
+    py::enum_<E> enum_type = export_enum<E>(scope, name, std::forward<Extra>(extra)...);
+
+    enum_type.def("to_json", [](const E& self) { return magic_enum::enum_name(self); })
+        .def("from_json", [](const std::string& json_string) -> E {
+            auto enum_value = magic_enum::enum_cast<E>(json_string);
+            if (!enum_value.has_value()) {
+                throw std::runtime_error(fmt::format("Invalid enum value: {}", json_string));
+            }
+            return enum_value.value();
+        });
+
+    return enum_type;
+}
