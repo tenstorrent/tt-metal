@@ -19,25 +19,6 @@ run_t3000_falcon7b_tests() {
   fi
 }
 
-# TODO [Deprecation notice] - Llama2-70B will be deprecated soon for the new Llama3-70B. The CI tests will be deprecated with it.
-run_t3000_llama2_70b_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_llama2_70b_tests"
-
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py -m "model_perf_t3000" --timeout=600 ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama2_70b_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_falcon40b_tests() {
   # Record the start time
   fail=0
@@ -112,28 +93,6 @@ run_t3000_ccl_reduce_scatter_perf_tests() {
   fi
 }
 
-run_t3000_llm_tests() {
-  # Run falcon7b tests
-  run_t3000_falcon7b_tests
-
-  # Run llama2-70b tests
-  run_t3000_llama2_70b_tests
-
-  # Run falcon40b tests
-  run_t3000_falcon40b_tests
-
-  # Merge all the generated reports
-  env python3 models/perf/merge_perf_results.py
-}
-
-run_t3000_cnn_tests() {
-  # Run resnet50 tests
-  run_t3000_resnet50_tests
-
-  # Merge all the generated reports
-  env python3 models/perf/merge_perf_results.py
-}
-
 run_t3000_ccl_tests() {
   # Run ccl performance tests
   run_t3000_ccl_all_gather_perf_tests
@@ -183,14 +142,10 @@ main() {
   cd $TT_METAL_HOME
   export PYTHONPATH=$TT_METAL_HOME
 
-  if [[ "$pipeline_type" == "llm_model_perf_t3000_device" ]]; then
-    run_t3000_llm_tests
-  elif [[ "$pipeline_type" == "cnn_model_perf_t3000_device" ]]; then
-    run_t3000_cnn_tests
-  elif [[ "$pipeline_type" == "ccl_perf_t3000_device" ]]; then
+  if [[ "$pipeline_type" == "ccl_perf_t3000_device" ]]; then
     run_t3000_ccl_tests
   else
-    echo "$pipeline_type is invalid (supported: [cnn_model_perf_t3000_device, cnn_model_perf_t3000_device, ccl_perf_t3000_device])" 2>&1
+    echo "$pipeline_type is invalid (supported: [ccl_perf_t3000_device])" 2>&1
     exit 1
   fi
 
