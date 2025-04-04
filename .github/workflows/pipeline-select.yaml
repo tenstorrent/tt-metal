@@ -94,3 +94,5 @@ jobs:
       arch: wormhole_b0
       runner-label: tt-beta-ubuntu-2204-n300-large-stable
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

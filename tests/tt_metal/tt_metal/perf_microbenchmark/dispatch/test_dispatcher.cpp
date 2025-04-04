@@ -40,7 +40,7 @@
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include "test_common.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include <tt-metalium/utils.hpp>
@@ -470,7 +470,7 @@ int main(int argc, char** argv) {
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
 
         // Make sure user doesn't exceed available L1 space with cmd line arguments.
-        auto& soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
+        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
         if (prefetcher_buffer_size_g + l1_buf_base > soc_desc.worker_l1_size) {
             log_fatal(
                 LogTest,

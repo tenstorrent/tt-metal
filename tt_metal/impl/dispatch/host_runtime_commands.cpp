@@ -25,7 +25,7 @@
 #include "command_queue.hpp"
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
-#include "dispatch_core_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -37,7 +37,7 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
@@ -119,7 +119,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     unicast_cores_launch_message_wptr(unicast_cores_launch_message_wptr),
     sub_device_id(sub_device_id) {
     this->device = device;
-    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
+    this->dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
 }
 
@@ -190,7 +190,7 @@ void EnqueueTerminateCommand::process() {
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-    if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         // Terminate dispatch_s if enabled
         cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
         HugepageDeviceCommand dispatch_s_command_sequence(cmd_region, cmd_sequence_sizeB);

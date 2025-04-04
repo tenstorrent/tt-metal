@@ -116,7 +116,7 @@ inline void verify_kernel_coordinates(
     tt::tt_metal::SubDeviceId sub_device_id,
     uint32_t cb_addr,
     bool idle_eth = false) {
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     tt::tt_metal::HalProgrammableCoreType hal_core_type = processor_class == tt::RISCV::ERISC
                                                               ? tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH
                                                               : tt::tt_metal::HalProgrammableCoreType::TENSIX;

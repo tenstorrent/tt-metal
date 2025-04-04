@@ -35,7 +35,7 @@
 #include <tt-metalium/shape2d.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
@@ -80,7 +80,7 @@ struct DeviceLocalShardedBufferTestConfig {
 };
 
 void skip_for_tg() {
-    if (tt::Cluster::instance().is_galaxy_cluster()) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
         GTEST_SKIP();
     }
 }

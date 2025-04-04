@@ -25,7 +25,7 @@
 #include "gtest/gtest.h"
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "umd/device/types/arch.h"
 
@@ -203,8 +203,10 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventC
     local_test_functions::FinishAllCqs(cqs);
 
     // Check that completion queue per device is correct. Ensure expected event_ids seen in order.
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
     constexpr uint32_t completion_queue_event_alignment = 32;
     uint32_t event;
     // Iterate through all CQs, and verify that the events returned by EnqueueRecordEvent are in order.
@@ -212,7 +214,8 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventC
         for (size_t i = 0; i < num_cmds_per_cq * num_events_per_cq; i++) {
             uint32_t host_addr =
                 completion_queue_base[cq_id] + i * DispatchSettings::TRANSFER_PAGE_SIZE + sizeof(CQDispatchCmd);
-            tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
+            tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+                &event, 4, host_addr, mmio_device_id, channel);
             log_debug(
                 tt::LogTest,
                 "Checking completion queue. cq_id: {} i: {} host_addr: {}. Got event_id: {}",
@@ -286,7 +289,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 // ordered via events. Do many loops, occasionally increasing size of buffers (page size, num pages).
 // Ensure read back data is correct, data is different for each write.
 TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQs) {
-    if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
     }
 
@@ -358,7 +361,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 // Read to Bufffer via CQ1. Ping-Pongs between Writes and Reads to same buffer. Use events to synchronze read after
 // write and write after read before checking correct data read at the end after all cmds finished on device.
 TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsPingPong) {
-    if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
     }
 

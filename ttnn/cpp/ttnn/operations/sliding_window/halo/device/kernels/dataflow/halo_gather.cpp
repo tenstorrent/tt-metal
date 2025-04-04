@@ -74,6 +74,7 @@ static inline void write_stick_async(
 
 template <
     uint32_t InputCBIndex,
+    uint32_t OutputCBIndex,
     uint32_t StickSizeBytes,
     uint32_t InputPageSizeAligned,
     uint32_t BlockSizeHeight,
@@ -84,12 +85,7 @@ template <
     bool IsBlockSharded,
     bool IsWidthSharded,
     bool IsColumnMajor>
-static inline void run_halo_gather(
-    const tt_l1_ptr uint16_t* config,
-    uint32_t in_base_l1_addr,
-    uint32_t out_base_l1_addr,
-    uint32_t my_noc_x,
-    uint32_t my_noc_y) {
+static inline void run_halo_gather(const tt_l1_ptr uint16_t* config, uint32_t my_noc_x, uint32_t my_noc_y) {
     static_assert(BlockStride >= 1, "Blocks stride must be at least 1");
 
     constexpr uint32_t block_size_height_tiles = BlockSizeHeight / TILE_SIZE;
@@ -101,6 +97,9 @@ static inline void run_halo_gather(
     if (number_of_segments_remaining == 0) {
         return;
     }
+
+    uint32_t in_base_l1_addr = get_read_ptr(InputCBIndex);
+    const uint32_t out_base_l1_addr = get_write_ptr(OutputCBIndex);
 
     // Assume input is already ready when !EnableBlocking (like when using RM)
     if constexpr (EnableBlocking) {
@@ -136,6 +135,7 @@ static inline void run_halo_gather(
                         BlockStride;  // When block stride > 1 we are expecting the input CB to skip
                                       // BlockStride number of blocks (like when splitting work across cores)
                     block_id += BlockStride;
+                    in_base_l1_addr = get_read_ptr(InputCBIndex);  // Ensure base address is at front of input CB
                 }
             }
             write_stick_async<StickSizeBytes, InputPageSizeAligned, EnableBlocking, BlockSizeHeight>(
@@ -179,9 +179,6 @@ void kernel_main() {
     const uint16_t my_noc_x = NOC_X(my_x[noc_index]);
     const uint16_t my_noc_y = NOC_Y(my_y[noc_index]);
 
-    const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
-    const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
-
     // Only one of the cores should push the input
     if constexpr (block_start_offset == 0) {
         cb_reserve_back(src_cb_id, in_nsticks);
@@ -199,7 +196,7 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
 
         const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
-        const uint32_t dst_base_addr = out_base_l1_addr;
+        const uint32_t dst_base_addr = get_write_ptr(out_cb_id);
 
         uint16_t nsticks = 1;
         for (uint16_t j = 0; nsticks; j += 2) {
@@ -222,6 +219,7 @@ void kernel_main() {
     const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
     run_halo_gather<
         in_cb_id,
+        out_cb_id,
         stick_nbytes,
         input_aligned_page_size,
         block_size_height,
@@ -231,7 +229,7 @@ void kernel_main() {
         enable_blocking,
         is_block_sharded,
         is_width_sharded,
-        is_col_major>(config_data, in_base_l1_addr, out_base_l1_addr, my_noc_x, my_noc_y);
+        is_col_major>(config_data, my_noc_x, my_noc_y);
 
     noc_async_read_barrier();
     noc_async_write_barrier();

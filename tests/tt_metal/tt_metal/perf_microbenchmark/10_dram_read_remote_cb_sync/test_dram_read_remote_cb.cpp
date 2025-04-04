@@ -52,7 +52,7 @@
 #include "test_common.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include <tt-metalium/tilize_utils.hpp>
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
@@ -623,7 +623,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         input_buffer = CreateBuffer(config);
     }
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     log_info("created sharded tensor");
 

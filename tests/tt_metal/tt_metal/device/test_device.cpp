@@ -32,7 +32,7 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include <tt-metalium/utils.hpp>
@@ -250,16 +250,20 @@ TEST_F(DeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
 TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
     std::unordered_map<chip_id_t, std::set<chip_id_t>> mmio_device_to_device_group;
     for (unsigned int dev_id = 0; dev_id < num_devices_; dev_id++) {
-        chip_id_t assoc_mmio_dev_id = tt::Cluster::instance().get_associated_mmio_device(dev_id);
+        chip_id_t assoc_mmio_dev_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id);
         std::set<chip_id_t>& device_ids = mmio_device_to_device_group[assoc_mmio_dev_id];
         device_ids.insert(dev_id);
     }
 
     for (const auto& [mmio_dev_id, device_group] : mmio_device_to_device_group) {
-        EXPECT_EQ(tt::Cluster::instance().get_num_host_channels(mmio_dev_id), device_group.size());
+        EXPECT_EQ(
+            tt::tt_metal::MetalContext::instance().get_cluster().get_num_host_channels(mmio_dev_id),
+            device_group.size());
         std::unordered_set<uint16_t> channels;
         for (const chip_id_t& device_id : device_group) {
-            channels.insert(tt::Cluster::instance().get_assigned_channel_for_device(device_id));
+            channels.insert(
+                tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id));
         }
         EXPECT_EQ(channels.size(), device_group.size());
     }
@@ -298,9 +302,12 @@ TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     tt_metal::detail::LaunchProgram(device, program);
 
     std::vector<uint32_t> result(size_bytes / sizeof(uint32_t));
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-    tt::Cluster::instance().read_sysmem(result.data(), size_bytes, base_pcie_dst_address, mmio_device_id, channel);
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+        result.data(), size_bytes, base_pcie_dst_address, mmio_device_id, channel);
 
     EXPECT_EQ(src, result);
 }

@@ -14,8 +14,8 @@
 #include "core_coord.hpp"
 #include "mesh_graph.hpp"
 #include "system_memory_manager.hpp"
-#include "tt_cluster.hpp"
-#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
@@ -111,10 +111,13 @@ public:
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
     void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
 
-    virtual CoreType GetCoreType() { return tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(); }
+    virtual CoreType GetCoreType() {
+        return tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    }
     tt_cxy_pair GetLogicalCore() { return logical_core_; }
     tt_cxy_pair GetVirtualCore() {
-        return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(logical_core_, GetCoreType());
+        return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            logical_core_, GetCoreType());
     }
     chip_id_t GetDeviceId() { return device_id_; }  // Since this->device may not exist yet
 

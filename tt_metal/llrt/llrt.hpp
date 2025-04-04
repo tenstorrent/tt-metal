@@ -14,7 +14,7 @@
 #include "core_coord.hpp"
 #include "span.hpp"
 // clang-format off
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
@@ -73,7 +73,7 @@ void write_hex_vec_to_core(
     const std::vector<DType>& hex_vec,
     uint64_t addr,
     bool small_access = false) {
-    tt::Cluster::instance().write_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
 }
 template <typename DType>
@@ -83,7 +83,7 @@ void write_hex_vec_to_core(
     tt::stl::Span<const DType> hex_vec,
     uint64_t addr,
     bool small_access = false) {
-    tt::Cluster::instance().write_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
 }
 
