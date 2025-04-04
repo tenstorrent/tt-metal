@@ -13,9 +13,8 @@ on:
         required: true
         type: choice
         options:
-          - N150
-          - N300
-          - BH
+          - tt-beta-ubuntu-2204-n150-large-stable
+          - tt-beta-ubuntu-2204-n300-large-stable
       timeout:
         required: false
         type: number
@@ -62,8 +61,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - ${{ inputs.runner-label || 'N150' }}
-      - "in-service"
+      - ${{ inputs.runner-label }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
