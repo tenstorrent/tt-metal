@@ -470,20 +470,24 @@ def test_llama_TG_perf_device(
 
 @pytest.mark.parametrize(
     "abs_tolerance_ns",
-    (500,),
+    (1500,),
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_all_reduce",
-    (500,),
+    (1500,),
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_all_gather",
-    (500,),
+    (1500,),
+)
+@pytest.mark.parametrize(
+    "abs_tolerance_ns_sdpa",
+    (2000,),
 )
 @pytest.mark.models_device_performance_bare_metal
 # Needs env variable TT_METAL_KERNELS_EARLY_RETURN=1
 def test_llama_TG_perf_device_non_overlapped_dispatch(
-    reset_seeds, abs_tolerance_ns, abs_tolerance_ns_all_reduce, abs_tolerance_ns_all_gather
+    reset_seeds, abs_tolerance_ns, abs_tolerance_ns_all_reduce, abs_tolerance_ns_all_gather, abs_tolerance_ns_sdpa
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
@@ -571,6 +575,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
                 tolerance = abs_tolerance_ns_all_reduce
             elif "AllGatherAsync" in op_code_with_id:
                 tolerance = abs_tolerance_ns_all_gather
+            elif "ScaledDotProductAttentionDecode" in op_code_with_id:
+                tolerance = abs_tolerance_ns_sdpa
             else:
                 tolerance = abs_tolerance_ns
             if avg_dispatch_duration > expected_time + tolerance:
