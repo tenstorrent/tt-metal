@@ -19,6 +19,14 @@ on:
   merge_group:
 
 jobs:
+  static-checks:
+    # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
+    # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
+    # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/all-static-checks.yaml
+    secrets: inherit
+
   code-analysis:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
     # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
@@ -76,13 +84,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [code-analysis, find-changes, build, build-docs]
+    needs: [static-checks, code-analysis, find-changes, build, build-docs]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "code-analysis, find-changes"
+          required-jobs: "static-checks, code-analysis, find-changes"
           optional-jobs: "build, build-docs"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
