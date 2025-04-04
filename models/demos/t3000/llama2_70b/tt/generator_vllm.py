@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 import torch
+from tqdm import tqdm
+
+import ttnn
 
 from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
 from models.demos.t3000.llama2_70b.tt.llama_common import (
@@ -71,3 +74,24 @@ class TtLlamaForCausalLM(TtLlamaModelForGeneration):
 
     def prefill_forward(self, tokens: torch.Tensor, page_table, kv_cache, prompt_lens):
         return super().prefill_forward(tokens, 0, page_table, kv_cache, prompt_lens)
+
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
+        kv_tt = []
+        for _ in tqdm(range(num_layers), desc=f"Allocating TT kv caches for each layer"):
+            kv_tt_i = [
+                ttnn.as_tensor(
+                    lp,
+                    device=self.mesh_device,
+                    # TODO: this could be ShardTensorToMesh, removing the need for vLLM to know about TP for num_kv_heads.
+                    # Could affect other calculations which use TTCacheEngine.num_kv_heads, though.
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat8_b,
+                    cache_file_name=self.cache_path / f"empty_cache_paged_attention{kv_cache_shape}",
+                )
+                for lp in (cache_kv, cache_kv)
+            ]
+            kv_tt.append(kv_tt_i)
+        return kv_tt
