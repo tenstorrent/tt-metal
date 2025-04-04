@@ -93,6 +93,7 @@ class VisionBlock(LightweightModule):
         rot_mats,
     ) -> ttnn.Tensor:
         def save_x(x, i):
+            return  # Retained for debug during model bringup only
             import torch
 
             mesh_composer = ttnn.ConcatMesh2dToTensor(
@@ -100,8 +101,7 @@ class VisionBlock(LightweightModule):
             )
             torch_x = ttnn.to_torch(x, mesh_composer=mesh_composer)
             torch_x = torch_x[:, 0:1, :, : x.shape[3]].squeeze(0).squeeze(0)
-            print("Not saving", i)
-            # torch.save(torch.Tensor(torch_x), f"our_{i}.pt")
+            torch.save(torch.Tensor(torch_x), f"our_{i}.pt")
 
         TG = self.args.is_galaxy
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
