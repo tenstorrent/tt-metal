@@ -228,14 +228,14 @@ bool matmul_single_core(
     SHAPE shape = {1, 1, (std::uint32_t)(M * 32), (std::uint32_t)(K * 32)};
     tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(
         shape, tt::deprecated::Initialize::RANDOM, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
+    auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
     auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     auto activations_tile_transposed = tt_metal::transpose_tiles(activations, M, K, in0_block_w);
     fixture->WriteBuffer(device, src0_dram_buffer, activations_tile_transposed);
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
-    auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
+    auto identity_tilized = tilize(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     fixture->WriteBuffer(device, src1_dram_buffer, weights);
@@ -253,7 +253,7 @@ bool matmul_single_core(
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
     auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
-    auto result_untilized = test_utils::untilize(result_flat_layout, M * 32, N * 32);
+    auto result_untilized = untilize(result_flat_layout, M * 32, N * 32);
     auto golden = tt_metal::select_columns(tensor.get_values(), M, K, std::min(K, N));
     pass &= test_utils::is_close_vectors<bfloat16>(golden, result_untilized, [&](const bfloat16& a, const bfloat16& b) {
         return tt::test_utils::is_close<bfloat16>(a, b, 0.015f);

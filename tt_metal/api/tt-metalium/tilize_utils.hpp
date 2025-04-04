@@ -79,8 +79,15 @@ std::vector<T> convert_layout(
     bool transpose_within_face = false,
     bool transpose_of_faces = false);
 
+// Those are specific cases that convert_layout can do, but left for compatibility with existing codebase
 template <typename T>
-void tilize(std::vector<T>& input, uint32_t m, uint32_t n);
+std::vector<T> tilize(const std::vector<T>& input, uint32_t m, uint32_t n);
 
 template <typename T>
-void untilize(std::vector<T>& input, uint32_t m, uint32_t n);
+std::vector<T> untilize(const std::vector<T>& input, uint32_t m, uint32_t n);
+
+template <typename T>
+std::vector<T> tilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n);
+
+template <typename T>
+std::vector<T> untilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n);

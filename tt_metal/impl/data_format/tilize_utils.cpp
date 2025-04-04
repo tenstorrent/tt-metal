@@ -48,6 +48,7 @@ std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) == 0) ? 
 
 std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + tile_val - 1) & ~(tile_val - 1); }
 
+// TODO: add support for batches
 // Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
 template <typename T>
 std::vector<T> untilize_nchw(
@@ -83,6 +84,7 @@ std::vector<T> untilize_nchw(
     return result;
 }
 
+// TODO: add support for batches
 // Converts a linear non-zero-padded row-major tensor to 32-swizzled tilized row-major tensor
 template <typename T>
 std::vector<T> tilize_nchw(
@@ -341,7 +343,34 @@ std::vector<T> convert_layout(
 }
 
 template <typename T>
-void tilize(std::vector<T>& input, uint32_t m, uint32_t n) {
+std::vector<T> tilize(const std::vector<T>& input, uint32_t m, uint32_t n) {
+    TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
+    TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
+
+    // TODO: reuse convert_layout (requires batch support)
+    return convert_layout<T>(
+        input,
+        PhysicalSize{m, n},
+        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+        tests::utils::TensorLayoutType::TILED_SWIZZLED);
+}
+
+template <typename T>
+std::vector<T> untilize(const std::vector<T>& input, uint32_t m, uint32_t n) {
+    TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
+    TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
+
+    // TODO: reuse convert_layout (requires batch support)
+    return convert_layout<T>(
+        input,
+        PhysicalSize{m, n},
+        tests::utils::TensorLayoutType::TILED_SWIZZLED,
+        tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+}
+
+// TODO: reuse convert_layout (requires batch support)
+template <typename T>
+std::vector<T> tilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n) {
     TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
     TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
@@ -399,11 +428,12 @@ void tilize(std::vector<T>& input, uint32_t m, uint32_t n) {
         TT_THROW("Invalid type passed into tilize");
     }
 
-    input = std::move(tilized_input);
+    return tilized_input;
 }
 
+// TODO: reuse convert_layout (requires batch support)
 template <typename T>
-void untilize(std::vector<T>& input, uint32_t m, uint32_t n) {
+std::vector<T> untilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n) {
     TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
     TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
@@ -466,7 +496,7 @@ void untilize(std::vector<T>& input, uint32_t m, uint32_t n) {
         TT_THROW("Invalid type passed into untilize");
     }
 
-    input = std::move(untilized_input);
+    return untilized_input;
 }
 
 // Explicit instantiations
@@ -495,14 +525,24 @@ template std::vector<uint16_t> convert_layout<uint16_t>(tt::stl::Span<const uint
 template std::vector<uint32_t> convert_layout<uint32_t>(tt::stl::Span<const uint32_t>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<bfloat16> convert_layout<bfloat16>(tt::stl::Span<const bfloat16>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
-template void tilize<uint16_t>(std::vector<uint16_t>& input, uint32_t m, uint32_t n);
-template void tilize<uint32_t>(std::vector<uint32_t>& input, uint32_t m, uint32_t n);
-template void tilize<bfloat16>(std::vector<bfloat16>& input, uint32_t m, uint32_t n);
-template void tilize<float>(std::vector<float>& input, uint32_t m, uint32_t n);
+template std::vector<uint16_t> tilize<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
+template std::vector<uint32_t> tilize<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
+template std::vector<bfloat16> tilize<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
+template std::vector<float> tilize<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
 
-template void untilize<uint16_t>(std::vector<uint16_t>& input, uint32_t m, uint32_t n);
-template void untilize<uint32_t>(std::vector<uint32_t>& input, uint32_t m, uint32_t n);
-template void untilize<bfloat16>(std::vector<bfloat16>& input, uint32_t m, uint32_t n);
-template void untilize<float>(std::vector<float>& input, uint32_t m, uint32_t n);
+template std::vector<uint16_t> untilize<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
+template std::vector<uint32_t> untilize<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
+template std::vector<bfloat16> untilize<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
+template std::vector<float> untilize<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
+
+template std::vector<uint16_t> tilize_nfaces<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
+template std::vector<uint32_t> tilize_nfaces<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
+template std::vector<bfloat16> tilize_nfaces<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
+template std::vector<float> tilize_nfaces<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
+
+template std::vector<uint16_t> untilize_nfaces<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
+template std::vector<uint32_t> untilize_nfaces<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
+template std::vector<bfloat16> untilize_nfaces<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
+template std::vector<float> untilize_nfaces<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
 
 // clang-format on

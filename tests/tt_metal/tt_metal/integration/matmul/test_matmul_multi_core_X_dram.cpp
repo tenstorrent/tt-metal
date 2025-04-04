@@ -277,14 +277,14 @@ bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
                 dram_buffer_dst_addr,
                 dram_buffer_size_out);
 
-            auto activations_tilized = test_utils::tilize(activation_slice, per_core_M * 32, K * 32);
+            auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
             auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
             auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
             auto activations_tile_transposed = tt_metal::transpose_tiles(activations, per_core_M, K, in0_block_w);
             pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                 device, dram_src0_channel_id, dram_buffer_src0_addr, activations_tile_transposed);
 
-            auto identity_tilized = test_utils::tilize(weights_slice, K * 32, per_core_N * 32);
+            auto identity_tilized = tilize(weights_slice, K * 32, per_core_N * 32);
             auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
             auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
             pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
@@ -343,7 +343,7 @@ bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
                 result_vec);
             auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
             auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
-            auto result_untilized = test_utils::untilize(result_flat_layout, per_core_M * 32, per_core_N * 32);
+            auto result_untilized = untilize(result_flat_layout, per_core_M * 32, per_core_N * 32);
             pass &= (per_core_golden == result_untilized);
         }
     }
@@ -505,14 +505,14 @@ bool matmul_multi_core_multi_dram(tt_metal::DispatchFixture* fixture, tt_metal::
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
     log_debug(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
-    auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
+    auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
     auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
 
     auto activation_buffer =
         tt_metal::Buffer::create(device, activations.size() * sizeof(uint32_t), 1024 * 2, tt_metal::BufferType::DRAM);
     pass &= move_tiles_to_dram(device, activations, M, K, activation_buffer);
-    auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
+    auto identity_tilized = tilize(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
 
