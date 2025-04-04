@@ -51,14 +51,14 @@ def run_rms_trace(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-        mesh_device,
-        [worker_sub_device],
-        0,
-        0,
-        True,
-        wrap_fabric_around_mesh=True,
-    )
+    # mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+    #     mesh_device,
+    #     [worker_sub_device],
+    #     0,
+    #     0,
+    #     True,
+    #     wrap_fabric_around_mesh=True,
+    # )
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     torch.manual_seed(1234)
     num_cores = input_shard_grid.num_cores()
@@ -277,5 +277,5 @@ def run_rms_trace(
     profiler.end("rms-trace")
     signpost("stop")
     time_taken = profiler.get_duration("rms-trace") - profiler.get_duration("rms-trace-warmup")
-    mesh_device.reset_sub_device_stall_group()
-    teardown_fabric_interface(mesh_device)
+    # mesh_device.reset_sub_device_stall_group()
+    # teardown_fabric_interface(mesh_device)
