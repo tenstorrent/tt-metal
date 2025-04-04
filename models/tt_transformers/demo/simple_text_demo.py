@@ -15,7 +15,7 @@ import ttnn
 
 
 from models.tt_transformers.tt.generator import Generator, SamplingParams
-from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
+from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json, CheckpointType
 
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
@@ -264,11 +264,25 @@ def prepare_generator_args(
             False,  # ci_only
             1,  # data_parallel
         ),
-        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
+        (  # Long-context 64k run - Single user, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+        ),
+        (  # Long-context 16k run - Single user, long prompt (adapted to the model being used and architecture)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
@@ -397,7 +411,8 @@ def prepare_generator_args(
     ids=[
         "batch-1",  # latency
         "batch-32",  # throughput
-        "long-context",  # max-length
+        "long-context-64k",  # 64k context, max_seq_len=128k
+        "long-context-16k",  # 32k context, max_seq_len=32k
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
         "ci-32",  # CI batch 32
@@ -554,6 +569,11 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
     )
+
+    if (model_args[0].checkpoint_type == CheckpointType.HuggingFace) and max_seq_len > model_args[0].max_context_len:
+        logger.info(f"Override max_seq_len to {model_args[0].max_context_len} for HuggingFace checkpoint")
+        max_seq_len = model_args[0].max_context_len
+
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
