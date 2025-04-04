@@ -163,8 +163,8 @@ class LMHead(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode):
         # workaround for OOM issue
-        if mode == "prefill":
-            return self.forward_on_host(x)
+        # if mode == "prefill":
+        #     return self.forward_on_host(x)
 
         # ttnn.device.dump_device_memory_state(self.mesh_device.get_device(self.mesh_device.get_device_ids()[0]), prefix="")
         outputs = []

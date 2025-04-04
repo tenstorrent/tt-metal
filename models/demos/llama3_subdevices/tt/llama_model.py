@@ -416,14 +416,10 @@ class TtTransformer(LightweightModule):
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True, sub_core_grids=sub_core_grids)
 
-        # if argmax_on_device:
-        #     tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
-        #         tt_logits, dim=3, use_multicore=True, sub_core_grids=sub_core_grids  # ,output_tensor=tokens
-        #     )
-        # else:
-        #     # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-        #     if not self.args.is_galaxy:
-        tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+        if argmax_on_device:
+            tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
+                tt_logits, dim=3, use_multicore=True, sub_core_grids=sub_core_grids  # ,output_tensor=tokens
+            )
 
         return tt_logits
 

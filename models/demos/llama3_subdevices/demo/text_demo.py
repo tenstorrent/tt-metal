@@ -452,7 +452,7 @@ def test_demo_text(
         user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
         # TODO Argmax on device is only supported for batch_size=1
-        argmax_on_device = False  # False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        argmax_on_device = True  # False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[0] for b in range(batch_size)])
