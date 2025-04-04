@@ -89,28 +89,27 @@ inline void reduce_h_fused(const uint32_t interm_cb_id, const uint32_t in_scalar
 namespace NAMESPACE {
 
 void MAIN {
-    // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet.
-    constexpr uint32_t in_ntiles_hw = get_compile_time_arg_val(
-        0);  // note ntiles_hw will always be 1 in this kernel, when ntiles_hw > 1 the large kernel is called
+    // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
+    // kernel is called
+    constexpr uint32_t in_ntiles_hw = get_compile_time_arg_val(0);
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(1);
-    constexpr uint32_t window_size_hw = get_compile_time_arg_val(3);
-    constexpr uint32_t out_h = get_compile_time_arg_val(4);
-    constexpr uint32_t out_w = get_compile_time_arg_val(5);
+    constexpr uint32_t window_size_hw = get_compile_time_arg_val(2);
+    constexpr uint32_t out_h = get_compile_time_arg_val(3);
+    constexpr uint32_t out_w = get_compile_time_arg_val(4);
 
-    constexpr uint32_t split_reader = get_compile_time_arg_val(12);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(5);
 
-    constexpr uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(13);
-    constexpr uint32_t in_c = get_compile_time_arg_val(14);
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(15);
-    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(16);
+    constexpr uint32_t nsticks_per_core_by_nblocks = get_compile_time_arg_val(6);
+    constexpr uint32_t in_c = get_compile_time_arg_val(7);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(8);
+    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(9);
 
-    constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(17);
-    constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(18);  // for split reader
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t interm_cb_id = get_compile_time_arg_val(21);
-
-    constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
+    constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(10);
+    constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(11);  // for split reader
+    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(12);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
+    constexpr uint32_t interm_cb_id = get_compile_time_arg_val(14);
+    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(15);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -118,11 +117,17 @@ void MAIN {
     constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
     constexpr uint32_t max_tiles_per_iter =
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
-    tilizeA_B_reduce_init<true>(
+
+    static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
+    constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
+    constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
+
+    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, interm_cb_id, num_faces_in_input_tile, max_rows_for_reduction);
 
     uint32_t interm_reduction_chunks = window_size_hw / max_rows_for_reduction;
@@ -133,6 +138,9 @@ void MAIN {
             pack_untilize_uninit(interm_cb_id);
             pack_untilize_dst_init_short<max_tiles_per_iter>(interm_cb_id, num_out_rows, num_faces_in_output_tile);
             cb_reserve_back(interm_cb_id, 1);
+            // For 5x5 kernel as an example, reduction over first 16 sticks AND next 9 sticks. It runs
+            // twice, and both results are written to interm_cb_id. interm_cb_id will be the input to the
+            // next level of reduction.
             for (uint32_t h = 0; h <= interm_reduction_chunks; h++) {
                 reduce_h_fused_interm<
                     max_tiles_per_iter,
@@ -143,11 +151,11 @@ void MAIN {
             }
             cb_push_back(interm_cb_id, 1);
 
-            // perform the final reduction over the first N - 1 whole chunks
+            // perform the final reduction over the first N - 1 whole chunks // Reduction of final 2 sticks.
             pack_untilize_uninit(out_cb_id);
             pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_output_tile);
             reduce_h_fused<max_tiles_per_iter, is_partial_tile, max_rows_for_reduction>(
-                interm_cb_id, in_scalar_cb_id, out_cb_id);
+                interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
         }
 
         // perform the intermediate reduction over chunk N (across the whole chunk even if the last chunk is partial)
@@ -168,7 +176,7 @@ void MAIN {
         pack_untilize_uninit(out_cb_id);
         pack_untilize_dst_init_short<partial_iter_output_tiles>(out_cb_id, num_out_rows, num_faces_in_output_tile);
         reduce_h_fused<partial_iter_output_tiles, is_partial_tile, max_rows_for_reduction>(
-            interm_cb_id, in_scalar_cb_id, out_cb_id);
+            interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
     }
     cb_pop_front(in_scalar_cb_id, 1);
 }

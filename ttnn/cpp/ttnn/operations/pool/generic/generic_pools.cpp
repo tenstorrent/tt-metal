@@ -7,6 +7,7 @@
 #include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
@@ -16,19 +17,6 @@
 
 namespace ttnn {
 namespace operations::pool {
-
-namespace {
-
-// Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
-uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
-    float value;
-    switch (pool_type) {
-        case Pool2DType::MAX_POOL2D: value = -std::numeric_limits<float>::infinity(); break;
-    }
-    return bfloat16(value).to_packed();
-}
-
-}  // namespace
 
 template <Pool2DType pool_type>
 Tensor Pool2DOp<pool_type>::invoke(
@@ -42,9 +30,9 @@ Tensor Pool2DOp<pool_type>::invoke(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
+    std::optional<bool> ceil_mode,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool ceil_mode,
     bool in_place_halo) {
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
@@ -53,7 +41,7 @@ Tensor Pool2DOp<pool_type>::invoke(
             .stride_hw = {stride.at(0), stride.at(1)},
             .padding = {padding.at(0), padding.at(0), padding.at(1), padding.at(1)},
             .dilation_hw = {dilation.at(0), dilation.at(1)},
-            .ceil_mode = ceil_mode,
+            .ceil_mode = ceil_mode.has_value() ? ceil_mode.value() : false,
     };
     auto output_shape = sliding_window_config.get_output_shape();   // last dim/width is 0
     auto input_tensor_sharded = input_tensor;
@@ -128,7 +116,7 @@ Tensor Pool2DOp<pool_type>::invoke(
             .num_cores_c = num_cores_c,
             .core_range_set = parallel_config.grid,
             .snap_to_tile = false,
-            .ceil_mode = ceil_mode,
+            .ceil_mode = ceil_mode.has_value() ? ceil_mode.value() : false,
     };
 
     // Call the halo uop
@@ -160,6 +148,7 @@ Tensor Pool2DOp<pool_type>::invoke(
 }
 
 template class Pool2DOp<Pool2DType::MAX_POOL2D>;
+template class Pool2DOp<Pool2DType::AVG_POOL2D>;
 
 }  // namespace operations::pool
 }  // namespace ttnn
