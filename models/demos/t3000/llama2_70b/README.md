@@ -1,8 +1,7 @@
 # Llama2-70B Demo
 
 > [!NOTE]
-> This model is no longer supported on QuietBox/LoudBox (T3000) setups. Please use caution when trying to
-> run it on such systems.
+> This model is no longer supported on QuietBox/LoudBox (T3000) setups.
 
 ## How to Run
 
