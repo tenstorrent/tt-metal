@@ -214,7 +214,7 @@ def test_dispatch_cores():
     RISC_COUNT = 1
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch": [16, 1501],
+        "Tensix CQ Dispatch": [16, 1404],
         "Tensix CQ Prefetch": [25, 1990],
     }
 
@@ -267,7 +267,7 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [17, 1567],
+        "Ethernet CQ Dispatch": [17, 1480],
         "Ethernet CQ Prefetch": [18, 1951],
     }
     devicesData = run_device_profiler_test(

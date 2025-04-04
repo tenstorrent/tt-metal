@@ -572,6 +572,7 @@ void generate_runtime_args_cmds(
             num_packed_cmds, max_runtime_args_len * sizeof(uint32_t), packed_write_max_unicast_sub_cmds, no_stride);
         runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
         runtime_args_command_sequences.back().add_dispatch_write_packed<PackedSubCmd>(
+            CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_RTA,
             num_packed_cmds,
             l1_arg_base_addr,
             max_runtime_args_len * sizeof(uint32_t),
@@ -1454,6 +1455,7 @@ void assemble_device_commands(
         }
         std::vector<uint8_t*> data_collection_location;
         device_command_sequence.add_dispatch_write_packed_large(
+            CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS,
             l1_alignment,
             batched_dispatch_subcmds[i].size(),
             batched_dispatch_subcmds[i],
@@ -1495,6 +1497,7 @@ void assemble_device_commands(
         uint32_t curr_sub_cmd_idx = 0;
         for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : unicast_sem_payload[i]) {
             device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS,
                 num_sub_cmds_in_cmd,
                 unicast_sem_dst_size[i].first + program.get_program_config(index).sem_offset,
                 unicast_sem_dst_size[i].second,
@@ -1523,6 +1526,7 @@ void assemble_device_commands(
     uint32_t dram_alignment = hal_ref.get_alignment(HalMemType::DRAM);
     for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
         device_command_sequence.add_dispatch_write_packed_large(
+            CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_PROGRAM_BINARIES,
             dram_alignment,
             kernel_bins_dispatch_subcmds[i].size(),
             kernel_bins_dispatch_subcmds[i],
@@ -1546,6 +1550,7 @@ void assemble_device_commands(
         for (const auto& [num_sub_cmds_in_cmd, multicast_go_signal_payload_sizeB] : multicast_go_signals_payload) {
             uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
             device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+                CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH,
                 num_sub_cmds_in_cmd,
                 multicast_launch_msg_addr,
                 go_signal_sizeB,
@@ -1578,6 +1583,7 @@ void assemble_device_commands(
         for (const auto& [num_sub_cmds_in_cmd, unicast_go_signal_payload_sizeB] : unicast_go_signals_payload) {
             uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
             device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_LAUNCH,
                 num_sub_cmds_in_cmd,
                 unicast_launch_msg_addr,
                 go_signal_sizeB,
