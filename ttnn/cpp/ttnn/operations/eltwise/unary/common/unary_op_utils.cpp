@@ -65,7 +65,8 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::FMOD: return "SFPU_OP_FMOD_INCLUDE";
         case UnaryOpType::FILL: return "SFPU_OP_FILL_INCLUDE";
         case UnaryOpType::ROUND: return "SFPU_OP_ROUND_INCLUDE";
-        case UnaryOpType::EQZ: return "SFPU_OP_COMP_INT_INCLUDE";
+        case UnaryOpType::EQZ:
+        case UnaryOpType::UNARY_NE: return "SFPU_OP_COMP_INT_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -207,9 +208,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("div_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(1.0f / param0))};
             break;
         case UnaryOpType::UNARY_NE:
-            op_init_and_name = {
-                "unary_ne_tile_init();",
-                fmt::format("unary_ne_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+                op_init_and_name = {
+                    "unary_ne_int_tile_init();", fmt::format("unary_ne_int_tile({}, {});", idst, param0)};
+            } else {
+                op_init_and_name = {
+                    "unary_ne_tile_init();",
+                    fmt::format("unary_ne_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
+
             break;
         case UnaryOpType::UNARY_GT:
             op_init_and_name = {

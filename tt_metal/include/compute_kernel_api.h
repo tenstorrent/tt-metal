@@ -514,7 +514,7 @@ ALWI void heaviside_tile(uint32_t idst, uint32_t param0) {
  */
 ALWI void heaviside_tile_init() { MATH((llk_math_eltwise_unary_sfpu_heaviside_init<APPROX>())); }
 
-// unary ne : if x !=value --> 1.0, else 0.0
+// unary ne : if x != value --> 1, else 0
 // clang-format off
 /**
  * Performs element-wise computation of:  result = 1 if x!=value , where x is each element of a tile

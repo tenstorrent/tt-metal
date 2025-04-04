@@ -22,4 +22,17 @@ inline void llk_math_eltwise_unary_sfpu_eqz_int(uint dst_index, int vector_mode 
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_eqz<APPROXIMATE>, dst_index, vector_mode);
 }
 
+// Unary Not equal
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_ne_int_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_ne_int32, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_ne_int(
+    uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_unary_ne_int32<APPROXIMATE>, dst_index, vector_mode, param0);
+}
+
 }  // namespace ckernel

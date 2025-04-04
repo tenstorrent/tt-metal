@@ -27,5 +27,18 @@ inline void calculate_eqz() {
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_unary_ne_int32(int scalar) {
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        vInt v = dst_reg[0];
+        vInt val = 0;
+        v_if(v != scalar) { val = 1; }
+        v_endif;
+        dst_reg[0] = val;
+        dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
