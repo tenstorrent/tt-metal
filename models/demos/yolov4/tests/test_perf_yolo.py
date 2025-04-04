@@ -8,7 +8,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.yolov4.common import load_torch_model
-from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
+from models.demos.yolov4.ttnn.preprocessing.model_preprocessing import (
+    create_yolov4_model_parameters,
+)
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.perf.device_perf_utils import (
     check_device_perf,

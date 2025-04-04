@@ -14,7 +14,9 @@ from models.demos.yolov4.post_processing import (
     post_processing,
 )
 from models.demos.yolov4.runner.runner import YOLOv4Runner
-from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
+from models.demos.yolov4.ttnn.preprocessing.model_preprocessing import (
+    create_yolov4_model_parameters,
+)
 from models.utility_functions import skip_for_grayskull
 
 
