@@ -5,14 +5,14 @@
 ### Model performant running with Trace+2CQ
 
 #### For 320x320:
-- end-2-end perf is 120 FPS
+- end-2-end perf is 80 FPS
   ```bash
-  pytest models/demos/wormhole/yolov4/test_yolov4_performant.py::test_run_yolov4_trace_2cqs_inference[resolution0-True-1-act_dtype0-weight_dtype0-device_params0]
+  pytest models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution0-True-1-act_dtype0-weight_dtype0-device_params0]
   ```
 #### For 640x640:
-- end-2-end perf is 50 FPS
+- end-2-end perf is 30 FPS
   ```bash
-  pytest models/demos/wormhole/yolov4/test_yolov4_performant.py::test_run_yolov4_trace_2cqs_inference[resolution1-True-1-act_dtype0-weight_dtype0-device_params0]
+  pytest models/demos/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution1-True-1-act_dtype0-weight_dtype0-device_params0]
   ```
 
 

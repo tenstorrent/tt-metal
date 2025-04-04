@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.yolov4.ttnn.common import Conv
+from models.demos.yolov4.tt.common import Conv
 
 
 class Down4:
