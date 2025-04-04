@@ -164,7 +164,6 @@ def import_tracy_op_logs(logFolder):
                     traceID = int(IDs[1].strip())
                     if "BEGIN" in opDataStr:
                         traceIDs[deviceID] = traceID
-                        print("Append begin trace id " + str(traceID) + " for " + str(deviceID))
                     elif "END" in opDataStr:
                         assert traceIDs[deviceID] == traceID, (
                             f"Wrong trace ID, device {deviceID} should finish on trace ID "
@@ -249,7 +248,6 @@ def get_device_op_data(ops):
     for opID, opData in ops.items():
         if "device_id" in opData.keys():
             deviceID = opData["device_id"]
-            print("Getting op " + str(opID) + " From: " + str(deviceID))
             if deviceID not in deviceOps.keys():
                 deviceOps[deviceID] = [opData]
             else:
