@@ -55,6 +55,8 @@ static inline CBHandle create_circular_buffer(
     return std::get<1>(tt::tt_metal::create_cb(cb_id, program, cores, pagesize, npages, df, buffer));
 }
 
+constexpr bool ENABLE_UNTILIZE_DOUBLE_BUFFERING = true;
+
 operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     Program& program,
     const Tensor& input_tensor,
@@ -132,10 +134,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         input_to_writer_cb_id0 = cb_indices.untilize_out_cb_id0;
         input_to_writer_cb_id1 = cb_indices.untilize_out_cb_id1;
         const uint32_t output_ntiles = (clamped_block_size_height / TILE_HEIGHT) * ntiles_per_block;
+        const uint32_t untilize_out_cb_num_pages = ENABLE_UNTILIZE_DOUBLE_BUFFERING ? 2 * output_ntiles : output_ntiles;
         auto untilize_out_cb0 = create_circular_buffer(
-            program, all_cores, cb_indices.untilize_out_cb_id0, out_df, output_ntiles, out_tile_size);
+            program, all_cores, cb_indices.untilize_out_cb_id0, out_df, untilize_out_cb_num_pages, out_tile_size);
         auto untilize_out_cb1 = create_circular_buffer(
-            program, all_cores, cb_indices.untilize_out_cb_id1, out_df, output_ntiles, out_tile_size);
+            program, all_cores, cb_indices.untilize_out_cb_id1, out_df, untilize_out_cb_num_pages, out_tile_size);
     }
 
     uint32_t out_cb_pagesize = out_stick_nbytes;

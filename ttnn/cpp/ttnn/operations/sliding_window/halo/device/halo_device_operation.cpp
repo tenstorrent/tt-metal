@@ -15,6 +15,9 @@ using namespace tt::tt_metal;
 thread_local std::unordered_map<std::size_t, std::uint32_t>
     HaloDeviceOperation::sliding_window_max_out_nsticks_per_core = {};
 
+// TODO: Look into increasing this to tradeoff some L1 for performance (#19980)
+constexpr int UNTILIZE_BLOCK_SIZE = 32;
+
 void HaloDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
