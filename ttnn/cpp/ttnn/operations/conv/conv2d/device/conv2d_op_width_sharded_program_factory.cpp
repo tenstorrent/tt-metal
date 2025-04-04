@@ -157,6 +157,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (input_cores.num_cores() > output_cores.num_cores()) {
         all_cores = input_cores;
     }
+    CoreRange all_reader_cores = all_cores.bounding_box();
+    log_debug("Conv2D Width Sharded All Reader Cores = {}", all_reader_cores);
     auto input_num_cores = input_cores.num_cores();
     auto output_num_cores = output_cores.num_cores();
 
@@ -814,6 +816,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         (uint32_t)act_mcast_end.y,
         (uint32_t)act_block_num_tiles * tt_metal::detail::TileSize(tilized_act_df),
         (uint32_t)output_num_cores,
+        (uint32_t)all_reader_cores.size(),
         (uint32_t)cb_indices.act_cb,
         (uint32_t)cb_indices.weight_cb,
         (uint32_t)cb_indices.sharded_act_cb,
@@ -842,7 +845,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     auto act_kernel_id = CreateKernel(
         program,
         activation_kernel_path,
-        all_cores,
+        all_reader_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
