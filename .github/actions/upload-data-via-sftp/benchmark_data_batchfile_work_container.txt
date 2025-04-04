@@ -1,0 +1,2 @@
+put -r /work/generated/benchmark_data/*.json
+ls -hal
