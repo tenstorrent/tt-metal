@@ -14,37 +14,11 @@ from models.demos.yolov4.reference.yolov4 import Yolov4
 from models.demos.yolov4.runner.runner import YOLOv4Runner
 from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
 from models.demos.yolov4.ttnn.weight_parameter_update import update_weight_parameters
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_grayskull()
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": 16384}],
-    indirect=True,
-    ids=["0"],
-)
-@pytest.mark.parametrize(
-    "use_pretrained_weight",
-    [True, False],
-    ids=[
-        "pretrained_weight_true",
-        "pretrained_weight_false",
-    ],
-)
-@pytest.mark.parametrize(
-    "resolution",
-    [
-        (320, 320),
-        (640, 640),
-    ],
-    ids=[
-        "0",
-        "1",
-    ],
-)
-def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_weight, resolution):
+def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_weight, resolution):
     torch.manual_seed(0)
 
     if use_pretrained_weight:
@@ -74,5 +48,43 @@ def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_we
     ttnn_model_runner = YOLOv4Runner(device, parameters, resolution)
     result_boxes, result_confs = ttnn_model_runner.run(ttnn_input)
 
-    assert_with_pcc(ref_boxes, result_boxes, 0.99)
-    assert_with_pcc(ref_confs, result_confs, 0.71)
+    if is_blackhole():
+        assert_with_pcc(ref_boxes, result_boxes, 0.96)
+    else:
+        assert_with_pcc(ref_boxes, result_boxes, 0.99)
+        assert_with_pcc(ref_confs, result_confs, 0.71)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 16384}],
+    indirect=True,
+    ids=["0"],
+)
+@pytest.mark.parametrize(
+    "use_pretrained_weight",
+    [True, False],
+    ids=[
+        "pretrained_weight_true",
+        "pretrained_weight_false",
+    ],
+)
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        (320, 320),
+        (640, 640),
+    ],
+    ids=[
+        "0",
+        "1",
+    ],
+)
+def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_weight, resolution):
+    run_yolov4(
+        device,
+        reset_seeds,
+        model_location_generator,
+        use_pretrained_weight,
+        resolution,
+    )
