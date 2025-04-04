@@ -424,7 +424,10 @@ inline void fabric_client_disconnect(volatile tt_l1_ptr fabric_push_client_inter
 
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
 inline void fabric_async_write_push_data(
-    volatile tt_l1_ptr fabric_push_client_interface_t* client_interface, uint32_t src_addr, uint32_t size, uint32_t header_id) {
+    volatile tt_l1_ptr fabric_push_client_interface_t* client_interface,
+    uint32_t src_addr,
+    uint32_t size,
+    volatile tt_l1_ptr packet_header_t* header) {
     uint64_t push_addr = get_noc_addr_helper(client_interface->router_addr_h, client_interface->router_push_addr);
     uint32_t router_buf_space = *(volatile uint32_t*)client_interface->router_space;
     while (router_buf_space == 0) {
@@ -436,11 +439,7 @@ inline void fabric_async_write_push_data(
         (client_interface->buffer_start + (client_interface->wr_ptr * FABRIC_ROUTER_BUF_SLOT_SIZE)));
     if constexpr (data_mode == ClientDataMode::RAW_DATA) {
         // In raw mode, pick up the header from header buffer in client interface.
-        noc_async_write_one_packet(
-            (uint32_t)&client_interface->header_buffer[header_id],
-            buffer_wr_addr,
-            PACKET_HEADER_SIZE_BYTES,
-            noc_index);
+        noc_async_write_one_packet((uint32_t)header, buffer_wr_addr, PACKET_HEADER_SIZE_BYTES, noc_index);
         buffer_wr_addr += PACKET_HEADER_SIZE_BYTES;
         size -= PACKET_HEADER_SIZE_BYTES;
     }
@@ -451,6 +450,19 @@ inline void fabric_async_write_push_data(
     if (client_interface->wr_ptr >= client_interface->buffer_size) {
         client_interface->wr_ptr -= client_interface->buffer_size;
     }
+}
+
+template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
+inline void fabric_async_write_push_data(
+    volatile tt_l1_ptr fabric_push_client_interface_t* client_interface,
+    uint32_t src_addr,
+    uint32_t size,
+    uint32_t header_id = 0) {
+    fabric_async_write_push_data<data_mode>(
+        client_interface,
+        src_addr,
+        size,
+        reinterpret_cast<volatile tt_l1_ptr packet_header_t*>(&client_interface->header_buffer[header_id]));
 }
 
 template <
@@ -676,7 +688,8 @@ inline void fabric_atomic_inc(
     uint16_t dst_dev_id,
     uint64_t dst_addr,
     uint32_t atomic_inc,
-    uint32_t wrap_boundary) {
+    uint32_t wrap_boundary,
+    uint32_t header_id = 0) {
     static_assert(
         std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
             std::is_same_v<T, volatile fabric_push_client_interface_t*>,
@@ -701,7 +714,7 @@ inline void fabric_atomic_inc(
         }
     } else {
         if constexpr (mode & AsyncWriteMode::PUSH) {
-            fabric_async_write_push_data<data_mode>(client_interface, src_addr, PACKET_HEADER_SIZE_BYTES, 0);
+            fabric_async_write_push_data<data_mode>(client_interface, src_addr, PACKET_HEADER_SIZE_BYTES, header_id);
         }
     }
 }
