@@ -24,6 +24,14 @@ struct ExecuteAllReduce {
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         const std::optional<size_t> num_workers = std::nullopt,
         const std::optional<size_t> num_buffers_per_channel = std::nullopt);
+    static std::vector<ttnn::Tensor> invoke(
+        const std::vector<ttnn::Tensor>& input_tensors,
+        ttnn::operations::reduction::ReduceType math_op,
+        const uint32_t num_links = 1,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        const std::optional<size_t> num_workers = std::nullopt,
+        const std::optional<size_t> num_buffers_per_channel = std::nullopt);
 };
 
 }  // namespace ccl

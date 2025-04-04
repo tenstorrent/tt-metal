@@ -13,6 +13,8 @@
 namespace ttnn {
 struct ReduceScatterAsync {
     ReduceScatterAsync(
+        std::vector<IDevice*> devices,
+        const distributed::MeshDevice* mesh_device,
         const ttnn::operations::binary::BinaryOpType binary_op_type,
         const uint32_t scatter_dim,
         const uint32_t ring_size,
@@ -24,6 +26,8 @@ struct ReduceScatterAsync {
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle,
         std::optional<uint32_t> cluster_axis) :
+        devices(std::move(devices)),
+        mesh_device(mesh_device),
         binary_op_type(binary_op_type),
         scatter_dim(scatter_dim),
         ring_size(ring_size),
@@ -35,6 +39,8 @@ struct ReduceScatterAsync {
         fabric_handle(fabric_handle),
         sub_device_id(sub_device_id) {}
 
+    std::vector<IDevice*> devices;
+    const distributed::MeshDevice* mesh_device;
     const ttnn::operations::binary::BinaryOpType binary_op_type;
     const uint32_t scatter_dim;
     const uint32_t ring_size;
@@ -116,6 +122,17 @@ Tensor reduce_scatter(
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt,   // TODO make reference
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
+std::vector<Tensor> reduce_scatter(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
+    const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+    ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
+    const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt,   // TODO make reference
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
 Tensor reduce_scatter(
     const Tensor& input_tensor,
     const int32_t dim,
@@ -123,6 +140,20 @@ Tensor reduce_scatter(
     const MeshDevice& mesh_device,
     const GlobalSemaphore& from_remote_multi_device_global_semaphore,
     const GlobalSemaphore& to_remote_multi_device_global_semaphore,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors = {},
+    ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
+    const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt,   // TODO make reference
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
+std::vector<Tensor> reduce_scatter(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
+    const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors = {},
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

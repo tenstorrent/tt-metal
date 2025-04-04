@@ -34,6 +34,7 @@ struct AllReduceAsync {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     bool enable_persistent_fabric_mode;
     uint32_t cluster_axis;
+    const distributed::MeshDevice* mesh_device;
 
     AllReduceAsync(
         uint32_t num_links,
@@ -43,7 +44,8 @@ struct AllReduceAsync {
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         bool enable_persistent_fabric_mode,
-        uint32_t cluster_axis) :
+        uint32_t cluster_axis,
+        const distributed::MeshDevice* mesh_device) :
         num_links(num_links),
         ring_size(ring_size),
         output_mem_config(output_mem_config),
@@ -51,7 +53,8 @@ struct AllReduceAsync {
         semaphore(semaphore),
         sub_device_id(sub_device_id),
         enable_persistent_fabric_mode(enable_persistent_fabric_mode),
-        cluster_axis(cluster_axis) {}
+        cluster_axis(cluster_axis),
+        mesh_device(mesh_device) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -123,6 +126,18 @@ Tensor all_reduce_async(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool enable_persistent_fabric_mode = false);
+
+std::vector<Tensor> all_reduce_async(
+    const std::vector<Tensor>& input_tensors,
+    Tensor& buffer_tensor,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,

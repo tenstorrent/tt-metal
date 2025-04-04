@@ -128,6 +128,7 @@ struct AllGather {
     const ccl::Topology topology;
     std::optional<uint32_t> cluster_axis;
     std::vector<IDevice*> devices;
+    const distributed::MeshDevice* mesh_device = nullptr;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor> &input_tensors) const;
@@ -214,8 +215,28 @@ Tensor all_gather(
     const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
 
+std::vector<Tensor> all_gather(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    const uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> user_defined_num_workers = std::nullopt,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+
 Tensor all_gather(
     const Tensor& input_tensor,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> user_defined_num_workers = std::nullopt,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
+
+std::vector<Tensor> all_gather(
+    const std::vector<Tensor>& input_tensors,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
