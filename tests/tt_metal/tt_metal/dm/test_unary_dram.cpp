@@ -58,7 +58,7 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
         ShardedBufferConfig sharded_dram_config{
             .device = device,
             .size = total_size_bytes,
-            .page_size = total_size_bytes,
+            .page_size = test_config.page_size_bytes,
             .buffer_type = BufferType::DRAM,
             .buffer_layout = TensorMemoryLayout::BLOCK_SHARDED,
             .shard_parameters = shard_spec};
@@ -133,10 +133,10 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
     detail::ReadFromBuffer(output_dram_buffer, packed_output);
 
     // Print output and golden vectors
-    log_info("Golden vector");
-    print_vector<uint32_t>(packed_golden);
-    log_info("Output vector");
-    print_vector<uint32_t>(packed_output);
+    // log_info("Golden vector");
+    // print_vector<uint32_t>(packed_golden);
+    // log_info("Output vector");
+    // print_vector<uint32_t>(packed_output);
 
     // Return comparison
     return is_close_packed_vectors<bfloat16, uint32_t>(
@@ -221,6 +221,17 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
         page_size_bytes *= 2;
     }
 
+    // 2 * 1024 * 1024 * 1024   = dram bank size / max shard size
+    // x * x * 64        = shard size where x is one dim of tensor_shape_in_pages
+    // x * x <= 1024 * 1024 * 32 this many pages should be able to fit on one dram bank
+    // max x => 1024 * 4 = 4096
+    // Fails when one dram bank size is set to 4GB (DRAM error)
+
+    // L1 capacity is 1 MB, error when shard size cannot exceed that (L1 error)
+    // So 1024 * 1024 / 64 = x * x = 128 * 128 => x = 128
+
+    // Fails: (when num dram banks isnt 1, 1)
+
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
@@ -229,7 +240,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
     for (uint32_t tensor_dim_size = 1; tensor_dim_size <= max_tensor_dim_pages; tensor_dim_size *= 2) {
         array<uint32_t, 2> tensor_shape_in_pages = {tensor_dim_size, tensor_dim_size};
         uint32_t num_of_transactions = tensor_dim_size * tensor_dim_size / transaction_size_pages;
-        for (uint32_t dram_banks_dim_ratio = 1; dram_banks_dim_ratio <= 2; dram_banks_dim_ratio *= 2) {
+        for (uint32_t dram_banks_dim_ratio = 1; dram_banks_dim_ratio <= tensor_dim_size; dram_banks_dim_ratio *= 2) {
             uint32_t dram_banks_dim_size = tensor_dim_size / dram_banks_dim_ratio;
             array<uint32_t, 2> num_dram_banks = {dram_banks_dim_size, dram_banks_dim_size};
 
@@ -244,13 +255,12 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
                 .tensor_shape_in_pages = tensor_shape_in_pages,
                 .num_dram_banks = num_dram_banks};
 
+            log_info("Tensor shape in pages: {}", tensor_shape_in_pages);
+            log_info("Number of dram banks: {}", num_dram_banks);
+
             // Run
             for (unsigned int id = 0; id < num_devices_; id++) {
                 EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-            }
-
-            if (tensor_dim_size == 1) {
-                break;
             }
         }
     }
