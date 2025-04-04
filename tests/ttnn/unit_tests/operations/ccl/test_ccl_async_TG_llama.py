@@ -252,6 +252,7 @@ def test_all_reduce_tg_llama(
     trace_mode,
     use_program_cache,
     function_level_defaults,
+    ensure_devices_tg,
 ):
     profiler = BenchmarkProfiler()
 
