@@ -45,11 +45,11 @@ def load_torch_model(model_location_generator, module=None):
         model_path = model_location_generator("models", model_subdir="Yolo")
 
     if model_path == "models":
-        if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
+        if not os.path.exists("models/demos/yolov4/tests/pcc/yolov4.pth"):  # check if yolov4.th is availble
             os.system(
-                "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
+                "models/demos/yolov4/tests/pcc/yolov4_weights_download.sh"
             )  # execute the yolov4_weights_download.sh file
-        weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
+        weights_pth = "models/demos/yolov4/tests/pcc/yolov4.pth"
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
