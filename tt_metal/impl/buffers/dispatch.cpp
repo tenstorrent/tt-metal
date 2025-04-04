@@ -29,6 +29,8 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/event/dispatch.hpp"
+#include "tt_metal/impl/profiler/dispatch.hpp"
 
 enum class CoreType;
 

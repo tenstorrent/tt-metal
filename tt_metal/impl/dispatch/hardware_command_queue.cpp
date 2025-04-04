@@ -322,7 +322,7 @@ void HWCommandQueue::enqueue_read_profiler_control_vector(
     profiler_dispatch::issue_read_profiler_control_vector_command_sequence(dispatch_params);
 
     this->issued_completion_q_reads_.push(
-        profiler_dispatch::generate_profiler_control_vector_read_descriptor(dst, dispatch_params));
+        std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadProfilerControlVectorDescriptor>, dst));
     this->increment_num_entries_in_completion_q();
 
     if (blocking) {
@@ -559,6 +559,10 @@ void HWCommandQueue::read_completion_queue() {
                         } else if constexpr (std::is_same_v<T, ReadEventDescriptor>) {
                             ZoneScopedN("CompletionQueueReadEvent");
                             event_dispatch::read_events_from_completion_queue(
+                                read_descriptor, mmio_device_id, channel, this->id_, this->manager_);
+                        } else if constexpr (std::is_same_v<T, ReadProfilerControlVectorDescriptor>) {
+                            ZoneScopedN("CompletionQueueReadProfilerControlVector");
+                            profiler_dispatch::read_profiler_control_vector_from_completion_queue(
                                 read_descriptor, mmio_device_id, channel, this->id_, this->manager_);
                         }
                     },
