@@ -164,8 +164,6 @@ def run_conv(
     if act_func:
         torch_out_golden_tensor = act_func(torch_out_golden_tensor)
 
-    reader_patterns_cache = {}
-
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor,
         weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
@@ -272,7 +270,6 @@ def run_conv(
     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
-    reader_patterns_cache.clear()
 
     if not fp32_accum:
         pcc = 0.985
@@ -384,8 +381,6 @@ def run_conv_with_split(
 
     for i in range(len(split_weight_tensors)):
         split_weight_tensors[i] = torch.split(split_weight_tensors[i], split_input_channels, 1)
-
-    reader_patterns_cache = {}
 
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
@@ -713,7 +708,6 @@ def test_conv_ws(
         groups=groups,
     )
 
-    reader_patterns_cache = {}
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
     )
@@ -775,7 +769,6 @@ def test_conv_ws(
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
     logger.info(f"Output Shape : {torch_output_tensor.shape}")
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
-    reader_patterns_cache.clear()
 
     pcc = 0.99
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)

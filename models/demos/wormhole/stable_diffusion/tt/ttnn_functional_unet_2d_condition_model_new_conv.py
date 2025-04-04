@@ -69,7 +69,6 @@ class UNet2DConditionModel:
         batch_size,
         input_height,
         input_width,
-        reader_patterns_cache,
         down_block_types: Tuple[str] = (
             "CrossAttnDownBlock2D",
             "CrossAttnDownBlock2D",
@@ -113,7 +112,6 @@ class UNet2DConditionModel:
                 down_block = cross_attention_down_block_2d(
                     device,
                     parameters.down_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -123,7 +121,6 @@ class UNet2DConditionModel:
                 down_block = downblock2d(
                     device,
                     parameters.down_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -141,7 +138,6 @@ class UNet2DConditionModel:
         self.mid_block = unet_mid_block_2d_cross_attn(
             device,
             parameters.mid_block,
-            reader_patterns_cache,
             batch_size,
             input_height,
             input_width,
@@ -158,7 +154,6 @@ class UNet2DConditionModel:
                 up_block = cross_attention_upblock2d(
                     device,
                     parameters.up_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -168,7 +163,6 @@ class UNet2DConditionModel:
                 up_block = upblock_2d(
                     device,
                     parameters.up_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -283,7 +277,6 @@ class UNet2DConditionModel:
         upcast_attention: bool = False,
         resnet_time_scale_shift: str = "default",
         return_dict: bool = True,
-        reader_patterns_cache: Optional[Dict] = None,
         dtype: Optional[ttnn.DataType] = None,
     ):
         num_upsamplers = len(block_out_channels) - 1

@@ -164,7 +164,6 @@ def squeezebert_attention(
     base_addr,
     parameters,
     device,
-    reader_patterns_cache,
     num_cores_x=12,
 ):
     num_heads = config.num_attention_heads
@@ -275,7 +274,6 @@ def squeezebert_layer(
     base_addr,
     parameters,
     device,
-    reader_patterns_cache,
 ):
     multi_head_attention_output = squeezebert_attention(
         config,
@@ -285,7 +283,6 @@ def squeezebert_layer(
         base_addr=f"{base_addr}attention.",
         parameters=parameters.attention,
         device=device,
-        reader_patterns_cache=reader_patterns_cache,
     )
 
     attention_output = squeezebert_conv_layernorm(
@@ -337,7 +334,6 @@ def squeezebert_encoder(
     base_addr,
     parameters,
     device,
-    reader_patterns_cache,
 ):
     hidden_states = permute_reshape(hidden_states)
     encoder_output = None
@@ -351,7 +347,6 @@ def squeezebert_encoder(
             base_addr=f"{base_addr}layers.{layer_idx}.",
             parameters=encoder_parameters,
             device=device,
-            reader_patterns_cache=reader_patterns_cache,
         )
         encoder_output = ttnn.reallocate(encoder_output)
         hidden_states = encoder_output
@@ -371,7 +366,6 @@ def squeezebert(
     base_addr,
     parameters,
     device,
-    reader_patterns_cache,
 ):
     word_embeddings = ttnn.embedding(
         input_ids,
@@ -420,7 +414,6 @@ def squeezebert(
         base_addr=f"{base_addr}encoder.",
         parameters=parameters.encoder,
         device=device,
-        reader_patterns_cache=reader_patterns_cache,
     )
     ttnn.deallocate(encoder_input)
 
@@ -438,7 +431,6 @@ def squeezebert_for_question_answering(
     base_addr,
     parameters,
     device,
-    reader_patterns_cache,
     name="transformer",
 ):
     squeezebert_output = squeezebert(
@@ -451,7 +443,6 @@ def squeezebert_for_question_answering(
         base_addr,
         parameters=parameters.transformer,
         device=device,
-        reader_patterns_cache=reader_patterns_cache,
     )
     qa_outputs = ttnn.linear(
         squeezebert_output,

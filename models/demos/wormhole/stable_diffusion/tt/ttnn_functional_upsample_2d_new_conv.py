@@ -29,9 +29,7 @@ config_override = {
 
 
 class upsample2d:
-    def __init__(
-        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-    ):
+    def __init__(self, device, parameters, batch_size, input_height, input_width, compute_kernel_config):
         self.input_height = input_height
         self.input_width = input_width
         self.device = device

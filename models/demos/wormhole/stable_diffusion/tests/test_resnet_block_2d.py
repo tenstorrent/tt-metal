@@ -131,7 +131,6 @@ def test_resnet_block_2d_512x512(
     temb = torch.randn(temb_shape)
 
     torch_output = resnet(input, temb.squeeze(0).squeeze(0))
-    reader_patterns_cache = {}
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
@@ -141,7 +140,6 @@ def test_resnet_block_2d_512x512(
     resnet_block = resnetBlock2D(
         device,
         parameters,
-        reader_patterns_cache,
         batch_size,
         input_height,
         input_width,

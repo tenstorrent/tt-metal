@@ -82,7 +82,6 @@ def test_stable_diffusion_trace_2cq(device, use_program_cache):
     input_width = 64
     encoder_hidden_states_shape = [1, 2, 77, 768]
     hidden_states_shape = [batch_size, in_channels, input_height, input_width]
-    reader_patterns_cache = {}
     class_labels = None
     attention_mask = None
     cross_attention_kwargs = None
@@ -112,7 +111,7 @@ def test_stable_diffusion_trace_2cq(device, use_program_cache):
         _t = ttnn.from_torch(_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         _tlist.append(_t)
 
-    ttnn_model = UNet2D(device, parameters, batch_size, input_height, input_width, reader_patterns_cache)
+    ttnn_model = UNet2D(device, parameters, batch_size, input_height, input_width)
 
     input_tensor = ttnn.allocate_tensor_on_device(
         ttnn_input.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
@@ -273,8 +272,7 @@ def test_stable_diffusion_perf(
     encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # define model
-    reader_patterns_cache = {}
-    model = UNet2D(device, parameters, batch_size, input_height, input_width, reader_patterns_cache)
+    model = UNet2D(device, parameters, batch_size, input_height, input_width)
 
     # run inference iterations
     for i in range(num_inference_steps):

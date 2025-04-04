@@ -47,7 +47,6 @@ class resnetBlock2D:
         self,
         device,
         parameters,
-        reader_patterns_cache,
         batch_size,
         input_height,
         input_width,
