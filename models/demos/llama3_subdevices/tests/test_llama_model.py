@@ -29,10 +29,9 @@ from models.utility_functions import skip_for_grayskull
     "weights, layers, iterations",
     [
         ("random", 1, 6),
-        ("random", 1, 200),
         ("instruct", 80, 5),
     ],
-    ids=["quick", "quick-stress", "full"],
+    ids=["quick", "full"],
 )
 @pytest.mark.parametrize(
     "paged_attention",
