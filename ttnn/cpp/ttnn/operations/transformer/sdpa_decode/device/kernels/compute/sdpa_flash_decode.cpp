@@ -122,6 +122,7 @@ void MAIN {
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
     }
+
     uint32_t num_cores_to_wait = num_cores_per_head - 1;
     if (num_cores_per_head > k_num_chunks) {
         num_cores_to_wait = k_num_chunks - 1;
@@ -177,10 +178,12 @@ void MAIN {
 
         // do reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
+            DPRINT << "12" << ENDL();
             // cb_out_accumulate_im should contain o_1
             // cb_prev_max and cb_prev_sum should contain m_1 and l_1
 
             if (k_chunk_end - k_chunk_start < k_num_chunks) {
+                DPRINT << "13" << ENDL();
                 // This indicates that there are computes done by other workers. Needs to wait for them and send to
                 // reducer's compute
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
@@ -188,18 +191,24 @@ void MAIN {
                     // pack_reconfig_data_format(cb_out_accumulate_im_2);
                     copy_block(cb_out_o, cb_out_accumulate_im_2, q_chunk_tiles);
                     copy_block(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
+#ifndef SKIP_OP
                     max_block(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
+#endif
 
                     // l = torch.exp(m_2 - m) * l_2 + torch.exp(m_1 - m) * l_1
                     /// l1 = torch.exp(m_2 - m) * l_2
                     // reconfig_data_format(cb_prev_max_2, cb_cur_max); // DEBUG
                     // pack_reconfig_data_format(cb_exp_max_diff_2);
+#ifndef SKIP_OP
                     sub_exp_block(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
+#endif
                     mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
                     /// l2 = torch.exp(m_1 - m) * l_1
                     // reconfig_data_format(cb_prev_max, cb_cur_max); // DEBUG
                     // pack_reconfig_data_format(cb_exp_max_diff);
+#ifndef SKIP_OP
                     sub_exp_block(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+#endif
                     mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                     /// l = l1 + l2
                     // reconfig_data_format(cb_cur_sum, cb_prev_sum); // DEBUG
@@ -223,18 +232,23 @@ void MAIN {
                     copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
                     copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
+                DPRINT << "13" << ENDL();
             }
+
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             cb_push_back(cb_cur_sum, Sq_chunk_t);
 
+            DPRINT << "14" << ENDL();
             reconfig_data_format(cb_cur_sum, cb_cur_sum);  // DEBUG
             pack_reconfig_data_format(cb_cur_sum);
             recip_block_inplace(cb_cur_sum, Sq_chunk_t);
 
+            DPRINT << "15" << ENDL();
             /* cb_out_accumulate_im *= cb_cur_sum */
             reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);  // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
             mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, DHt);
+            DPRINT << "16" << ENDL();
             pack_reconfig_data_format(cb_out_final);
             copy_block(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
 
@@ -244,5 +258,6 @@ void MAIN {
         }
     }
     cb_pop_front(cb_q_in, q_chunk_tiles);
+    DPRINT << "DONE C" << ENDL();
 }
 }  // namespace NAMESPACE

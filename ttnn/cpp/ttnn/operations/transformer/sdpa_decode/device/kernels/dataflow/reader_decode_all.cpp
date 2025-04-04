@@ -84,22 +84,10 @@ void kernel_main() {
         }
     }
 
-    volatile tt_l1_ptr uint32_t* page_table_ptr;
-    if constexpr (is_paged_attention) {
-        constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
-        const InterleavedAddrGen<true> page_table_gen = {
-            .bank_base_address = page_table_addr, .page_size = page_table_page_size};
-        cb_reserve_back(cb_id_page_table, 1);
-        uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-        uint64_t page_table_noc_addr = get_noc_addr(cur_batch, page_table_gen);
-        noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_page_size);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_page_table, 1);
-        page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
-    }
     // Sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
         get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
+
     tt_l1_ptr uint32_t* all_output_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_output_cores;
     tt_l1_ptr uint32_t* all_output_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx++));
@@ -148,7 +136,16 @@ void kernel_main() {
         }
         cb_reserve_back(cb_q_in, q_chunk_tiles);
         uint32_t q_write_ptr = get_write_ptr(cb_q_in);
-        noc_async_read(q_read_addr, q_write_ptr, q_chunk_tiles_bytes);
+        if constexpr (q_tile_bytes == 1024) {
+            // q_addr represents 32x32 tiles; read them as 16x32 tiles
+            for (uint8_t tile = 0; tile < q_chunk_tiles; tile++) {
+                noc_async_read(q_read_addr, q_write_ptr, q_tile_bytes);
+                q_read_addr += 2 * q_tile_bytes;
+                q_write_ptr += q_tile_bytes;
+            }
+        } else {
+            noc_async_read(q_read_addr, q_write_ptr, q_chunk_tiles_bytes);
+        }
         noc_async_read_barrier();
         cb_push_back(cb_q_in, q_chunk_tiles);
     } else {
@@ -179,6 +176,20 @@ void kernel_main() {
 
     const InterleavedAddrGenFast<is_dram> mask_reader = {
         .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
+
+    volatile tt_l1_ptr uint32_t* page_table_ptr;
+    if constexpr (is_paged_attention) {
+        constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
+        const InterleavedAddrGen<true> page_table_gen = {
+            .bank_base_address = page_table_addr, .page_size = page_table_page_size};
+        cb_reserve_back(cb_id_page_table, 1);
+        uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
+        uint64_t page_table_noc_addr = get_noc_addr(cur_batch, page_table_gen);
+        noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_page_size);
+        noc_async_read_barrier();
+        cb_push_back(cb_id_page_table, 1);
+        page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+    }
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;

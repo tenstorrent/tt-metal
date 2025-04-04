@@ -146,6 +146,8 @@ void kernel_main() {
     // generate and send mask to compute if causal
     if constexpr (is_causal) {
         generate_mask<cb_mask_in, PNHt, Sk_chunk_t>(k_num_chunks, cur_pos);
+        // cb_reserve_back(cb_mask_in, PNHt * Sk_chunk_t);
+        // cb_push_back(cb_mask_in, PNHt * Sk_chunk_t);
     }
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;

@@ -4,9 +4,9 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tuple>
-uint32_t nearest_n(uint32_t x, uint32_t n) { return ((x + n - 1) / n) * n; }
+inline uint32_t nearest_n(uint32_t x, uint32_t n) { return ((x + n - 1) / n) * n; }
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_runtime_args(
+inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_runtime_args(
     int cur_pos, int cur_batch, int core_num, int num_cores_per_batch, uint32_t k_chunk_size) {
     uint32_t valid_seq_len = nearest_n(cur_pos + 1, k_chunk_size);
     uint32_t pst_value = valid_seq_len / tt::constants::TILE_HEIGHT;

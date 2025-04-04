@@ -16,6 +16,8 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 
+// #define SKIP_OP
+
 /******************************************************************************
  *                                                                             *
  *                   Common Functions for Compute Kernels                      *
@@ -137,6 +139,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t
     exp_tile_init<true>();
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
+    DPRINT << "cols: " << cols << ENDL();
 
     constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
     uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
@@ -144,7 +147,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
+#ifndef SKIP_OP
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+#endif
                 exp_tile<true>(j);
             }
             tile_regs_commit();
@@ -173,7 +178,9 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
             acquire_dst();
+#ifndef SKIP_OP
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+#endif
             cb_pop_front(in0_cb, 1);
             cb_reserve_back(in0_cb, 1);
             pack_tile(0, in0_cb);
@@ -316,7 +323,69 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_pop_front(in_cb, num_tiles);
 }
 
-ALWI void cb_matmul_blocks(
+ALWI void cb_matmul_blocks1(
+    const uint32_t& in0_cb,
+    const uint32_t& in1_cb,
+    const uint32_t& out_cb,
+    const uint32_t& M,
+    const uint32_t& N,
+    const uint32_t& K,
+    const uint32_t& num_blocks,
+    const uint32_t& in0_num_subblocks,
+    const uint32_t& in1_num_subblocks,
+    const uint32_t& in0_block_w,
+    const uint32_t& subblock_h,
+    const uint32_t& subblock_w,
+    const bool& transpose) {
+    // precondition: in0_cb has M*K produced
+    // preconditino: in1_cb has K*N produced
+    // postcondition: in0_cb is full, in1_cb is empty
+    // postcondition: out_cb has M*N produced
+
+    mm_block_init_short(
+        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+
+    reconfig_data_format(in1_cb, in0_cb);
+    cb_wait_front(in1_cb, K * N);
+
+    uint32_t output_num_tiles = M * N;
+    uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+    uint32_t in0_index_offset = 0;
+
+    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+        uint32_t in1_index_offset = 0;
+        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
+            tile_regs_acquire();
+
+            uint32_t dst_index = 0;
+            uint32_t in0_index = in0_index_offset;
+            uint32_t in1_index = in1_index_offset;
+
+            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                matmul_block(
+                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
+                in0_index++;
+                in1_index += N;
+            }
+            tile_regs_commit();
+
+            cb_reserve_back(out_cb, out_subblock_num_tiles);
+            tile_regs_wait();
+            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                pack_tile(i, out_cb);
+            }
+            tile_regs_release();
+            cb_push_back(out_cb, out_subblock_num_tiles);
+            // in1_index_offset += in1_subblock * subblock_w;
+            // in1_index_offset = (in1_subblock+1) * subblock_w;
+            in1_index_offset += subblock_w;
+        }
+        in0_index_offset += subblock_h * in0_block_w;
+    }
+    cb_pop_front(in1_cb, K * N);
+}
+
+ALWI void cb_matmul_blocks2(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,
     const uint32_t& out_cb,
@@ -485,7 +554,8 @@ void flash_attention_loop(
         /* QK = Q_CHUNK @ K_CHUNK */
         reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
         pack_reconfig_data_format(cb_qk_im);
-        cb_matmul_blocks(
+
+        cb_matmul_blocks1(
             cb_q_in,
             cb_k_in,
             cb_qk_im,
@@ -502,6 +572,7 @@ void flash_attention_loop(
 
         /* QK *= SCALE */
         mul_block_bcast_scalar_inplace(cb_qk_im, cb_scale_in, qk_chunk_tiles);
+        DPRINT << "3" << ENDL();
 
         if constexpr (is_causal) {
             // For decode, we only apply mask at the last chunk for causal mode
@@ -517,6 +588,7 @@ void flash_attention_loop(
             }
         }
 
+        DPRINT << "4" << ENDL();
         reconfig_data_format(cb_qk_im, cb_identity_scale_in);
         pack_reconfig_data_format(cb_cur_max);
         reduce_c<
@@ -528,16 +600,19 @@ void flash_attention_loop(
             Sq_chunk_t,
             Sk_chunk_t>();
 
+        DPRINT << "5" << ENDL();
         if (k_chunk > k_chunk_start) {
             reconfig_data_format(cb_cur_max, cb_prev_max);
             max_block_inplace(cb_cur_max, cb_prev_max, Sq_chunk_t);
         }
+        DPRINT << "6" << ENDL();
         /* QK -= cb_cur_max */
         /* QK = exp(QK)*/
         reconfig_data_format(cb_qk_im, cb_cur_max);
         pack_reconfig_data_format(cb_qk_im);
         sub_exp_block_bcast_cols_inplace(cb_qk_im, cb_cur_max, Sq_chunk_t, Sk_chunk_t);
 
+        DPRINT << "7" << ENDL();
         /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
         reconfig_data_format(cb_qk_im, cb_identity_scale_in);
         pack_reconfig_data_format(cb_cur_sum);
@@ -549,11 +624,12 @@ void flash_attention_loop(
             cb_cur_sum,
             Sq_chunk_t,
             Sk_chunk_t>();
+        DPRINT << "8" << ENDL();
 
         /* OUT_IM = QK @ V_CHUNK */
         reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
         pack_reconfig_data_format(cb_out_im);
-        cb_matmul_blocks(
+        cb_matmul_blocks2(
             cb_qk_im,
             cb_v_in,
             cb_out_im,
@@ -569,13 +645,17 @@ void flash_attention_loop(
             false /*transpose*/);
         reconfig_data_format_srca(cb_out_im);
         cb_pop_front(cb_qk_im, qk_chunk_tiles);
+        DPRINT << "9" << ENDL();
 
         /* OUT_ACC += OUT_IM */
         if (k_chunk == k_chunk_start) {
+            DPRINT << "10a" << ENDL();
             reconfig_data_format_srca(cb_out_im);
             pack_reconfig_data_format(cb_out_accumulate_im);
             copy_block(cb_out_im, cb_out_accumulate_im, out_chunk_tiles);
+            DPRINT << "10a" << ENDL();
         } else {
+            DPRINT << "10b" << ENDL();
             reconfig_data_format(cb_prev_max, cb_cur_max);  // DEBUG
             pack_reconfig_data_format(cb_exp_max_diff);
             /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
@@ -599,20 +679,26 @@ void flash_attention_loop(
             reconfig_data_format(cb_out_accumulate_im, cb_out_im);  // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
             add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
+            DPRINT << "10b" << ENDL();
         }
 
         if (k_chunk < k_chunk_end - 1 || do_reduce) {
+            DPRINT << "11a" << ENDL();
             // Set cb_prev_sum and cb_prev_max
             reconfig_data_format(cb_cur_max, cb_cur_max);  // DEBUG
             pack_reconfig_data_format(cb_prev_max);
             copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
             copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+            DPRINT << "11a" << ENDL();
 
         } else {
+            DPRINT << "11b" << ENDL();
             // Write o, m, l into cb_out
             copy_block(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
             copy_block(cb_cur_max, cb_out_m, Sq_chunk_t);
             copy_block(cb_cur_sum, cb_out_l, Sq_chunk_t);
+            DPRINT << "11b" << ENDL();
         }
     }
+    DPRINT << "DONE F" << ENDL();
 }
