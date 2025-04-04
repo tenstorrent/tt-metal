@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.utility_functions import (
     comp_allclose_and_pcc,
-    skip_for_grayskull,
+    skip_for_blackhole,
 )
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
@@ -496,7 +496,7 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
     assert passing
 
 
-@skip_for_grayskull()
+@skip_for_blackhole("Fails on BH. Issue #19911")
 @pytest.mark.parametrize(
     "input_shape",
     [
