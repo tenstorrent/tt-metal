@@ -225,9 +225,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     "unary_ne_tile_init();",
                     fmt::format("unary_ne_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
-            // op_init_and_name = {
-            // "unary_ne_tile_init();",
-            // fmt::format("unary_ne_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
 
             break;
         case UnaryOpType::UNARY_GT:
