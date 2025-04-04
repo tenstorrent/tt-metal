@@ -64,7 +64,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           ${{ matrix.test-group.cmd }}
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -76,10 +76,10 @@ jobs:
           path: /work/generated/test_reports/
           prefix: "test_reports_"
       - name: Generate system logs on failure
-        uses: ./.github/actions/generate-system-logs
+        uses: tenstorrent/tt-metal/.github/actions/generate-system-logs@main
         if: ${{ failure() }}
       - name: Generate gtest annotations on failure
-        uses: ./.github/actions/generate-gtest-failure-message
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
         with:
           path: /work/generated/test_reports/

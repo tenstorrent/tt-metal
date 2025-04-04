@@ -45,7 +45,7 @@ jobs:
           name: TTMetal_build_any
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
+      - uses: tenstorrent/tt-metal/.github/actions/install-python-deps@main
       - name: Run pre/post regression tests in a loop
         run: |
           source ${{ github.workspace }}/python_env/bin/activate

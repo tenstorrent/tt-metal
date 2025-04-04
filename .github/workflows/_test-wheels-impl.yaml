@@ -32,7 +32,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/install-metal-deps
+      - uses: tenstorrent/tt-metal/.github/actions/install-metal-deps@main
         with:
           os: ${{ matrix.os }}
       - uses: actions/download-artifact@v4

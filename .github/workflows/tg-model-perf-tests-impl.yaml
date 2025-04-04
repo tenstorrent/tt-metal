@@ -71,7 +71,7 @@ jobs:
       - name: Enable performance mode
         run: |
           sudo cpupower frequency-set -g performance
-      - uses: ./.github/actions/ensure-active-weka-mount
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-active-weka-mount@main
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         timeout-minutes: 10
@@ -86,7 +86,7 @@ jobs:
           name: ${{ inputs.wheel-artifact-name || 'wheel artifact not specified' }}
       - name: Run model perf regression tests
         timeout-minutes: 60
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         env:
           LOGURU_LEVEL: INFO
         with:
@@ -102,7 +102,7 @@ jobs:
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
         if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests' || matrix.test-group.name == 'TG Llama 70B model perf tests') && !cancelled() }}
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -114,7 +114,7 @@ jobs:
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
         if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests' || matrix.test-group.name == 'TG Llama 70B model perf tests') && !cancelled() }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt

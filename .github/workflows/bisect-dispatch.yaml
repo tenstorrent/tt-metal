@@ -84,7 +84,7 @@ jobs:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
+      - uses: tenstorrent/tt-metal/.github/actions/install-python-deps@main
       - name: Run Git Bisect
         shell: bash
         env:

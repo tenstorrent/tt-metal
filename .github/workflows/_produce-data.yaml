@@ -133,7 +133,7 @@ jobs:
       - name: Show directory to see output files
         run: ls -hal
       - name: Upload cicd data
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         if: ${{ github.event_name == 'workflow_run' || inputs.upload_data }}
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
@@ -152,7 +152,7 @@ jobs:
               pipelinecopy_*.json
               workflow.json
               workflow_jobs.json
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}

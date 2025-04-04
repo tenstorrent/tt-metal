@@ -64,9 +64,9 @@ jobs:
       - name: Enable Performance mode
         if: ${{ matrix.test-group.name == 'N300_performance' }}
         run: sudo cpupower frequency-set -g performance
-      - uses: ./.github/actions/ensure-active-weka-mount
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-active-weka-mount@main
       - name: Run demo regression tests
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         timeout-minutes: 90
         env:
           LOGURU_LEVEL: INFO
@@ -84,7 +84,7 @@ jobs:
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
         if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         env:
           LOGURU_LEVEL: INFO
         with:
@@ -99,7 +99,7 @@ jobs:
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
         if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt

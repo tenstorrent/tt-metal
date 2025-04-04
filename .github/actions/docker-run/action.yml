@@ -44,7 +44,7 @@ runs:
         echo "TT_METAL_DOCKER_IMAGE_TAG=${{ inputs.docker_image }}" >> $GITHUB_ENV
     - name: Determine docker image tag
       if: ${{ ! inputs.docker_image }}
-      uses: ./.github/actions/generate-docker-tag
+      uses: tenstorrent/tt-metal/.github/actions/generate-docker-tag@main
       with:
         image: ${{ inputs.docker_os_arch || 'docker-image-unresolved!'}}
     - name: Set

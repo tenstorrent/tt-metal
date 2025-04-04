@@ -49,7 +49,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - uses: ./.github/actions/ensure-active-weka-mount
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-active-weka-mount@main
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         timeout-minutes: 10
@@ -66,7 +66,7 @@ jobs:
         run: |
           sudo cpupower frequency-set -g performance
       - name: Run model perf regression tests
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           LOGURU_LEVEL: INFO
@@ -101,7 +101,7 @@ jobs:
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -140,7 +140,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - uses: ./.github/actions/ensure-active-weka-mount
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-active-weka-mount@main
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         timeout-minutes: 10
@@ -157,7 +157,7 @@ jobs:
         run: |
           sudo cpupower frequency-set -g performance
       - name: Run model perf regression tests
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           LOGURU_LEVEL: INFO
@@ -203,7 +203,7 @@ jobs:
           path: |
             ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
             ${{ steps.check-perf-report.outputs.perf_report_filename_reduce_scatter }}
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}

@@ -59,10 +59,10 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
-      - uses: ./.github/actions/ensure-active-weka-mount
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-active-weka-mount@main
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -111,10 +111,10 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
-      - uses: ./.github/actions/ensure-active-weka-mount
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-active-weka-mount@main
       - name: Run frequent reg tests scripts
         timeout-minutes: 30
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -189,10 +189,10 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
-      - uses: ./.github/actions/ensure-active-weka-mount
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-active-weka-mount@main
       - name: Run frequent reg tests scripts
         timeout-minutes: 60
-        uses: ./.github/actions/docker-run
+        uses: tenstorrent/tt-metal/.github/actions/docker-run@main
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
