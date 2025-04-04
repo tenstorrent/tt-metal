@@ -42,7 +42,6 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     tt::tt_metal::operation::launch_op(
         [num_preferred_links,
          memory_config,
-         mesh_view,
          cluster_axis,
          num_devices,
          topology,
@@ -57,27 +56,21 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
-            TT_FATAL(
-                mesh_view.is_mesh_2d(),
-                "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
-                                                                : mesh_view.get_devices_on_row(coordinate[0]);
             const auto& input_tensor = input_tensors.at(0);
             return tt::tt_metal::operation::run(
-                ttnn::operations::fused::normalization::create_rms_struct(
-                    input_device_tensor,
-                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-                    memory_config,
-                    devices,
-                    topology,
-                    semaphore,
-                    subdevice_id,
+                RMSAllGather(
                     epsilon,
+                    memory_config.value_or(input_tensor.memory_config()),
                     program_config,
                     kernel_config_val,
                     dtype,
-                    is_pre),
+                    topology,
+                    is_pre,
+                    num_preferred_links.value_or(1),
+                    num_devices,
+                    semaphore,
+                    subdevice_id,
+                    cluster_axis),
                 {input_tensor},
                 optional_input_tensors,
                 optional_output_tensors);
