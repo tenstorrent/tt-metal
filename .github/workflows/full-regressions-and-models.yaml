@@ -26,7 +26,10 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ["model-runner-${{ matrix.arch }}", "in-service"]
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: ./.github/actions/ensure-active-weka-mount
       - name: Set up dyanmic env vars for build
         run: |
