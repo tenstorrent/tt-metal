@@ -417,6 +417,7 @@ def test_tg_trace_rms_fuse(
         use_new_version=use_new_version,
     )
 
+
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
