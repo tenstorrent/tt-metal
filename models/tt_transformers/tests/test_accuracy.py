@@ -13,7 +13,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations, parse_decoder_json
+from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision, parse_decoder_json
 from pathlib import Path
 
 
@@ -81,9 +81,10 @@ def get_accuracy_thresholds(model_args, optimizations):
 @pytest.mark.parametrize(
     "optimizations",
     [
-        ModelOptimizations.accuracy,
-        ModelOptimizations.performance,
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers),
     ],
+    ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize(
     "paged_attention",

@@ -15,7 +15,7 @@ import ttnn
 
 
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import ModelOptimizations, DecodersPrecision, parse_decoder_json
+from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
@@ -409,8 +409,8 @@ def prepare_generator_args(
 @pytest.mark.parametrize(
     "optimizations",
     [
-        lambda model_args: DecodersPrecision(model_args.n_layers, ModelOptimizations.performance()),
-        lambda model_args: DecodersPrecision(model_args.n_layers, ModelOptimizations.accuracy()),
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers),
     ],
     ids=["performance", "accuracy"],
 )
@@ -447,8 +447,8 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
-
-    if is_ci_env and (optimizations == ModelOptimizations.accuracy or not ci_only):
+    test_id = request.node.callspec.id
+    if is_ci_env and (test_id == "accuracy" or not ci_only):
         pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG
