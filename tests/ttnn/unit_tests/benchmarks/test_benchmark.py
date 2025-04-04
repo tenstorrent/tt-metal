@@ -154,8 +154,8 @@ matmul_configs = [
 @pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("num_warmup_iterations", [0])
-@pytest.mark.parametrize("num_measurement_iterations", [1])
+@pytest.mark.parametrize("num_warmup_iterations", [5])
+@pytest.mark.parametrize("num_measurement_iterations", [100])
 def test_matmul_2d_host_perf(
     device,
     grid_size,
