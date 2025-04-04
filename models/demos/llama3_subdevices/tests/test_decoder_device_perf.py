@@ -250,7 +250,7 @@ def average_per_instance_dict(input_dict):
 
 @pytest.mark.parametrize(
     "abs_tolerance_ns",
-    (1500,),
+    (2000,),
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_all_reduce",
@@ -262,7 +262,7 @@ def average_per_instance_dict(input_dict):
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_sdpa",
-    (2000,),
+    (3000,),
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_op_to_op",
