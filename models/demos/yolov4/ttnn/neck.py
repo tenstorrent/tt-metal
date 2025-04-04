@@ -5,6 +5,7 @@
 import ttnn
 from models.demos.yolov4.ttnn.common import Conv
 import math
+from models.utility_functions import is_blackhole
 
 
 def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
@@ -269,10 +270,10 @@ class TtNeck:
                 output_tensor.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
             )
 
-            if output_tensor.is_sharded():
-                output_tensor = ttnn.reshard(output_tensor, shardspec)
+            if is_blackhole():
+                output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
             else:
-                output_tensor = ttnn.interleaved_to_sharded(output_tensor, shardspec)
+                output_tensor = ttnn.to_memory_config(output_tensor, shardspec)
 
             output_tensor_upsample_1 = ttnn.upsample(
                 output_tensor, scale_factor=2, memory_config=output_tensor.memory_config()
@@ -386,10 +387,10 @@ class TtNeck:
                 output_tensor.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
             )
 
-            if output_tensor.is_sharded():
-                output_tensor = ttnn.reshard(output_tensor, shardspec)
+            if is_blackhole():
+                output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
             else:
-                output_tensor = ttnn.interleaved_to_sharded(output_tensor, shardspec)
+                output_tensor = ttnn.to_memory_config(output_tensor, shardspec)
 
             output_tensor_upsample_2 = ttnn.upsample(
                 output_tensor, scale_factor=2, memory_config=output_tensor.memory_config()
