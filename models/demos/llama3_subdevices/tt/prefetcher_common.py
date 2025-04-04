@@ -20,6 +20,9 @@ def get_buffer_address(tensor):
     return addr[0]
 
 
+global_tt_tensor_address = None
+
+
 class TtLlamaPrefetcherSetup(LightweightModule):
     def __init__(
         self,
@@ -69,6 +72,12 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         ##### Setup up sub devices #####
 
         if mode == "prefill":
+            # self.global_cb_size = int(600 * 1088 * 1.5)
+            # self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
+            # self.global_circular_buffer = ttnn.create_global_circular_buffer(
+            #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
+            # )
+            # logger.info(f"GlobalCB size {self.global_cb_size}")
             self.all_sub_device = ttnn.SubDevice([self.all_core_range_set])
             if mesh_sub_device_manager_id_prefill is None:
                 mesh_sub_device_manager_id_prefill = create_and_load_sub_device_manager_with_fabric_interface(
@@ -76,7 +85,14 @@ class TtLlamaPrefetcherSetup(LightweightModule):
                 )
             else:
                 mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_prefill)
+                ttnn.initialize_edm_fabric(
+                    mesh_device,
+                    wrap_fabric_around_mesh=False,
+                    context_switch_interval_override=None,
+                    topology=ttnn.Topology.Linear,
+                )
             self.mesh_sub_device_manager_id_prefill = mesh_sub_device_manager_id_prefill
+            print("within pf", self.mesh_sub_device_manager_id_prefill)
 
             self.all_sub_device_id = ttnn.SubDeviceId(0)
             self.worker_sub_device_id = self.all_sub_device_id
@@ -90,10 +106,10 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # TODO: Above calculation is not accurate, need to find a better lower bound
             self.global_cb_size = 600 * 1088
             self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
-            self.global_circular_buffer = ttnn.create_global_circular_buffer(
-                self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
-            )
-            logger.info(f"GlobalCB size {self.global_cb_size}")
+            # self.global_circular_buffer = ttnn.create_global_circular_buffer(
+            #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
+            # )
+            # logger.info(f"GlobalCB size {self.global_cb_size}")
 
             self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
             self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
@@ -103,6 +119,12 @@ class TtLlamaPrefetcherSetup(LightweightModule):
                 )
             else:
                 mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_decode)
+                ttnn.initialize_edm_fabric(
+                    mesh_device,
+                    wrap_fabric_around_mesh=False,
+                    context_switch_interval_override=None,
+                    topology=ttnn.Topology.Linear,
+                )
             print("done loading")
             self.mesh_sub_device_manager_id_decode = mesh_sub_device_manager_id_decode
             self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
@@ -153,5 +175,8 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         assert (
             len(self.tensors) >= self.n_tensors
         ), f"Expected at least {self.n_tensors} tensors, got {len(self.tensors)}"
-
-        return self.tensors[: self.n_tensors] + [self.get_tensor_addrs()]
+        global global_tt_tensor_address
+        if global_tt_tensor_address is None:
+            global_tt_tensor_address = self.get_tensor_addrs()
+        self.tt_tensor_address = global_tt_tensor_address
+        return self.tensors[: self.n_tensors] + [self.tt_tensor_address]

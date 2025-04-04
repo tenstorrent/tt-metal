@@ -65,12 +65,18 @@ class TT_CCL:
             self.gather_idx = [0, 0]
             self.buffer_idx = [0, 0]
 
+            # if mode == "decode":
+            # if mode == "prefill":
+            # global BUFFERS_CREATED
+            if mode == "decode":
+                print("setting up decode")
+            if mode == "prefill":
+                print("setting up prefill")
+                self.persistent_buffers = self.get_reduce_scatter_buffers()
+                self.all_gather_buffers = self.get_prefill_all_gather_buffers()
             if mode == "decode":
                 self.persistent_buffers = self.get_persistent_buffers()
                 self.all_gather_buffers = self.get_all_gather_buffers()
-            if mode == "prefill":
-                self.persistent_buffers = self.get_reduce_scatter_buffers()
-                self.all_gather_buffers = self.get_prefill_all_gather_buffers()
 
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
@@ -597,7 +603,6 @@ def tt_sharded_distributed_rmsnorm(
 
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(inp, residual_input_tensor=res, program_config=ln_sharded_progcfg)
-    print("tt_stats", tt_stats)
     # All gather stats
     # tt_stats = ttnn.all_gather(
     #     tt_stats,
@@ -625,7 +630,6 @@ def tt_sharded_distributed_rmsnorm(
     )
     # ttnn.synchronize_device(tt_ccl.mesh_device, sub_device_ids=[tt_ccl.worker_sub_device_id])
     # ttnn.deallocate(tt_stats_dram)
-    print("all gather stats", tt_global_stats_sharded)
 
     # tt_global_stats_sharded = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
     ttnn.deallocate(tt_stats)

@@ -111,7 +111,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    tt_model_args.n_layers = 1
+    tt_model_args.n_layers = 80
     state_dict = tt_model_args.load_state_dict()
 
     page_table = None
@@ -185,10 +185,10 @@ def create_tt_model(
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
-            2,  # repeat_batches
+            5,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            2,  # max_generated_tokens
+            200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -307,7 +307,7 @@ def test_demo_text(
         pytest.skip("TG only supports batch 1 and 32")
 
     mesh_device.enable_async(True)
-    enable_trace = False  # Use tracing for better perf
+    enable_trace = True  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
@@ -425,7 +425,8 @@ def test_demo_text(
             )
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
-
+        # model.switch_mode("decode")
+        # model.switch_mode("prefill")
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
@@ -437,6 +438,7 @@ def test_demo_text(
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished", prefilled_token.shape)
+        # return True
         if prefilled_token.shape[0] != 32:
             prefilled_token = prefilled_token.repeat(batch_size, 1)
         # Keep track of generated outputs to print out every iteration
@@ -542,32 +544,32 @@ def test_demo_text(
                 users_decoding = False
 
             # Final print
-            # if not users_decoding:
-            #     profiler.start(f"log_saving_file", iteration=batch_idx)
-            #     logger.info("Finished decoding, printing the final outputs...\n")
-            #     for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-            #         text = tokenizer.decode(output)
-            #         prompt_including_assistant_tags = tokenizer.decode(
-            #             model_args.encode_prompt(prompt, instruct=instruct)
-            #         )
-            #         text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
-            #         if print_to_file:
-            #             with open(output_filename, "a") as f:
-            #                 f.write(
-            #                     f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
-            #                 )
-            #         else:
-            #             # Strip leading newlines from output when sent to terminal
-            #             short_prompt = (
-            #                 (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
-            #                 if len(prompt) > 200
-            #                 else prompt
-            #             )
-            #             logger.info(
-            #                 f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
-            #             )
-            #         break
-            #     profiler.end(f"log_saving_file", iteration=batch_idx)
+            if not users_decoding:
+                profiler.start(f"log_saving_file", iteration=batch_idx)
+                logger.info("Finished decoding, printing the final outputs...\n")
+                for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
+                    text = tokenizer.decode(output)
+                    prompt_including_assistant_tags = tokenizer.decode(
+                        model_args.encode_prompt(prompt, instruct=instruct)
+                    )
+                    text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
+                    if print_to_file:
+                        with open(output_filename, "a") as f:
+                            f.write(
+                                f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
+                            )
+                    else:
+                        # Strip leading newlines from output when sent to terminal
+                        short_prompt = (
+                            (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
+                            if len(prompt) > 200
+                            else prompt
+                        )
+                        logger.info(
+                            f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
+                        )
+                    break
+                profiler.end(f"log_saving_file", iteration=batch_idx)
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
@@ -575,7 +577,6 @@ def test_demo_text(
 
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
-
     return True
 
     # Prepare profile benchmark metrics for the first repeat batch only
