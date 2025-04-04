@@ -408,8 +408,8 @@ def test_demo_text(
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
         if batch_idx != 0:
+            model.switch_mode("prefill")
             for layer in model.layers:
-                model.switch_mode("prefill")
                 k_cache, v_cache = layer.attention.layer_past
                 k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
