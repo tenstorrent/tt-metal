@@ -60,13 +60,13 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     chip_id_t dst_physical_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(dst_mesh_chip_id);
 
     // get a port to connect to
-    std::vector<chan_id_t> eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
+    std::set<chan_id_t> eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
         src_mesh_chip_id.first, src_mesh_chip_id.second, RoutingDirection::E);
     if (eth_chans.size() == 0) {
         GTEST_SKIP() << "No active eth chans to connect to";
     }
 
-    auto edm_port = eth_chans[0];
+    auto edm_port = *(eth_chans.begin());
     CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
         src_physical_device_id, edm_port);
 
