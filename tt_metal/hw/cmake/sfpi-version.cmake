@@ -1,6 +1,6 @@
 # Define the SFPI version to use
 
 set(SFPI_x86_64_Linux_RELEASE
-    "v6.5.0/sfpi-release.tgz"
-    "abbc526ce5f45aafd2a6d67b6247d616"
+    "v6.8.0/sfpi-release.tgz"
+    "fca4cea73901483f741f6f325c289c7d"
 )

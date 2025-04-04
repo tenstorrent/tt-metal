@@ -1,1 +1,0 @@
-../../../wormhole/stable_diffusion/tests/test_geglu.py

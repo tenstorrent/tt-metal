@@ -2,21 +2,54 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_memory.h>
-#include "llrt.hpp"
-#include "tt_metal/detail/kernel_cache.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/kernel.hpp>
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <magic_enum/magic_enum.hpp>
+#include <stdint.h>
+#include <sys/types.h>
 #include <tt-metalium/device_pool.hpp>
-#include "hal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/tt_memory.h>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <compare>
+#include <cstring>
+#include <exception>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
 #include <thread>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "jit_build/build.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include "llrt/hal.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -142,7 +175,7 @@ int main(int argc, char** argv) {
             ////////////////////////////////////////////////////////////////////////////
             // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
             uint32_t programmable_core_index =
-                tt_metal::hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
+                tt_metal::hal_ref.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
             const tt_metal::KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
             TT_FATAL(
                 kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
@@ -202,8 +235,8 @@ int main(int argc, char** argv) {
                                             .get_device_build_env(device->build_id())
                                             .build_key;
                         tt_metal::detail::CompileProgram(device, program);
-                        uint32_t programmable_core_index =
-                            tt_metal::hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
+                        uint32_t programmable_core_index = tt_metal::hal_ref.get_programmable_core_type_index(
+                            tt_metal::HalProgrammableCoreType::TENSIX);
                         const tt_metal::KernelGroup* kernel_group =
                             program.kernels_on_core(core, programmable_core_index);
                         auto compute_kernel = tt_metal::detail::GetKernel(

@@ -2,15 +2,47 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstring>
+#include <exception>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 using std::vector;
 using namespace tt;
@@ -20,10 +52,10 @@ struct BinaryOpType {
     static const vector<Enum> all() { return {ADD, SUB, MUL}; }
 };
 
-std::map<string, string> get_defines(BinaryOpType::Enum op_type) {
+std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {
     // TODO(AP): remove duplication
-    std::map<string, string> defines;
-    string op_name, op_binary_type;
+    std::map<std::string, std::string> defines;
+    std::string op_name, op_binary_type;
     switch (op_type) {
         case BinaryOpType::ADD:
             op_name = "add_tiles";
@@ -84,7 +116,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> binary_defines = get_defines(BinaryOpType::ADD);
+    std::map<std::string, std::string> binary_defines = get_defines(BinaryOpType::ADD);
     binary_defines["ELTWISE_OP"] = "add_tiles";
     auto eltwise_binary_kernel = tt_metal::CreateKernel(
         program,

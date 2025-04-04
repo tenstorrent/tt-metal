@@ -2,29 +2,63 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <thread>
-
-#include "assert.hpp"
+#include <chrono>
+#include <emmintrin.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "rtoptions.hpp"
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <iomanip>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/command_queue_common.hpp>
 #include "common.h"
-#include "tt_cluster.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include "llrt/hal.hpp"
+#include <tt-metalium/logger.hpp>
+#include "noc/noc_parameters.h"
+#include <tt-metalium/program_impl.hpp>
+#include "rtoptions.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include "test_common.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/tt_io.hpp"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
-#include "hal.hpp"
-#include "llrt.hpp"
-
-#include "test_common.hpp"
-
-#define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)
+#define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST)
 
 constexpr uint32_t DEFAULT_TEST_TYPE = 0;
 constexpr uint32_t DEVICE_DATA_SIZE = 768 * 1024;
@@ -122,7 +156,8 @@ uint32_t l1_buf_base_g;
 uint32_t test_device_id_g = 0;
 
 void init(int argc, char** argv) {
-    auto default_settings = DispatchSettings::defaults(DISPATCH_CORE_TYPE, tt::Cluster::instance(), 1);
+    auto default_settings =
+        DispatchSettings::defaults(DISPATCH_CORE_TYPE, tt::tt_metal::MetalContext::instance().get_cluster(), 1);
 
     std::vector<std::string> input_args(argv, argv + argc);
 
@@ -233,7 +268,7 @@ void dirty_host_completion_buffer(uint32_t* host_hugepage_completion_buffer) {
 }
 
 uint32_t round_cmd_size_up(uint32_t size) {
-    uint32_t align_mask = hal.get_alignment(HalMemType::HOST) - 1;
+    uint32_t align_mask = hal_ref.get_alignment(HalMemType::HOST) - 1;
 
     return (size + align_mask) & ~align_mask;
 }
@@ -490,7 +525,7 @@ void gen_dram_packed_read_cmd(
     int count = 0;
     for (auto length : lengths) {
         TT_ASSERT(length <= num_dram_banks_g * page_size);
-        TT_ASSERT((length & (hal.get_alignment(HalMemType::DRAM) - 1)) == 0);
+        TT_ASSERT((length & (hal_ref.get_alignment(HalMemType::DRAM) - 1)) == 0);
         CQPrefetchRelayPagedPackedSubCmd sub_cmd;
         sub_cmd.start_page = 0;  // TODO: randomize?
         sub_cmd.log_page_size = log_page_size;
@@ -659,7 +694,7 @@ void gen_linear_read_cmd(
     for (uint32_t i = 0; i < length_words; i++) {
         device_data.push_one(worker_core, device_data.at(worker_core, bank_id, offset + i));
     }
-    device_data.pad(worker_core, bank_id, hal.get_alignment(HalMemType::L1));
+    device_data.pad(worker_core, bank_id, hal_ref.get_alignment(HalMemType::L1));
 }
 
 void gen_dispatcher_delay_cmd(
@@ -815,7 +850,7 @@ void gen_host_test(
     }
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(first_worker_g);
     llrt::write_hex_vec_to_core(device->id(), phys_worker_core, data, l1_buf_base_g);
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     for (int count = 1; count < 100; count++) {
         uint32_t data_size_words = std::rand() % ((max_data_size / 100 / sizeof(uint32_t)) * count) + 1;
@@ -872,7 +907,7 @@ void gen_rnd_dram_paged_cmd(
     CoreCoord worker_core) {
     vector<uint32_t> dispatch_cmds;
 
-    const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+    const uint32_t dram_alignment = hal_ref.get_alignment(HalMemType::DRAM);
     uint32_t start_page = std::rand() % num_dram_banks_g;
     uint32_t max_page_size = big_g ? MAX_PAGE_SIZE : 4096;
     uint32_t page_size = (std::rand() % (max_page_size + 1)) & ~(dram_alignment - 1);
@@ -970,7 +1005,7 @@ void gen_packed_read_test(
         uint32_t n_sub_cmds =
             relay_max_packed_paged_submcds ? CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS : (std::rand() % 7) + 1;
         uint32_t max_read_size = (1 << packed_read_page_size) * num_dram_banks_g;
-        auto dram_alignment = hal.get_alignment(HalMemType::DRAM);
+        auto dram_alignment = hal_ref.get_alignment(HalMemType::DRAM);
         vector<uint32_t> lengths;
         uint32_t total_length = 0;
         for (uint32_t i = 0; i < n_sub_cmds; i++) {
@@ -1062,7 +1097,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
 
         index += page_size;
     }
-    tt::Cluster::instance().dram_barrier(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
 
     CQPrefetchCmd cmd;
     cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF;
@@ -1090,7 +1125,7 @@ void gen_smoke_test(
     CoreCoord another_worker_core) {
     vector<uint32_t> empty_payload;  // don't give me grief, it is just a test
     vector<uint32_t> dispatch_cmds;
-    const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+    const uint32_t dram_alignment = hal_ref.get_alignment(HalMemType::DRAM);
 
     if (!use_dram_exec_buf_g) {
         add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, empty_payload);
@@ -1521,7 +1556,7 @@ void write_prefetcher_cmd(
 
     // wait for space
     while (prefetch_q_dev_ptr == prefetch_q_dev_fence) {
-        tt::Cluster::instance().read_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             read_vec, sizeof(uint32_t), tt_cxy_pair(device->id(), phys_prefetch_core), prefetch_q_rd_ptr_addr);
         prefetch_q_dev_fence = read_vec[0];
     }
@@ -1532,7 +1567,7 @@ void write_prefetcher_cmd(
         prefetch_q_dev_ptr = prefetch_q_base;
 
         while (prefetch_q_dev_ptr == prefetch_q_dev_fence) {
-            tt::Cluster::instance().read_core(
+            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 read_vec, sizeof(uint32_t), tt_cxy_pair(device->id(), phys_prefetch_core), prefetch_q_rd_ptr_addr);
             prefetch_q_dev_fence = read_vec[0];
         }
@@ -1745,12 +1780,12 @@ void configure_for_single_chip(
     uint32_t dispatch_buffer_base = l1_buf_base_g;
     uint32_t prefetch_d_buffer_base = l1_buf_base_g;
     uint32_t prefetch_d_buffer_pages = prefetch_d_buffer_size_g >> DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-    dispatch_wait_addr_g = l1_unreserved_base_aligned + hal.get_alignment(HalMemType::L1);
+    dispatch_wait_addr_g = l1_unreserved_base_aligned + hal_ref.get_alignment(HalMemType::L1);
     vector<uint32_t> zero_data(0);
     llrt::write_hex_vec_to_core(device->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
     uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(DispatchSettings::prefetch_q_entry_type);
-    uint32_t noc_read_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t noc_read_alignment = hal_ref.get_alignment(HalMemType::HOST);
     uint32_t cmddat_q_base =
         prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
 
@@ -1763,9 +1798,12 @@ void configure_for_single_chip(
     TT_ASSERT(cmddat_q_size_g >= 2 * max_prefetch_command_size_g);
 
     // NOTE: this test hijacks hugepage
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-    host_hugepage_base = (void*)tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+    host_hugepage_base =
+        (void*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
     host_hugepage_base = (void*)((uint8_t*)host_hugepage_base + dev_hugepage_base_g);
     host_hugepage_completion_buffer_base_g = (void*)((uint8_t*)host_hugepage_base + hugepage_issue_buffer_size_g);
     uint32_t dev_hugepage_completion_buffer_base = dev_hugepage_base_g + hugepage_issue_buffer_size_g;
@@ -2470,12 +2508,12 @@ void configure_for_multi_chip(
     uint32_t prefetch_d_buffer_pages = prefetch_d_buffer_size_g >> DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
     prefetch_q_base = l1_buf_base_g;
     prefetch_q_rd_ptr_addr = l1_unreserved_base_aligned;
-    dispatch_wait_addr_g = l1_unreserved_base_aligned + hal.get_alignment(HalMemType::L1);
+    dispatch_wait_addr_g = l1_unreserved_base_aligned + hal_ref.get_alignment(HalMemType::L1);
     vector<uint32_t> zero_data(0);
     llrt::write_hex_vec_to_core(device_r->id(), phys_dispatch_core, zero_data, dispatch_wait_addr_g);
 
     uint32_t prefetch_q_size = prefetch_q_entries_g * sizeof(DispatchSettings::prefetch_q_entry_type);
-    uint32_t noc_read_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t noc_read_alignment = hal_ref.get_alignment(HalMemType::HOST);
     uint32_t cmddat_q_base =
         prefetch_q_base + ((prefetch_q_size + noc_read_alignment - 1) / noc_read_alignment * noc_read_alignment);
 
@@ -2488,9 +2526,12 @@ void configure_for_multi_chip(
     TT_ASSERT(cmddat_q_size_g >= 2 * max_prefetch_command_size_g);
 
     // NOTE: this test hijacks hugepage
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-    host_hugepage_base = (void*)tt::Cluster::instance().host_dma_address(0, mmio_device_id, channel);
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+    host_hugepage_base =
+        (void*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
     host_hugepage_base = (void*)((uint8_t*)host_hugepage_base + dev_hugepage_base_g);
     host_hugepage_completion_buffer_base_g = (void*)((uint8_t*)host_hugepage_base + hugepage_issue_buffer_size_g);
     uint32_t dev_hugepage_completion_buffer_base = dev_hugepage_base_g + hugepage_issue_buffer_size_g;
@@ -3291,7 +3332,8 @@ int main(int argc, char** argv) {
             device_r = device;
         } else {
             auto const& device_active_eth_cores = device->get_active_ethernet_cores();
-            auto remote_chips = tt::Cluster::instance().get_devices_controlled_by_mmio_device(device_id_l);
+            auto remote_chips =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(device_id_l);
             // remove mmio chip from the set. get_devices_controlled_by_mmio_device() returns a set that
             // holds mmio chips as well as remote chips accessed through that mmmio chip.
             remote_chips.erase(device_id_l);
@@ -3407,8 +3449,8 @@ int main(int argc, char** argv) {
         }
         log_info(LogTest, "Iterations: {}", iterations_g);
 
-        tt::Writer prefetch_q_writer =
-            tt::Cluster::instance().get_static_tlb_writer(tt_cxy_pair(device->id(), phys_prefetch_core_g));
+        tt::Writer prefetch_q_writer = tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(
+            tt_cxy_pair(device->id(), phys_prefetch_core_g));
 
         vector<uint32_t> cmds, terminate_cmds;
         vector<uint32_t> cmd_sizes, terminate_sizes;
@@ -3426,11 +3468,11 @@ int main(int argc, char** argv) {
             initialize_dram_banks(device);
         }
 
-        tt::Cluster::instance().l1_barrier(device->id());
-        tt::Cluster::instance().dram_barrier(device->id());
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
         if (test_device_id_g != 0) {
-            tt::Cluster::instance().l1_barrier(device_r->id());
-            tt::Cluster::instance().dram_barrier(device_r->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_r->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device_r->id());
         }
 
         // Cache stuff

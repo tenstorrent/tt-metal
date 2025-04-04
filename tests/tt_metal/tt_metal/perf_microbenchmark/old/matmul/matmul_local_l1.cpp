@@ -2,20 +2,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <chrono>
-#include <functional>
-#include <random>
-#include <thread>
-
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <optional>
+#include <ratio>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include "fmt/base.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
 #include "test_common.hpp"
-#include <tt-metalium/host_api.hpp>
-#include "dprint_server.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/device.hpp>
 
 #define LAUNCH
 
@@ -155,7 +179,7 @@ std::vector<T> slice(std::vector<T> const& v, int m, int n) {
     return vec;
 }
 
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const string& name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
     for (int i = 0; i < rows; i++) {

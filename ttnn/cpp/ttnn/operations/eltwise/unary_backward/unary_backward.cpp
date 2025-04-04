@@ -25,6 +25,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::unary_backward {
 
@@ -254,7 +255,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardPow::invoke(
         return grad_tensor;
     }
 
-    Tensor power_input = ttnn::power(queue_id, input, fabs(exponent - 1.0f), output_mem_config);
+    Tensor power_input = ttnn::power(queue_id, input, std::fabs(exponent - 1.0f), output_mem_config);
     if (exponent < 1.0f) {
         power_input = ttnn::reciprocal(queue_id, power_input, output_mem_config);
     }
@@ -509,7 +510,7 @@ std::vector<Tensor> ExecuteUnaryBackwardTan::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardSigmoid::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor sig_result = ttnn::sigmoid(input, output_mem_config);
+    Tensor sig_result = ttnn::sigmoid(input, false, output_mem_config);
     Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, output_mem_config);
     Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
     Tensor prod_term_2 = ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config);
@@ -641,24 +642,41 @@ std::vector<Tensor> ExecuteUnaryBackwardCos::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardAcosh::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor in_rsqrt = ttnn::square(input, output_mem_config);
-    in_rsqrt = ttnn::rsqrt(ttnn::subtract(in_rsqrt, 1.0, std::nullopt, output_mem_config), true, output_mem_config);
+    Tensor in_sq = ttnn::square(input, output_mem_config);
+    Tensor in_rsqrt = ttnn::rsqrt(ttnn::subtract(in_sq, 1.0, std::nullopt, output_mem_config), true, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
-    float t_nan = std::nanf("");
-    float t_inf = std::numeric_limits<float>::infinity();
-    Tensor cond_result = ttnn::logical_or(
-        ttnn::lt(input, -1.0f, std::nullopt, output_mem_config),
-        ttnn::gt(input, 1.0f, std::nullopt, output_mem_config),
-        std::nullopt,
+    float t_nan = tt::tt_metal::hal::get_nan();
+    float t_inf = tt::tt_metal::hal::get_inf();
+
+    Tensor check_condition =
+        ttnn::multiply(ttnn::signbit(grad, output_mem_config), -1.0f, std::nullopt, output_mem_config);
+
+    grad_a = ttnn::where(
+        ttnn::logical_or(
+            ttnn::lt(in_sq, 1.0f, std::nullopt, output_mem_config),
+            ttnn::logical_and(
+                ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
+                ttnn::eqz(grad, output_mem_config),
+                std::nullopt,
+                output_mem_config),
+            std::nullopt,
+            output_mem_config),
+        t_nan,
+        ttnn::where(
+            ttnn::logical_and(
+                ttnn::le(input, 1.0f, std::nullopt, output_mem_config),
+                ttnn::ge(input, -1.0f, std::nullopt, output_mem_config),
+                std::nullopt,
+                output_mem_config),
+            ttnn::multiply(
+                ttnn::add(
+                    check_condition, ttnn::eqz(check_condition, output_mem_config), std::nullopt, output_mem_config),
+                t_inf,
+                std::nullopt,
+                output_mem_config),
+            grad_a,
+            output_mem_config),
         output_mem_config);
-    grad_a = ttnn::where(ttnn::eqz(cond_result, output_mem_config), t_nan, grad_a, output_mem_config);
-    cond_result = ttnn::logical_or(
-        ttnn::eq(input, -1.0f, std::nullopt, output_mem_config),
-        ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    grad_a =
-        ttnn::where(ttnn::eq(cond_result, 1.0f, std::nullopt, output_mem_config), t_inf, grad_a, output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
 }
@@ -935,7 +953,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(
     std::vector<std::optional<Tensor>> result = {std::nullopt};
 
     input_grad = input_grad.value_or(ttnn::empty_like(input));
-    Tensor sigmoid_res = ttnn::sigmoid(input, output_mem_config);
+    Tensor sigmoid_res = ttnn::sigmoid(input, false, output_mem_config);
     Tensor grad_sigmoid = ttnn::multiply(queue_id, grad, sigmoid_res, std::nullopt, output_mem_config);
     Tensor add_sub = ttnn::add(
         queue_id,

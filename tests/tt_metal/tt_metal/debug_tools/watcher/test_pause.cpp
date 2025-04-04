@@ -2,8 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <functional>
+#include <initializer_list>
+#include <map>
+#include <set>
+#include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
-#include "debug_tools_test_utils.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include "impl/context/metal_context.hpp"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher pause feature.
@@ -40,7 +62,7 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
         ComputeConfig{});
 
     // Write runtime args
-    uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
+    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
     uint32_t delay_cycles = clk_mhz * 500000; // .5 secons
     const std::vector<uint32_t> args = { delay_cycles };
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {

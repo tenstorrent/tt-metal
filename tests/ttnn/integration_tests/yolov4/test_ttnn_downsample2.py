@@ -2,45 +2,47 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-import pytest
 import time
-from models.utility_functions import skip_for_grayskull
-from models.demos.yolov4.reference.downsample2 import DownSample2
-from models.demos.yolov4.ttnn.downsample2 import Down2
+
+import pytest
+import torch
 from loguru import logger
-import os
+
+import ttnn
+from models.demos.yolov4.common import load_torch_model
+from models.demos.yolov4.ttnn.downsample2 import Down2
+from models.demos.yolov4.ttnn.model_preprocessing import create_ds2_model_parameters
+from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        (320, 320),
+        (640, 640),
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_down2(device, reset_seeds, model_location_generator):
+def test_down2(device, reset_seeds, model_location_generator, resolution):
     torch.manual_seed(0)
-    model_path = model_location_generator("models", model_subdir="Yolo")
 
-    if model_path == "models":
-        if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
-            os.system(
-                "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
-            )  # execute the yolov4_weights_download.sh file
-
-        weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
+    torch_model = load_torch_model(model_location_generator, module="down2")
+    if resolution == (320, 320):
+        torch_input = torch.randn((1, 64, 160, 160), dtype=torch.float)
+    elif resolution == (640, 640):
+        torch_input = torch.randn((1, 64, 320, 320), dtype=torch.float)
     else:
-        weights_pth = str(model_path / "yolov4.pth")
+        raise ValueError(f"Unsupported resolution {resolution}")
+    ref = torch_model(torch_input)
 
-    ttnn_model = Down2(device, weights_pth)
+    parameters = create_ds2_model_parameters(torch_model, torch_input, resolution, device)
 
-    torch_input = torch.randn((1, 160, 160, 64), dtype=torch.bfloat16)
+    ttnn_model = Down2(device, parameters, parameters.conv_args)
+
+    torch_input = torch_input.permute(0, 2, 3, 1)
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
-    torch_input = torch_input.permute(0, 3, 1, 2).float()
-
-    torch_model = DownSample2()
-    ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items() if (k.startswith("down2."))}
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), ds_state_dict.values()))
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
 
     result_ttnn = ttnn_model(ttnn_input)
 
@@ -48,8 +50,8 @@ def test_down2(device, reset_seeds, model_location_generator):
     for x in range(2):
         result_ttnn = ttnn_model(ttnn_input)
     logger.info(f"Time taken: {time.time() - start_time}")
+
     result = ttnn.to_torch(result_ttnn)
-    ref = torch_model(torch_input)
-    ref = ref.permute(0, 2, 3, 1)
+    result = result.permute(0, 3, 1, 2)
     result = result.reshape(ref.shape)
     assert_with_pcc(result, ref, 0.99)

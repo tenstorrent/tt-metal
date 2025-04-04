@@ -16,7 +16,7 @@ from tt_metal.tools.profiler.process_model_log import (
     run_device_profiler,
     get_samples_per_s,
 )
-from models.perf.perf_utils import today, process_perf_results
+from models.perf.perf_utils import process_perf_results
 
 
 def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="", has_signposts=False):
@@ -71,6 +71,17 @@ def post_process_ops_log_detailed(
         df = df.iloc[start + 1 : stop]
     if op_name != "":
         df = df[df["OP CODE"] == op_name]
+
+    # group by DEVICE ID
+    df = df.groupby("DEVICE ID")
+    # now sort the list of df by the DEVICE FW START CYCLE
+    df = sorted(df, key=lambda x: x[1]["DEVICE FW START CYCLE"].iloc[0])
+
+    # Convert list of tuples to list of dataframes
+    dfs = [group for _, group in df]
+
+    # concatenate the list of df into a single df by interleaving the rows
+    df = pd.concat([df.iloc[[i]] for i in range(len(dfs[0])) for df in dfs], ignore_index=True)
 
     if warmup_iters > 0:
         df = df.iloc[warmup_iters:]

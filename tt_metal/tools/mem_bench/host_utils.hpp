@@ -4,16 +4,19 @@
 
 #pragma once
 
+#include <tt-metalium/tt_align.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
-#include <tt-metalium/memcpy.hpp>
-#include <tt-metalium/tt_align.hpp>
+
+#include "dispatch/memcpy.hpp"
+#include "vector_aligned.hpp"
 
 namespace tt::tt_metal::tools::mem_bench {
 
 // Generate random data aligned for memcpy_to_device.
-tt::tt_metal::vector_memcpy_aligned<uint32_t> generate_random_src_data(uint32_t num_bytes);
+tt::tt_metal::vector_aligned<uint32_t> generate_random_src_data(uint32_t num_bytes);
 
 // Get current host time, in seconds.
 double get_current_time_seconds();

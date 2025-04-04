@@ -4,11 +4,9 @@
 import torch
 import pytest
 from loguru import logger
-import os
 import ttnn
 from models.demos.llama3_subdevices.tt.llama_common import (
     sample_host,
-    encode_prompt_llama_instruct,
     HostEmbedding,
     PagedAttentionConfig,
 )
@@ -28,12 +26,13 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "weights, layers",
+    "weights, layers, iterations",
     [
-        ("random", 1),
-        ("instruct", 80),
+        ("random", 1, 6),
+        ("random", 1, 200),
+        ("instruct", 80, 5),
     ],
-    ids=["quick", "full"],
+    ids=["quick", "quick-stress", "full"],
 )
 @pytest.mark.parametrize(
     "paged_attention",
@@ -76,6 +75,7 @@ from models.utility_functions import skip_for_grayskull
 def test_llama_model_inference(
     weights,
     layers,
+    iterations,
     max_seq_len,
     batch_size,
     paged_attention,
@@ -89,7 +89,7 @@ def test_llama_model_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
@@ -121,8 +121,6 @@ def test_llama_model_inference(
     final_v_cache_pcc = {
         "llama31_70b": 0.9997,
     }[model_name]
-
-    iterations = 6 if layers == 1 else 5
 
     if layers is not None:
         model_args.n_layers = layers
@@ -180,7 +178,8 @@ def test_llama_model_inference(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+            model_args.batch_size_per_device_group,
+            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
         )
         page_table_tt = ttnn.from_torch(
             page_table,
@@ -189,7 +188,7 @@ def test_llama_model_inference(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, -2) if batch_size > 1 else (None, None),
+                dims=(None, None),
                 mesh_shape=model_args.cluster_shape,
             ),
         )
@@ -309,10 +308,14 @@ def test_llama_model_inference(
                     ]
                 )
                 tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-                    tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    tt_out[0],
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    buffer_key="SAMPLING",
                 )
                 tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-                ttnn.deallocate(tt_out_gathered)
                 tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
                     tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
                 )

@@ -2,21 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
+#include <fmt/base.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
-#include "ttnn/tensor/enum_types.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <functional>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include <tt-metalium/host_api.hpp>
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/borrowed_buffer.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 /*
 

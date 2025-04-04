@@ -15,6 +15,12 @@ repos:
   hooks:
     - id: black
       language_version: python3
+- repo: https://github.com/PyCQA/autoflake
+  rev: v2.3.1
+  hooks:
+    -  id: autoflake
+       args: [--remove-all-unused-imports, --in-place, --recursive, --exclude=__init__.py]
+       files: ^models/  # Run only on files in the models directory
 - repo: https://github.com/BlankSpruce/gersemi
   rev: 0.16.2
   hooks:
@@ -31,3 +37,10 @@ repos:
       require_serial: true
       types_or: [c++, c]
       args: ["--style=file"]
+- repo: local
+  hooks:
+    - id: validate-metalium-api
+      name: validate-metalium-public-apis
+      entry: python3 scripts/validate_metalium_api.py tt_metal/api
+      language: system
+      pass_filenames: false

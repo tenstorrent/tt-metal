@@ -13,14 +13,13 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
 )
-from models.demos.bert.tt import ttnn_bert, ttnn_optimized_bert
+from models.demos.bert.tt import ttnn_bert, ttnn_optimized_bert, ttnn_optimized_sharded_bert
 
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
 
-from ttnn.model_preprocessing import *
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import evaluate
@@ -75,6 +74,9 @@ def run_bert_question_and_answering_inference(
         tt_model_name = f"ttnn_{model_name}"
     elif bert == ttnn_optimized_bert:
         tt_model_name = f"ttnn_{model_name}_optimized"
+    elif bert == ttnn_optimized_sharded_bert:
+        tt_model_name = f"ttnn_{model_name}_optimized_sharded"
+        config = ttnn_optimized_sharded_bert.update_model_config(config, batch_size)
     else:
         raise ValueError(f"Unknown bert: {bert}")
 
@@ -160,6 +162,8 @@ def run_bert_question_and_answering_inference(
         "inference_time": profiler.get("inference_time"),
         "post_processing": profiler.get("post_processing_output_to_string"),
     }
+
+    logger.info(f"tt_model_name: {tt_model_name}")
     logger.info(f"preprocessing_parameter: {measurements['preprocessing_parameter']} s")
     logger.info(f"preprocessing_input: {measurements['preprocessing_input']} s")
     logger.info(f"inference_time: {measurements['inference_time']} s")
@@ -193,6 +197,9 @@ def run_bert_question_and_answering_inference_squad_v2(
         tt_model_name = f"ttnn_{model_name}"
     elif bert == ttnn_optimized_bert:
         tt_model_name = f"ttnn_{model_name}_optimized"
+    elif bert == ttnn_optimized_sharded_bert:
+        tt_model_name = f"ttnn_{model_name}_optimized_sharded"
+        config = ttnn_optimized_sharded_bert.update_model_config(config, batch_size)
     else:
         raise ValueError(f"Unknown bert: {bert}")
 
@@ -269,7 +276,7 @@ def run_bert_question_and_answering_inference_squad_v2(
 
 
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
-@pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert])
+@pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert, ttnn_optimized_sharded_bert])
 def test_demo(
     input_path,
     model_name,
@@ -293,7 +300,7 @@ def test_demo(
 
 
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
-@pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert])
+@pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert, ttnn_optimized_sharded_bert])
 @pytest.mark.parametrize(
     "n_iterations",
     ((3),),

@@ -3,10 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common_tensor_test_utils.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/async_runtime.hpp"
 
+#include <stdint.h>
+#include <memory>
+#include <vector>
+
+#include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
+#include <tt-metalium/host_api.hpp>
+#include "ttnn/async_runtime.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace test_utils {
 
@@ -20,12 +35,15 @@ void test_tensor_on_device(
     const auto host_buffer_datum_size_bytes = sizeof(uint32_t);
     const auto input_buf_size = input_buf_size_bytes / host_buffer_datum_size_bytes;
 
-    auto host_data = std::make_shared<uint32_t[]>(input_buf_size);
-    auto readback_data = std::make_shared<uint32_t[]>(input_buf_size);
+    auto host_data = std::shared_ptr<void>(new uint32_t[input_buf_size], std::default_delete<uint32_t[]>());
+    auto* host_data_ptr = static_cast<uint32_t*>(host_data.get());
+
+    auto readback_data = std::shared_ptr<void>(new uint32_t[input_buf_size], std::default_delete<uint32_t[]>());
+    auto* readback_data_ptr = static_cast<uint32_t*>(readback_data.get());
 
     const auto random_prime_number = 4051;
     for (int i = 0; i < input_buf_size; i++) {
-        host_data[i] = i % random_prime_number;
+        host_data_ptr[i] = i % random_prime_number;
     }
 
     auto tensor = tt::tt_metal::create_device_tensor(TensorSpec(input_shape, layout), device);
@@ -38,8 +56,8 @@ void test_tensor_on_device(
     ttnn::queue_synchronize(device->command_queue(*io_cq));
 
     for (int i = 0; i < input_buf_size; i++) {
-        EXPECT_EQ(host_data[i], readback_data[i]);
-        if (host_data[i] != readback_data[i]) {
+        EXPECT_EQ(host_data_ptr[i], readback_data_ptr[i]);
+        if (host_data_ptr[i] != readback_data_ptr[i]) {
             break;
         }
     }

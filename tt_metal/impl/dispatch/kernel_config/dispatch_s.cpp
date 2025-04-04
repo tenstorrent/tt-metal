@@ -2,25 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch_s.hpp"
-#include "dispatch.hpp"
-#include "prefetch.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt_metal.hpp>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "command_queue_common.hpp"
+#include "device.hpp"
+#include "dispatch.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "prefetch.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
 void DispatchSKernel::GenerateStaticConfigs() {
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
 
     uint32_t dispatch_s_buffer_base = 0xff;
-    if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
         if (GetCoreType() == CoreType::WORKER) {
             // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
@@ -41,12 +57,14 @@ void DispatchSKernel::GenerateStaticConfigs() {
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     // used by dispatch_d to signal that dispatch_s can send go signal
 
-    static_config_.mcast_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+    static_config_.mcast_go_signal_addr =
+        hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
     static_config_.unicast_go_signal_addr =
-        (hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
-            ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
+        (hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
+            ? hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
             : 0;
-    static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
+    static_config_.distributed_dispatcher =
+        MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
     static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
     static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
@@ -113,7 +131,7 @@ void DispatchSKernel::CreateKernel() {
 }
 
 void DispatchSKernel::ConfigureCore() {
-    if (!DispatchQueryManager::instance().distributed_dispatcher()) {
+    if (!MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {
         return;
     }
     // Just need to clear the dispatch message

@@ -594,7 +594,7 @@ def test_binary_fmod_ttnn(input_shapes, device):
 
     output_tensor = ttnn.fmod(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.fmod)
-    golden_tensor = golden_function(in_data1, in_data2)
+    golden_tensor = golden_function(in_data1, in_data2, device=device)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
@@ -617,7 +617,7 @@ def test_binary_fmod_decimal_ttnn(input_shapes, device):
     input_tensor2 = ttnn.Tensor(in_data2, ttnn.float32).to(ttnn.TILE_LAYOUT).to(device)
     output_tensor = ttnn.fmod(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.fmod)
-    golden_tensor = golden_function(in_data1, in_data2)
+    golden_tensor = golden_function(in_data1, in_data2, device=device)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor], 0.9999)
     assert comp_pass
@@ -641,7 +641,7 @@ def test_fmod_ttnn(input_shapes, scalar, device):
 
     output_tensor = ttnn.fmod(input_tensor1, scalar)
     golden_function = ttnn.get_golden_function(ttnn.fmod)
-    golden_tensor = golden_function(in_data1, scalar)
+    golden_tensor = golden_function(in_data1, scalar, device=device)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

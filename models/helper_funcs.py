@@ -2,9 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Union, Optional
+from typing import Optional
 import ttnn
-from loguru import logger
 
 
 def Linear(

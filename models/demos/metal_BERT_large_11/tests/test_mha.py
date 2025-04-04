@@ -14,7 +14,6 @@ from tt_lib.utils import pad_activation
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
-    profiler,
 )
 from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
 from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel

@@ -2,21 +2,55 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <random>
-
-#include <stdexcept>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <cmath>
+#include <cstdlib>
+#include <exception>
+#include <map>
+#include <memory>
+#include <optional>
+#include <random>
+#include <stdexcept>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "env_lib.hpp"
-
 #include "gmock/gmock.h"
-#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/semaphore.hpp>
+#include "span.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -135,7 +169,7 @@ void validate_sems(
         ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, sem_buffer_base, sem_buffer_size, readback_sem_vals);
         uint32_t sem_idx = 0;
         for (uint32_t i = 0; i < readback_sem_vals.size();
-             i += (hal.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
+             i += (hal_ref.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
             EXPECT_EQ(readback_sem_vals[i], expected_semaphore_values[sem_idx]);
             sem_idx++;
         }

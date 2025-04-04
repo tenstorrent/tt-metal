@@ -2,20 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import bz2
 import pytest
 from loguru import logger
 import os
 import ttnn
 from models.demos.llama3_subdevices.tt.llama_common import (
-    get_prefill_rot_mat,
     HostEmbedding,
     PagedAttentionConfig,
 )
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.demos.llama3_subdevices.demo.demo import preprocess_inputs_prefill
 from pathlib import Path
 
 
@@ -56,10 +53,13 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 
 
 @torch.no_grad()
-@pytest.mark.timeout(900)
+@pytest.mark.parametrize(
+    "min_top1_acc, min_top5_acc",  # Max seqlen should be at least prefill_len + decode_len
+    ((92, 100),),
+)
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
-    ((10, 10, 1024),),
+    ((512, 128, 1024),),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -99,7 +99,7 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
     "use_reference_file",
     [
         # pytest.param(True, id="reference_file"),
-        pytest.param(False, id="reference_text"),
+        pytest.param(True, id="reference_text"),
     ],
 )
 @pytest.mark.parametrize(
@@ -116,6 +116,8 @@ def test_tt_model_acc(
     decode_len,
     max_seq_len,
     batch_size,
+    min_top1_acc,
+    min_top5_acc,
     paged_attention,
     page_params,
     optimizations,
@@ -152,7 +154,7 @@ def test_tt_model_acc(
 
     if use_reference_file:
         # Existing reference file loading logic
-        reference_data_file = f"models/demos/llama3/tests/reference_outputs/{model_size}.refpt"
+        reference_data_file = "models/tt_transformers/tests/reference_outputs/Llama3.1-70B-Instruct.refpt"
         logger.info(f"Loading reference data from {reference_data_file}")
         assert os.path.exists(reference_data_file)
         reference_data = torch.load(reference_data_file)
@@ -256,12 +258,15 @@ def test_tt_model_acc(
                 page_table=page_table_tt,
             )
 
-            ttnn.synchronize_device(mesh_device)
             tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-                tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                tt_out[0],
+                dim=3,
+                num_links=2,
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="SAMPLING",
             )
             tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-            ttnn.deallocate(tt_out_gathered)
             tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
                 tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
             )
@@ -326,10 +331,9 @@ def test_tt_model_acc(
             page_table=page_table_tt,
         )
         tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-            tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
         )
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-        ttnn.deallocate(tt_out_gathered)
         tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
             tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
         )
@@ -465,10 +469,12 @@ def test_tt_model_acc(
     #     optimizations,s
     # )
 
+    tt_model.tt_ccl.close()
+
     logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
-    # assert (
-    #     total_top1_acc >= min_top1_acc
-    # ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
-    # assert (
-    #     total_top5_acc >= min_top5_acc
-    # ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
+    assert (
+        total_top1_acc >= min_top1_acc
+    ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+    assert (
+        total_top5_acc >= min_top5_acc
+    ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"

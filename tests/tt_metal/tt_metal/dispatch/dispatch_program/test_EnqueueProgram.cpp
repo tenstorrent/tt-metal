@@ -2,29 +2,64 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <magic_enum/magic_enum.hpp>
+#include <stdlib.h>
+#include <string.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
+#include <map>
+#include <memory>
 #include <random>
+#include <set>
+#include <string>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "command_queue_fixture.hpp"
-#include "core_coord.hpp"
-#include "hal_exp.hpp"
-#include "llrt.hpp"
-#include "multi_command_queue_fixture.hpp"
-#include "random_program_fixture.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "dispatch_test_utils.hpp"
+#include "env_lib.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include "hal.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/kernel.hpp>
-#include <tt-metalium/allocator.hpp>
-#include "sub_device_types.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "llrt.hpp"
+#include "llrt/hal.hpp"
+#include <tt-metalium/logger.hpp>
+#include "multi_command_queue_fixture.hpp"
+#include <tt-metalium/program_impl.hpp>
+#include "random_program_fixture.hpp"
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/semaphore.hpp>
+#include "span.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/context/metal_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -196,8 +231,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
-    uint32_t rta_base0 =
-        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    uint32_t rta_base0 = hal_ref.get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     std::map<string, string> dummy_defines0 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args0)},
@@ -219,7 +254,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     vector<uint32_t> dummy_kernel0_args_readback = tt::llrt::read_hex_vec_from_core(
         device->id(),
         eth_noc_xy,
-        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
+        hal_ref.get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
         dummy_kernel0_args.size() * sizeof(uint32_t));
 
     pass &= (dummy_kernel0_args == dummy_kernel0_args_readback);
@@ -288,12 +324,12 @@ bool test_dummy_EnqueueProgram_with_sems(
         for (const CoreCoord& core_coord : core_range) {
             vector<uint32_t> semaphore_vals;
             uint32_t expected_semaphore_vals_for_core_idx = 0;
-            const uint32_t semaphore_buffer_size = program_config.num_sems * hal.get_alignment(HalMemType::L1);
+            const uint32_t semaphore_buffer_size = program_config.num_sems * hal_ref.get_alignment(HalMemType::L1);
             uint32_t semaphore_base = program.get_sem_base_addr(device, core_coord, CoreType::WORKER);
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size();
-                 i += (hal.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
+                 i += (hal_ref.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
                 const bool is_semaphore_value_correct =
                     semaphore_vals[i] == expected_semaphore_vals_for_core[expected_semaphore_vals_for_core_idx];
                 expected_semaphore_vals_for_core_idx++;
@@ -743,7 +779,7 @@ bool verify_rt_args(
     bool pass = true;
     std::string label = unique ? "Unique" : "Common";
     // Same idea as ReadFromDeviceL1() but with ETH support.
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto noc_xy = riscv == tt::RISCV::ERISC ? device->ethernet_core_from_logical_core(logical_core)
                                             : device->worker_core_from_logical_core(logical_core);
     std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
@@ -785,7 +821,7 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, const tt::RIS
         case tt::RISCV::ERISC: {
             HalProgrammableCoreType eth_core_type =
                 idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-            unique_args_addr = hal.get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
+            unique_args_addr = hal_ref.get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
             common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             break;
         } break;
@@ -923,8 +959,8 @@ void test_my_coordinates(IDevice* device, tt::RISCV processor_class, size_t cq_i
         cr = CoreRangeSet{std::set<CoreRange>{eth_cores.begin(), eth_cores.end()}};
     }
 
-    uint32_t cb_addr = processor_class == tt::RISCV::ERISC ? experimental::hal::get_erisc_l1_unreserved_base()
-                                                           : experimental::hal::get_tensix_l1_unreserved_base();
+    uint32_t cb_addr = processor_class == tt::RISCV::ERISC ? hal::get_erisc_l1_unreserved_base()
+                                                           : hal::get_tensix_l1_unreserved_base();
     std::vector<uint32_t> compile_args{
         cb_addr,
     };

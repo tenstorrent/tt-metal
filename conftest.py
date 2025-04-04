@@ -116,8 +116,6 @@ def device(request, device_params):
     yield device
 
     ttnn.DumpDeviceProfiler(device)
-
-    ttnn.synchronize_device(device)
     ttnn.close_device(device)
 
 
@@ -325,6 +323,14 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     ttnn.close_mesh_device(mesh_device)
     reset_fabric(fabric_config)
     del mesh_device
+
+
+@pytest.fixture()
+def ensure_devices_tg():
+    import ttnn
+
+    device_ids = ttnn.get_device_ids()
+    assert len(device_ids) == 32, f"Expected 32 devices, got {len(device_ids)}"
 
 
 @pytest.fixture()

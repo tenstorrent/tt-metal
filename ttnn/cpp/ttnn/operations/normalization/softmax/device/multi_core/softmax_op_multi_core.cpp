@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <math.h>
+#include <optional>
+
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include "tt-metalium/circular_buffer.hpp"
@@ -16,8 +19,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/util.hpp>
-
-#include <optional>
 
 using namespace tt::constants;
 namespace ttnn::operations::normalization {
@@ -697,7 +698,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
         bool mask_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(mask_stick_size);
         reader_compile_time_args.push_back((std::uint32_t)mask_stick_size_is_power_of_two);
         if (mask_stick_size_is_power_of_two) {
-            uint32_t mask_log2_stick_size = (std::uint32_t)log2(mask_stick_size);
+            uint32_t mask_log2_stick_size = (std::uint32_t)std::log2(mask_stick_size);
             reader_compile_time_args.push_back((std::uint32_t)mask_log2_stick_size);
         } else {
             reader_compile_time_args.push_back(mask_stick_size);

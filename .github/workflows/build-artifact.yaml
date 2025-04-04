@@ -24,7 +24,7 @@ on:
       version:
         required: false
         type: string
-        default: "20.04"
+        default: "22.04"
       architecture:
         required: false
         type: string
@@ -32,7 +32,7 @@ on:
       toolchain:
         required: false
         type: string
-        default: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+        default: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
         description: "Toolchain file to use for build"
       publish-artifact:
         required: false
@@ -53,12 +53,15 @@ on:
         default: false
         description: "Profile the compilation"
     outputs:
-      ci-build-docker-image:
-        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
-        value: ${{ jobs.build-docker-image.outputs.ci-build-tag }}
+      #ci-build-docker-image:
+      #  description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
+      #  value: ${{ jobs.build-docker-image.outputs.dev-tag }}
       #ci-test-docker-image:
       #  description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
       #  value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
+      dev-docker-image:
+        description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
+        value: ${{ jobs.build-docker-image.outputs.dev-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
@@ -100,7 +103,7 @@ on:
       toolchain:
         required: false
         type: string
-        default: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+        default: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
         description: "Toolchain file to use for build"
       profile:
         required: false
@@ -130,7 +133,7 @@ jobs:
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
       wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
     container:
-      image: ${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
+      image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
       env:
         CCACHE_TEMPDIR: /tmp/ccache
         CARGO_HOME: /tmp/.cargo
@@ -230,7 +233,7 @@ jobs:
       - name: 📦 Package
         run: |
           nice -n 19 cmake --build build --target package
-          ls -1sh build/*.deb build/*.ddeb
+          ls -1sh build/*.deb build/*.ddeb || true
 
       - name: 🐍 Build wheel
         if: ${{ inputs.build-wheel }}

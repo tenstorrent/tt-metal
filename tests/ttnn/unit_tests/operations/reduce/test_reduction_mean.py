@@ -11,7 +11,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, construct_pcc_assert_m
 from models.utility_functions import torch_random, comp_allclose
 
 
-@pytest.mark.parametrize("batch_size", [1, 16, 1, 16])
+@pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
 @pytest.mark.parametrize("dim", [-1, -2])

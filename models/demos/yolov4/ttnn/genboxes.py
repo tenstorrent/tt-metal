@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import math
+
 import numpy as np
+import torch
+
 import ttnn
 from models.utility_functions import _nearest_32
 
@@ -20,14 +22,22 @@ def create_conv_bias_tensor(torch_tensor, N, K, pad=0):
 
 
 class TtGenBoxes:
-    def __init__(self, device) -> None:
+    def __init__(self, device, resolution) -> None:
         self.thresh = 0.6
         self.num_classes = 80
         self.num_anchors = 3
+        self.resolution = resolution
+
+        if resolution == (320, 320):
+            h1, h2, h3 = 40, 20, 10
+        elif resolution == (640, 640):
+            h1, h2, h3 = 80, 40, 20
+        else:
+            raise ValueError(f"Unsupported resolution: {resolution}")
 
         self.grid_x = []
         self.grid_y = []
-        for H in (40, 20, 10):
+        for H in (h1, h2, h3):
             grid_x_i = torch.reshape(
                 torch.flatten(
                     torch.from_numpy(
@@ -65,12 +75,20 @@ class TtGenBoxes:
         AHW = self.num_anchors * HW
         A = self.num_anchors
 
-        if HW == 1600:
-            group = 0
-        elif HW == 400:
-            group = 1
-        elif HW == 100:
-            group = 2
+        if self.resolution[0] == 320:
+            if HW == 1600:
+                group = 0
+            elif HW == 400:
+                group = 1
+            elif HW == 100:
+                group = 2
+        else:
+            if HW == 6400:
+                group = 0
+            elif HW == 1600:
+                group = 1
+            elif HW == 400:
+                group = 2
 
         # Pre-derived from the torch function
         if group == 0:

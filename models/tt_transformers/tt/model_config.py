@@ -717,8 +717,8 @@ class ModelArgs:
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,
-                q_chunk_size=256,
-                k_chunk_size=256,
+                q_chunk_size=128 if self.arch_name == "blackhole" else 256,
+                k_chunk_size=128 if self.arch_name == "blackhole" else 256,
             )
 
             self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
@@ -1847,7 +1847,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            wrapper = HfDecoderWrapper(layer, self.head_dim)
+            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def reference_attention(self):
@@ -1996,25 +1996,29 @@ class HfAttentionWrapper:
 
 
 class HfDecoderWrapper:
-    def __init__(self, decoder, head_dim):
+    def __init__(self, decoder, head_dim, rotary_emb):
         from transformers import DynamicCache
 
         self.decoder = decoder
         self.head_dim = head_dim
+        self.rotary_emb = rotary_emb
         self.past_key_values = DynamicCache()
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        position_embeddings = self.rotary_emb(x, position_ids)
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
-        output, self.past_key_values = self.decoder.forward(
+        result = self.decoder.forward(
             x,
+            position_embeddings=position_embeddings,
             past_key_value=self.past_key_values,
             use_cache=True,
             position_ids=position_ids,
             attention_mask=mask,
         )
+        output = result[0]
         return output
 
     def __call__(self, *args, **kwargs):

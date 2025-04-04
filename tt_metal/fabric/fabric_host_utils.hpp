@@ -4,7 +4,19 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <tt-metalium/program_impl.hpp>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "fabric_host_interface.h"
+#include "system_memory_manager.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_fabric {
 
@@ -18,7 +30,7 @@ namespace tt::tt_fabric {
 // Inputs:
 // src_chip_id: physical chip id/device id of the sender chip
 // dst_chip_id: physical chip id/device id of the receiver chip
-// routing_plane: the link (0..n) to use b/w the src_chip_id and dst_chip_id. On WH for
+// link_idx: the link (0..n) to use b/w the src_chip_id and dst_chip_id. On WH for
 //                instance we can have upto 4 active links b/w two chips
 // worker_program: program handle
 // worker_core: worker core logical coordinates
@@ -33,7 +45,7 @@ namespace tt::tt_fabric {
 void append_fabric_connection_rt_args(
     chip_id_t src_chip_id,
     chip_id_t dst_chip_id,
-    routing_plane_id_t routing_plane,
+    uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args);

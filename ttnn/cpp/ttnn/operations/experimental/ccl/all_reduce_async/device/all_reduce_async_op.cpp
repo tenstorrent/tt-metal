@@ -35,9 +35,13 @@ AllReduceAsync create_all_reduce_async_struct(
             semaphore = semaphores.at(i);  // Get raw pointer
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(num_devices - 1);
             }
             if (i != num_devices - 1) {
                 forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
             }
         }
     }
@@ -192,9 +196,6 @@ Tensor all_reduce_async(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode) {
-    TT_FATAL(
-        topology == ttnn::ccl::Topology::Linear,
-        "This all_reduce API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -248,7 +249,7 @@ Tensor all_reduce_async(
 }  // namespace experimental
 }  // namespace operations
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
     size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;

@@ -4,10 +4,19 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <cstddef>
 #include <map>
+#include <string>
+#include <vector>
 
-#include "hlk_desc.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/hlk_desc.hpp>
+#include <hostdevcommon/kernel_structs.h>
+
+enum class MathFidelity : uint8_t;
+namespace tt {
+enum CBIndex : std::uint8_t;
+}  // namespace tt
 
 namespace tt::tt_metal {
 

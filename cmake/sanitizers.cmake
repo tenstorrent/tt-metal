@@ -19,24 +19,16 @@ set_property(
 
 # ASan, LSan and UBSan do not conflict with each other and are each fast enough that we can combine them.
 # Saves us from an explosion of pipelines to test our code.
-set(asan_flags "-fsanitize=address -fsanitize=leak -fsanitize=undefined")
-set(asan_compile_flags "${asan_flags} -fno-omit-frame-pointer")
-set(CMAKE_C_FLAGS_ASAN "${CMAKE_C_FLAGS_RELWITHDEBINFO} ${asan_compile_flags}")
-set(CMAKE_CXX_FLAGS_ASAN "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${asan_compile_flags}")
+set(asan_flags "-fno-omit-frame-pointer -fsanitize=address,leak,undefined")
+set(CMAKE_C_FLAGS_ASAN "${CMAKE_C_FLAGS_RELWITHDEBINFO} ${asan_flags}")
+set(CMAKE_CXX_FLAGS_ASAN "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${asan_flags}")
 set(CMAKE_EXE_LINKER_FLAGS_ASAN "${CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO} ${asan_flags}")
 set(CMAKE_SHARED_LINKER_FLAGS_ASAN "${CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO} ${asan_flags}")
-# set(CMAKE_STATIC_LINKER_FLAGS_ASAN "${CMAKE_STATIC_LINKER_FLAGS_RELWITHDEBINFO} ${asan_flags}")
 set(CMAKE_MODULE_LINKER_FLAGS_ASAN "${CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO} ${asan_flags}")
 
-set(CMAKE_C_FLAGS_TSAN "${CMAKE_C_FLAGS_RELWITHDEBINFO} -fsanitize=thread -fno-omit-frame-pointer")
-set(CMAKE_CXX_FLAGS_TSAN "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -fsanitize=thread -fno-omit-frame-pointer")
-set(CMAKE_EXE_LINKER_FLAGS_TSAN "${CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO} -fsanitize=thread -fno-omit-frame-pointer")
-set(CMAKE_SHARED_LINKER_FLAGS_TSAN
-    "${CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO} -fsanitize=thread -fno-omit-frame-pointer"
-)
-# set(CMAKE_STATIC_LINKER_FLAGS_TSAN
-# "${CMAKE_STATIC_LINKER_FLAGS_RELWITHDEBINFO} -fsanitize=thread -fno-omit-frame-pointer"
-# )
-set(CMAKE_MODULE_LINKER_FLAGS_TSAN
-    "${CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO} -fsanitize=thread -fno-omit-frame-pointer"
-)
+set(tsan_flags "-O1 -fno-omit-frame-pointer -fsanitize=thread")
+set(CMAKE_C_FLAGS_TSAN "${CMAKE_C_FLAGS_RELWITHDEBINFO} ${tsan_flags}")
+set(CMAKE_CXX_FLAGS_TSAN "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} ${tsan_flags}")
+set(CMAKE_EXE_LINKER_FLAGS_TSAN "${CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO} ${tsan_flags}")
+set(CMAKE_SHARED_LINKER_FLAGS_TSAN "${CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO} ${tsan_flags}")
+set(CMAKE_MODULE_LINKER_FLAGS_TSAN "${CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO} ${tsan_flags}")
