@@ -192,8 +192,8 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
         output_tensors.at(4),  // partial_output_tensor_backward_direction
         foreward_direction_remote_output_tensor,
         backward_direction_remote_output_tensor,
-        find_device(devices, sender_device_id),
         find_device(devices, receiver_device_id),
+        find_device(devices, sender_device_id),
         this->binary_op_type,
         this->scatter_dim,
         this->ring_size,
