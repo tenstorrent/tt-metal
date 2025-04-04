@@ -2184,6 +2184,7 @@ enum class FabricTestMode {
     HalfRing,
     FullRing,
     SaturateChipToChipRing,
+    RingAsLinear,
 };
 
 struct WriteThroughputStabilityTestWithPersistentFabricParams {
@@ -2298,10 +2299,12 @@ void Run1DFabricPacketSendTest(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     TT_FATAL(
-        !params.disable_sends_for_interior_workers || params.fabric_mode == FabricTestMode::Linear,
+        !params.disable_sends_for_interior_workers || params.fabric_mode == FabricTestMode::Linear ||
+            params.fabric_mode == FabricTestMode::RingAsLinear,
         "This test can only be run with disable_sends_for_interior_workers set to true or fabric_mode set to Linear");
     TT_FATAL(
-        !params.disable_end_workers_in_backward_direction || params.fabric_mode == FabricTestMode::Linear,
+        !params.disable_end_workers_in_backward_direction || params.fabric_mode == FabricTestMode::Linear ||
+            params.fabric_mode == FabricTestMode::RingAsLinear,
         "This test can only be run with disable_end_workers_in_backward_direction set to true or fabric_mode set to "
         "Linear");
     bool use_tg = num_devices == 32;
@@ -2329,7 +2332,8 @@ void Run1DFabricPacketSendTest(
         case FabricTestMode::SaturateChipToChipRing:
             TT_FATAL(line_size == 4, "SaturateChipToChipRing only supports line_size 4");
         case FabricTestMode::HalfRing:
-        case FabricTestMode::FullRing: topology = ttnn::ccl::Topology::Ring; break;
+        case FabricTestMode::FullRing:
+        case FabricTestMode::RingAsLinear: topology = ttnn::ccl::Topology::Ring; break;
     }
 
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
@@ -2423,7 +2427,7 @@ void Run1DFabricPacketSendTest(
     std::vector<Program*> fabric_program_ptrs;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
     setup_test_with_persistent_fabric(
-        devices,
+        devices_,
         dummy_worker_programs,
         subdevice_managers,
         fabric_programs,
@@ -2506,7 +2510,7 @@ void Run1DFabricPacketSendTest(
         size_t sync_num_fwd_hops;
         size_t sync_num_bwd_hops;
         size_t sync_count_per_link;
-        if (topology == ttnn::ccl::Topology::Ring) {
+        if (topology == ttnn::ccl::Topology::Ring && fabric_mode != FabricTestMode::RingAsLinear) {
             backward_device = i == 0 ? devices.back() : devices[i - 1];
             forward_device = i == line_size - 1 ? devices.front() : devices[i + 1];
 
@@ -2782,13 +2786,13 @@ void Run1DFabricPacketSendTest(
         log_info(tt::LogTest, "Main op done");
     }
 
-    TT_FATAL(fabric_programs->size() == devices.size(), "Expected fabric programs size to be same as devices size");
+    TT_FATAL(fabric_programs->size() == devices_.size(), "Expected fabric programs size to be same as devices size");
     log_info(tt::LogTest, "Fabric teardown");
     persistent_fabric_teardown_sequence(
-        devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+        devices_, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
 
     log_info(tt::LogTest, "Waiting for teardown completion");
-    for (IDevice* d : devices) {
+    for (IDevice* d : devices_) {
         tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
 
