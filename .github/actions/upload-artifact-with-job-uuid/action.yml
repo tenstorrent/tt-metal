@@ -5,6 +5,7 @@ inputs:
   path:
     description: "Paths to pass to upload-artifact and upload"
     required: true
+    default: "/work/generated/test_reports/"
   prefix:
     description: "Artifact name prefix"
     default: "artifact_"

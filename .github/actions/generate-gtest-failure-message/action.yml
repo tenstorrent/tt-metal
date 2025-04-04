@@ -5,6 +5,7 @@ inputs:
   path:
     description: "Paths to pass containing gtest XML files"
     required: true
+    default: "/work/generated/test_reports/"
 
 runs:
   using: "composite"
