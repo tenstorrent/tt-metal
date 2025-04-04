@@ -32,7 +32,10 @@ jobs:
     runs-on: ${{ matrix.runner-info.runs-on }}
     name: ${{ matrix.runner-info.machine-type }} ${{ matrix.runner-info.name }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
