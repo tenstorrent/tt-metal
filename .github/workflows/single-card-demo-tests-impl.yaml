@@ -60,7 +60,7 @@ jobs:
     env:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: 
+    runs-on:
       - ${{ matrix.test-group.runner-label }}
       - in-service
       - ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && 'bare-metal' || 'cloud-virtual-machine' }}
