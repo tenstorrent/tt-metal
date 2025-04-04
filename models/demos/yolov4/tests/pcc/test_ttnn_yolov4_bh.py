@@ -4,7 +4,7 @@
 
 import pytest
 
-from tests.ttnn.integration_tests.yolov4.test_ttnn_yolov4 import run_yolov4
+from models.demos.yolov4.tests.pcc.test_ttnn_yolov4 import run_yolov4
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)

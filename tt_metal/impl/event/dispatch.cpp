@@ -125,6 +125,7 @@ void issue_record_event_commands(
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
     uint32_t address = cq_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
     command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+        CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_EVENT,
         num_command_queues,
         address,
         DispatchSettings::EVENT_PADDED_SIZE,

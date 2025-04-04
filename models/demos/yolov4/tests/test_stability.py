@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@ import time
 import pytest
 import torch
 from loguru import logger
+from tqdm import tqdm
 
 import ttnn
 from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
@@ -21,7 +22,7 @@ from models.utility_functions import run_for_wormhole_b0
     "batch_size, act_dtype, weight_dtype",
     ((1, ttnn.bfloat16, ttnn.bfloat16),),
 )
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize(
     "resolution",
     [
@@ -29,7 +30,8 @@ from models.utility_functions import run_for_wormhole_b0
         (640, 640),
     ],
 )
-def test_run_yolov4_trace_2cqs_inference(
+@pytest.mark.parametrize("test_duration", [5])
+def test_yolov4_stability(
     device,
     use_program_cache,
     batch_size,
@@ -38,6 +40,7 @@ def test_run_yolov4_trace_2cqs_inference(
     enable_async_mode,
     model_location_generator,
     resolution,
+    test_duration,
 ):
     performant_runner = YOLOv4PerformantRunner(
         device,
@@ -48,19 +51,18 @@ def test_run_yolov4_trace_2cqs_inference(
         model_location_generator=None,
     )
 
-    inference_times = []
-    for _ in range(10):
-        input_shape = (1, *resolution, 3)
-        torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    logger.info(f"Running stability test for YOLOv4 with resolution: {resolution} and batch size: {batch_size}")
 
-        t0 = time.time()
-        _ = performant_runner.run(torch_input_tensor)
-        t1 = time.time()
-        inference_times.append(t1 - t0)
+    start_time = time.time()
+    with tqdm(total=test_duration, desc="Executing on device", unit="sec", mininterval=1) as pbar:
+        while True:
+            elapsed_time = round(time.time() - start_time, 1)
+            pbar.update(min(elapsed_time, test_duration) - pbar.n)
+
+            if elapsed_time >= test_duration:
+                break
+
+            torch_input_tensor = torch.randn((1, *resolution, 3), dtype=torch.float32)
+            _ = performant_runner.run(torch_input_tensor)
 
     performant_runner.release()
-
-    inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
-    logger.info(
-        f"ttnn_yolov4_batch_size: {batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
-    )
