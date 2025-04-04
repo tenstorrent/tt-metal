@@ -52,6 +52,7 @@ def test_cross_attention_transformer_text_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
+    is_ci_env,
 ):
     dtype = ttnn.bfloat8_b
     prefill_pcc_required = 0.98
@@ -70,6 +71,10 @@ def test_cross_attention_transformer_text_inference(
         kv_cache_dtype = torch.bfloat16
         # [INFO] n_iter = 3 is sufficient to exercise both prefill and decode phases
         n_iter = 3
+        if is_ci_env:
+            logger.info("Load and test 4 layers and 1 cross attention layer in CI for Llama 90B model")
+            model_args.n_layers = 4
+            model_args.vision_num_cross_attention_layers = 1
 
     state_dict = model_args.load_state_dict()
 
@@ -78,6 +83,15 @@ def test_cross_attention_transformer_text_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
+    if model_args.is_90b and is_ci_env:
+        # removing extra cross attention layers from the state dict as the Ref model decrees
+        x_atten_prefix = "cross_attention_layers."
+        partial_state_dict = {
+            k: v
+            for k, v in partial_state_dict.items()
+            if (not k.startswith(x_atten_prefix))
+            or (k.startswith(x_atten_prefix) and int(k.split(".")[1]) < model_args.vision_num_cross_attention_layers)
+        }
 
     dim = model_args.dim
     head_dim = model_args.head_dim
