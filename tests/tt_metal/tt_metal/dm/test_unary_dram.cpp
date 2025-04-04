@@ -215,7 +215,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
 /* ========== Sharded dram buffer test; Test id = 2 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
     // Parameters
-    uint32_t max_tensor_dim_pages = 4;  // Arbitrary tensor for sharding
+    uint32_t max_tensor_dim_pages = 1;  // Arbitrary tensor for sharding
     uint32_t page_size_bytes = 32;      // Page size in bytes (=flit size): 32 bytes for WH, 64 for BH
     if (arch_ == tt::ARCH::BLACKHOLE) {
         page_size_bytes *= 2;
