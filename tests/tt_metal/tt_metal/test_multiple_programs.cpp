@@ -263,7 +263,8 @@ int main(int argc, char** argv) {
             0,
             100,
             std::chrono::system_clock::now().time_since_epoch().count());
-        auto src0_activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(src0_tensor.get_values()));
+        auto src0_activations_tile_layout =
+            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(src0_tensor.get_values()));
         auto src0_activations = pack_bfloat16_vec_into_uint32_vec(src0_activations_tile_layout);
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_activations);
 
@@ -273,7 +274,8 @@ int main(int argc, char** argv) {
             0,
             100,
             std::chrono::system_clock::now().time_since_epoch().count());
-        auto src1_activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(src1_tensor.get_values()));
+        auto src1_activations_tile_layout =
+            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(src1_tensor.get_values()));
         auto src1_activations = pack_bfloat16_vec_into_uint32_vec(src1_activations_tile_layout);
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_activations);
 
@@ -308,7 +310,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         // Write matmul weights to DRAM
         auto identity = create_identity_matrix(32, 32, 32);  // bflaot16 32x32 identity
-        auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity));
+        auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(identity));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 

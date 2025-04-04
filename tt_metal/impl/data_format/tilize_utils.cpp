@@ -49,13 +49,47 @@ std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) == 0) ? 
 std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + tile_val - 1) & ~(tile_val - 1); }
 
 // TODO: add support for batches
+// Converts a linear non-zero-padded row-major tensor to 32-swizzled tilized row-major tensor
+template <typename T>
+std::vector<T> convert_layout_row_major_to_tile_swizzled(
+    tt::stl::Span<const T> in_row_major, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
+    ZoneScoped;
+    std::vector<T> tilized_result;
+    if (in_row_major.size() == 0) {
+        return tilized_result;
+    }
+
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+
+    TT_ASSERT(shape[0] % tile_H == 0 && shape[1] % tile_W == 0);
+
+    uint32_t H = shape[0];
+    uint32_t W = shape[1];
+
+    tilized_result.resize(H * W);
+    uint64_t out_index = 0;
+    for (auto hs = 0; hs < H; hs += tile_H) {
+        for (auto ws = 0; ws < W; ws += tile_W) {
+            for (auto ht = 0; ht < tile_H; ht++) {
+                size_t src_idx = (hs + ht) * W + ws;
+                size_t dst_idx = hs * W + (ws * tile_H) + (ht * tile_W);
+                std::memcpy(&tilized_result[dst_idx], &in_row_major[src_idx], tile_W * sizeof(T));
+            }
+        }
+    }
+
+    return tilized_result;
+}
+
+// TODO: add support for batches
 // Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
 template <typename T>
-std::vector<T> untilize_nchw(
-    tt::stl::Span<const T> in, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
+std::vector<T> convert_layout_tile_swizzled_to_row_major(
+    tt::stl::Span<const T> in_tile_swizzled, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
     ZoneScoped;
     std::vector<T> result;
-    if (in.size() == 0) {
+    if (in_tile_swizzled.size() == 0) {
         return result;
     }
 
@@ -76,7 +110,7 @@ std::vector<T> untilize_nchw(
                 // Note: the only difference with tilize_nchw - switched src and dst indices
                 size_t dst_idx = (hs + ht) * W + ws;
                 size_t src_idx = hs * W + (ws * tile_H) + (ht * tile_W);
-                std::memcpy(&result[dst_idx], &in[src_idx], tile_W * sizeof(T));
+                std::memcpy(&result[dst_idx], &in_tile_swizzled[src_idx], tile_W * sizeof(T));
             }
         }
     }
@@ -84,62 +118,28 @@ std::vector<T> untilize_nchw(
     return result;
 }
 
-// TODO: add support for batches
-// Converts a linear non-zero-padded row-major tensor to 32-swizzled tilized row-major tensor
-template <typename T>
-std::vector<T> tilize_nchw(
-    tt::stl::Span<const T> in_rowmajor, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
-    ZoneScoped;
-    std::vector<T> tilized_result;
-    if (in_rowmajor.size() == 0) {
-        return tilized_result;
-    }
-
-    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
-    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
-
-    TT_ASSERT(shape[0] % tile_H == 0 && shape[1] % tile_W == 0);
-
-    uint32_t H = shape[0];
-    uint32_t W = shape[1];
-
-    tilized_result.resize(H * W);
-    uint64_t out_index = 0;
-    for (auto hs = 0; hs < H; hs += tile_H) {
-        for (auto ws = 0; ws < W; ws += tile_W) {
-            for (auto ht = 0; ht < tile_H; ht++) {
-                size_t src_idx = (hs + ht) * W + ws;
-                size_t dst_idx = hs * W + (ws * tile_H) + (ht * tile_W);
-                std::memcpy(&tilized_result[dst_idx], &in_rowmajor[src_idx], tile_W * sizeof(T));
-            }
-        }
-    }
-
-    return tilized_result;
-}
-
 template <class T>
-std::vector<T> convert_to_tile_layout(
-    tt::stl::Span<const T> data,
+std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
+    tt::stl::Span<const T> in_tile_swizzled,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
     const bool transpose_face_order) {
     ZoneScoped;
     std::vector<T> result;
-    if (data.size() == 0) {
+    if (in_tile_swizzled.size() == 0) {
         return result;
     }
 
-    result.reserve(data.size());
+    result.reserve(in_tile_swizzled.size());
     auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
     auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
     auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
-    TT_ASSERT(data.size() % tile_HW == 0);
-    int num_tiles = data.size() / tile_HW;
+    TT_ASSERT(in_tile_swizzled.size() % tile_HW == 0);
+    int num_tiles = in_tile_swizzled.size() / tile_HW;
     for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         std::vector<T> top_left, top_right, bottom_left, bottom_right;
         top_left.resize(face_HW);
@@ -152,19 +152,22 @@ std::vector<T> convert_to_tile_layout(
             for (int col = 0; col < face_H; col++) {
                 for (int row = 0; row < face_W; row++) {
                     size_t dst_index = row * face_H + col;
-                    top_left[dst_index] = data[tile_offset + (col)*tile_W + row];
-                    top_right[dst_index] = data[tile_offset + (col)*tile_W + row + face_W];
-                    bottom_left[dst_index] = data[tile_offset + (col + face_H) * tile_W + row];
-                    bottom_right[dst_index] = data[tile_offset + (col + face_H) * tile_W + row + face_W];
+                    top_left[dst_index] = in_tile_swizzled[tile_offset + (col)*tile_W + row];
+                    top_right[dst_index] = in_tile_swizzled[tile_offset + (col)*tile_W + row + face_W];
+                    bottom_left[dst_index] = in_tile_swizzled[tile_offset + (col + face_H) * tile_W + row];
+                    bottom_right[dst_index] = in_tile_swizzled[tile_offset + (col + face_H) * tile_W + row + face_W];
                 }
             }
         } else {
             int index = tile_idx * tile_HW;
             for (int row = 0; row < face_H; row++) {
-                std::memcpy(&top_left[row * face_W], &data[index], face_W * sizeof(T));
-                std::memcpy(&top_right[row * face_W], &data[index + face_W], face_W * sizeof(T));
-                std::memcpy(&bottom_left[row * face_W], &data[index + tile_W * face_H], face_W * sizeof(T));
-                std::memcpy(&bottom_right[row * face_W], &data[index + tile_W * face_H + face_W], face_W * sizeof(T));
+                std::memcpy(&top_left[row * face_W], &in_tile_swizzled[index], face_W * sizeof(T));
+                std::memcpy(&top_right[row * face_W], &in_tile_swizzled[index + face_W], face_W * sizeof(T));
+                std::memcpy(&bottom_left[row * face_W], &in_tile_swizzled[index + tile_W * face_H], face_W * sizeof(T));
+                std::memcpy(
+                    &bottom_right[row * face_W],
+                    &in_tile_swizzled[index + tile_W * face_H + face_W],
+                    face_W * sizeof(T));
 
                 index += tile_W;
             }
@@ -191,15 +194,15 @@ std::vector<T> convert_to_tile_layout(
 }
 
 template <class T>
-std::vector<T> convert_to_flat_layout(
-    tt::stl::Span<const T> data,
+std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
+    tt::stl::Span<const T> in_tile_nfaces,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
     const bool /*transpose_face_order*/) {
     ZoneScoped;
-    std::vector<T> result(data.size());
-    if (data.size() == 0) {
+    std::vector<T> result(in_tile_nfaces.size());
+    if (in_tile_nfaces.size() == 0) {
         return result;
     }
     auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
@@ -210,8 +213,8 @@ std::vector<T> convert_to_flat_layout(
     auto face_HW = face_H * face_W;
     auto num_faces_col = tile_W / face_W;
     auto num_faces_row = tile_H / face_H;
-    TT_ASSERT(data.size() % tile_HW == 0);
-    int num_tiles = data.size() / tile_HW;
+    TT_ASSERT(in_tile_nfaces.size() % tile_HW == 0);
+    int num_tiles = in_tile_nfaces.size() / tile_HW;
     size_t dest_idx = 0;
     for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         int tile_start = tile_idx * tile_HW;
@@ -222,7 +225,7 @@ std::vector<T> convert_to_flat_layout(
                     const int start = tile_start + face_y * (face_H * tile_W);
                     for (int col = 0; col < face_W; col++) {
                         for (int row = 0; row < face_H; row++) {
-                            result[dest_idx++] = data[start + col + row * face_W];
+                            result[dest_idx++] = in_tile_nfaces[start + col + row * face_W];
                         }
                     }
                 }
@@ -232,7 +235,7 @@ std::vector<T> convert_to_flat_layout(
                     for (int face_x = 0; face_x < num_faces_col; face_x++) {
                         const int offset = face_x * face_HW;
                         for (int row = 0; row < face_H; row++) {
-                            result[dest_idx++] = data[start + offset + row * face_W];
+                            result[dest_idx++] = in_tile_nfaces[start + offset + row * face_W];
                         }
                     }
                 }
@@ -243,7 +246,7 @@ std::vector<T> convert_to_flat_layout(
                         for (int face_y = 0; face_y < num_faces_row; face_y++) {
                             const int offset = face_y * (face_H * tile_W);
                             for (int row = 0; row < face_H; row++) {
-                                result[dest_idx++] = data[start + offset + row * face_W];
+                                result[dest_idx++] = in_tile_nfaces[start + offset + row * face_W];
                             }
                         }
                     }
@@ -257,7 +260,7 @@ std::vector<T> convert_to_flat_layout(
                     for (int row = 0; row < face_H; row++) {
                         size_t src_idx = src_face_start + row * face_W;
                         size_t dst_idx = dst_face_start + row * tile_W;
-                        std::memcpy(&result[dst_idx], &data[src_idx], face_W * sizeof(T));
+                        std::memcpy(&result[dst_idx], &in_tile_nfaces[src_idx], face_W * sizeof(T));
                     }
                 }
             }
@@ -285,20 +288,21 @@ std::vector<T> convert_layout(
     switch (inL) {
         case tests::utils::TensorLayoutType::TILED_SWIZZLED:
             if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
-                return convert_to_tile_layout<T>(
+                return convert_layout_tile_swizzled_to_tile_nfaces<T>(
                     inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else if (outL == tests::utils::TensorLayoutType::LIN_ROW_MAJOR) {
-                return untilize_nchw<T>(inp, shape, tile_shape);
+                return convert_layout_tile_swizzled_to_row_major<T>(inp, shape, tile_shape);
             } else {
                 TT_ASSERT(false && "Unsupported conversion.");
             }
             break;
         case tests::utils::TensorLayoutType::LIN_ROW_MAJOR:
             if (outL == tests::utils::TensorLayoutType::TILED_SWIZZLED) {
-                return tilize_nchw<T>(inp, shape, tile_shape);
+                return convert_layout_row_major_to_tile_swizzled<T>(inp, shape, tile_shape);
             } else if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
-                auto swiz32 = tilize_nchw<T>(inp, shape, tile_shape);
-                return convert_to_tile_layout<T>(
+                // TODO: Implement direct conversion. Double conversion is not optimal
+                auto swiz32 = convert_layout_row_major_to_tile_swizzled<T>(inp, shape, tile_shape);
+                return convert_layout_tile_swizzled_to_tile_nfaces<T>(
                     swiz32, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else {
                 TT_ASSERT(false && "Unsupported conversion.");
@@ -306,12 +310,13 @@ std::vector<T> convert_layout(
             break;
         case tests::utils::TensorLayoutType::TILED_NFACES:
             if (outL == tests::utils::TensorLayoutType::TILED_SWIZZLED) {
-                return convert_to_flat_layout<T>(
+                return convert_layout_tile_nfaces_to_tile_swizzled<T>(
                     inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else if (outL == tests::utils::TensorLayoutType::LIN_ROW_MAJOR) {
-                auto swiz32 =
-                    convert_to_flat_layout<T>(inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
-                return untilize_nchw<T>(swiz32, shape, tile_shape);
+                // TODO: Implement direct conversion. Double conversion is not optimal
+                auto swiz32 = convert_layout_tile_nfaces_to_tile_swizzled<T>(
+                    inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+                return convert_layout_tile_swizzled_to_row_major<T>(swiz32, shape, tile_shape);
             } else {
                 TT_ASSERT(false && "Unsupported conversion");
             }
@@ -343,7 +348,7 @@ std::vector<T> convert_layout(
 }
 
 template <typename T>
-std::vector<T> tilize(const std::vector<T>& input, uint32_t m, uint32_t n) {
+std::vector<T> tilize_swizzled(const std::vector<T>& input, uint32_t m, uint32_t n) {
     TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
     TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
@@ -356,7 +361,7 @@ std::vector<T> tilize(const std::vector<T>& input, uint32_t m, uint32_t n) {
 }
 
 template <typename T>
-std::vector<T> untilize(const std::vector<T>& input, uint32_t m, uint32_t n) {
+std::vector<T> untilize_swizzled(const std::vector<T>& input, uint32_t m, uint32_t n) {
     TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
     TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
@@ -374,6 +379,12 @@ std::vector<T> tilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n
     TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
     TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
+    // // TODO: reuse convert_layout (requires batch support)
+    // return convert_layout<T>(
+    //     input,
+    //     PhysicalSize{m, n},
+    //     tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+    //     tests::utils::TensorLayoutType::TILED_NFACES);
     std::vector<T> tilized_input;
     tilized_input.reserve(input.size());
 
@@ -437,6 +448,12 @@ std::vector<T> untilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t
     TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
     TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
+    // // TODO: reuse convert_layout (requires batch support)
+    // return convert_layout<T>(
+    //     input,
+    //     PhysicalSize{m, n},
+    //     tests::utils::TensorLayoutType::TILED_NFACES,
+    //     tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
     std::vector<T> untilized_input;
     untilized_input.reserve(input.size());
 
@@ -501,15 +518,15 @@ std::vector<T> untilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t
 
 // Explicit instantiations
 // clang-format off
-template std::vector<float> convert_to_tile_layout<float>(tt::stl::Span<const float>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint16_t> convert_to_tile_layout<uint16_t>(tt::stl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint32_t> convert_to_tile_layout<uint32_t>(tt::stl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<bfloat16> convert_to_tile_layout<bfloat16>(tt::stl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<float> convert_layout_tile_swizzled_to_tile_nfaces<float>(tt::stl::Span<const float>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint16_t> convert_layout_tile_swizzled_to_tile_nfaces<uint16_t>(tt::stl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint32_t> convert_layout_tile_swizzled_to_tile_nfaces<uint32_t>(tt::stl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<bfloat16> convert_layout_tile_swizzled_to_tile_nfaces<bfloat16>(tt::stl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
-template std::vector<float> convert_to_flat_layout<float>(tt::stl::Span<const float>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint16_t> convert_to_flat_layout<uint16_t>(tt::stl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<uint32_t> convert_to_flat_layout<uint32_t>(tt::stl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
-template std::vector<bfloat16> convert_to_flat_layout<bfloat16>(tt::stl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<float> convert_layout_tile_nfaces_to_tile_swizzled<float>(tt::stl::Span<const float>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint16_t> convert_layout_tile_nfaces_to_tile_swizzled<uint16_t>(tt::stl::Span<const uint16_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<uint32_t> convert_layout_tile_nfaces_to_tile_swizzled<uint32_t>(tt::stl::Span<const uint32_t>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
+template std::vector<bfloat16> convert_layout_tile_nfaces_to_tile_swizzled<bfloat16>(tt::stl::Span<const bfloat16>, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
 template std::vector<float> convert_layout<float>(tt::stl::Span<const float>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<int> convert_layout<int>(tt::stl::Span<const int>, const PhysicalSize&, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
@@ -525,15 +542,15 @@ template std::vector<uint16_t> convert_layout<uint16_t>(tt::stl::Span<const uint
 template std::vector<uint32_t> convert_layout<uint32_t>(tt::stl::Span<const uint32_t>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 template std::vector<bfloat16> convert_layout<bfloat16>(tt::stl::Span<const bfloat16>, tt::stl::Span<const uint32_t>, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, std::optional<PhysicalSize>, std::optional<PhysicalSize>, const bool, const bool);
 
-template std::vector<uint16_t> tilize<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
-template std::vector<uint32_t> tilize<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
-template std::vector<bfloat16> tilize<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
-template std::vector<float> tilize<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
+template std::vector<uint16_t> tilize_swizzled<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
+template std::vector<uint32_t> tilize_swizzled<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
+template std::vector<bfloat16> tilize_swizzled<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
+template std::vector<float> tilize_swizzled<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
 
-template std::vector<uint16_t> untilize<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
-template std::vector<uint32_t> untilize<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
-template std::vector<bfloat16> untilize<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
-template std::vector<float> untilize<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
+template std::vector<uint16_t> untilize_swizzled<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
+template std::vector<uint32_t> untilize_swizzled<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
+template std::vector<bfloat16> untilize_swizzled<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
+template std::vector<float> untilize_swizzled<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
 
 template std::vector<uint16_t> tilize_nfaces<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
 template std::vector<uint32_t> tilize_nfaces<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);

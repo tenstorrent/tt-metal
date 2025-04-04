@@ -258,14 +258,16 @@ int main(int argc, char** argv) {
                 std::vector<bfloat16> weights_slice = get_col_slice(identity, num_cores_c, c, Kt * 32, Nt * 32);
 
                 CoreCoord core = {(std::size_t)c, (std::size_t)r};
-                auto activations_tilized = tilize(activation_slice, per_core_Mt * 32, Kt * 32);
-                auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
+                auto activations_tilized = tilize_swizzled(activation_slice, per_core_Mt * 32, Kt * 32);
+                auto activations_tile_layout =
+                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
                 pass &= tt_metal::detail::WriteToDeviceL1(device, core, activations_addr, activations);
                 TT_FATAL(pass, "Error");
 
-                auto identity_tilized = tilize(weights_slice, Kt * 32, per_core_Nt * 32);
-                auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
+                auto identity_tilized = tilize_swizzled(weights_slice, Kt * 32, per_core_Nt * 32);
+                auto weights_tile_layout =
+                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 auto weights_tile_transposed = transpose_tiles(weights, Kt, per_core_Nt, 1);
                 pass &= tt_metal::detail::WriteToDeviceL1(device, core, weights_addr, weights_tile_transposed);
@@ -356,8 +358,9 @@ int main(int argc, char** argv) {
                     tt_metal::detail::ReadFromDeviceL1(
                         device, core, output_addr, cb_output_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                    auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
-                    auto result_untilized = untilize(result_flat_layout, per_core_Mt * 32, per_core_Nt * 32);
+                    auto result_flat_layout =
+                        convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+                    auto result_untilized = untilize_swizzled(result_flat_layout, per_core_Mt * 32, per_core_Nt * 32);
 
                     if (print_tensor) {
                         print_vec(

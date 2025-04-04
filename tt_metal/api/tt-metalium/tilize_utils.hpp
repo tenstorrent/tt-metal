@@ -42,7 +42,7 @@ std::uint32_t round_up_to_mul32(std::uint32_t val);
 std::uint32_t round_up_to_tile(int val, int tile_val);
 
 template <class T>
-std::vector<T> convert_to_tile_layout(
+std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
     tt::stl::Span<const T> data,
     std::optional<PhysicalSize> tile_shape = std::nullopt,
     std::optional<PhysicalSize> face_shape = std::nullopt,
@@ -50,7 +50,7 @@ std::vector<T> convert_to_tile_layout(
     bool transpose_face_order = false);
 
 template <class T>
-std::vector<T> convert_to_flat_layout(
+std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
     tt::stl::Span<const T> data,
     std::optional<PhysicalSize> tile_shape = std::nullopt,
     std::optional<PhysicalSize> face_shape = std::nullopt,
@@ -80,11 +80,12 @@ std::vector<T> convert_layout(
     bool transpose_of_faces = false);
 
 // Those are specific cases that convert_layout can do, but left for compatibility with existing codebase
+// Converts from/to row major
 template <typename T>
-std::vector<T> tilize(const std::vector<T>& input, uint32_t m, uint32_t n);
+std::vector<T> tilize_swizzled(const std::vector<T>& input, uint32_t m, uint32_t n);
 
 template <typename T>
-std::vector<T> untilize(const std::vector<T>& input, uint32_t m, uint32_t n);
+std::vector<T> untilize_swizzled(const std::vector<T>& input, uint32_t m, uint32_t n);
 
 template <typename T>
 std::vector<T> tilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n);
