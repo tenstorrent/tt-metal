@@ -173,6 +173,7 @@ def test_rms_perf(
 
     assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
 
+
 @pytest.mark.parametrize(
     "ar_type, warmup_iters, perf_target_us",
     [
