@@ -646,12 +646,9 @@ class TtFalconAttentionDecode(nn.Module):
                 -2,
                 -3,
             )
-            query_layer = ttnn.reshape_on_device(
+            query_layer = ttnn.reshape(
                 query_layer,
-                batch,
-                1,
-                self.padded_local_heads,
-                self.head_dim,  # Batch must be in dim 0 to match K cache
+                (batch, 1, self.padded_local_heads, self.head_dim),  # Batch must be in dim 0 to match K cache
             )
             query_layer = ttnn.interleaved_to_sharded(
                 query_layer,
@@ -792,7 +789,7 @@ class TtFalconAttentionDecode(nn.Module):
             )
 
             # Get batch in dim 1
-            attn_output = ttnn.reshape_on_device(attn_output, 1, batch, self.padded_local_heads, self.head_dim)
+            attn_output = ttnn.reshape(attn_output, (1, batch, self.padded_local_heads, self.head_dim))
 
             # Get batch in dim 2
             attn_output = ttnn.transpose(
