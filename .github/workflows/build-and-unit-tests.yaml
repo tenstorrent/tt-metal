@@ -55,7 +55,7 @@ jobs:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        GTEST_OUTPUT: xml:generated/test_reports/
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_SLOW_DISPATCH_MODE: 1
         TT_METAL_HOME: /work
       volumes:
@@ -89,7 +89,7 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           path: |
-            generated/test_reports/
+            /work/generated/test_reports/
           prefix: "test_reports_"
       - name: Generate system logs on failure
         uses: ./.github/actions/generate-system-logs
@@ -99,4 +99,4 @@ jobs:
         if: ${{ failure() }}
         with:
           path: |
-            generated/test_reports/
+            /work/generated/test_reports/
