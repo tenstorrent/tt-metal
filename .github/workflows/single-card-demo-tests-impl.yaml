@@ -63,8 +63,8 @@ jobs:
     runs-on:
       - ${{ matrix.test-group.runner-label }}
       - in-service
-      - ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && 'bare-metal' || 'cloud-virtual-machine' }}
-      - ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && 'pipeline-perf' || 'cloud-virtual-machine' }}
+      - ${{ (matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && 'bare-metal') || 'cloud-virtual-machine' }}
+      - ${{ (matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && 'pipeline-perf') || 'cloud-virtual-machine' }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
