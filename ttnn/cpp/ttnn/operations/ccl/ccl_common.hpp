@@ -677,5 +677,7 @@ private:
     uint32_t partition_size;
 };
 
+std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);
+
 }  // namespace ccl
 }  // namespace ttnn
