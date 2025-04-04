@@ -42,7 +42,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig get_default_fabric_config() {
 void append_fabric_connection_rt_args(
     chip_id_t src_chip_id,
     chip_id_t dst_chip_id,
-    routing_plane_id_t routing_plane,
+    uint32_t link_idx,
     tt::tt_metal::Program& worker_program,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args) {
@@ -63,42 +63,32 @@ void append_fabric_connection_rt_args(
         src_mesh_id,
         dst_mesh_id);
 
-    // currently the src and dest should be adjacent, until the control plane has enough logic to check on the same line
-    const auto& neighbor_chips_and_cores =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(src_chip_id);
-    const auto& dst_chip_and_cores = neighbor_chips_and_cores.find(dst_chip_id);
-    TT_FATAL(dst_chip_and_cores != neighbor_chips_and_cores.end(), "Src and Dst chips are not physically adjacent");
-
-    const auto& fabric_ethernet_channels =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(src_chip_id);
-    const auto& candidate_ethernet_cores = dst_chip_and_cores->second;
-    const auto& logical_eth_core_to_chan_map =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(src_chip_id).logical_eth_core_to_chan_map;
-
-    std::optional<chan_id_t> fabric_router_channel;
-
-    for (const auto& eth_core : candidate_ethernet_cores) {
-        auto eth_chan = logical_eth_core_to_chan_map.at(eth_core);
-
-        // selected channel should match the requested routing plane and should be one of the active fabric channels
-        if (routing_plane != control_plane->get_routing_plane_id(eth_chan)) {
+    auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+    std::optional<std::set<chan_id_t>> candidate_ethernet_cores;
+    // mimic the 1d fabric connection setup steps to correctly find the candidate links
+    for (const auto& direction : routing_directions) {
+        auto neighbors = control_plane->get_intra_chip_neighbors(src_mesh_id, src_logical_chip_id, direction);
+        if (neighbors.empty() || neighbors[0] != dst_logical_chip_id) {
             continue;
         }
-        if (fabric_ethernet_channels.find(eth_chan) != fabric_ethernet_channels.end()) {
-            fabric_router_channel = eth_chan;
-            break;
-        }
+
+        candidate_ethernet_cores =
+            control_plane->get_active_fabric_eth_channels_in_direction(src_mesh_id, src_logical_chip_id, direction);
     }
 
     TT_FATAL(
-        fabric_router_channel.has_value(),
-        "Could not find any fabric router for requested routing plane: {}",
-        routing_plane);
+        candidate_ethernet_cores.has_value(), "Could not find any fabric ethernet cores between src and dst chips");
+
+    TT_FATAL((link_idx + 1) <= candidate_ethernet_cores.value().size(), "link idx out of bounds");
+
+    auto it = candidate_ethernet_cores.value().begin();
+    std::advance(it, link_idx);
+    auto fabric_router_channel = *it;
 
     const auto& edm_config = get_default_fabric_config();
     CoreCoord fabric_router_virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
-            src_chip_id, fabric_router_channel.value());
+            src_chip_id, fabric_router_channel);
 
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = fabric_router_virtual_core.x,
