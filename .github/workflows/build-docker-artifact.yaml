@@ -98,7 +98,7 @@ jobs:
     if: needs.check-docker-images.outputs.dev-exists != 'true'
     timeout-minutes: 30
     runs-on:
-      - tt-beta-ubuntu-2204-large
+      - tt-beta-ubuntu-2204-xlarge
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4

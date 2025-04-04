@@ -126,7 +126,7 @@ jobs:
     needs: build-docker-image
     timeout-minutes: 30
     runs-on:
-      - tt-beta-ubuntu-2204-large
+      - tt-beta-ubuntu-2204-xlarge
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
