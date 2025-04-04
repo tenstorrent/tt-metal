@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "activation.hpp"
+#include "cluster.hpp"
 #include "core.hpp"
 #include "device.hpp"
 #include "fabric.hpp"
@@ -42,6 +43,7 @@ PYBIND11_MODULE(_ttnn, module) {
     auto m_graph = module.def_submodule("graph", "Contains graph capture functions");
     auto m_types = module.def_submodule("types", "ttnn Types");
     auto m_activation = module.def_submodule("activation", "ttnn Activation");
+    auto m_cluster = module.def_submodule("cluster", "ttnn cluster");
     auto m_core = module.def_submodule("core", "core functions");
     auto m_device = module.def_submodule("device", "ttnn devices");
     auto m_multi_device = module.def_submodule("multi_device", "ttnn multi_device");
@@ -85,6 +87,7 @@ PYBIND11_MODULE(_ttnn, module) {
 
     ttnn::types::py_module(m_types);
     ttnn::activation::py_module(m_activation);
+    ttnn::cluster::py_cluster_module(m_cluster);
     ttnn::device::py_device_module(m_device);
     ttnn::distributed::py_module(m_multi_device);
     ttnn::events::py_module(m_events);
