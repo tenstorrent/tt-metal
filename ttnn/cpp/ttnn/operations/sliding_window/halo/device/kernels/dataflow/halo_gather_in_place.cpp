@@ -194,13 +194,9 @@ void kernel_main() {
     constexpr uint32_t is_width_sharded = get_compile_time_arg_val(14);
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(15);
     constexpr uint32_t remote_read = get_compile_time_arg_val(16);  // Unused parameter
-    constexpr uint32_t num_cores_nhw = get_compile_time_arg_val(17);
-    constexpr uint32_t num_cores_c = get_compile_time_arg_val(18);
-    constexpr uint32_t num_cores_x = get_compile_time_arg_val(19);
-    constexpr uint32_t semaphore_id = get_compile_time_arg_val(20);
-    constexpr uint32_t max_out_nsticks_per_core = get_compile_time_arg_val(21);
-
-    constexpr uint32_t num_cores = num_cores_nhw * num_cores_c;
+    constexpr uint32_t num_cores = get_compile_time_arg_val(17);
+    constexpr uint32_t semaphore_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_out_buffer_start_delta = get_compile_time_arg_val(19);
 
     uint32_t arg_idx = 0;
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -216,7 +212,11 @@ void kernel_main() {
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 
-    // input shards
+    // if constexpr (local_config_cb_id) {
+    //     tt::data_movement::common::print_bf16_pages(
+    //         in_base_l1_addr, 512, 64);
+    // }
+
     if constexpr (local_config_cb_id) {
         cb_reserve_back(src_cb_id, in_nsticks);
         cb_push_back(src_cb_id, in_nsticks);
@@ -238,7 +238,6 @@ void kernel_main() {
     noc_async_write_barrier();
 
     if constexpr (local_config_cb_id) {
-        const int32_t in_out_buffer_start_delta = max_out_nsticks_per_core - in_nsticks;
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
         copy_sticks_async<stick_nbytes, input_aligned_page_size>(
@@ -249,7 +248,6 @@ void kernel_main() {
     noc_async_write_barrier();
 
     for (uint16_t noc = 0; noc < num_cores; ++noc) {
-        DPRINT << "id=" << noc << " x=" << core_noc_x[noc] << " y=" << core_noc_y[noc] << ENDL();
         const uint64_t ref_semaphore_noc_addr = get_noc_addr(core_noc_x[noc], core_noc_y[noc], semaphore_addr);
         noc_semaphore_inc(ref_semaphore_noc_addr, 1);
     }
@@ -303,4 +301,5 @@ void kernel_main() {
 
     noc_async_read_barrier();
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
