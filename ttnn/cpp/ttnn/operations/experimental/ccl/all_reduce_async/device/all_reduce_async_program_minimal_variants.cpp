@@ -254,7 +254,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             get_optimal_worker_core_placement(ethernet_cores_virtual, sub_device_cores, num_links);
     } else {
         std::tie(sender_worker_core_range, sender_worker_cores) =
-            choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, sub_device_cores);
+            ar_choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, sub_device_cores);
     }
 
     if (device->id() == 4) {
