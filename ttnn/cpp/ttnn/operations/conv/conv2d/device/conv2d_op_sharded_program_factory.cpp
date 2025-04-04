@@ -1378,11 +1378,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     if (packer_l1_acc_en) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
+
+    bmm_op_utils::throttle_mm_perf(compute_defines, math_fidelity);
+
     for (auto elem : compute_defines) {
         log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
     }
-
-    bmm_op_utils::add_nops_in_matmul(compute_defines, math_fidelity);
 
     writer_compile_time_args = {
         cb_indices.out0_cb,

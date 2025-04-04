@@ -602,6 +602,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         compute_defines["PACKER_L1_ACC"] = "1";
     }
 
+    bmm_op_utils::throttle_mm_perf(compute_defines, math_fidelity);
+
     for (auto elem : compute_defines) {
         log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
     }
@@ -754,8 +756,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         partials_cb_uses_output = cb_config_matmul_partials.globally_allocated_address().value() ==
                                   cb_config_output.globally_allocated_address().value();
     }
-
-    bmm_op_utils::add_nops_in_matmul(compute_defines, math_fidelity);
 
     compute_kernel_args = {
         act_block_w_ntiles,      // in0_block_w
