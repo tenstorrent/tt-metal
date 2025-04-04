@@ -100,7 +100,6 @@ jobs:
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
-      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
