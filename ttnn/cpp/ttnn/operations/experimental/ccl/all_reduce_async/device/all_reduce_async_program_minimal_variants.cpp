@@ -81,28 +81,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
-    size_t num_targets_forward = 0;
-    size_t num_targets_backward = 0;
-    bool dynamic_alternate = false;
-    if (topology == ccl::Topology::Linear) {
-        LineTopology line_topology(ring_size, ring_index);
-        num_targets_forward =
-            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
-        num_targets_backward =
-            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
-    } else if (topology == ccl::Topology::Ring) {
-        // TODO: Commonize
-        num_targets_forward = tt::div_up(ring_size - 1, 2);
-        num_targets_backward = ring_size - 1 - num_targets_forward;
-        constexpr bool static_alternate = true;
-        if constexpr (static_alternate) {
-            if (ring_index % 2 == 0) {
-                std::swap(num_targets_forward, num_targets_backward);
-            }
-        }
-        // Even ring size will result in uneven fwd/backward distances
-        dynamic_alternate = ring_size % 2 == 0;
-    }
+    auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
+        ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();

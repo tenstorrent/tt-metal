@@ -120,6 +120,7 @@ void kernel_main() {
         // Within-shard offset
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
 
+        // This issues a flush barrier
         write_and_advance_local_read_address_for_fabric_write(
             noc0_dest_noc_addr,
             pkt_hdr_forward,
@@ -139,7 +140,6 @@ void kernel_main() {
             shard_tile_id = 0;
             core_id++;
         }
-        noc_async_writes_flushed();
         cb_pop_front(cb0_id, num_tiles_to_read_this_core);
     }
 
@@ -184,7 +184,7 @@ void kernel_main() {
     }
 
     // 3. wait for mcast output ready semaphore
-    while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
+    while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
 
     // loop over mcast ranges
     for (uint32_t i = 0; i < num_mcast_ranges; i++) {
@@ -205,7 +205,7 @@ void kernel_main() {
     }
 
     // 4. global semaphore reset
-    *reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) = 0;
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close_finish();
