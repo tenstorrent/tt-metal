@@ -91,6 +91,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
     prev_pcc = None
 
     logger.info("Run Llama_MLP_PF")
+    # Explicitly allocate global CB to avoid memory fragmentation
     prefetcher_setup.global_circular_buffer = ttnn.create_global_circular_buffer(
         mesh_device,
         prefetcher_setup.sender_receiver_mapping,

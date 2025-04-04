@@ -179,6 +179,7 @@ def test_llama_attention_inference(
             mesh_shape=model_args.cluster_shape,
         ),
     )
+    # Explicitly allocate global CB to avoid memory fragmentation
     prefetcher_setup.global_circular_buffer = ttnn.create_global_circular_buffer(
         mesh_device,
         prefetcher_setup.sender_receiver_mapping,
