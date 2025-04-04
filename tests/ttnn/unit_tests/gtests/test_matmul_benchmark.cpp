@@ -135,7 +135,7 @@ public:
 };
 
 TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
-    GTEST_SKIP() << "WH di/dt hang, need to skip CI and run locally only";
+    GTEST_SKIP() << "Benchmark is not intended to be run as part of CI and can be manually run locally";
 
     // Parse test config
     const MatmulTestConfig& test_config = std::get<0>(GetParam());
@@ -179,8 +179,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     auto compute_grid_size = device->compute_with_storage_grid_size();
     if (compute_grid_size.y < grid_size.height() || compute_grid_size.x < grid_size.width()) {
-        GTEST_SKIP() << "Requested grid size of " << grid_size << " exceeds device's available compute grid of size "
-                     << compute_grid_size.str();
+        GTEST_SKIP() << "Skipping test as requested compute grid size " << grid_size
+                     << " exceeds available compute grid " << compute_grid_size.str();
     }
 
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
