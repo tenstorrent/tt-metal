@@ -23,7 +23,7 @@ jobs:
         test-group:
           - name: "WH N300 pgm dispatch nightly"
             arch: wormhole_b0
-            runs-on: ["cloud-virtual-machine", "N300", "in-service"]
+            runs-on: tt-beta-ubuntu-2204-n300-large-stable
             run-args: |
               mkdir -p generated/test_reports
               ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_wormhole_b0 --benchmark_out_format=json --benchmark_out=bench.json
