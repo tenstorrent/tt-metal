@@ -68,6 +68,8 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
+    const auto input_core_ranges = input_tensor.buffer()->shard_spec().grid().ranges();
+    const auto padded_input_shape = input_tensor.get_padded_shape();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
@@ -78,12 +80,20 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout);
+
+    TT_FATAL(
+        input_core_ranges[0].start_coord.x == 1 && input_core_ranges[0].end_coord.x == 3 &&
+            input_core_ranges[0].start_coord.y == 0 && input_core_ranges[0].end_coord.y == 1 &&
+            input_core_ranges[1].start_coord.x == 1 && input_core_ranges[1].end_coord.x == 2 &&
+            input_core_ranges[1].start_coord.y == 2 && input_core_ranges[1].end_coord.y == 2,
+        "Unsupported input core ranges!");
+    TT_FATAL(
+        padded_input_shape[0] == 1 && padded_input_shape[1] == 8 && padded_input_shape[2] == 32 &&
+            padded_input_shape[3] == 128,
+        "Unsupported input shape, should be [1, 8, 32, 128]!");
 }
 
 static void validate_output_tensor_alloc(const std::vector<Tensor>& output_tensors) {
@@ -110,8 +120,9 @@ std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::v
     auto batch = input_shape[1];
     auto head_dim = input_shape[3];
     // pad batch to 32 if necessary
-    if (batch < 32) {
-        batch = 32;
+    uint32_t batch_size = 32;
+    if (batch < batch_size) {
+        batch = batch_size;
     }
     auto hidden_dim = num_heads * head_dim;
 

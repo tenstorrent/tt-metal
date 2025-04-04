@@ -34,6 +34,17 @@ namespace ttnn {
 
 using namespace ccl;
 
+struct llama_config {
+    CoreRange nlp_only_core_range_1 = CoreRange({1, 1}, {3, 1});  // cores that are used for NLP op only
+    CoreRange nlp_only_core_range_2 = CoreRange({1, 2}, {2, 2});
+    uint32_t num_cores_input_tensor = 8;
+    CoreRange sem_mcast_range_1 =
+        CoreRange({2, 0}, {3, 0});  // cores waiting for all gather op to finish to start nlp op
+    CoreRange sem_mcast_range_2 = CoreRange({1, 1}, {3, 1});
+    CoreRange sem_mcast_range_3 = CoreRange({1, 2}, {2, 2});
+    uint32_t num_semaphore_ranges = 3;
+};
+
 void append_fabric_connection_rt_arguments(
     const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& connection,
     const CoreCoord& core,
@@ -107,6 +118,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const size_t num_targets_backward =
         line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
 
+    // To overlap NLP local data with all gather, we divide the batches for each device into:
+    //      - local batch (starts with start_local)
+    //      - remote batches
+    //          - batch 1 (from batch_start_1 to batch end_1)
+    //          - batch 2 (from batch_start_2 to batch end_2) if applicable
     uint32_t batch_size = 1;
     uint32_t batch_start_1 = 8;
     uint32_t batch_end_1 = 32;
@@ -172,9 +188,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     auto face_h = face_shape[0];
     auto face_w = face_shape[1];
     auto face_hw = face_h * face_w;
+    uint32_t first_phase = 1;
+    uint32_t second_phase = 2;
 
     const uint32_t head_tiles = head_dim / tile_w;
     const uint32_t head_size = head_tiles * single_tile_size;
+    const uint32_t tile_size = head_size / head_tiles;
 
     uint32_t element_size = temp_tensor.element_size();
     uint32_t sub_tile_line_bytes = face_w * element_size;
@@ -227,15 +246,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
     const auto& cores = corerange_to_cores(q_cores, num_cores, true);
 
-    auto core_range_1 = CoreRange({1, 1}, {3, 1});
-    auto core_range_2 = CoreRange({1, 2}, {2, 2});
-    const auto& q_cores_updated = CoreRangeSet(std::vector{core_range_1, core_range_2});
+    llama_config llama_configuration;
+    const auto& q_cores_updated =
+        CoreRangeSet(std::vector{llama_configuration.nlp_only_core_range_1, llama_configuration.nlp_only_core_range_2});
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
 
     // cores for input
     const uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
     const auto& in_cores_vec = corerange_to_cores(in_cores, in_num_cores, true);
+    const uint32_t num_tiles_per_core_concat = (head_tiles * batch) / in_num_cores;
 
     std::vector<uint32_t> noc_x_coords;
     noc_x_coords.reserve(in_num_cores);
@@ -256,7 +276,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         head_size,
         batch,
         head_tiles,
-        1,  // read the first phase
+        first_phase,
         in_num_cores,
         face_h,
         face_hw,
@@ -266,7 +286,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         batch_end_1,
         batch_start_2,
         batch_end_2,
-        start_local};
+        start_local,
+        tile_size,
+        num_tiles_per_core_concat};
 
     auto concat_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -278,7 +300,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             .noc = reader_noc,
             .compile_args = concat_reader_ct_args});
 
-    concat_reader_ct_args[6] = 2;
+    concat_reader_ct_args[6] = second_phase;
     auto concat_reader_2_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
@@ -302,7 +324,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         head_size,
         batch,
         head_tiles,
-        1,  // read the first phase
+        first_phase,
         in_num_cores,
         face_h,
         face_hw,
@@ -312,7 +334,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         batch_end_1,
         batch_start_2,
         batch_end_2,
-        start_local};
+        start_local,
+        tile_size,
+        num_tiles_per_core_concat};
 
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -340,7 +364,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         head_size,
         batch,
         head_tiles,
-        2,  // read the second phase
+        second_phase,
         in_num_cores,
         face_h,
         face_hw,
@@ -350,7 +374,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         batch_end_1,
         batch_start_2,
         batch_end_2,
-        start_local};
+        start_local,
+        llama_configuration.num_semaphore_ranges,
+        tile_size,
+        num_tiles_per_core_concat};
 
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -383,7 +410,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
     std::vector<uint32_t> nlp_local_core_x;
     std::vector<uint32_t> nlp_local_core_y;
-    for (uint32_t k = 0; k < 8; k++) {
+    for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
         auto this_core = device->worker_core_from_logical_core(input_cores_vec[k]);
         nlp_local_core_x.push_back(this_core.x);
         nlp_local_core_y.push_back(this_core.y);
@@ -503,10 +530,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             // out_ready_sem_wait_value,              // out_ready_sem_wait_value
             concat_semaphore_id,
         };
-        auto sem_mcast_range_1 = CoreRange({2, 0}, {3, 0});
-        auto sem_mcast_range_2 = CoreRange({1, 1}, {3, 1});
-        auto sem_mcast_range_3 = CoreRange({1, 2}, {2, 2});
-        auto sem_mcast_ranges = CoreRangeSet(std::vector{sem_mcast_range_1, sem_mcast_range_2, sem_mcast_range_3});
+
+        auto sem_mcast_ranges = CoreRangeSet(std::vector{
+            llama_configuration.sem_mcast_range_1,
+            llama_configuration.sem_mcast_range_2,
+            llama_configuration.sem_mcast_range_3});
         std::vector<uint32_t> mcast_start_x;
         std::vector<uint32_t> mcast_start_y;
         std::vector<uint32_t> mcast_end_x;
@@ -563,7 +591,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         const auto& core = cores[i];
         std::vector<uint32_t> input_cores_x;
         std::vector<uint32_t> input_cores_y;
-        for (uint32_t k = 0; k < 8; k++) {
+        for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
             auto this_core = device->worker_core_from_logical_core(input_cores_vec[k]);
             input_cores_x.push_back(this_core.x);
             input_cores_y.push_back(this_core.y);
