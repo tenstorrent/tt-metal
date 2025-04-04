@@ -22,6 +22,7 @@ jobs:
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
+      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
   # TTNN FD Unit tests
