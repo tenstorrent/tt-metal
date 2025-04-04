@@ -7,7 +7,8 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-
+    with:
+      build-wheel: true
   sd-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -20,5 +21,8 @@ jobs:
         ]
     uses: ./.github/workflows/build-and-unit-tests.yaml
     with:
-      arch: ${{ matrix.test-group.arch}}
-      runner-label: ${{ matrix.test-group.runner-label}}
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
