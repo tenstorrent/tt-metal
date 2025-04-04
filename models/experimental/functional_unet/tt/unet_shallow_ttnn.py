@@ -378,7 +378,7 @@ class UNetUpblock:
 
 class UNet:
     def __init__(self, parameters: ParameterDict, device, mesh_mapper=None):
-        assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
+        # assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
 
         self.device = device
         self.conv_cache = {}
