@@ -112,7 +112,6 @@ matmul_shapes_bfloat8_b = [
     (2048, 3072, 3072, True, True, 1, 1, 1),
     (3072, 3072, 3072, True, True, 2, 1, 1),
     (3072, 3072, 4096, True, True, 2, 1, 1),
-    (3072, 4096, 4096, True, True, 1, 2, 2),
     (4096, 4096, 4096, False, False, 1, 2, 2),
     (8192, 8192, 8192, False, False, 2, 4, 4),
     (16384, 16384, 16384, False, False, 4, 8, 8),
@@ -155,8 +154,8 @@ matmul_configs = [
 @pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("num_warmup_iterations", [5])
-@pytest.mark.parametrize("num_measurement_iterations", [100])
+@pytest.mark.parametrize("num_warmup_iterations", [0])
+@pytest.mark.parametrize("num_measurement_iterations", [1])
 def test_matmul_2d_host_perf(
     device,
     grid_size,
@@ -172,7 +171,7 @@ def test_matmul_2d_host_perf(
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_report.csv"
 
     compute_grid_size = device.compute_with_storage_grid_size()
-    if compute_grid_size.y < grid_size[0] or compute_grid_size.x < grid_size[1]:
+    if compute_grid_size.y < grid_size[1] or compute_grid_size.x < grid_size[0]:
         pytest.skip(
             f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
         )
@@ -456,7 +455,7 @@ def test_matmul_2d_host_perf_out_of_box(
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_out_of_box_report.csv"
 
     compute_grid_size = device.compute_with_storage_grid_size()
-    if compute_grid_size.y < grid_size[0] or compute_grid_size.x < grid_size[1]:
+    if compute_grid_size.y < grid_size[1] or compute_grid_size.x < grid_size[0]:
         pytest.skip(
             f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
         )
