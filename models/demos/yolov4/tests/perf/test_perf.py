@@ -8,8 +8,8 @@ from loguru import logger
 
 import ttnn
 from models.demos.yolov4.common import load_torch_model
-from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
-from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
+from models.demos.yolov4.tt.model_preprocessing import create_yolov4_model_parameters
+from models.demos.yolov4.tt.yolov4 import TtYOLOv4
 from models.perf.device_perf_utils import (
     check_device_perf,
     prep_device_perf_report,
@@ -19,34 +19,27 @@ from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
-def get_expected_compile_time_sec():
-    return 70
-
-
-def get_expected_inference_time_sec():
-    return 0.5
-
-
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape",
+    "input_shape, expected_compile_time, expected_inference_time",
     [
-        (1, 320, 320, 3),
-        (1, 640, 640, 3),
+        ((1, 320, 320, 3), 70, 0.5),
+        ((1, 640, 640, 3), 70, 0.6),
     ],
 )
 def test_yolov4(
     device,
     input_shape,
+    expected_compile_time,
+    expected_inference_time,
     model_location_generator,
 ):
     disable_persistent_kernel_cache()
     profiler.clear()
+
     batch_size = input_shape[0]
-
-    resolution = (input_shape[1], input_shape[2])
-
+    resolution = input_shape[1:3]
     torch_model = load_torch_model(model_location_generator)
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_input = torch_input_tensor.permute(0, 3, 1, 2).float()
@@ -93,9 +86,6 @@ def test_yolov4(
         f"Mean inference time for {batch_size} (batch), resolution {resolution} images was {(mean_inference_time * 1000.0):.2f} ms ({batch_size / mean_inference_time:.2f} fps)"
     )
 
-    expected_compile_time = get_expected_compile_time_sec()
-    expected_inference_time = get_expected_inference_time_sec()
-
     prep_perf_report(
         model_name="yolov4",
         batch_size=batch_size,
@@ -113,22 +103,18 @@ def test_yolov4(
 
 
 @pytest.mark.parametrize(
-    "batch_size, model_name",
+    "batch_size, model_name, expected_perf",
     [
-        (1, "yolov4"),
+        (1, "yolov4", 82),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_yolov4(batch_size, model_name):
+def test_perf_device_bare_metal_yolov4(batch_size, model_name, expected_perf):
     subdir = model_name
     num_iterations = 1
     margin = 0.03
 
-    expected_perf = 82
-
-    command = (
-        f"pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py::test_yolov4[1-pretrained_weight_false-0]"
-    )
+    command = f"pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[1-pretrained_weight_false-0]"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

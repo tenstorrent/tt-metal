@@ -12,8 +12,8 @@ from models.demos.yolov4.common import image_to_tensor, load_image, load_torch_m
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs, get_region_boxes
 from models.demos.yolov4.reference.yolov4 import Yolov4
 from models.demos.yolov4.runner.runner import YOLOv4Runner
-from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
-from models.demos.yolov4.ttnn.weight_parameter_update import update_weight_parameters
+from models.demos.yolov4.tt.model_preprocessing import create_yolov4_model_parameters
+from models.demos.yolov4.tt.weight_parameter_update import update_weight_parameters
 from models.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

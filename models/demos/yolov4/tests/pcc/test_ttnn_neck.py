@@ -7,8 +7,8 @@ import torch
 
 import ttnn
 from models.demos.yolov4.common import load_torch_model
-from models.demos.yolov4.ttnn.model_preprocessing import create_neck_model_parameters
-from models.demos.yolov4.ttnn.neck import TtNeck
+from models.demos.yolov4.tt.model_preprocessing import create_neck_model_parameters
+from models.demos.yolov4.tt.neck import TtNeck
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
