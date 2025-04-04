@@ -30,6 +30,7 @@ from models.utility_functions import (
     ),
 )
 def test_convert_to_chw(device, C, HW, core_grid, input_data_type):
+    torch.manual_seed(0)
     device_num_cores = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y
     requested_num_cores = core_grid.x * core_grid.y
     if device_num_cores < requested_num_cores:

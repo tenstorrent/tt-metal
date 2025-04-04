@@ -74,26 +74,26 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
     const uint32_t cb_in_transpose_id = tt::CBIndex::c_2;
-    const uint32_t cb_in_transpose_total_size = intermediary_tile_size;
+    const uint32_t cb_in_transpose_total_size = 16 * intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const auto cb_in_transpose = create_circular_buffer(
         cb_in_transpose_id, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
 
     std::vector<uint32_t> reader_compile_time_args = {cb_in_id};
     std::vector<uint32_t> writer_compile_time_args = {cb_in_transpose_id, cb_out_id, C};
-    std::vector<uint32_t> compute_compile_time_args = {cb_in_id, cb_in_transpose_id, cb_out_id};
+    std::vector<uint32_t> compute_compile_time_args = {cb_in_id, cb_in_transpose_id};
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/reader_convert_to_chw.cpp",
         input_core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(reader_compile_time_args));
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/writer_convert_to_chw.cpp",
         input_core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(writer_compile_time_args));
 
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
