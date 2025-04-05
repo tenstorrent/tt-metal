@@ -1,0 +1,18 @@
+
+#############################################################
+
+# Accept an argument to specify the Ubuntu version and host architecture
+ARG UBUNTU_VERSION=22.04
+ARG IMAGE_ARCH=amd64
+ARG BASE_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-${UBUNTU_VERSION}-dev-${IMAGE_ARCH}:latest
+# Since release is a different workflow, we'll use the current image for now, but append -dev later in development
+FROM ${BASE_IMAGE} AS release
+
+#############################################################
+
+RUN mkdir -p /etc && \
+    echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
+
+ARG WHEEL_FILENAME
+ADD $WHEEL_FILENAME $WHEEL_FILENAME
+RUN pip3 install $WHEEL_FILENAME
