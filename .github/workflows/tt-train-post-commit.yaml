@@ -33,8 +33,6 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on:
       - ${{ inputs.runner-label }}
-      - cloud-virtual-machine
-      - in-service
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:

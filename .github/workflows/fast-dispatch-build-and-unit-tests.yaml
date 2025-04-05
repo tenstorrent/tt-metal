@@ -65,8 +65,6 @@ jobs:
       LOGURU_LEVEL: INFO
     runs-on:
       - ${{ inputs.runner-label }}
-      - cloud-virtual-machine
-      - in-service
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4

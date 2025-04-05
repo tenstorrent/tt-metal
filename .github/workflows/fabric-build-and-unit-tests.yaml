@@ -34,7 +34,7 @@ jobs:
           {name: fabric unit tests, cmd: ./tests/scripts/run_cpp_fabric_tests.sh },
         ]
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
-    runs-on: ${{ startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)) || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label)) }}
+    runs-on: ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
       env:
