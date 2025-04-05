@@ -13,8 +13,7 @@
 #include "pad.hpp"
 
 namespace ttnn::operations::data_movement {
-
-namespace {
+namespace detail {
 
 bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
@@ -168,7 +167,7 @@ static ttnn::Tensor pad_impl(
 static ttnn::Tensor pad_impl(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding,
+    ttnn::SmallVector<PadSpecDim> padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
@@ -195,12 +194,12 @@ static ttnn::Tensor pad_impl(
     auto input_shape_with_tile_padding = input_tensor_4D.get_padded_shape();
     std::vector<uint32_t> output_padded_shape(padding_size, 0);
     for (size_t i = 0; i < padding_size; i++) {
-        output_padded_shape[i] =
-            padding[i + extra_index].first + input_shape_with_tile_padding[i] + padding[i + extra_index].second;
+        output_padded_shape[i] = padding[i + extra_index].before_elements + input_shape_with_tile_padding[i] +
+                                 padding[i + extra_index].after_elements;
     }
 
-    auto pad_front = padding | std::views::transform([](const auto& p) { return p.first; });
-    auto pad_back = padding | std::views::transform([](const auto& p) { return p.second; });
+    auto pad_front = padding | std::views::transform([](const auto& p) { return p.before_elements; });
+    auto pad_back = padding | std::views::transform([](const auto& p) { return p.after_elements; });
 
     if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
         const int target_height = output_padded_shape[padding_size - 2];
@@ -222,8 +221,10 @@ static ttnn::Tensor pad_impl(
 }
 
 std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
-    const ttnn::Shape& input_logical_shape, const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& pad_spec) {
-    if (std::all_of(pad_spec.begin(), pad_spec.end(), [](auto& p) { return p.first == 0 && p.second == 0; })) {
+    const ttnn::Shape& input_logical_shape, const ttnn::SmallVector<PadSpecDim>& pad_spec) {
+    if (std::all_of(pad_spec.begin(), pad_spec.end(), [](auto& p) {
+            return p.before_elements == 0 && p.after_elements == 0;
+        })) {
         return std::make_tuple(compute_padded_shape(input_logical_shape), compute_padded_shape(input_logical_shape));
     }
 
@@ -235,7 +236,7 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
         input_logical_shape.cend(),
         pad_spec.cbegin(),
         requested_logical_shape_vec.begin(),
-        [](auto& a, auto& b) { return a + b.second; });
+        [](auto& a, auto& b) { return a + b.after_elements; });
 
     const ttnn::Shape logical_shape(requested_logical_shape_vec);
     return std::make_tuple(logical_shape, compute_padded_shape(logical_shape));
@@ -244,14 +245,13 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
 ttnn::Tensor invoke_rm(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& padding_vec,
+    const ttnn::SmallVector<PadSpecDim>& padding_vec,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     const int original_rank = input_tensor.get_logical_shape().rank();
 
-    ttnn::Tensor output_tensor =
-        pad_impl(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg);
+    ttnn::Tensor output_tensor = pad_impl(queue_id, input_tensor, padding_vec, value, use_multicore, memory_config_arg);
 
     // output_tensor is currently 4D. We have to squeeze back to the original rank
     if (original_rank <= 4) {
@@ -275,12 +275,12 @@ ttnn::Tensor invoke_rm(
 ttnn::Tensor invoke_tile(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& padding_vec,
+    const ttnn::SmallVector<PadSpecDim>& padding_vec,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     const bool front_padding_is_zero =
-        std::all_of(padding_vec.begin(), padding_vec.end(), [](auto& x) { return x.first == 0; });
+        std::all_of(padding_vec.begin(), padding_vec.end(), [](auto& x) { return x.before_elements == 0; });
     TT_FATAL(front_padding_is_zero, "ttnn.pad: on device tile padding does not support front padding");
 
     const auto& input_logical_shape = input_tensor.get_logical_shape();
@@ -302,13 +302,14 @@ ttnn::Tensor invoke_tile(
     } else {
         // need to align the requested padding to tile size. Note that begin padding is not supported so now just
         // set to zero
-        ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padded_padding_vec(requested_rank);
+        ttnn::SmallVector<PadSpecDim> padded_padding_vec;
+        padded_padding_vec.reserve(requested_rank);
         std::transform(
             requested_padded_shape.cbegin(),
             requested_padded_shape.cend(),
             input_padded_shape.cbegin(),
-            padded_padding_vec.begin(),
-            [](auto& a, auto& b) { return std::make_pair(0, a - b); });
+            std::back_inserter(padded_padding_vec),
+            [](auto& a, auto& b) { return PadSpecDim{0, a - b}; });
 
         // this tensor will be 4D
         output_tensor =
@@ -322,7 +323,7 @@ ttnn::Tensor invoke_tile(
     }
     return output_tensor;
 }
-}  // anonymous namespace
+}  // namespace detail
 
 // This function signature is similar to pytorch's signature
 // Any rank tensor supported
@@ -330,26 +331,31 @@ ttnn::Tensor invoke_tile(
 ttnn::Tensor ExecutePad::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const std::pair<uint32_t, uint32_t>> padding,
+    const ttnn::SmallVector<PadSpecDim>& padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     const int original_rank = input_tensor.get_logical_shape().rank();
-    ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding_vec(padding.begin(), padding.end());
+
+    ttnn::SmallVector<PadSpecDim> working_padding = padding;
 
     if (int diff = original_rank - padding.size(); diff != 0) {
         TT_FATAL(diff > 0, "ttnn.pad: padding len can't be larger than input tensor rank");
 
-        padding_vec.insert(padding_vec.begin(), diff, {0, 0});
+        working_padding.insert(working_padding.begin(), diff, {0, 0});
     }
 
-    if (std::all_of(padding.begin(), padding.end(), [](auto& p) { return p.first == 0 && p.second == 0; })) {
+    if (std::all_of(working_padding.begin(), working_padding.end(), [](auto& p) {
+            return p.before_elements == 0 && p.after_elements == 0;
+        })) {
         return input_tensor;
     }
 
     if (original_rank > 4) {
         const auto first_pad_idx =
-            std::find_if(padding.begin(), padding.end(), [](auto& p) { return p.second != 0; }) - padding.begin();
+            std::find_if(
+                working_padding.begin(), working_padding.end(), [](auto& p) { return p.after_elements != 0; }) -
+            working_padding.begin();
         TT_FATAL(
             first_pad_idx >= original_rank - 3,
             "ttnn::pad only supports padding on the lowest 3 dimensions for tensors with rank > 4 {}",
@@ -357,51 +363,42 @@ ttnn::Tensor ExecutePad::invoke(
     }
 
     if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
-        return invoke_tile(queue_id, input_tensor, padding_vec, value, use_multicore, memory_config_arg);
+        return detail::invoke_tile(queue_id, input_tensor, working_padding, value, use_multicore, memory_config_arg);
     } else {
-        return invoke_rm(queue_id, input_tensor, padding_vec, value, use_multicore, memory_config_arg);
+        return detail::invoke_rm(queue_id, input_tensor, working_padding, value, use_multicore, memory_config_arg);
     }
 }
 
-#define PAD_OVERLOAD_DIM_IMPL(ShapeType)                                                                               \
-    ttnn::Tensor ExecutePad::invoke(                                                                                   \
-        QueueId queue_id,                                                                                              \
-        const ttnn::Tensor& input_tensor,                                                                              \
-        const ShapeType& output_padded_shape,                                                                          \
-        const ShapeType& input_tensor_start,                                                                           \
-        const float value,                                                                                             \
-        const bool use_multicore,                                                                                      \
-        const std::optional<MemoryConfig>& memory_config_arg) {                                                        \
-        return pad_impl(                                                                                               \
-            queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg); \
-    }                                                                                                                  \
-                                                                                                                       \
-    ttnn::Tensor ExecutePad::invoke(                                                                                   \
-        const ttnn::Tensor& input_tensor,                                                                              \
-        const ShapeType& output_padded_shape,                                                                          \
-        const ShapeType& input_tensor_start,                                                                           \
-        const float value,                                                                                             \
-        const std::optional<MemoryConfig>& memory_config_arg) {                                                        \
-        return pad_impl(                                                                                               \
-            DefaultQueueId, input_tensor, output_padded_shape, input_tensor_start, value, false, memory_config_arg);   \
-    }                                                                                                                  \
-                                                                                                                       \
-    ttnn::Tensor ExecutePad::invoke(                                                                                   \
-        const ttnn::Tensor& input_tensor,                                                                              \
-        const ShapeType& output_padded_shape,                                                                          \
-        const ShapeType& input_tensor_start,                                                                           \
-        const float value) {                                                                                           \
-        return pad_impl(                                                                                               \
-            DefaultQueueId, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);        \
+ttnn::Tensor ExecutePad::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& padding,
+    const float value,
+    const bool use_multicore,
+    const std::optional<MemoryConfig>& memory_config_arg) {
+    ttnn::SmallVector<PadSpecDim> padding_impl;
+    std::transform(padding.begin(), padding.end(), std::back_inserter(padding_impl), [](auto& p) {
+        return PadSpecDim(p.first, p.second);
+    });
+
+    return ExecutePad::invoke(queue_id, input_tensor, padding_impl, value, use_multicore, memory_config_arg);
+}
+
+ttnn::Tensor ExecutePad::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const tt::tt_metal::Array4D& output_padded_shape,
+    const tt::tt_metal::Array4D& input_tensor_start,
+    const float value,
+    const bool use_multicore,
+    const std::optional<MemoryConfig>& memory_config_arg) {
+    ttnn::SmallVector<PadSpecDim> padding_impl;
+    const auto& log_shape = input_tensor.get_logical_shape();
+    for (uint32_t i = 0; i < output_padded_shape.size(); ++i) {
+        padding_impl.emplace_back(
+            input_tensor_start.at(i), output_padded_shape.at(i) - log_shape[i] - input_tensor_start.at(i));
     }
 
-PAD_OVERLOAD_DIM_IMPL(tt::tt_metal::Array1D)
-PAD_OVERLOAD_DIM_IMPL(tt::tt_metal::Array2D)
-PAD_OVERLOAD_DIM_IMPL(tt::tt_metal::Array3D)
-PAD_OVERLOAD_DIM_IMPL(tt::tt_metal::Array4D)
-PAD_OVERLOAD_DIM_IMPL(tt::tt_metal::Array5D)
-PAD_OVERLOAD_DIM_IMPL(tt::tt_metal::Array6D)
-PAD_OVERLOAD_DIM_IMPL(tt::tt_metal::Array7D)
-PAD_OVERLOAD_DIM_IMPL(tt::tt_metal::Array8D)
-
+    return invoke(queue_id, input_tensor, padding_impl, value, use_multicore, memory_config_arg);
+}
 }  // namespace ttnn::operations::data_movement
