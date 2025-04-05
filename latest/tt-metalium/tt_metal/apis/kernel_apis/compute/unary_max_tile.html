@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>gelu_tile &mdash; TT-Metalium  documentation</title>
+  <title>unary_max_tile &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/gelu_tile.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/unary_max_tile.html" />
   <!--[if lt IE 9]>
     <script src="../../../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
-    <link rel="next" title="heaviside_tile" href="heaviside_tile.html" />
-    <link rel="prev" title="erfinv_tile" href="erfinv_tile.html" /> 
+    <link rel="next" title="cb_wait_front" href="cb_wait_front.html" />
+    <link rel="prev" title="unary_lt_tile" href="unary_lt_tile.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -90,7 +90,7 @@
 <li class="toctree-l4"><a class="reference internal" href="erf_tile.html">erf_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="erfc_tile.html">erfc_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="erfinv_tile.html">erfinv_tile</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">gelu_tile</a></li>
+<li class="toctree-l4"><a class="reference internal" href="gelu_tile.html">gelu_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="heaviside_tile.html">heaviside_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="isinf_tile.html">isinf_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="isinf_tile.html#isposinf-tile">isposinf_tile</a></li>
@@ -128,7 +128,7 @@
 <li class="toctree-l4"><a class="reference internal" href="unary_ne_tile.html">unary_ne_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="unary_gt_tile.html">unary_gt_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="unary_lt_tile.html">unary_lt_tile</a></li>
-<li class="toctree-l4"><a class="reference internal" href="unary_max_tile.html">unary_max_tile</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">unary_max_tile</a></li>
 <li class="toctree-l4"><a class="reference internal" href="cb_wait_front.html">cb_wait_front</a></li>
 <li class="toctree-l4"><a class="reference internal" href="cb_pop_front.html">cb_pop_front</a></li>
 <li class="toctree-l4"><a class="reference internal" href="cb_reserve_back.html">cb_reserve_back</a></li>
@@ -171,9 +171,9 @@
           <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
           <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
           <li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
-      <li class="breadcrumb-item active">gelu_tile</li>
+      <li class="breadcrumb-item active">unary_max_tile</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/kernel_apis/compute/gelu_tile.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../../../_sources/tt_metal/apis/kernel_apis/compute/unary_max_tile.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -181,12 +181,12 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="gelu-tile">
-<h1>gelu_tile<a class="headerlink" href="#gelu-tile" title="Permalink to this heading"></a>
+  <section id="unary-max-tile">
+<h1>unary_max_tile<a class="headerlink" href="#unary-max-tile" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel14gelu_tile_initEvv">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fast_and_approx</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a2e0f2cefbe52082482d71f807145de1e"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">gelu_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel14gelu_tile_initEvv" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel19unary_max_tile_initEv">
+<span class="target" id="namespaceckernel_1a58e13d5ec7ef2411ce422db7de9e5a5a"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">unary_max_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel19unary_max_tile_initEv" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Please refer to documentation for any_init. </p>
@@ -194,11 +194,11 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel9gelu_tileEv8uint32_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fast_and_approx</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a572012591ff76c4277ed48036399de6e"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">gelu_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel9gelu_tileEv8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel14unary_max_tileE8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1a4516e2249f80644b2f7501794cac98b1"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">unary_max_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel14unary_max_tileE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs element-wise computation of gelu on each element of a tile in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Performs element-wise computation of: result = x if x &gt; value , where x is each element of a tile in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
@@ -213,18 +213,18 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>tile_index   </p></td>
+<td><p>idst   </p></td>
 <td><p>The index of the tile in DST register buffer to perform the computation on   </p></td>
 <td><p>uint32_t   </p></td>
 <td><p>Must be less than the size of the DST register buffer   </p></td>
 <td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>fast_and_approx   </p></td>
-<td><p>Computation to be done faster and approximate   </p></td>
-<td><p>bool   </p></td>
+<td><p>param0   </p></td>
+<td><p>The value to be compared with the input tensor   </p></td>
+<td><p>uint32_t   </p></td>
 <td><p></p></td>
-<td><p>False   </p></td>
+<td><p>True   </p></td>
 </tr>
 </tbody>
 </table>
@@ -239,8 +239,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="erfinv_tile.html" class="btn btn-neutral float-left" title="erfinv_tile" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="heaviside_tile.html" class="btn btn-neutral float-right" title="heaviside_tile" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="unary_lt_tile.html" class="btn btn-neutral float-left" title="unary_lt_tile" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="cb_wait_front.html" class="btn btn-neutral float-right" title="cb_wait_front" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
