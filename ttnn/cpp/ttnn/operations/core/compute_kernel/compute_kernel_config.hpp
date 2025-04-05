@@ -5,11 +5,13 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <variant>
 #include <tuple>
 #include <optional>
 #include "umd/device/types/arch.h"
 #include <tt-metalium/base_types.hpp>
+#include <vector>
 
 namespace ttnn {
 
@@ -25,6 +27,8 @@ struct WormholeComputeKernelConfig {
     bool fp32_dest_acc_en = false;
     bool packer_l1_acc = false;
     bool dst_full_sync_en = false;
+    std::vector<uint32_t> compile_args = {};
+    std::map<std::string, std::string> defines = {};
 };
 
 using BlackholeComputeKernelConfig = WormholeComputeKernelConfig;

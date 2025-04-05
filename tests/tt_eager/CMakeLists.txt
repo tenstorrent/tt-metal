@@ -4,6 +4,7 @@ target_link_libraries(test_eager_common_libs INTERFACE test_common_libs)
 set(TT_EAGER_TESTS_OPS
     ops/test_eltwise_binary_op.cpp
     ops/test_eltwise_unary_op.cpp
+    ops/test_generic_op.cpp
     ops/test_softmax_op.cpp
     ops/test_layernorm_op.cpp
     ops/test_bcast_op.cpp
