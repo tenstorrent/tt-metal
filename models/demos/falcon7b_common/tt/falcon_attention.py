@@ -799,19 +799,7 @@ class TtFalconAttentionDecode(nn.Module):
             )
 
             # UNPAD
-            attn_output_shape = attn_output.padded_shape
-            attn_output = ttnn.slice(
-                attn_output,
-                starts=(0, 0, 0, 0),
-                ends=(
-                    attn_output_shape[0],
-                    self.num_heads,
-                    attn_output_shape[2],
-                    attn_output_shape[3],
-                ),
-                steps=(1, 1, 1, 1),
-                memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-            )
+            attn_output = attn_output[:, : self.num_heads, :, :]
         else:
             # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
             if is_wormhole_b0():
