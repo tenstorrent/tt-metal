@@ -132,6 +132,16 @@ struct Conv2dConfig {
     }
 };
 
+struct Conv2dSliceConfig {
+    // Determines the dimension along which the input & output tensors are sliced.
+    //  Slices based on [N, H, W, C] shape.
+    enum class SliceType : bool { HEIGHT, WIDTH };
+    SliceType slice_type = SliceType::WIDTH;
+
+    // Number of slices that the output tensor should be divided into.
+    uint32_t num_slices = 0;
+};
+
 // TODO: Accept parallelization
 enum class OptimizedConvOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
 

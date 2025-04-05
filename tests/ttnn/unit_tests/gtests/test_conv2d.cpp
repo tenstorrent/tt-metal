@@ -157,6 +157,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         // Run Conv2D
         auto [output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device] =
             conv2d::conv2d(
+                DefaultQueueId,
                 input_tensor,
                 weight_tensor,
                 device,
