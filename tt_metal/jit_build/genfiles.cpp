@@ -373,7 +373,7 @@ static void emit_pack_tile_dims(const std::string& pack_tile_dims_descs, tt_hlk_
     file_stream.close();
 }
 
-static void generate_tile_dims_descriptors(JitBuildOptions& options) {
+static void generate_tile_dims_descriptors(JitBuildOptions& options, const tt::ARCH /*arch*/) {
     string out_file_name_base = "chlkc_";
     string out_file_name_suffix = "_tile_dims.h";
     string unpack_tile_dims_descs = options.path + out_file_name_base + "unpack" + out_file_name_suffix;
@@ -443,6 +443,7 @@ static void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
     file_stream.close();
 }
 
+// clang-format off
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& options) {
     //ZoneScoped;
     //const std::string tracyPrefix = "generate_descriptors_";
@@ -450,7 +451,7 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
     fs::create_directories(options.path);
     try {
         std::thread td( [&]() { generate_data_format_descriptors(options, env.get_arch()); } );
-        std::thread tt([&]() { generate_tile_dims_descriptors(options); });
+        std::thread tt( [&]() { generate_tile_dims_descriptors(options, env.get_arch()); } );
         std::thread tm( [&]() { generate_math_fidelity_descriptor(options); } );
         std::thread ta( [&]() { generate_math_approx_mode_descriptor(options); } );
         std::thread tf( [&]() { generate_dst_accum_mode_descriptor(options); } );
@@ -465,5 +466,6 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
         std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
     }
 }
+// clang-format on
 
 }  // namespace tt::tt_metal
