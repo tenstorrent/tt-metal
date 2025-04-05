@@ -562,7 +562,12 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         // dispatch cores (Idle Eth) configured with DISPATCH_MODE_HOST
         // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
     // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
-    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, *launch_msg);
+
+    // Create a temporary message for initializing the buffer with DISPATCH_MODE_NONE
+    launch_msg_t initial_buffer_msg = *launch_msg;
+    initial_buffer_msg.kernel_config.mode = DISPATCH_MODE_NONE;
+    // Initialize the buffer using the temporary message
+    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, initial_buffer_msg);
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         init_launch_msg_data.data(),
         launch_msg_buffer_num_entries * sizeof(launch_msg_t),
