@@ -5,6 +5,13 @@
 #pragma once
 
 namespace tt::tt_metal {
-enum class FabricConfig : uint32_t { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, FABRIC_2D_PUSH = 3, CUSTOM = 4 };
+enum class FabricConfig : uint32_t {
+    DISABLED = 0,
+    FABRIC_1D = 1,
+    FABRIC_1D_RING = 2,
+    FABRIC_2D = 3,
+    FABRIC_2D_PUSH = 4,
+    CUSTOM = 5
+};
 
 }  // namespace tt::tt_metal

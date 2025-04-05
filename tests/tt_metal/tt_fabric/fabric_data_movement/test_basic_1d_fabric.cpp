@@ -115,10 +115,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
         num_hops};
 
     // append the EDM connection rt args
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
-    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
+    const auto edm_config = get_1d_fabric_config();
 
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,

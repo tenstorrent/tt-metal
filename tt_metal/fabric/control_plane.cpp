@@ -841,6 +841,11 @@ std::vector<std::pair<routing_plane_id_t, CoreCoord>> ControlPlane::get_routers_
     return routers;
 }
 
+const std::unordered_map<chip_id_t, RouterEdge>& ControlPlane::get_intra_chip_neighbors(
+    mesh_id_t src_mesh_id, chip_id_t src_chip_id) const {
+    return this->routing_table_generator_->get_intra_mesh_connectivity()[src_mesh_id][src_chip_id];
+}
+
 std::vector<chip_id_t> ControlPlane::get_intra_chip_neighbors(
     mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const {
     for (const auto& [_, routing_edge] :

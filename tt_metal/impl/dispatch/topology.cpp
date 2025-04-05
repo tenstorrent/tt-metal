@@ -44,6 +44,7 @@
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
@@ -1010,15 +1011,60 @@ void configure_2d_fabric_cores(IDevice* device) {
     }
 }
 
-std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, bool wrap_around_mesh = true) {
+bool check_dateline(
+    tt_fabric::ControlPlane* control_plane,
+    tt_fabric::Topology topology,
+    tt_fabric::mesh_id_t mesh_id,
+    chip_id_t chip0,
+    chip_id_t chip1,
+    bool wrap_around_mesh) {
+    if (topology != tt_fabric::Topology::Ring) {
+        return false;
+    }
+    if (chip1 < chip0) {
+        std::swap(chip0, chip1);
+    }
+
+    auto physical_mesh_shape = control_plane->get_physical_mesh_shape(mesh_id);
+
+    // Refactor this once mesh_id has row/col control
+    if (wrap_around_mesh) {
+        if (chip0 == 0 && chip1 == physical_mesh_shape[1]) {
+            // Wrap around dateline
+            return true;
+        }
+    } else {
+        if (chip0 % physical_mesh_shape[1] == 0 && (chip0 + physical_mesh_shape[1] - 1) == chip1) {
+            // Column dateline
+            // chip0 is the first col, chip1 is the last col on the same row
+            return true;
+        } else if (
+            chip0 < physical_mesh_shape[1] && chip1 >= (physical_mesh_shape[1] * (physical_mesh_shape[0] - 1)) &&
+            chip1 % physical_mesh_shape[1] == 0) {
+            // Row dateline
+            // chip0 is the first row, chip1 is the last row on the same column
+            return true;
+        }
+    }
+    return false;
+}
+
+std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, FabricConfig fabric_config) {
     using namespace tt_fabric;
     std::unique_ptr<Program> fabric_program_ptr;
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     std::pair<mesh_id_t, chip_id_t> mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
+    auto mesh_shape = control_plane->get_physical_mesh_shape(mesh_chip_id.first);
     std::unordered_map<RoutingDirection, std::set<chan_id_t>> active_fabric_eth_channels;
     std::unordered_map<RoutingDirection, chip_id_t> chip_neighbors;
     std::unordered_map<chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
     auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+    Topology topology;
+    switch (fabric_config) {
+        case FabricConfig::FABRIC_1D: topology = Topology::Linear; break;
+        case FabricConfig::FABRIC_1D_RING: topology = Topology::Ring; break;
+        default: TT_THROW("Invalid fabric config for 1D");
+    }
 
     if (device->is_mmio_capable() &&
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG)) {
@@ -1051,19 +1097,35 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
     }
 
     fabric_program_ptr = std::make_unique<Program>();
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
-    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
+    const auto edm_config = get_1d_fabric_config();
+
+    // Refactor this once mesh_id has row/col control
+    bool wrap_around_mesh = control_plane->get_intra_chip_neighbors(mesh_chip_id.first, 0).size() == 2;
 
     for (const auto& [direction, remote_chip_id] : chip_neighbors) {
+        bool is_dateline = check_dateline(
+            control_plane,
+            topology,
+            mesh_chip_id.first,
+            mesh_chip_id.second,
+            control_plane->get_mesh_chip_id_from_physical_chip_id(remote_chip_id).second,
+            wrap_around_mesh);
+
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = tt::tt_metal::MetalContext::instance()
                                         .get_cluster()
                                         .get_soc_desc(device->id())
                                         .get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
-                device, *fabric_program_ptr, eth_logical_core, device->id(), remote_chip_id, edm_config, true, false);
+                device,
+                *fabric_program_ptr,
+                eth_logical_core,
+                device->id(),
+                remote_chip_id,
+                edm_config,
+                true,
+                false,
+                is_dateline);
             edm_builders.insert({eth_chan, edm_builder});
         }
     }
@@ -1156,9 +1218,9 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
 
 std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (fabric_config == FabricConfig::FABRIC_1D) {
-        return create_and_compile_1d_fabric_program(device);
-    } else if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+    if (tt_fabric::is_1d_fabric_config(fabric_config)) {
+        return create_and_compile_1d_fabric_program(device, fabric_config);
+    } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
         return create_and_compile_2d_fabric_program(device, fabric_config);
     }
     return nullptr;
@@ -1166,7 +1228,7 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
 
 void configure_fabric_cores(IDevice* device) {
     auto fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+    if (tt_fabric::is_2d_fabric_config(fabric_config)) {
         configure_2d_fabric_cores(device);
     }
 }
