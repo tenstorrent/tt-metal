@@ -52,7 +52,6 @@ bool is_l1_impl(BufferType buffer_type) { return buffer_type == BufferType::L1 o
 void validate_buffer_size_and_page_size(
     DeviceAddr size,
     DeviceAddr page_size,
-    const BufferType& buffer_type,
     const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters) {
     if (size == 0) {
@@ -81,7 +80,6 @@ void validate_buffer_size_and_page_size(
 }
 
 std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 2>>> core_to_host_pages(
-    const uint32_t total_pages,
     const uint32_t pages_per_shard,
     const uint32_t num_shards,
     const TensorMemoryLayout layout,
@@ -218,7 +216,6 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
 
     uint32_t num_dev_pages = buffer.num_dev_pages();
     auto [core_host_page_indices, shard_shape] = core_to_host_pages(
-        num_dev_pages,
         shard_spec.num_pages(),
         num_cores,
         buffer.buffer_layout(),
@@ -293,7 +290,7 @@ Buffer::Buffer(
         this->allocator_ = device->allocator().get();
     }
     if (size != 0) {
-        validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
+        validate_buffer_size_and_page_size(size, page_size, buffer_layout, shard_parameters);
     }
     unique_id_ = next_unique_id.fetch_add(1);
 }

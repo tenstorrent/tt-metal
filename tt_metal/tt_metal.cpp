@@ -249,8 +249,7 @@ inline void SetRuntimeArgsImpl(
 void SetRuntimeArgsImpl(
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
-    const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
-    bool blocking) {
+    const std::shared_ptr<RuntimeArgs>& runtime_args_ptr) {
     std::vector<uint32_t> resolved_runtime_args = {};
     resolved_runtime_args.reserve(runtime_args_ptr->size());
 
@@ -283,14 +282,14 @@ inline void SetRuntimeArgsImpl(
             } else if constexpr (std::is_same_v<T, CoreRange>) {
                 for (auto x = core_spec.start_coord.x; x <= core_spec.end_coord.x; x++) {
                     for (auto y = core_spec.start_coord.y; y <= core_spec.end_coord.y; y++) {
-                        SetRuntimeArgsImpl(kernel, CoreCoord(x, y), runtime_args, blocking);
+                        SetRuntimeArgsImpl(kernel, CoreCoord(x, y), runtime_args);
                     }
                 }
             } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
                 for (const auto& core_range : core_spec.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                            SetRuntimeArgsImpl(kernel, CoreCoord(x, y), runtime_args, blocking);
+                            SetRuntimeArgsImpl(kernel, CoreCoord(x, y), runtime_args);
                         }
                     }
                 }
@@ -306,7 +305,7 @@ inline void SetRuntimeArgsImpl(
     bool blocking) {
     // SetRuntimeArgs API for Async CQ Mode (support vector of runtime args)
     for (size_t i = 0; i < core_spec.size(); i++) {
-        SetRuntimeArgsImpl(kernel, core_spec[i], runtime_args[i], blocking);
+        SetRuntimeArgsImpl(kernel, core_spec[i], runtime_args[i]);
     }
 }
 
@@ -384,7 +383,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t l1_small_size,
     const size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& l1_bank_remap) {
+    const std::vector<uint32_t>& /*l1_bank_remap*/) {
     ZoneScoped;
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config);
