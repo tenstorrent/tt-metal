@@ -89,7 +89,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     bool math_approx_mode = std::all_of(
         args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
-    std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
+    std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.get_dtype());
     auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root);
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(

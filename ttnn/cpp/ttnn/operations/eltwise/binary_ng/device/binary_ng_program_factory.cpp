@@ -462,8 +462,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             post_activations.insert(post_activations.begin(), *op_config.postprocess);
         }
 
-        add_activation_defines(compute_kernel_defines, lhs_activations, "LHS");
-        add_activation_defines(compute_kernel_defines, rhs_activations, "RHS");
+        add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
+        add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
 
         if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
             compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
@@ -475,10 +475,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
-                add_activation_defines(compute_kernel_defines, post_activations, "POST");
+                add_activation_defines(compute_kernel_defines, post_activations, "POST", a_dtype);
             }
         } else {
-            add_activation_defines(compute_kernel_defines, post_activations, "POST");
+            add_activation_defines(compute_kernel_defines, post_activations, "POST", a_dtype);
         }
     }
 
