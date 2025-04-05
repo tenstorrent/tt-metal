@@ -15,6 +15,7 @@ Welcome to TT-NN documentation!
    ttnn/usage
    ttnn/tensor
    ttnn/api
+   ttnn/convolution
    ttnn/tutorials
    ttnn/onboarding
    ttnn/converting_torch_model_to_ttnn
