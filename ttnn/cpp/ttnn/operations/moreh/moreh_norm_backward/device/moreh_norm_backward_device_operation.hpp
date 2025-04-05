@@ -4,8 +4,22 @@
 
 #pragma once
 
+#include <boost/move/utility_core.hpp>
+#include <stdint.h>
+#include <cstddef>
+#include <optional>
+#include <tuple>
+#include <variant>
+
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/small_vector.hpp>
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 #define DEFINE_PROGRAM_FACTORY(FactoryName)                                                 \
     struct FactoryName {                                                                    \

@@ -4,8 +4,13 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include <optional>
+
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {

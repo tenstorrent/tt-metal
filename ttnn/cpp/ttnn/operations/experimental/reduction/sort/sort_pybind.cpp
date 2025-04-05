@@ -3,10 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "sort_pybind.hpp"
 
-#include "pybind11/decorators.hpp"
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <stdint.h>
+#include <optional>
+#include <tuple>
+#include <vector>
 
+#include "pybind11/decorators.hpp"
 #include "sort.hpp"
-#include "device/sort_device_operation.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::reduction::detail {
 namespace py = pybind11;

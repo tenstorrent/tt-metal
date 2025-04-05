@@ -4,7 +4,17 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <vector>
+
 #include "cpp/ttnn/operations/ccl/common/types/sharding_common.hpp"
+#include <tt-metalium/core_coord.hpp>
+
+namespace tt {
+namespace tt_metal {
+class Tensor;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace shard_builder {
 

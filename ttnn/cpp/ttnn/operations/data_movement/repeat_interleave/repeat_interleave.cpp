@@ -4,10 +4,23 @@
 
 #include "repeat_interleave.hpp"
 
-#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
+#include <boost/container/vector.hpp>
+#include <algorithm>
+#include <vector>
+
 #include "cpp/ttnn/operations/copy.hpp"
+#include "cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn {
 namespace operations {

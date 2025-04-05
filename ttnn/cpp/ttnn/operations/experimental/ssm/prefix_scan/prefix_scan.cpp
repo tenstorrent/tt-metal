@@ -4,8 +4,16 @@
 
 #include "prefix_scan.hpp"
 
+#include <boost/container/vector.hpp>
+#include <algorithm>
+#include <vector>
+
 #include "device/prefix_scan_op.hpp"
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::tt_metal;
 

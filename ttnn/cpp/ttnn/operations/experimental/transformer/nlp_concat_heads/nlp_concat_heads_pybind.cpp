@@ -2,9 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <memory>
+#include <optional>
 
+#include "cpp/pybind11/decorators.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::transformer::detail {
 

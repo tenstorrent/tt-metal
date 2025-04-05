@@ -3,7 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "topk_op.hpp"
+
+#include <fmt/base.h>
+
 #include "topk_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 using namespace tt::tt_metal;
 

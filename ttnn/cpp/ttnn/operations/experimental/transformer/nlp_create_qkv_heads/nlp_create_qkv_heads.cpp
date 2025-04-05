@@ -4,7 +4,19 @@
 
 #include "nlp_create_qkv_heads.hpp"
 
+#include <fmt/base.h>
 #include <utility>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::transformer {
 

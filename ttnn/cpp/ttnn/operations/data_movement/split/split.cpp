@@ -2,15 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+#include <cmath>
+#include <numeric>
+#include <utility>
+
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/split/split.hpp"
 #include "ttnn/operations/data_movement/split/device/split_op.hpp"
+#include "ttnn/operations/data_movement/split/split.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::data_movement {

@@ -4,10 +4,18 @@
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include <stdint.h>
 #include <tt-metalium/constants.hpp>
+#include <optional>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

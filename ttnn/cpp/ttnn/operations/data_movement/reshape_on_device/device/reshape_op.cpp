@@ -3,10 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reshape_op.hpp"
+
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/constants.hpp>
 
-#include "ttnn/tensor/tensor_utils.hpp"
 #include "reshape_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 

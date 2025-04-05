@@ -3,10 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "groupnorm.hpp"
-#include "device/groupnorm_op.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <algorithm>
+#include <vector>
+
+#include "device/groupnorm_op.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 
 namespace ttnn::operations::normalization {
 

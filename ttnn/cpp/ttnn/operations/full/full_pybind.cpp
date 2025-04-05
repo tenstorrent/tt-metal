@@ -4,13 +4,16 @@
 
 #include "full_pybind.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <optional>
+#include <string>
 
+#include "cpp/pybind11/decorators.hpp"
 #include "full.hpp"
 #include "pybind11/cast.h"
-#include "cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/full/device/full_device_operation.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::full {
 void bind_full_operation(py::module& module) {

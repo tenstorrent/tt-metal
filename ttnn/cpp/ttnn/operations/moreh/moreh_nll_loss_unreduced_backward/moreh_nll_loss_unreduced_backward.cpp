@@ -7,6 +7,12 @@
 
 #include "device/moreh_nll_loss_unreduced_backward_device_operation.hpp"
 
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
 
 Tensor MorehNllLossUnreducedBackward::invoke(

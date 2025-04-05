@@ -4,8 +4,12 @@
 
 #pragma once
 
-#include <tt-metalium/small_vector.hpp>
+#include <stdint.h>
 #include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <cstddef>
+#include <iosfwd>
+#include <tuple>
 
 namespace tt::tt_metal {
 

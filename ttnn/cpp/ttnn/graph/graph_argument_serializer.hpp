@@ -4,11 +4,14 @@
 #pragma once
 
 #include <any>
+#include <cstddef>
 #include <functional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <typeindex>
 #include <unordered_map>
+#include <vector>
 
 namespace ttnn::graph {
 std::string graph_demangle(const std::string_view name);

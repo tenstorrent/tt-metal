@@ -4,7 +4,11 @@
 
 #include "moreh_layer_norm_backward_input_grad_device_operation.hpp"
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_layer_norm_backward_input_grad {
@@ -35,8 +39,10 @@ MorehLayerNormBackwardInputGradOperation::compute_output_specs(
     }
     return TensorSpec(
         tensor_args.input.get_logical_shape(),
-        TensorLayout(
-            tensor_args.output_grad.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            tensor_args.output_grad.get_dtype(),
+            tt::tt_metal::PageConfig(Layout::TILE),
+            operation_attributes.memory_config));
 };
 
 MorehLayerNormBackwardInputGradOperation::tensor_return_value_t

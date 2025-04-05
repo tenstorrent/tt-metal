@@ -4,6 +4,12 @@
 
 #include "moreh_mean_backward_pybind.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <memory>
+#include <optional>
+
 #include "pybind11/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp"
 

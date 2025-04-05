@@ -4,8 +4,11 @@
 
 #pragma once
 
-#include "unary_device_operation_types.hpp"
+#include <stdint.h>
+
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/device_operation.hpp"
+#include "unary_device_operation_types.hpp"
 
 namespace ttnn::operations::unary::program {
 

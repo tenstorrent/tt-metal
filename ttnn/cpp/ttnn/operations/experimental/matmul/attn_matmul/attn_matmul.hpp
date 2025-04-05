@@ -4,8 +4,17 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include <stdint.h>
+#include <optional>
+
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::experimental::matmul {

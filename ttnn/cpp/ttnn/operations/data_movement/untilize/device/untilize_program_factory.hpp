@@ -4,7 +4,12 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+class CoreRangeSet;
 
 namespace ttnn::operations::data_movement::detail {
 

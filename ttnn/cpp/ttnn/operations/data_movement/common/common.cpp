@@ -3,10 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
+
+#include <fmt/base.h>
+#include <stddef.h>
+#include <algorithm>
+#include <numeric>
+#include <vector>
+
 #include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn {
 namespace operations {

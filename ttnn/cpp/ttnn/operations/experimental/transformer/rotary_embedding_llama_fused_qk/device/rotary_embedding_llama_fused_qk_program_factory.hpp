@@ -6,12 +6,14 @@
 
 #include <functional>
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace tt {
 namespace tt_metal {
+class Tensor;
 
 tt::tt_metal::operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_sharded(
     const Tensor& q_input,

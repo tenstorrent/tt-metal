@@ -3,8 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill.hpp"
-#include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
+
+#include <boost/container/vector.hpp>
+#include <algorithm>
+#include <vector>
+
+#include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
+#include "ttnn/run_operation.hpp"
 
 using namespace tt::tt_metal;
 

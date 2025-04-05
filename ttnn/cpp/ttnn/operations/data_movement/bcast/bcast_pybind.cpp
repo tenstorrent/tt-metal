@@ -2,11 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+enum class BcastOpDim;
+enum class BcastOpMath;
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;

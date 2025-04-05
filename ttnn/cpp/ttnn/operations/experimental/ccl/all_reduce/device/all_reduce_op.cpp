@@ -3,12 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/ccl/all_reduce/device/all_reduce_op.hpp"
+
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
-#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
-#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include <cstdint>
+#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 namespace ttnn {
 

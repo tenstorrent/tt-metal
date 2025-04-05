@@ -4,26 +4,47 @@
 
 #include "unary_composite_op.hpp"
 
-#include <functional>
-#include <optional>
-
-#include <magic_enum/magic_enum.hpp>
-#include <utility>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include <tt-metalium/hal.hpp>
+#include <cmath>
+#include <functional>
+#include <limits>
+#include <optional>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+#include <tt_stl/strong_type.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include <tt-metalium/hal.hpp>
-#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include <umd/device/types/arch.h>
+
 namespace ttnn::operations::unary {
 
 Tensor _deg2rad(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {

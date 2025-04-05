@@ -8,6 +8,14 @@
 
 #include "ttnn/any_device.hpp"
 
+namespace tt {
+namespace tt_metal {
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::creation::detail {
 
 OptionalAnyDevice::OptionalAnyDevice(std::nullopt_t) {}

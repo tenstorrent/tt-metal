@@ -4,10 +4,21 @@
 
 #include "moreh_sum_device_operation.hpp"
 
-#include <cstdint>
-
+#include <fmt/base.h>
 #include <tt-metalium/base_types.hpp>
+#include <cstdint>
+#include <memory>
+#include <utility>
+
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 

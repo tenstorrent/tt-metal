@@ -4,11 +4,19 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include <stddef.h>
+#include <stdint.h>
+#include <optional>
 
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include <tt-metalium/fabric_edm_types.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations {

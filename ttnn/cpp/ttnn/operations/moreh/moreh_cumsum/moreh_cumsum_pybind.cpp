@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
+#include <memory>
+#include <optional>
 
 #include "pybind11/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_cumsum/moreh_cumsum.hpp"

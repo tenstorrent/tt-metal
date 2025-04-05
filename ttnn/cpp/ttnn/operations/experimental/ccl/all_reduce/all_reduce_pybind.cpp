@@ -4,15 +4,32 @@
 
 #include "all_reduce_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include <tt-metalium/fabric_edm_types.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce/all_reduce.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+namespace ttnn {
+namespace operations {
+namespace reduction {
+enum class ReduceType;
+}  // namespace reduction
+}  // namespace operations
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::ccl {
 

@@ -4,12 +4,16 @@
 
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 
+#include <boost/container/vector.hpp>
+#include <algorithm>
 #include <utility>
+#include <vector>
 
 #include "device/copy_device_operation.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 

@@ -2,10 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include <pybind11/cast.h>
+#include <memory>
+#include <optional>
 
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/experimental/plusone/plusone.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+class CoreRangeSet;
 
 namespace ttnn::operations::experimental::plusone::detail {
 namespace py = pybind11;

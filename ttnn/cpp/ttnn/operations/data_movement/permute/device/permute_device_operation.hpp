@@ -4,15 +4,21 @@
 
 #pragma once
 
-#include <variant>
-#include <optional>
-
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
+#include <stdint.h>
 #include <tt_stl/span.hpp>
+#include <optional>
+#include <tuple>
+#include <variant>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 

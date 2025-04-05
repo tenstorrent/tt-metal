@@ -2,8 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <stdint.h>
+#include <xtensor/xbuilder.hpp>
+#include <xtensor/xexception.hpp>
+#include <xtensor/xlayout.hpp>
+#include <xtensor/xslice.hpp>
+#include <xtensor/xstrided_view.hpp>
+#include <xtensor/xtensor_forward.hpp>
+#include <xtensor/xtensor_simd.hpp>
+#include <xtensor/xutils.hpp>
+#include <xtl/xvariant_impl.hpp>
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 

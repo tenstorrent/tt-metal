@@ -4,8 +4,20 @@
 
 #include "sdpa_decode_op.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <cmath>
+#include <cstddef>
+
 #include "sdpa_decode_program_factory.hpp"
-#include "ttnn/run_operation.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 using namespace tt::tt_metal;
 

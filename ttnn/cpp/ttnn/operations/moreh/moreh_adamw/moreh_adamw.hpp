@@ -4,9 +4,22 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <optional>
+#include <vector>
+
+#include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::moreh::moreh_adamw {
 

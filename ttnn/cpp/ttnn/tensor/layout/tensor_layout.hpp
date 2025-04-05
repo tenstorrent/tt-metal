@@ -4,13 +4,28 @@
 
 #pragma once
 
+#include <stddef.h>
 #include <tt-metalium/shape2d.hpp>
+#include <algorithm>
+#include <optional>
+#include <tuple>
+#include <utility>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tile.hpp>
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/alignment.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+enum class Layout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

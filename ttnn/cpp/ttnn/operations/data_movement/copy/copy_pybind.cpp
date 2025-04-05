@@ -2,11 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <optional>
+#include <string>
+#include <string_view>
 
 #include "copy.hpp"
 #include "cpp/pybind11/decorators.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace {
 std::string get_binary_doc_string(

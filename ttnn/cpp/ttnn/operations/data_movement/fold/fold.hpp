@@ -4,15 +4,23 @@
 
 #pragma once
 
-#include "ttnn/core.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
+#include <stdint.h>
+#include <optional>
 
 #include "device/fold_device_op.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {

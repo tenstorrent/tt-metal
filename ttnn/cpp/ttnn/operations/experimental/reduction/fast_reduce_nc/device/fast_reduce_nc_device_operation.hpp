@@ -4,12 +4,19 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <optional>
+#include <vector>
 
+#include <tt_stl/span.hpp>
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::reduction::detail {
 

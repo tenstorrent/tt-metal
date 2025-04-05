@@ -4,18 +4,57 @@
 
 #pragma once
 
-#include <cstdint>
-#include <numeric>
-
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/program_impl.hpp>
-#include "ttnn/tensor/types.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include "erisc_datamover_builder_helper.hpp"
+#include <tt-metalium/program_impl.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <tuple>
+#include <vector>
+
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "erisc_datamover_builder_helper.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/tt_xy_pair.h>
+
+namespace tt {
+enum class DataFormat : uint8_t;
+namespace tt_fabric {
+class FabricEriscDatamoverBuilder;
+enum class Topology;
+}  // namespace tt_fabric
+namespace tt_metal {
+class IDevice;
+class Program;
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace ccl {

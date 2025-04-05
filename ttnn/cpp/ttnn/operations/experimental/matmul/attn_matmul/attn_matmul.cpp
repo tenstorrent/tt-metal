@@ -2,12 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/attn_matmul_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "attn_matmul.hpp"
-
+#include <fmt/base.h>
+#include <algorithm>
 #include <utility>
+#include <vector>
+
+#include "attn_matmul.hpp"
+#include "device/attn_matmul_device_operation.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::experimental::matmul {
 

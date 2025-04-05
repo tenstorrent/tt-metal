@@ -5,7 +5,14 @@
 
 #pragma once
 
+#include <optional>
+#include <vector>
+
 #include "device/example_multiple_return_device_operation.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::examples {
 

@@ -4,10 +4,13 @@
 
 #include "moreh_nll_loss_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
+#include <memory>
+#include <optional>
 
-#include "moreh_nll_loss.hpp"
 #include "cpp/pybind11/decorators.hpp"
+#include "moreh_nll_loss.hpp"
 
 namespace py = pybind11;
 

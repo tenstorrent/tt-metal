@@ -3,12 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_reduce_async_op.hpp"
-#include "ttnn/operations/math.hpp"
+
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <array>
+#include <cstddef>
+
 #include "cpp/ttnn/global_semaphore.hpp"
-
-#include <tt-metalium/host_api.hpp>
-
-#include "ttnn/tensor/tensor_utils.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace ttnn {
 namespace ccl {

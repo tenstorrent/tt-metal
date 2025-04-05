@@ -3,11 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+
+#include <fmt/base.h>
 #include <tt-metalium/buffer_constants.hpp>
-#include "cpp/ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/types.hpp"
 #include <tt-metalium/device.hpp>
+#include <optional>
+
 #include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "cpp/ttnn/tensor/tensor.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/logger.hpp>
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/xy_pair.h>
 
 using namespace tt::tt_metal;
 

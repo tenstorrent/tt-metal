@@ -4,19 +4,37 @@
 
 #include "ttnn/run_operation.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt_stl/reflection.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
+#include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <limits>
+#include <memory>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <unordered_set>
+#include <variant>
 
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/operation.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tracy/Tracy.hpp>
-#include <tt_stl/reflection.hpp>
-#include "tools/profiler/op_profiler.hpp"
-#include "ttnn/config.hpp"
-#include "ttnn/device_operation.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace tt::tt_metal::operation {
 

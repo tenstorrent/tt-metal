@@ -3,21 +3,60 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/tensor_impl.hpp"
-#include <optional>
 
-#include "tt-metalium/mesh_buffer.hpp"
-#include "tt-metalium/mesh_device.hpp"
-#include "tt-metalium/mesh_command_queue.hpp"
-#include <tt_stl/overloaded.hpp>
-#include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/distributed/api.hpp"
-
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
 #include <tracy/Tracy.hpp>
+#include <tt_stl/overloaded.hpp>
+#include <cstddef>
+#include <cstdlib>
+#include <functional>
+#include <iomanip>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/strong_type.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

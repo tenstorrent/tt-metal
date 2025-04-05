@@ -2,14 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <utility>
 #include <vector>
 
 #include "loss.hpp"
-
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include <tt-metalium/assert.hpp>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/loss/loss_types.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn {
 

@@ -4,6 +4,17 @@
 
 #include "ttnn/tensor/tensor_spec.hpp"
 
+#include <fmt/base.h>
+#include <stdint.h>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include "ttnn/tensor/types.hpp"
+
 namespace tt::tt_metal {
 
 namespace {

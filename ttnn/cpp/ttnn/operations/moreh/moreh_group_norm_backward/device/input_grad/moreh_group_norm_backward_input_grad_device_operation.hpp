@@ -4,8 +4,19 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <cstddef>
+#include <optional>
+#include <tuple>
+#include <variant>
+
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
 struct MorehGroupNormBackwardInputGradOperation {

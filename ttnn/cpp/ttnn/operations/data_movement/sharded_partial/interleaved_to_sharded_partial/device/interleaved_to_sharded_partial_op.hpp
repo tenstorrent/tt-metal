@@ -4,11 +4,18 @@
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-
-#include <tt-metalium/core_coord.hpp>
+#include <stdint.h>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <functional>
+#include <tuple>
+#include <vector>
+
+#include "ttnn/operation.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
 namespace ttnn::operations::data_movement {
 
 struct InterleavedToShardedPartialDeviceOperation {

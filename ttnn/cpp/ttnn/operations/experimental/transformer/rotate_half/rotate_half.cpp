@@ -4,7 +4,21 @@
 
 #include "rotate_half.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+#include <vector>
+
 #include "device/rotate_half_device_operation.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

@@ -4,8 +4,27 @@
 
 #pragma once
 
+#include <stdint.h>
+
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace sliding_window {
+struct SlidingWindowConfig;
+}  // namespace sliding_window
+}  // namespace operations
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::sliding_window::halo {
 
 // This is the main operation that will be called by the user

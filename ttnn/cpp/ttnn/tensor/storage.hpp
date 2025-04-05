@@ -4,9 +4,29 @@
 
 #pragma once
 
+#include <fmt/base.h>
+#include <stdint.h>
+#include <algorithm>
+#include <functional>
 #include <memory>
-#include "ttnn/tensor/types.hpp"
+#include <mutex>
+#include <optional>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/tensor/host_buffer/borrowed_buffer.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace tt::tt_metal {
 

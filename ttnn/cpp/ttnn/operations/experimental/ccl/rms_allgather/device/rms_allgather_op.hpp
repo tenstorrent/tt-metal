@@ -4,15 +4,35 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <algorithm>
 #include <optional>
+#include <string>
+#include <tuple>
+#include <vector>
 
+#include <tt_stl/reflection.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
-#include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
+namespace tt {
+namespace tt_fabric {
+enum class Topology;
+}  // namespace tt_fabric
+}  // namespace tt
 
 namespace ttnn::operations::fused::normalization {
 

@@ -2,14 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/argmax_op.hpp"
-#include "ttnn/operations/reduction/argmax/argmax.hpp"
-
+#include <boost/container/vector.hpp>
+#include <algorithm>
 #include <utility>
+#include <vector>
 
+#include "device/argmax_op.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::reduction {
 

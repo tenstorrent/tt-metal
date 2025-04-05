@@ -3,7 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sort_device_operation.hpp"
+
+#include <fmt/base.h>
+
 #include "sort_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 using namespace tt::tt_metal;
 

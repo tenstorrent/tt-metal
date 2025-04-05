@@ -4,7 +4,19 @@
 
 #include "running_statistics_device_operation.hpp"
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <fmt/base.h>
+#include <cstdint>
+#include <string_view>
+#include <utility>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::normalization {
@@ -99,7 +111,10 @@ RunningStatistics::spec_return_value_t RunningStatistics::compute_output_specs(
     const auto output_shape = tensor_args.batch_mean.get_logical_shape();
     return TensorSpec(
         output_shape,
-        TensorLayout(operation_attributes.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            operation_attributes.get_dtype(),
+            tt::tt_metal::PageConfig(Layout::TILE),
+            operation_attributes.memory_config));
 }
 
 RunningStatistics::tensor_return_value_t RunningStatistics::create_output_tensors(

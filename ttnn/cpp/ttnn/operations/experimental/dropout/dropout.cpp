@@ -5,6 +5,11 @@
 
 #include "device/dropout_device_operation.hpp"
 #include "dropout.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
 namespace ttnn::operations::experimental {
 
 Tensor DropoutOperation::invoke(

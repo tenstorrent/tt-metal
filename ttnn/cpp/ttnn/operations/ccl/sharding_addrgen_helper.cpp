@@ -2,9 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/tensor/tensor.hpp"
+#include <fmt/base.h>
+#include <algorithm>
+#include <array>
+#include <iterator>
+#include <optional>
+
 #include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "cpp/ttnn/tensor/tensor.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include "ttnn/operations/ccl/common/types/sharding_common.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace shard_builder {
 

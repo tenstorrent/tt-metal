@@ -4,9 +4,19 @@
 
 #include "global_semaphore.hpp"
 
-#include <tt-metalium/host_api.hpp>
+#include <fmt/base.h>
+#include <stddef.h>
 #include <tt-metalium/global_semaphore.hpp>
-#include <tt_stl/span.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <algorithm>
+#include <functional>
+#include <utility>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+
+class CoreRangeSet;
 
 namespace ttnn::global_semaphore {
 

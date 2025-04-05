@@ -5,10 +5,19 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
-
+#include <nlohmann/json_fwd.hpp>
+#include <stddef.h>
+#include <stdint.h>
+#include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
+
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::graph {
 

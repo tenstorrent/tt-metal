@@ -3,16 +3,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "slice_write.hpp"
-#include "device/slice_write_op.hpp"
-#include "tt-metalium/assert.hpp"
-#include "tt-metalium/logger.hpp"
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "cpp/ttnn/operations/creation.hpp"
+
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <algorithm>
+#include <array>
+#include <optional>
+#include <vector>
+
 #include "cpp/ttnn/operations/data_movement/copy/copy.hpp"
-#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "device/slice_write_op.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental {
 

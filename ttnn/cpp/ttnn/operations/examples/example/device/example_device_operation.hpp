@@ -4,14 +4,17 @@
 
 #pragma once
 
+#include <cstddef>
 #include <optional>
+#include <tuple>
 #include <variant>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::examples {
 

@@ -4,9 +4,17 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include <vector>
+
+#include <tt-metalium/shape.hpp>
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
 namespace ttnn {
 
 struct RM_RESHAPE_STRUCT {

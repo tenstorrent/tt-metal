@@ -2,26 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/run_operation.hpp"
-#include "reshape.hpp"
-#include "reshape_common.hpp"
-#include <tt-metalium/constants.hpp>
-#include <functional>
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
 #include <ttnn/operations/functions.hpp>
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "device/reshape_rm_op.hpp"
-#include "cpp/ttnn/operations/copy.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
-#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include <algorithm>
+#include <vector>
 
+#include "cpp/ttnn/operations/copy.hpp"
 #include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "device/reshape_rm_op.hpp"
+#include "reshape.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::data_movement {
 

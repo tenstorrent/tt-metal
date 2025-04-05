@@ -4,8 +4,25 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
+#include <array>
+#include <optional>
+#include <variant>
+
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+enum class ShardOrientation;
+enum class TensorMemoryLayout;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations::data_movement {

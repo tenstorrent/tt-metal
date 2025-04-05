@@ -3,12 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv3d_device_operation.hpp"
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/constants.hpp>
-#include "conv3d_program_factory.hpp"
 
+#include <fmt/base.h>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+
+#include "conv3d_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

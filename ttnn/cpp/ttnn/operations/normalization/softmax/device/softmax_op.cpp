@@ -3,20 +3,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_op.hpp"
+
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/math.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/run_operation.hpp"
-
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/util.hpp>
-
+#include <algorithm>
+#include <cstdint>
+#include <functional>
+#include <limits>
 #include <optional>
 #include <type_traits>
+#include <variant>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/normalization/softmax/device/softmax_types.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;

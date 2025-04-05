@@ -4,16 +4,24 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <memory>
 #include <optional>
+#include <tuple>
 #include <variant>
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "cpp/ttnn/operations/sliding_window/sliding_window.hpp"
+#include <tt_stl/reflection.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations {
 namespace pool {

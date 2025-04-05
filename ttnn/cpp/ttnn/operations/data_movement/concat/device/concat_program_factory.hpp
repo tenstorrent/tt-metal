@@ -4,11 +4,16 @@
 
 #pragma once
 
-#include <tt-metalium/work_split.hpp>
+#include <stdint.h>
 #include <tt-metalium/util.hpp>
-#include "cpp/ttnn/operation.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <vector>
 
+#include "cpp/ttnn/operation.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
 namespace ttnn::operations::data_movement::detail {
 
 // start is inclusive, end is exclusive

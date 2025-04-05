@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 
 namespace ttnn::operations::conv {
 namespace conv2d {

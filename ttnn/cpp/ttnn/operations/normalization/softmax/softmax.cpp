@@ -4,10 +4,24 @@
 
 #include "softmax.hpp"
 
+#include <algorithm>
+#include <functional>
+
 #include "cpp/ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 #include "device/softmax_op.hpp"
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/normalization/softmax/device/softmax_types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::normalization {
 

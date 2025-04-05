@@ -4,7 +4,16 @@
 
 #include "moreh_norm_backward_device_operation.hpp"
 
+#include <boost/container/vector.hpp>
+#include <algorithm>
+#include <memory>
+
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm_backward {

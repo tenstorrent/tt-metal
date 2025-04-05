@@ -8,10 +8,25 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+
+#include "device/conv3d_device_operation.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 // #include <tt-metalium/operation.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
-#include "device/conv3d_device_operation.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace experimental {
+namespace conv3d {
+struct Conv3dConfig;
+}  // namespace conv3d
+}  // namespace experimental
+}  // namespace operations
+}  // namespace ttnn
 
 namespace ttnn::operations::experimental::conv3d {
 

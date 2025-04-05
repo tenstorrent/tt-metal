@@ -4,12 +4,24 @@
 
 #include "moreh_matmul_backward.hpp"
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/moreh/moreh_dot_backward/moreh_dot_backward.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/run_operation.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::moreh::moreh_matmul_backward {
 

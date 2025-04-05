@@ -4,8 +4,21 @@
 
 #include "moreh_matmul_device_operation.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+#include <memory>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul {

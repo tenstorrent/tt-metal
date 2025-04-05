@@ -4,11 +4,12 @@
 
 #include "rotary_embedding_llama_fused_qk_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
-
 #include "rotary_embedding_llama_fused_qk.hpp"
 
 namespace ttnn::operations::experimental::transformer {

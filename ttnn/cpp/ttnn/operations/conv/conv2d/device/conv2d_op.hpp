@@ -4,14 +4,43 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
+#include <functional>
 #include <optional>
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+enum class TensorMemoryLayout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
+namespace operations {
+namespace sliding_window {
+struct SlidingWindowConfig;
+}  // namespace sliding_window
+namespace unary {
+struct UnaryWithParam;
+}  // namespace unary
+}  // namespace operations
 
 namespace operations::conv {
 namespace conv2d {

@@ -4,8 +4,18 @@
 
 #include "rmsnorm_post_all_gather.hpp"
 
-#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
+#include <boost/container/vector.hpp>
+#include <algorithm>
+#include <vector>
+
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_distributed_types.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::normalization {
 

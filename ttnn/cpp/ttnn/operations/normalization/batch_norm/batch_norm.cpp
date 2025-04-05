@@ -4,11 +4,19 @@
 
 #include "batch_norm.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+
 #include "device/batch_norm_device_operation.hpp"
-#include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 #include "device/running_statistics_device_operation.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 using namespace tt::tt_metal;
 

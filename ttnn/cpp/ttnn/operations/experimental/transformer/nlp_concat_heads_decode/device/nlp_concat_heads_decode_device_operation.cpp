@@ -3,7 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_concat_heads_decode_device_operation.hpp"
+
+#include <fmt/base.h>
 #include <tt-metalium/work_split.hpp>
+#include <array>
+#include <optional>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

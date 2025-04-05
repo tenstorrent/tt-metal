@@ -3,12 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dram_prefetcher_op.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/math.hpp"
 
+#include <fmt/base.h>
+#include <stddef.h>
 #include <tt-metalium/constants.hpp>
-
+#include <array>
+#include <cstdint>
 #include <optional>
+#include <utility>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;

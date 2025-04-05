@@ -3,7 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sampling_op.hpp"
+
+#include <fmt/base.h>
+
 #include "sampling_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 

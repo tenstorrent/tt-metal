@@ -4,6 +4,16 @@
 
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
 
+#include <fmt/base.h>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {

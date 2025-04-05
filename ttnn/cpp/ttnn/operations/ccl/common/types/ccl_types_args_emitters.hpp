@@ -3,24 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
-
-#include <vector>
+#include <algorithm>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
 namespace tt {
 namespace tt_metal {
-class Tensor;
-class ShardSpec;
-
 class IDevice;
+class ShardSpec;
+class Tensor;
 
 }  // namespace tt_metal
 }  // namespace tt
 
 namespace ttnn {
 namespace ccl {
+struct WorkerEdmInterfaceArgs;
+template <typename T>
+struct Shape4D;
 
 using args_list_t = std::vector<uint32_t>;
 

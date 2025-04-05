@@ -4,12 +4,16 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
+#include <string>
+#include <vector>
 
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::transformer {
 

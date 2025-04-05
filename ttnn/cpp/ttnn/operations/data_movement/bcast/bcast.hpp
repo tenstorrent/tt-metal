@@ -3,10 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "ttnn/decorators.hpp"
+#include <optional>
+
 #include "bcast_types.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
+enum class BcastOpDim;
+enum class BcastOpMath;
 
 namespace operations::data_movement {
 

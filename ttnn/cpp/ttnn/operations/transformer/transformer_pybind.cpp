@@ -4,8 +4,10 @@
 
 #include "transformer_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <cstddef>
+#include <optional>
 
 #include "attention_softmax/attention_softmax_pybind.hpp"
 #include "concatenate_heads/concatenate_heads_pybind.hpp"
@@ -13,6 +15,7 @@
 #include "sdpa_config.hpp"
 #include "sdpa_decode/sdpa_decode_pybind.hpp"
 #include "split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::transformer {
 

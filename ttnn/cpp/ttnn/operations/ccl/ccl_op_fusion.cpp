@@ -3,8 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <type_traits>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+namespace tt_metal {
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

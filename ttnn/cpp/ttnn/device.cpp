@@ -3,7 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/device.hpp"
+
 #include <tt-metalium/device_pool.hpp>
+#include <functional>
+#include <memory>
+#include <vector>
+
+#include <tt_stl/span.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <umd/device/types/arch.h>
 
 namespace ttnn {
 

@@ -3,13 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv3d.hpp"
-#include "device/conv3d_device_operation.hpp"
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
+
+#include <boost/container/vector.hpp>
 #include <tt-metalium/constants.hpp>
-#include "ttnn/common/constants.hpp"
-#include "ttnn/run_operation.hpp"
+#include <algorithm>
+#include <vector>
+
+#include "device/conv3d_device_operation.hpp"
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

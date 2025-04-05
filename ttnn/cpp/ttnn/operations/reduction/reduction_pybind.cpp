@@ -2,14 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <pybind11/stl.h>
+#include <boost/move/utility_core.hpp>
+#include <pybind11/pybind11.h>
+#include <memory>
 
 #include "cpp/pybind11/export_enum.hpp"
-
+#include "pybind11/decorators.hpp"
+#include "pybind11/pybind_fwd.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/reduction/argmax/argmax_pybind.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions_pybind.hpp"
-#include "ttnn/operations/reduction/argmax/argmax_pybind.hpp"
 #include "ttnn/operations/reduction/moe/moe_pybind.hpp"
+#include "ttnn/operations/reduction/prod/prod.hpp"
 #include "ttnn/operations/reduction/prod/prod_pybind.hpp"
 #include "ttnn/operations/reduction/sampling/sampling_pybind.hpp"
 #include "ttnn/operations/reduction/topk/topk_pybind.hpp"

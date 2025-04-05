@@ -4,13 +4,12 @@
 
 #include "where.hpp"
 
-#include <functional>
+#include <algorithm>
 #include <utility>
 #include <variant>
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
-
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 

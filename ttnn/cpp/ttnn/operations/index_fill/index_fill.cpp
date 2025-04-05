@@ -7,6 +7,12 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/index_fill/device/index_fill_device_operation.hpp"
 
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::index_fill {
 
 Tensor IndexFill::invoke(

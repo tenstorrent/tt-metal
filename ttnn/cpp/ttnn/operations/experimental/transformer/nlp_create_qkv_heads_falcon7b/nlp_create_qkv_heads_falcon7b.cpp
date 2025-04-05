@@ -4,7 +4,15 @@
 
 #include "nlp_create_qkv_heads_falcon7b.hpp"
 
+#include <boost/container/vector.hpp>
+#include <algorithm>
+#include <initializer_list>
 #include <utility>
+
+#include <tt-metalium/buffer_constants.hpp>
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/device/nlp_create_qkv_heads_falcon7b_device_operation.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

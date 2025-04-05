@@ -4,9 +4,21 @@
 
 #include "joint_sdpa_op.hpp"
 
-#include "joint_sdpa_program_factory.hpp"
-#include "ttnn/run_operation.hpp"
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
+#include <cmath>
+#include <cstddef>
+
+#include "joint_sdpa_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 using namespace tt::tt_metal;
 

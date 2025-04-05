@@ -4,7 +4,22 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <optional>
+
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations::data_movement {

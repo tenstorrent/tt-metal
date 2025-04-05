@@ -2,11 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include "ttnn/operations/cb_utils.hpp"
-#include "paged_cache_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+
+#include "paged_cache_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::paged_cache::detail {
 

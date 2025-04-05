@@ -4,10 +4,27 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include <stdint.h>
+#include <optional>
+#include <vector>
+
+#include <tt-metalium/system_memory_manager.hpp>
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_fabric {
+enum class Topology;
+}  // namespace tt_fabric
+}  // namespace tt
+
 namespace ttnn {
 
 struct Barrier {

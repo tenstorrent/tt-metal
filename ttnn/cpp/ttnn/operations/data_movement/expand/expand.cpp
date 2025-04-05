@@ -2,13 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/run_operation.hpp"
-#include "expand.hpp"
-#include <tt-metalium/constants.hpp>
-#include <functional>
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
 #include <ttnn/operations/functions.hpp>
+#include <span>
+
+#include "expand.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::expand {
 
 

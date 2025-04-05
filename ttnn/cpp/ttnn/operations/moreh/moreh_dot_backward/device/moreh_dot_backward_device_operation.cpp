@@ -4,6 +4,10 @@
 
 #include "moreh_dot_backward_device_operation.hpp"
 
+#include <fmt/base.h>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

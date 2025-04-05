@@ -4,6 +4,21 @@
 
 #include "fold_device_op.hpp"
 
+#include <fmt/base.h>
+#include <array>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
 namespace ttnn::operations::data_movement {
 
 Fold::program_factory_t Fold::select_program_factory(

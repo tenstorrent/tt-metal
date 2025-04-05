@@ -4,9 +4,17 @@
 
 #include "dropout_device_operation.hpp"
 
-#include <magic_enum/magic_enum.hpp>
-#include <tt-metalium/constants.hpp>
-#include "ttnn/tensor/tensor_utils.hpp"
+#include <fmt/base.h>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/experimental/dropout/device/dropout_device_operation_types.hpp"
+#include "ttnn/operations/experimental/dropout/device/dropout_program_factory.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/storage.hpp"
 
 using namespace tt::tt_metal;
 

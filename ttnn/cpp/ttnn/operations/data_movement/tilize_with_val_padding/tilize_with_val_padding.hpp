@@ -4,11 +4,25 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <optional>
+
 #include "device/tilize_with_val_padding_op.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "tilize_with_val_padding_common.hpp"
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 

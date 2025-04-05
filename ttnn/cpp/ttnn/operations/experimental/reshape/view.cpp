@@ -4,14 +4,28 @@
 
 #include "view.hpp"
 
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/run_operation.hpp"
-#include <tt-metalium/constants.hpp>
-#include <ttnn/operations/functions.hpp>
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-
+#include <stdint.h>
 #include <tracy/Tracy.hpp>
+#include <ttnn/operations/functions.hpp>
+#include <array>
+#include <memory>
+#include <optional>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::reshape {
 

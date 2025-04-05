@@ -2,10 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <tt-metalium/hal.hpp>
+#include <array>
+#include <optional>
 
 #include "interleaved_to_sharded_op.hpp"
 #include "interleaved_to_sharded_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 using namespace tt::tt_metal;
 

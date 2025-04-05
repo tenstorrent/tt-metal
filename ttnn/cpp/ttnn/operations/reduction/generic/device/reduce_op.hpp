@@ -4,12 +4,17 @@
 
 #pragma once
 
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/tensor/tensor.hpp"
-
-#include "ttnn/operation.hpp"
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
 
 #include "common.hpp"
+#include <tt-metalium/utils.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace tt {
 

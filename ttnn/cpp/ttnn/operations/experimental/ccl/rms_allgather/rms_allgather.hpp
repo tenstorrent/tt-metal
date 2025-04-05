@@ -4,13 +4,23 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include <stddef.h>
+#include <stdint.h>
+#include <optional>
 
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
-#include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::fused::normalization {

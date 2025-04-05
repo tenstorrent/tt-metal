@@ -4,14 +4,31 @@
 
 #include "moreh_helper_functions.hpp"
 
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
 #include <magic_enum/magic_enum.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <numeric>
+#include <set>
+#include <string_view>
 #include <utility>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
 
-#include "tt-metalium/hal.hpp"
+namespace tt {
+namespace tt_metal {
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations {

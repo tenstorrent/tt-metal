@@ -4,11 +4,24 @@
 
 #include "hc_sum_reduce_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
-#include "hc_sum_reduce.hpp"
 #include "cpp/pybind11/decorators.hpp"
+#include "hc_sum_reduce.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+enum class MathFidelity : uint8_t;
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::ssm::detail {
 

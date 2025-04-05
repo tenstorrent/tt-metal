@@ -4,12 +4,20 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <string>
 #include <tuple>
+#include <unordered_map>
+#include <vector>
 
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 // #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::sliding_window {
 namespace halo {

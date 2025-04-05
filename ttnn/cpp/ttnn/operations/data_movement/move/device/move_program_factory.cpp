@@ -2,20 +2,52 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
-
-#include <tt-metalium/work_split.hpp>
-#include "cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
-#include "ttnn/operations/math.hpp"
-#include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/allocator.hpp>
-#include <algorithm>
-
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
+#include <hostdevcommon/kernel_structs.h>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -105,7 +137,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     std::vector<uint32_t> compile_time_args = {cb_index, (uint32_t)src_is_dram, (uint32_t)dst_is_dram};
     if (!tilized) {
         bool page_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
-        log2_page_size = page_size_is_power_of_two ? (std::uint32_t)log2(page_size) : 0;
+        log2_page_size = page_size_is_power_of_two ? (std::uint32_t)std::log2(page_size) : 0;
         compile_time_args.push_back((uint32_t)page_size_is_power_of_two);
     }
 

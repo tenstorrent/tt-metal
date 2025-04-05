@@ -2,22 +2,53 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <pybind11/attr.h>
+#include <pybind11/buffer_info.h>
+#include <pybind11/cast.h>
 #include <pybind11/operators.h>
-
+#include <pybind11/pybind11.h>
+#include <pybind11/pytypes.h>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
-#include "tensor.hpp"
 #include "cpp/pybind11/json_class.hpp"
 #include "export_enum.hpp"
-
-#include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/tensor/serialization.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
+#include "tensor.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tile.hpp>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/host_buffer/borrowed_buffer.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/serialization.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/xy_pair.h>
+
+enum class MathFidelity : uint8_t;
+namespace tt {
+namespace tt_metal {
+enum class Layout;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

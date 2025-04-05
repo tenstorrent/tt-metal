@@ -4,17 +4,35 @@
 
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <stdint.h>
+#include <tt-metalium/constants.hpp>
+#include <array>
 #include <utility>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::auto_format {
 

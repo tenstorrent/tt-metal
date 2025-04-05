@@ -2,11 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <cmath>
+#include <map>
+#include <utility>
+#include <variant>
+#include <vector>
 
 #include "clone_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <hostdevcommon/kernel_structs.h>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/util.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/xy_pair.h>
 
 namespace ttnn::operations::data_movement::clone {
 CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory::create(
@@ -70,14 +97,14 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         };
     } else {
         bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_unit_size);
-        uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (uint32_t)log2(input_unit_size) : 0;
+        uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (uint32_t)std::log2(input_unit_size) : 0;
         reader_compile_time_args = {
             (uint32_t)src_cb_id,
             (uint32_t)input_is_dram,
             (uint32_t)src_stick_size_is_power_of_two,
             (uint32_t)src_log2_stick_size};
         bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_unit_size);
-        uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (uint32_t)log2(output_unit_size) : 0;
+        uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (uint32_t)std::log2(output_unit_size) : 0;
         writer_compile_time_args = {
             (uint32_t)dst_cb_id,
             (uint32_t)output_is_dram,

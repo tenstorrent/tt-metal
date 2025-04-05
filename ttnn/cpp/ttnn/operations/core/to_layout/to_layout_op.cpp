@@ -4,16 +4,40 @@
 
 #include "to_layout_op.hpp"
 
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <array>
+#include <set>
+#include <stdexcept>
+#include <utility>
+
+#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include <tt-metalium/constants.hpp>
-#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {

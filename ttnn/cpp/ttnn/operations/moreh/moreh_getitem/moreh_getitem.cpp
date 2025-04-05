@@ -4,6 +4,17 @@
 
 #include "moreh_getitem.hpp"
 
+#include <fmt/base.h>
+
+#include <tt-metalium/assert.hpp>
+#include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_device_operation.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::moreh::moreh_getitem {
 Tensor MorehGetItem::invoke(
     const std::optional<const Tensor>& input,

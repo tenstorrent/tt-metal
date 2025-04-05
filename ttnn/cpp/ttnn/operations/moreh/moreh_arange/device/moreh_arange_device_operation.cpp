@@ -4,7 +4,17 @@
 
 #include "moreh_arange_device_operation.hpp"
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <fmt/base.h>
+#include <stdint.h>
+#include <cmath>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_arange {
@@ -67,13 +77,16 @@ MorehArangeOperation::spec_return_value_t MorehArangeOperation::compute_output_s
     if (operation_attributes.untilize_out) {
         return TensorSpec(
             Shape({num_elems}),
-            TensorLayout(
-                operation_attributes.dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.memory_config));
+            tt::tt_metal::TensorLayout(
+                operation_attributes.dtype,
+                tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
+                operation_attributes.memory_config));
     }
 
     return TensorSpec(
         Shape({1, num_elems}),
-        TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
 MorehArangeOperation::tensor_return_value_t MorehArangeOperation::create_output_tensors(

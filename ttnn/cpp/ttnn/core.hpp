@@ -3,17 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <atomic>
 #include <csignal>
 #include <cstdint>
 #include <optional>
 #include <string>
 
+#include "ttnn/config.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/config.hpp"
 #include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class StorageType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 

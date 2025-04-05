@@ -4,11 +4,23 @@
 
 #include "events.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <pybind11/cast.h>
 #include <tt-metalium/event.hpp>
-#include "pybind11/pybind11.h"
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <vector>
 
+#include "pybind11/pybind11.h"
+#include <tt_stl/strong_type.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/events.hpp"
 
 using namespace tt::tt_metal;
 

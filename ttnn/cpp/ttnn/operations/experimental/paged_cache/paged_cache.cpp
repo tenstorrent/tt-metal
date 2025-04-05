@@ -2,12 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <algorithm>
+
 #include "device/paged_cache_operation.hpp"  // TODO: not right!
-#include "ttnn/run_operation.hpp"
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace operations::experimental::paged_cache {

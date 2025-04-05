@@ -2,16 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <optional>
-
-#include "prod_op_all.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
-#include "tools/profiler/op_profiler.hpp"
-
 #include <umd/device/tt_cluster_descriptor.h>  // tt_ClusterDescriptor
+#include <algorithm>
+#include <variant>
+
+#include "prod_op_all.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include <umd/device/types/arch.h>
 
 namespace tt {
 using namespace constants;

@@ -2,7 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
 #include <tt-metalium/constants.hpp>
+
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::data_movement::detail {

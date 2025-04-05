@@ -4,13 +4,49 @@
 
 #include "cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
-#include <algorithm>
-#include <numeric>
-
-#include "cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
-#include "ttnn/tensor/tensor.hpp"
-
+#include <fmt/base.h>
+#include <stddef.h>
 #include <tt-metalium/tt_align.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <iterator>
+#include <map>
+#include <numeric>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
+#include <tt-metalium/work_split.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 using namespace tt;
 using namespace tt::constants;

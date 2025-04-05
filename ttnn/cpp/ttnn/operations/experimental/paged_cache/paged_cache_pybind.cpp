@@ -2,10 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include <pybind11/cast.h>
+#include <stdint.h>
+#include <optional>
+#include <tuple>
+#include <vector>
 
+#include "cpp/pybind11/decorators.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::paged_cache::detail {
 

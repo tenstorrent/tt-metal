@@ -5,7 +5,15 @@
 #include "reduce_scatter.hpp"
 
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace reduction {
+enum class ReduceType;
+}  // namespace reduction
+}  // namespace operations
+}  // namespace ttnn
 
 namespace ttnn::operations::experimental::ccl {
 

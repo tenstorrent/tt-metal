@@ -2,12 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/nlp_concat_heads_decode_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "nlp_concat_heads_decode.hpp"
-
+#include <boost/container/vector.hpp>
+#include <algorithm>
 #include <utility>
+#include <vector>
+
+#include "device/nlp_concat_heads_decode_device_operation.hpp"
+#include "nlp_concat_heads_decode.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/run_operation.hpp"
+#include <umd/device/types/xy_pair.h>
 
 namespace ttnn::operations::experimental::transformer {
 

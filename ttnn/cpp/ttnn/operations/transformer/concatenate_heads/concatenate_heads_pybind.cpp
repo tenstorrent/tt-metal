@@ -4,11 +4,13 @@
 
 #include "concatenate_heads_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
-#include "cpp/pybind11/decorators.hpp"
 #include "concatenate_heads.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace ttnn::operations::transformer {
 

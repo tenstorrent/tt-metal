@@ -5,11 +5,12 @@
 #include "moreh_nll_loss_backward_pybind.hpp"
 
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
+#include "cpp/pybind11/decorators.hpp"
 #include "moreh_nll_loss_backward.hpp"
 #include "pybind11/cast.h"
-#include "cpp/pybind11/decorators.hpp"
 
 namespace py = pybind11;
 

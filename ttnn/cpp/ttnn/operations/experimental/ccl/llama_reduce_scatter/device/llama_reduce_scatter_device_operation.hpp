@@ -4,16 +4,25 @@
 
 #pragma once
 
-#include <variant>
-#include <optional>
-
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include <stdint.h>
 #include <tt-metalium/sub_device.hpp>
+#include <optional>
+#include <tuple>
+#include <variant>
+#include <vector>
+
+#include "cpp/ttnn/global_semaphore.hpp"
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 

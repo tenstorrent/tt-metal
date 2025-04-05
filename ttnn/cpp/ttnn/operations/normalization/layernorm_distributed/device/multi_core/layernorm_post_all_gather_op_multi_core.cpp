@@ -2,19 +2,48 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
+#include <fmt/base.h>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <map>
+#include <memory>
 #include <optional>
+#include <string>
+#include <unordered_set>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include "cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "tt-metalium/circular_buffer_types.hpp"
+#include <hostdevcommon/kernel_structs.h>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
-#include <tt-metalium/circular_buffer.hpp>
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_distributed_types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/xy_pair.h>
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
@@ -263,7 +292,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
         reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         // if (gamma_stick_size_is_power_of_two) {
-        uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)log2(gamma_stick_size) : 0;
+        uint32_t gamma_log2_stick_size =
+            gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
         reader_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
     }
 

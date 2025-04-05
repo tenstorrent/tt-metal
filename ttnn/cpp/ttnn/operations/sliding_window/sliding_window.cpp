@@ -3,9 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sliding_window.hpp"
-#include <cstdint>
-#include <vector>
+
 #include <tt-metalium/assert.hpp>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <type_traits>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 

@@ -4,11 +4,16 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-
-#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <stdint.h>
 #include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <optional>
+#include <vector>
+
 #include "device/dram_prefetcher_op.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/global_cb_utils.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace operations::dram_prefetcher {

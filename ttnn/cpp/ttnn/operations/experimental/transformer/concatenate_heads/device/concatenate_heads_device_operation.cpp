@@ -4,7 +4,17 @@
 
 #include "concatenate_heads_device_operation.hpp"
 
+#include <fmt/base.h>
+
 #include "concatenate_heads_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

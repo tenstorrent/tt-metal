@@ -2,13 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/data_movement/fold/fold.hpp"
-#include "ttnn/operations/data_movement/fold/fold_pybind.hpp"
-
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stdint.h>
+#include <memory>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/data_movement/fold/fold.hpp"
+#include "ttnn/operations/data_movement/fold/fold_pybind.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {

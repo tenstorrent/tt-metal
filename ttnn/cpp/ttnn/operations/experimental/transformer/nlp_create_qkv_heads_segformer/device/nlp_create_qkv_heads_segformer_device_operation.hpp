@@ -5,13 +5,17 @@
 #pragma once
 
 #include <optional>
-
-#include "ttnn/run_operation.hpp"
 #include <variant>
+#include <vector>
 
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

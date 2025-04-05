@@ -4,13 +4,19 @@
 
 #include "events.hpp"
 
-#include <memory>
 #include <tt-metalium/event.hpp>
-#include "tt-metalium/distributed.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <algorithm>
+#include <functional>
+#include <memory>
+
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
-
-#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::events {
 

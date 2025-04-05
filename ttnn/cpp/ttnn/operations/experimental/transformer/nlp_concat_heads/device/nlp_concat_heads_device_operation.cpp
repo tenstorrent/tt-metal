@@ -4,6 +4,22 @@
 
 #include "nlp_concat_heads_device_operation.hpp"
 
+#include <fmt/base.h>
+#include <stdint.h>
+#include <array>
+#include <optional>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+
 namespace ttnn::operations::experimental::transformer {
 
 // Generic NLP ConcatHeads op

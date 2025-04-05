@@ -2,16 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <optional>
+#include <type_traits>
 #include <utility>
+#include <variant>
 
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/move/move.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/core.hpp"
+#include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/data_movement/move/move.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn {
 namespace operations::conv {

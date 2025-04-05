@@ -2,9 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
+#include <type_traits>
+
 #include "compute_kernel_config.hpp"
-#include "ttnn/device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+
+#include "ttnn/device.hpp"  // NEEDED ONLY IN DEBUG MODE FOR TT_ASSERT ?
 
 #define DATUMS_PER_ROW 16
 

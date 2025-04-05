@@ -5,13 +5,21 @@
 #pragma once
 
 #include <memory>
-#include "tt-metalium/mesh_event.hpp"
+#include <optional>
+#include <vector>
+
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
 
-#include "tt-metalium/device.hpp"
-#include "tt-metalium/event.hpp"
-#include "tt-metalium/sub_device_types.hpp"
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 

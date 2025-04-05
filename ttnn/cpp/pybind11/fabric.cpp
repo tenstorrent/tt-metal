@@ -4,11 +4,11 @@
 
 #include "fabric.hpp"
 
-#include <pybind11/operators.h>
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
 #include <tt-metalium/tt_metal.hpp>
+
+#include <tt-metalium/fabric_types.hpp>
 
 namespace ttnn::fabric {
 

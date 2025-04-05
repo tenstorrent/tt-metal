@@ -4,9 +4,6 @@
 
 #include "prefetcher_pybind.hpp"
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
 #include "prefetcher/dram_prefetcher_pybind.hpp"
 
 namespace ttnn::operations::prefetcher {

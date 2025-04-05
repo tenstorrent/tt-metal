@@ -2,9 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <stddef.h>
 #include <tt-metalium/constants.hpp>
+#include <algorithm>
+#include <functional>
+#include <numeric>
+#include <utility>
+
 #include "slice_op.hpp"
 #include "slice_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 
 using namespace tt::tt_metal;
 

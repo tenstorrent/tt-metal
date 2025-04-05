@@ -3,10 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sort.hpp"
-#include "device/sort_device_operation.hpp"
 
+#include <boost/container/vector.hpp>
+#include <algorithm>
+#include <type_traits>
+#include <utility>
+
+#include "device/sort_device_operation.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::reduction {

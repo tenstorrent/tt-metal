@@ -4,13 +4,25 @@
 
 #pragma once
 
-#include "ttnn/core.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
+#include <stdint.h>
+#include <array>
+#include <optional>
 
 #include "device/pool_op.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class TensorMemoryLayout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations::pool {

@@ -2,6 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
+#include <map>
+
+#include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
 namespace ttnn::operations::data_movement::detail {
 
 const std::map<ttnn::DataType, uint32_t> data_type_to_size = {

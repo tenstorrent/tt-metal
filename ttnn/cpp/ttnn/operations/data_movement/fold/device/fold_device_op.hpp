@@ -4,12 +4,24 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <optional>
+#include <tuple>
+#include <variant>
 #include <vector>
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/device_operation.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::data_movement {
 

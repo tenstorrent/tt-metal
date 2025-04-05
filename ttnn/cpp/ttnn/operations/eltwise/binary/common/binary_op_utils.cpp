@@ -4,9 +4,15 @@
 
 #include "binary_op_utils.hpp"
 
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/assert.hpp>
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <vector>
+
 #include "cpp/ttnn/tensor/types.hpp"
+#include <tt-metalium/logger.hpp>
+#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::tt_metal;
 

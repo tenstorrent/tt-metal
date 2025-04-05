@@ -5,6 +5,14 @@
 #include "ttnn/core.hpp"
 
 #include <magic_enum/magic_enum.hpp>
+#include <stdlib.h>
+#include <cctype>
+#include <csignal>
+#include <iostream>
+
+#include <tt-metalium/assert.hpp>
+#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::core {
 

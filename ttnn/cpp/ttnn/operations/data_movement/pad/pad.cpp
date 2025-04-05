@@ -4,11 +4,34 @@
 
 #include "pad.hpp"
 
+#include <boost/container/vector.hpp>
+#include <boost/core/span.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <stddef.h>
+#include <algorithm>
+#include <array>
+#include <functional>
+#include <numeric>
+#include <ranges>
+#include <span>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_op.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::data_movement {
 

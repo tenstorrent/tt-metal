@@ -4,6 +4,19 @@
 
 #include "tensor_layout.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <array>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+
 namespace tt::tt_metal {
 
 namespace {

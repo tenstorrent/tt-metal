@@ -3,8 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <stdint.h>
+#include <cstddef>
+#include <map>
 #include <optional>
+#include <string>
+#include <tuple>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -12,9 +25,25 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
+namespace tt {
+enum class ARCH;
+namespace tt_metal {
+class Program;
+namespace experimental {
+class GlobalCircularBuffer;
+}  // namespace experimental
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn {
+namespace experimental {
+namespace ccl {
+struct MatmulFusedOpSignaler;
+}  // namespace ccl
+}  // namespace experimental
 
 namespace operations {
 

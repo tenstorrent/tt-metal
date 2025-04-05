@@ -4,11 +4,23 @@
 
 #include "convert_to_chw_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
 #include "convert_to_chw.hpp"
 #include "cpp/pybind11/decorators.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::cnn::detail {
 

@@ -4,12 +4,16 @@
 
 #include "cpp/ttnn/operations/ccl/ccl_pybind.hpp"
 
-#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
-#include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
+#include <pybind11/cast.h>
+#include <optional>
 
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "cpp/ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
+#include "pybind11/pybind_fwd.hpp"
+#include <tt-metalium/fabric_edm_types.hpp>
+#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
+#include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 
 namespace ttnn::operations::ccl {
 

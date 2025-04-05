@@ -4,16 +4,19 @@
 
 #pragma once
 
-#include <cmath>
+#include <stdint.h>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <cmath>
+#include <optional>
+#include <vector>
 
 #include "softmax_types.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::normalization {
 

@@ -4,9 +4,22 @@
 
 #pragma once
 
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <stdint.h>
+#include <cstddef>
+#include <optional>
+
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace transformer {
+struct SDPAProgramConfig;
+}  // namespace transformer
+}  // namespace operations
+}  // namespace ttnn
 
 namespace ttnn::operations::transformer::detail {
 

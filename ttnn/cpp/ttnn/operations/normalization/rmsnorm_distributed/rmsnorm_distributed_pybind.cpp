@@ -4,13 +4,16 @@
 
 #include "rmsnorm_distributed_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
-
-#include "rmsnorm_pre_all_gather.hpp"
 #include "rmsnorm_post_all_gather.hpp"
+#include "rmsnorm_pre_all_gather.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::normalization::detail {
 

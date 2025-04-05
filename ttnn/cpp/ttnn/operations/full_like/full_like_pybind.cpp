@@ -4,12 +4,13 @@
 
 #include "full_like_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
-#include "full_like.hpp"
 #include "cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/full_like/device/full_like_device_operation.hpp"
+#include "full_like.hpp"
 
 namespace py = pybind11;
 

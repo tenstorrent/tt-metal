@@ -2,13 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <pybind11/cast.h>
+#include <stdint.h>
+#include <optional>
 
+#include "cpp/pybind11/decorators.hpp"
 #include "kv_cache.hpp"
 #include "kv_cache_pybind.hpp"
-#include "cpp/pybind11/decorators.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace py = pybind11;
 

@@ -5,7 +5,10 @@
 #pragma once
 
 #include <map>
+#include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "unary_op_types.hpp"
 

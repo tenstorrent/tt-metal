@@ -4,11 +4,22 @@
 
 #pragma once
 
+#include <stddef.h>
 #include <memory>
+#include <optional>
+#include <vector>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class StorageType;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::distributed {
 

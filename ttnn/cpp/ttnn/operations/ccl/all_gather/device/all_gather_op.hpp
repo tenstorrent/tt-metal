@@ -4,24 +4,45 @@
 
 #pragma once
 
-#include <cstdint>
-#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/constants.hpp>
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-
-
-#include "ttnn/run_operation.hpp"
-
+#include <tt-metalium/core_coord.hpp>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <vector>
-#include <algorithm>
+
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
+namespace ccl {
+class EriscDatamoverBuilder;
+}  // namespace ccl
+namespace experimental {
+namespace ccl {
+struct AllGatherFusedOpSignaler;
+}  // namespace ccl
+}  // namespace experimental
 
 enum AllGatherBidirectionalMode {
     // Splits the tensor into two and sends each half in opposite directions

@@ -4,7 +4,17 @@
 
 #pragma once
 
+#include <cstddef>
+#include <optional>
+#include <tuple>
+
+#include <tt_stl/span.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn {
 namespace operations {

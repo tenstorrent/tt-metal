@@ -6,6 +6,7 @@
 // Contains utility functions for partitioning shards work between multiple cores.
 //
 
+#include <fmt/base.h>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/logger.hpp>
 

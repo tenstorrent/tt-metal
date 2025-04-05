@@ -4,10 +4,15 @@
 
 #pragma once
 
-#include <optional>
+#include <stdint.h>
 #include <functional>
+#include <optional>
 
+#include <tt-metalium/small_vector.hpp>
 #include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

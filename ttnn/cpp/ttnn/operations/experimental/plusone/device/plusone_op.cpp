@@ -3,7 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "plusone_op.hpp"
+
+#include <fmt/base.h>
+
 #include "plusone_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental {
 

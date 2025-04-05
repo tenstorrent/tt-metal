@@ -4,9 +4,25 @@
 
 #include "moreh_linear_backward.hpp"
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <algorithm>
+
 #include "cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 #include "cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_linear_backward/device/moreh_linear_backward_device_operation.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
 

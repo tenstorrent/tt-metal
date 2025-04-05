@@ -3,14 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
-#include "ttnn/operation.hpp"
-
+#include <tt-metalium/math.hpp>
 #include <optional>
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::auto_format {
 

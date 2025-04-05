@@ -4,12 +4,17 @@
 
 #pragma once
 
-#include "ttnn/tensor/types.hpp"
+#include <stdint.h>
+#include <optional>
+#include <ranges>
+
 #include "cpp/ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
-
-#include <ranges>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations {

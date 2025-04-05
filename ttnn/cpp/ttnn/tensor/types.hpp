@@ -4,26 +4,32 @@
 
 #pragma once
 
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <iosfwd>
 #include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
-#include <algorithm>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include <tt_stl/reflection.hpp>
-#include <tt_stl/span.hpp>
+#include "cpp/ttnn/tensor/enum_types.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
-#include "cpp/ttnn/tensor/enum_types.hpp"
-
 #include "ttnn/tensor/shape/shape.hpp"
+
+class bfloat16;
 
 namespace tt {
 

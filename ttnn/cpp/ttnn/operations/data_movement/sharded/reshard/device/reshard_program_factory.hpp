@@ -4,7 +4,13 @@
 
 #pragma once
 
+#include <stdint.h>
+
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/operation.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include <umd/device/types/xy_pair.h>
 
 namespace ttnn::operations::data_movement::detail {
 

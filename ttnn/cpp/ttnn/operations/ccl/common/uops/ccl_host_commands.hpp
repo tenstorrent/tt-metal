@@ -4,8 +4,14 @@
 
 #pragma once
 
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/global_semaphore.hpp>
+#include <variant>
+#include <vector>
+
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include <tt_stl/span.hpp>
 
 namespace ttnn::ccl::cmd {
 

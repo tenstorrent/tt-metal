@@ -2,31 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/decorators.hpp"
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <array>
+#include <cmath>
+#include <limits>
+#include <tuple>
+#include <type_traits>
 
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/copy/copy.hpp"
-#include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 #include "cpp/ttnn/operations/eltwise/unary/unary_composite.hpp"
-#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
-#include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
-#include <tt-metalium/constants.hpp>
-#include "cpp/ttnn/common/constants.hpp"
+#include <tt_stl/strong_type.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
-#include "tools/profiler/op_profiler.hpp"
-#include <magic_enum/magic_enum.hpp>
-#include <utility>
+#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+#include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
+#include "ttnn/operations/functions.hpp"
 
 namespace ttnn::operations::binary_backward {
 

@@ -4,8 +4,20 @@
 
 #include "moreh_group_norm_backward.hpp"
 
+#include <fmt/base.h>
+#include <algorithm>
+#include <utility>
+
 #include "device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include "device/input_grad/moreh_group_norm_backward_input_grad_device_operation.hpp"
+#include <tt-metalium/assert.hpp>
+#include "ttnn/run_operation.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

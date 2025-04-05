@@ -4,15 +4,23 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <cstddef>
 #include <optional>
-
-#include "ttnn/run_operation.hpp"
+#include <tuple>
 #include <variant>
+#include <vector>
 
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

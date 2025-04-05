@@ -4,12 +4,32 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <tt-metalium/hal.hpp>
-#include "cpp/ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
-#include "ttnn/distributed/types.hpp"
+#include <algorithm>
+#include <cstddef>
 #include <limits>
+#include <map>
+#include <string>
+#include <vector>
+
+#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/tensor/tensor_impl.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+enum class DataFormat : uint8_t;
+namespace tt_fabric {
+enum class Topology;
+}  // namespace tt_fabric
+}  // namespace tt
 
 namespace ttnn {
 namespace ccl {

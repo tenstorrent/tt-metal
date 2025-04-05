@@ -2,18 +2,50 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal.hpp>
-#include "ttnn/operations/math.hpp"
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/util.hpp>
-#include "ttnn/operation.hpp"
-
+#include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cmath>
 #include <cstdint>
-#include <math.h>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <utility>
+#include <variant>
 #include <vector>
+
+#include <hostdevcommon/kernel_structs.h>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <umd/device/types/xy_pair.h>
 
 using namespace tt::tt_metal;
 
@@ -718,7 +750,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         reader_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             reader_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             reader_compile_time_args.push_back(stick_size);
@@ -737,7 +769,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         writer_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             writer_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             writer_compile_time_args.push_back(stick_size);
@@ -1616,7 +1648,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         reader_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             reader_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             reader_compile_time_args.push_back(stick_size);
@@ -1639,7 +1671,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         writer_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             writer_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             writer_compile_time_args.push_back(stick_size);

@@ -4,16 +4,28 @@
 
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
 #include <optional>
-#include "ttnn/decorators.hpp"
+#include <vector>
 
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-
-#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations {
+namespace reduction {
+enum class ReduceType;
+}  // namespace reduction
+
 namespace experimental {
 namespace ccl {
 

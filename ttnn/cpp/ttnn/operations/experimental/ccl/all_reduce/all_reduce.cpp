@@ -5,6 +5,15 @@
 #include "all_reduce.hpp"
 
 #include "cpp/ttnn/operations/experimental/ccl/all_reduce/device/all_reduce_op.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace reduction {
+enum class ReduceType;
+}  // namespace reduction
+}  // namespace operations
+}  // namespace ttnn
 
 namespace ttnn::operations::experimental::ccl {
 

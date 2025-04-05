@@ -4,6 +4,23 @@
 
 #include "transpose_pybind.hpp"
 
+#include <pybind11/cast.h>
+#include <stdint.h>
+#include <memory>
+#include <optional>
+
+#include "pybind11/decorators.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 

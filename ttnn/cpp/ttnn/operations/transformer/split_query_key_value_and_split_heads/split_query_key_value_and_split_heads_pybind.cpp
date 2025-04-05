@@ -4,12 +4,24 @@
 
 #include "split_query_key_value_and_split_heads_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stdint.h>
+#include <memory>
+#include <optional>
+#include <tuple>
 
 #include "cpp/pybind11/decorators.hpp"
-
 #include "split_query_key_value_and_split_heads.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::transformer {
 

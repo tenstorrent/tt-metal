@@ -2,11 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
 #include "sharded_to_interleaved.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
 using namespace tt::tt_metal;

@@ -4,8 +4,15 @@
 
 #include "unary_op_utils.hpp"
 
+#include <fmt/base.h>
+#include <stdint.h>
+#include <sys/types.h>
 #include <tt-metalium/assert.hpp>
+#include <bit>
+
 #include "cpp/ttnn/tensor/types.hpp"
+#include <tt-metalium/utils.hpp>
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 using namespace tt::tt_metal;
 

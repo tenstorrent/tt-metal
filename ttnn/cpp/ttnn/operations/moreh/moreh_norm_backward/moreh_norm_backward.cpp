@@ -6,6 +6,12 @@
 
 #include "device/moreh_norm_backward_device_operation.hpp"
 
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::moreh::moreh_norm_backward {
 Tensor MorehNormBackward::invoke(
     const Tensor& input,

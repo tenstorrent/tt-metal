@@ -2,15 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+#include <limits>
+#include <vector>
+
+#include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 

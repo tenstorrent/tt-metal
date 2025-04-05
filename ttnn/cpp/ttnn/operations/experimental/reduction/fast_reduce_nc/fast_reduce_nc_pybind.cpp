@@ -2,10 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <pybind11/cast.h>
+#include <stdint.h>
+#include <memory>
+#include <optional>
 
+#include "cpp/pybind11/decorators.hpp"
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_pybind.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::reduction::detail {
 

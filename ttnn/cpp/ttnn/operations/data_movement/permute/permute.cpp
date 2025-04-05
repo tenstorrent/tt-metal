@@ -4,17 +4,30 @@
 
 #include "permute.hpp"
 
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+#include <cstdint>
+#include <functional>
+#include <numeric>
+#include <vector>
 
-#include <tt-metalium/constants.hpp>
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/run_operation.hpp"
 #include "cpp/ttnn/operations/copy.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace detail {

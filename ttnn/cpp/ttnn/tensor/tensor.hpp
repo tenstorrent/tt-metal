@@ -4,33 +4,49 @@
 
 #pragma once
 
-#include <array>
-#include <random>
-#include <tuple>
-#include <variant>
-#include <vector>
-
+#include <fmt/base.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt_stl/reflection.hpp>
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <random>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/any_device.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt_stl/reflection.hpp>
+#include "ttnn/tensor/types.hpp"
 #include "types.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+class CommandQueue;
 
 namespace distributed {
 class MeshDevice;

@@ -4,8 +4,11 @@
 
 #include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
-#include <tt-metalium/runtime_args_data.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+
+#include <tt-metalium/logger.hpp>
 
 namespace ttnn::ccl {
 size_t tensor_address_runtime_args_overrider::add_tensor() {

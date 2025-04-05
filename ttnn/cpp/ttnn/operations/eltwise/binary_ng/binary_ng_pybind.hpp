@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include "pybind11/pybind_fwd.hpp"
 #include <string>
+
+#include "pybind11/pybind_fwd.hpp"
 
 namespace ttnn::operations::binary_ng {
 

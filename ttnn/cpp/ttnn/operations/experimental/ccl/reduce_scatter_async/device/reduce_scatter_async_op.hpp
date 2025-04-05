@@ -4,13 +4,39 @@
 
 #pragma once
 
+#include <fmt/base.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/sub_device_types.hpp>
-#include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include <algorithm>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <vector>
+
 #include "cpp/ttnn/global_semaphore.hpp"
+#include <tt_stl/reflection.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
+namespace operations {
+namespace binary {
+enum class BinaryOpType;
+}  // namespace binary
+}  // namespace operations
+
 struct ReduceScatterAsync {
     ReduceScatterAsync(
         const ttnn::operations::binary::BinaryOpType binary_op_type,

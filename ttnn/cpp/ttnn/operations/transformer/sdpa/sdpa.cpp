@@ -4,11 +4,19 @@
 
 #include "sdpa.hpp"
 
+#include <boost/container/vector.hpp>
+#include <algorithm>
 #include <utility>
+#include <vector>
 
-#include "device/sdpa_op.hpp"
 #include "device/joint_sdpa_op.hpp"
+#include "device/sdpa_op.hpp"
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::transformer {

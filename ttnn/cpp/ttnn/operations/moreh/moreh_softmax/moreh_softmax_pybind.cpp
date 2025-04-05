@@ -4,9 +4,15 @@
 
 #include "moreh_softmax_pybind.hpp"
 
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <memory>
+#include <optional>
+
+#include "cpp/pybind11/export_enum.hpp"
 #include "moreh_softmax.hpp"
 #include "pybind11/decorators.hpp"
-#include "cpp/pybind11/export_enum.hpp"
+#include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax {
 

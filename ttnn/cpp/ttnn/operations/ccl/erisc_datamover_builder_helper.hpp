@@ -4,10 +4,25 @@
 
 #pragma once
 
+#include <fmt/base.h>
+#include <stddef.h>
 #include <tt-metalium/erisc_datamover_builder.hpp>
+#include <optional>
+#include <unordered_map>
+#include <vector>
 
-#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace ccl {

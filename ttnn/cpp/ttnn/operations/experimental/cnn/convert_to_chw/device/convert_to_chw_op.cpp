@@ -4,8 +4,22 @@
 
 #include "convert_to_chw_op.hpp"
 
-#include "convert_to_chw_program_factory.hpp"
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
+#include <array>
+#include <optional>
+
+#include "convert_to_chw_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::experimental::cnn {
 

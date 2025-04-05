@@ -4,16 +4,24 @@
 
 #pragma once
 
-#include <functional>
 #include <magic_enum/magic_enum.hpp>
+#include <stdint.h>
+#include <tt-metalium/command_queue.hpp>
+#include <functional>
 #include <optional>
+#include <tuple>
 #include <variant>
 
-#include <tt-metalium/command_queue.hpp>
+#include <tt_stl/reflection.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
@@ -21,7 +29,16 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace binary {
+enum class BinaryOpType;
+}  // namespace binary
+}  // namespace operations
+}  // namespace ttnn
 
 namespace ttnn::operations::binary {
 

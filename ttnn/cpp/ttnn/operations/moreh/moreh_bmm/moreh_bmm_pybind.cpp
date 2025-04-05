@@ -4,6 +4,11 @@
 
 #include "moreh_bmm_pybind.hpp"
 
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <memory>
+#include <optional>
+
 #include "moreh_bmm.hpp"
 #include "pybind11/decorators.hpp"
 

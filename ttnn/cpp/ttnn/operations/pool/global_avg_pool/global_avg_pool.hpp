@@ -4,9 +4,12 @@
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
+#include <optional>
 
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -21,9 +24,9 @@ Tensor global_avg_pool2d(
 }  // namespace tt_metal
 }  // namespace tt
 
-#include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
 
 namespace ttnn {
 namespace operations {

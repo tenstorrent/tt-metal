@@ -2,11 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include <stdint.h>
+#include <array>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <span>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 
-#include "cpp/ttnn/tensor/types.hpp"
 #include "cpp/ttnn/tensor/tensor.hpp"
+#include "cpp/ttnn/tensor/types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+enum class ShardOrientation;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations {

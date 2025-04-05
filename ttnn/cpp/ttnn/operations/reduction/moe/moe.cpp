@@ -2,15 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
-
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/reduction/moe/moe.hpp"
-
+#include <boost/container/vector.hpp>
+#include <algorithm>
 #include <utility>
 
 #include "device/moe_op.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include "ttnn/operations/reduction/moe/moe.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::reduction {

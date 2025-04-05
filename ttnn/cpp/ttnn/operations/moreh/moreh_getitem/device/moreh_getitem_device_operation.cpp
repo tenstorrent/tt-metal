@@ -4,9 +4,19 @@
 
 #include "moreh_getitem_device_operation.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
 #include <cstdint>
+#include <utility>
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_getitem {
@@ -152,9 +162,9 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
     }
     return TensorSpec(
         output_shape,
-        TensorLayout(
+        tt::tt_metal::TensorLayout(
             tensor_args.input.get_dtype(),
-            PageConfig(tensor_args.input.get_layout()),
+            tt::tt_metal::PageConfig(tensor_args.input.get_layout()),
             operation_attributes.memory_config));
 }
 

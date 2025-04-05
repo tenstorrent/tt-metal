@@ -6,6 +6,13 @@
 
 #include "device/moreh_arange_device_operation.hpp"
 
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::moreh::moreh_arange {
 Tensor MorehArange::invoke(
     float start,

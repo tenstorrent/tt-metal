@@ -2,10 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/run_operation.hpp"
+#include <boost/container/vector.hpp>
+#include <algorithm>
+#include <vector>
+
 #include "device/sharded_to_interleaved_op.hpp"
 #include "sharded_to_interleaved.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::data_movement {
 

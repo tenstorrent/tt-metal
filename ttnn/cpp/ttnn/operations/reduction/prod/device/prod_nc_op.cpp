@@ -2,12 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "prod_nc_op.hpp"
-
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
+#include <algorithm>
+
+#include "prod_nc_op.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
 
 using namespace constants;
 namespace operations {
