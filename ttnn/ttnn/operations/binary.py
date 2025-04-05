@@ -228,6 +228,9 @@ ttnn.attach_golden_function(ttnn.hypot, golden_function=_golden_function_hypot)
 def _golden_function_maximum(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if not torch.is_tensor(input_tensor_b):
+        input_tensor_b = torch.full(input_tensor_a.shape, input_tensor_b)
+
     return torch.maximum(input_tensor_a, input_tensor_b)
 
 
