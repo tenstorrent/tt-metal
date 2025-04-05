@@ -2436,7 +2436,7 @@ void Run1DFabricPacketSendTest(
         enable_persistent_fabric_mode,
         num_links,
         topology,
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval);
+        fabric_context_switch_interval);
 
     // Other boiler plate setup
     std::vector<std::vector<CoreCoord>> worker_cores_vec_per_device;
