@@ -132,14 +132,14 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t
     exp_tile_init<true>();
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
-    DPRINT << "cols: " << cols << ENDL();
 
-#ifdef MUL_BCAST_GRANULARITY
+#ifdef SUB_EXP_GRANULARITY
     constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
-    uint32_t granularity = cols >> LOG2_MUL_BCAST_GRANULARITY;
+    uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
 #else
-    constexpr uint32_t dst_tiles = cols;
+    uint32_t dst_tiles = cols;
     uint32_t granularity = 1;
+    DPRINT << "sub: " << dst_tiles << ", " << granularity << ENDL();
 #endif
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
@@ -199,7 +199,7 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb, uint32_t in1_scalar_cb, uin
     constexpr uint32_t dst_tiles = MUL_BCAST_GRANULARITY;
     uint32_t granularity = num_tiles >> LOG2_MUL_BCAST_GRANULARITY;
 #else
-    constexpr uint32_t dst_tiles = num_tiles;
+    uint32_t dst_tiles = num_tiles;
     uint32_t granularity = 1;
 #endif
 

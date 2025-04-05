@@ -312,42 +312,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug("out_in1_num_subblocks: {}", out_in1_num_subblocks);
     log_debug("out_num_blocks: {}", out_num_blocks);
 
-    // Determine granularity for statistics computation
-    const uint32_t stats_granularity = std::min(PNHt, dst_size);
-    // Find log2 of stats_granularity using std
-    const uint32_t log2_stats_granularity = std::log2(stats_granularity);
-    // Assert that this is a power of 2
-    TT_FATAL(stats_granularity == (1 << log2_stats_granularity), "Error");
-
-    uint32_t sub_exp_granularity = 0;
-    uint32_t log2_sub_exp_granularity = 0;
-    uint32_t mul_bcast_granularity = 0;
-    uint32_t log2_mul_bcast_granularity = 0;
-    if (Sk_chunk_t > 0) {
-        sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
-        log2_sub_exp_granularity = std::log2(sub_exp_granularity);
-        TT_FATAL(sub_exp_granularity == (1 << log2_sub_exp_granularity), "Error");
-
-        mul_bcast_granularity = std::min(PNHt * Sk_chunk_t, dst_size);
-        log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
-        TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity), "Error");
-    }
-
-    const uint32_t dht_granularity = std::min(DHt, dst_size);
-    const uint32_t log2_dht_granularity = std::log2(dht_granularity);
-
-    // Log these
-    log_debug("stats_granularity: {}", stats_granularity);
-    log_debug("log2_stats_granularity: {}", log2_stats_granularity);
-    log_debug("sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug("log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
-    log_debug("mul_bcast_granularity: {}", mul_bcast_granularity);
-    log_debug("log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
-    log_debug("dht_granularity: {}", dht_granularity);
-    log_debug("log2_dht_granularity: {}", log2_dht_granularity);
-
     // Create circular buffers
-
     tt::DataFormat q_df = tt_metal::datatype_to_dataformat_converter(input_tensor_q.get_dtype());
     tt::DataFormat k_df = tt_metal::datatype_to_dataformat_converter(input_tensor_k.get_dtype());
     tt::DataFormat v_df = tt_metal::datatype_to_dataformat_converter(input_tensor_v.get_dtype());
@@ -715,16 +680,29 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         use_attention_mask,
     };
 
-    std::map<string, string> defines;
-    defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
-    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
-    defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
-    defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
-    defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
-    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    // Determine granularity for compute loops
+    std::map<string, string> compute_defines;
+    if (Sk_chunk_t > 0) {
+        const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
+        const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
+        TT_FATAL(sub_exp_granularity == (1 << log2_sub_exp_granularity), "Error");
+
+        const uint32_t mul_bcast_granularity = std::min(PNHt * Sk_chunk_t, dst_size);
+        const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
+        TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity), "Error");
+
+        compute_defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
+        compute_defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
+        compute_defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
+        compute_defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
+
+        // Log these
+        log_debug("sub_exp_granularity: {}", sub_exp_granularity);
+        log_debug("log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
+        log_debug("mul_bcast_granularity: {}", mul_bcast_granularity);
+        log_debug("log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
+    }
+    compute_defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
     // Compute
     auto compute_kernels_id = CreateKernel(
@@ -736,21 +714,21 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args_common,
-            .defines = defines});
+            .defines = compute_defines});
 
     // Reader
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp",
         core_grid,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args_common, defines));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args_common));
 
     // Writer
     auto writer_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp",
         core_grid,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args_common, defines));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args_common));
 
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
