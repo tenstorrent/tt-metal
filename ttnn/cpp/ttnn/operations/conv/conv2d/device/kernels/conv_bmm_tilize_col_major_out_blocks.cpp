@@ -35,7 +35,7 @@ inline void tilize_in(
     tilize_uninit(in_cb_id, out_cb_id);
 }  // tilize_in()
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, bool is_non_tile_mul_height>
 inline void reblock_and_untilize(
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
@@ -43,14 +43,14 @@ inline void reblock_and_untilize(
     uint32_t output_rows_h,
     uint32_t interm_cb_id,
     uint32_t out_cb_id) {
-    uint32_t TILE_SIZE = 32;
+    uint32_t TILE_SIZE = is_non_tile_mul_height ? 32 : out_block_w;
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
     uint32_t within_block_index = 0;
     for (uint32_t h = 0; h < out_subblock_h; h++) {
         uint32_t block_offset = 0;
         uint32_t out_sub_block_rows_h = output_rows_h <= TILE_SIZE ? output_rows_h : TILE_SIZE;
-        uint32_t rows_to_copy = out_sub_block_rows_h;
+        uint32_t rows_to_copy = is_non_tile_mul_height ? out_sub_block_rows_h : 16;
         cb_reserve_back(out_cb_id, out_sub_block_rows_h);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             tile_regs_acquire();
@@ -102,9 +102,10 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
     constexpr bool partials_cb_uses_output = get_compile_time_arg_val(26);
     uint32_t output_rows_h = get_compile_time_arg_val(27);
+    constexpr bool is_non_tile_mul_height = get_compile_time_arg_val(28);
 
 #ifdef WIDTH_SHARDED
-    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(28);
+    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(29);
 #endif
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
@@ -443,11 +444,11 @@ void MAIN {
                 pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
                 copy_tile_to_dst_init_short(matmul_partials_cb);
                 uint32_t curr_tile_output_rows_h = 0;
-                uint32_t TILE_SIZE = 32;
+                uint32_t TILE_SIZE = is_non_tile_mul_height ? 32 : out_block_w;
                 TILE_SIZE = TILE_SIZE * out_subblock_h;
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     curr_tile_output_rows_h = output_rows_h < TILE_SIZE ? output_rows_h : TILE_SIZE;
-                    reblock_and_untilize<out_subblock_w, out_block_w>(
+                    reblock_and_untilize<out_subblock_w, out_block_w, is_non_tile_mul_height>(
                         in1_num_subblocks,
                         out_subblock_num_tiles,
                         out_subblock_h,

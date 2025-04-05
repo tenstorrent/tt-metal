@@ -214,7 +214,8 @@ Result conv_transpose2d(
         in_channels,
         out_channels,
         mm_conv,
-        auto_shard);
+        auto_shard,
+        false);
 
     uint32_t round_up_size = tt::constants::TILE_HEIGHT;
 

@@ -185,7 +185,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool enable_split_reader,
-    bool enable_subblock_padding);
+    bool enable_subblock_padding,
+    bool is_non_tile_mul_height);
 
 // new micro op
 struct OptimizedConvNew {
@@ -204,6 +205,7 @@ struct OptimizedConvNew {
     bool enable_weights_double_buffer;
     bool enable_split_reader;
     bool enable_subblock_padding;
+    bool is_non_tile_mul_height;
     uint32_t pre_op_l1_allocation_size_bytes;
     OptimizedConvNew(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
@@ -221,7 +223,8 @@ struct OptimizedConvNew {
         bool enable_act_double_buffer,
         bool enable_weights_double_buffer,
         bool enable_split_reader,
-        bool enable_subblock_padding) :
+        bool enable_subblock_padding,
+        bool is_non_tile_mul_height) :
         output_channels(output_channels),
         groups(groups),
         sliding_window_config(sliding_window_config),
@@ -237,7 +240,8 @@ struct OptimizedConvNew {
         enable_act_double_buffer(enable_act_double_buffer),
         enable_weights_double_buffer(enable_weights_double_buffer),
         enable_split_reader(enable_split_reader),
-        enable_subblock_padding(enable_subblock_padding) {}
+        enable_subblock_padding(enable_subblock_padding),
+        is_non_tile_mul_height(is_non_tile_mul_height) {}
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -307,7 +311,8 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,
     bool enable_split_reader = false,
-    bool enable_subblock_padding = false);
+    bool enable_subblock_padding = false,
+    bool is_non_tile_mul_height = false);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation

@@ -125,7 +125,8 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
     uint32_t width,
     uint32_t in_channels,
     uint32_t out_channels,
-    bool is_mm_conv);
+    bool is_mm_conv,
+    bool is_non_tile_mul_height);
 
 template <typename DeviceType>
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(DeviceType* device);
@@ -161,7 +162,8 @@ shard_or_reshard_tensor_if_required(
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv,
-    bool auto_shard);
+    bool auto_shard,
+    bool is_non_tile_mul_height);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 

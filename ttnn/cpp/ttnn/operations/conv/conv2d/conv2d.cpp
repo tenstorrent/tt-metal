@@ -401,6 +401,11 @@ Result conv2d_L1(
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
 
+    bool is_non_tile_mul_height = false;
+    if (stride[0] >= 8 && stride[1] >= 8 && conv_config.shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+        conv_config.output_layout == Layout::ROW_MAJOR) {
+        is_non_tile_mul_height = true;
+    }
     auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required(
         device,
         input_tensor,
@@ -411,7 +416,8 @@ Result conv2d_L1(
         in_channels,
         out_channels,
         mm_conv,
-        auto_shard);
+        auto_shard,
+        is_non_tile_mul_height);
 
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
@@ -485,7 +491,7 @@ Result conv2d_L1(
             .dilation_hw = {dilation[0], dilation[1]},
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid,
-            .snap_to_tile = false,
+            .snap_to_tile = !is_non_tile_mul_height,
         };
 
         bool bypass_halo =
@@ -510,7 +516,7 @@ Result conv2d_L1(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 0,
                 input_tensor_post_tm.memory_config(),
-                false,
+                !is_non_tile_mul_height,
                 conv_config.in_place);
 
             if (conv_config.deallocate_activation) {
@@ -542,7 +548,9 @@ Result conv2d_L1(
             compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
-            conv_config.enable_split_reader);
+            conv_config.enable_split_reader,
+            conv_config.enable_subblock_padding,
+            is_non_tile_mul_height);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
