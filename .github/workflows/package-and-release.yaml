@@ -58,7 +58,7 @@ jobs:
       build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
   tg-demos:
     needs: build-artifact
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml@releases/0.57
+    uses: ./.github/workflows/tg-demo-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
