@@ -20,7 +20,7 @@ void bind_pad(py::module& module) {
                 input_tensor = ttnn.ones([1,8,20,20])
                 input_tensor=ttnn.pad(pad_input, [(0,0),(0,0),(0,12),(0,12)], 0)
 
-                # row/col 20-32 == 0
+                assert (ttnn.to_torch(input_tensor[:,:,20:32,20:32]) == 0).all()
                 assert input_tensor.shape == Shape([1,8,32,32])
 
             Args:
@@ -63,87 +63,6 @@ void bind_pad(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::Array1D& output_padded_shape,
-               const tt::tt_metal::Array1D& input_tensor_start,
-               const float value,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    output_padded_shape,
-                    input_tensor_start,
-                    value,
-                    use_multicore,
-                    memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("output_padded_shape"),
-            py::arg("input_tensor_start"),
-            py::arg("value"),
-            py::kw_only(),
-            py::arg("use_multicore") = false,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        },
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::Array2D& output_padded_shape,
-               const tt::tt_metal::Array2D& input_tensor_start,
-               const float value,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    output_padded_shape,
-                    input_tensor_start,
-                    value,
-                    use_multicore,
-                    memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("output_padded_shape"),
-            py::arg("input_tensor_start"),
-            py::arg("value"),
-            py::kw_only(),
-            py::arg("use_multicore") = false,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        },
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::Array3D& output_padded_shape,
-               const tt::tt_metal::Array3D& input_tensor_start,
-               const float value,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    output_padded_shape,
-                    input_tensor_start,
-                    value,
-                    use_multicore,
-                    memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("output_padded_shape"),
-            py::arg("input_tensor_start"),
-            py::arg("value"),
-            py::kw_only(),
-            py::arg("use_multicore") = false,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        },
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
                const tt::tt_metal::Array4D& output_padded_shape,
                const tt::tt_metal::Array4D& input_tensor_start,
                const float value,
@@ -166,115 +85,6 @@ void bind_pad(py::module& module) {
             py::kw_only(),
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        },
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::Array5D& output_padded_shape,
-               const tt::tt_metal::Array5D& input_tensor_start,
-               const float value,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    output_padded_shape,
-                    input_tensor_start,
-                    value,
-                    use_multicore,
-                    memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("output_padded_shape"),
-            py::arg("input_tensor_start"),
-            py::arg("value"),
-            py::kw_only(),
-            py::arg("use_multicore") = false,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        },
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::Array6D& output_padded_shape,
-               const tt::tt_metal::Array6D& input_tensor_start,
-               const float value,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    output_padded_shape,
-                    input_tensor_start,
-                    value,
-                    use_multicore,
-                    memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("output_padded_shape"),
-            py::arg("input_tensor_start"),
-            py::arg("value"),
-            py::kw_only(),
-            py::arg("use_multicore") = false,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        },
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::Array7D& output_padded_shape,
-               const tt::tt_metal::Array7D& input_tensor_start,
-               const float value,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    output_padded_shape,
-                    input_tensor_start,
-                    value,
-                    use_multicore,
-                    memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("output_padded_shape"),
-            py::arg("input_tensor_start"),
-            py::arg("value"),
-            py::kw_only(),
-            py::arg("use_multicore") = false,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        },
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::Array8D& output_padded_shape,
-               const tt::tt_metal::Array8D& input_tensor_start,
-               const float value,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    output_padded_shape,
-                    input_tensor_start,
-                    value,
-                    use_multicore,
-                    memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("output_padded_shape"),
-            py::arg("input_tensor_start"),
-            py::arg("value"),
-            py::kw_only(),
-            py::arg("use_multicore") = false,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::data_movement::detail
