@@ -434,7 +434,7 @@ KernelGroup::KernelGroup(
     const detail::Program_& program,
     uint32_t programmable_core_type_index,
     kernel_id_array_t kernel_ids,
-    bool erisc_is_idle,
+    bool /*erisc_is_idle*/,
     uint32_t max_local_cb_end_index,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges) :
@@ -1533,13 +1533,13 @@ void detail::Program_::set_runtime_id(uint64_t id) { this->runtime_id = id; }
 
 void Program::set_runtime_id(uint64_t id) { pimpl_->set_runtime_id(id); }
 
-uint32_t Program::get_sem_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type) {
+uint32_t Program::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
     return base_addr + get_program_config(hal_ref.get_programmable_core_type_index(programmable_core_type)).sem_offset;
 }
 
-uint32_t Program::get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type) {
+uint32_t Program::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
     return base_addr + get_program_config(hal_ref.get_programmable_core_type_index(programmable_core_type)).cb_offset;

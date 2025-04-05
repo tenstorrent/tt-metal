@@ -289,7 +289,7 @@ void DeviceProfiler::logPacketData(
     const std::string& opname,
     chip_id_t device_id,
     CoreCoord core,
-    int core_flat,
+    int /*core_flat*/,
     int risc_num,
     uint64_t data,
     uint32_t timer_id,
@@ -446,7 +446,7 @@ void DeviceProfiler::logPacketDataToCSV(
     uint64_t data,
     uint32_t run_id,
     uint32_t run_host_id,
-    const std::string_view opname,
+    const std::string_view /*opname*/,
     const std::string_view zone_name,
     kernel_profiler::PacketTypes packet_type,
     uint64_t source_line,
@@ -483,7 +483,7 @@ void DeviceProfiler::logNocTracePacketDataToJson(
     int core_x,
     int core_y,
     const std::string_view risc_name,
-    uint32_t timer_id,
+    uint32_t /*timer_id*/,
     uint64_t timestamp,
     uint64_t data,
     uint32_t run_id,
@@ -491,8 +491,8 @@ void DeviceProfiler::logNocTracePacketDataToJson(
     const std::string_view opname,
     const std::string_view zone_name,
     kernel_profiler::PacketTypes packet_type,
-    uint64_t source_line,
-    const std::string_view source_file) {
+    uint64_t /*source_line*/,
+    const std::string_view /*source_file*/) {
     if (packet_type == kernel_profiler::ZONE_START || packet_type == kernel_profiler::ZONE_END) {
         if ((risc_name == "NCRISC" || risc_name == "BRISC") &&
             (zone_name.starts_with("TRUE-KERNEL-END") || zone_name.ends_with("-KERNEL"))) {

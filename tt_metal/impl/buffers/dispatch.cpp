@@ -346,7 +346,7 @@ using InterleavedBufferWriteDispatchParamsVariant =
 
 InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_params(
     const Buffer& buffer,
-    const BufferDispatchConstants& buf_dispatch_constants,
+    const BufferDispatchConstants& /*buf_dispatch_constants*/,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     const BufferRegion& region) {

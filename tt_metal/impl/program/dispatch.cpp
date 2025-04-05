@@ -234,7 +234,7 @@ uint32_t finalize_sems(
 }
 
 uint32_t finalize_cbs(
-    uint32_t programmable_core_type_index,
+    uint32_t /*programmable_core_type_index*/,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
     uint32_t& cb_offset,
@@ -476,7 +476,8 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
     program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(0, 0, 0);
 }
 
-void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device) {
+void insert_stall_cmds(
+    ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* /*device*/) {
     // Initialize stall command sequences for this program.
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
@@ -537,7 +538,7 @@ void generate_runtime_args_cmds(
             return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
         };
     thread_local static auto get_runtime_args_data_offset =
-        [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast) {
+        [](uint32_t num_packed_cmds, uint32_t /*runtime_args_len*/, bool is_unicast) {
             uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
             uint32_t sub_cmd_sizeB =
                 is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
@@ -2147,7 +2148,7 @@ void reset_worker_dispatch_state_on_device(
 }
 
 void set_num_worker_sems_on_dispatch(
-    IDevice* device, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems) {
+    IDevice* /*device*/, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems) {
     // Not needed for regular dispatch kernel
     if (!MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         return;
@@ -2164,7 +2165,7 @@ void set_num_worker_sems_on_dispatch(
 }
 
 void set_go_signal_noc_data_on_dispatch(
-    IDevice* device,
+    IDevice* /*device*/,
     const vector_aligned<uint32_t>& go_signal_noc_data,
     SystemMemoryManager& manager,
     uint8_t cq_id) {
