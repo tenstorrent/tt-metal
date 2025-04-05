@@ -191,7 +191,7 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int thread_idx) {
+            [device, &pgm](int /*thread_idx*/) {
                 // Program
                 tt::tt_metal::detail::LaunchProgram(device, pgm, true);
             },
@@ -254,7 +254,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int thread_idx) {
+            [device, &pgm](int /*thread_idx*/) {
                 // Program
                 tt::tt_metal::detail::LaunchProgram(device, pgm, true);
             },
@@ -305,7 +305,7 @@ TestResult mem_bench_multi_mmio_devices(
         double host_copy_time = 0;
         execute_work_synced_start(
             1,
-            [devices, &programs](int thread_idx) {
+            [devices, &programs](int /*thread_idx*/) {
                 // Program
                 for (auto& [device_id, pgm] : programs) {
                     tt::tt_metal::detail::LaunchProgram(devices.at(device_id), pgm, false);
@@ -417,7 +417,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int thread_idx) {
+            [device, &pgm](int /*thread_idx*/) {
                 // Program
                 tt::tt_metal::detail::LaunchProgram(device, pgm, true);
             },
