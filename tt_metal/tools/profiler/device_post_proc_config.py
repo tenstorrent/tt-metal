@@ -246,8 +246,8 @@ class test_dispatch_cores(default_setup):
         "Tensix CQ Prefetch": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
-            "end": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
+            "start": {"risc": "BRISC", "zone_name": "KERNEL-MAIN-HD"},
+            "end": {"risc": "BRISC", "zone_name": "KERNEL-MAIN-HD"},
         },
     }
     detectOps = False
