@@ -12,6 +12,9 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      arch:
+        required: true
+        type: string
 
 jobs:
   single-card-demo-tests:
@@ -19,31 +22,49 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {
-            name: "N150",
-            arch: wormhole_b0,
-            runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-            cmd: run_n150_tests
-          }, # group of owners; working on splitting up
-          {
-            name: "N300_functionality",
-            arch: wormhole_b0,
-            runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-            cmd: run_n300_func_tests
-          }, # group of owners; working on splitting up
-          {
-            name: "N300_performance",
-            arch: wormhole_b0,
-            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
-            cmd: run_n300_perf_tests
-          } # group of owners; working on splitting up
+          { name: "falcon7b", runner-label: "N150", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
+          { name: "mistral7b", runner-label: "N150", performance: false, cmd: run_mistral7b_func, owner_id: U03PUAKE719}, # Miguel Tairum
+          { name: "qwen7b", runner-label: "N150", performance: false, cmd: run_qwen7b_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "llama3", runner-label: "N150", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
+          { name: "vgg", runner-label: "N150", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
+          { name: "bert_tiny", runner-label: "N150", performance: false, cmd: run_bert_tiny_func, owner_id: U024A4EFV6U}, # Brian Liu
+          { name: "bert", runner-label: "N150", performance: false, cmd: run_bert_func, owner_id: U024A4EFV6U}, # Brian Liu
+          { name: "resnet", runner-label: "N150", performance: false, cmd: run_resnet_func, owner_id: U0837MYG788}, # Marko Radosavljevic
+          { name: "distilbert", runner-label: "N150", performance: false, cmd: run_distilbert_func, owner_id: U013121KDH9}, # Austin Ho
+          { name: "covnet_mnist", runner-label: "N150", performance: false, cmd: run_covnet_mnist_func, owner_id: U06LRK6JDGB}, # Saad Jameel
+          { name: "mnist", runner-label: "N150", performance: false, cmd: run_mnist_func, owner_id: U06ECNVR0EN}, # Evan Smal
+          { name: "squeezebert", runner-label: "N150", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, # Joseph Chu
+          { name: "roberta", runner-label: "N150", performance: false, cmd: run_roberta_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "stable_diffusion", runner-label: "N150", performance: false, cmd: run_stable_diffusion_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
+          { name: "falcon7b", runner-label: "N300", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
+          { name: "mistral7b", runner-label: "N300", performance: false, cmd: run_mistral7b_func, owner_id: U03PUAKE719}, # Miguel Tairum
+          { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "llama3", runner-label: "N300", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
+          { name: "vgg", runner-label: "N300", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
+          { name: "bert_tiny", runner-label: "N300", performance: false, cmd: run_bert_tiny_func, owner_id: U024A4EFV6U}, # Brian Liu
+          { name: "bert", runner-label: "N300", performance: false, cmd: run_bert_func, owner_id: U024A4EFV6U}, # Brian Liu
+          { name: "resnet", runner-label: "N300", performance: false, cmd: run_resnet_func, owner_id: U0837MYG788}, # Marko Radosavljevic
+          { name: "distilbert", runner-label: "N300", performance: false, cmd: run_distilbert_func, owner_id: U013121KDH9}, # Austin Ho
+          { name: "covnet_mnist", runner-label: "N300", performance: false, cmd: run_covnet_mnist_func, owner_id: U06LRK6JDGB}, # Saad Jameel
+          { name: "mnist", runner-label: "N300", performance: false, cmd: run_mnist_func, owner_id: U06ECNVR0EN}, # Evan Smal
+          { name: "squeezebert", runner-label: "N300", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, #Joseph Chu
+          { name: "roberta", runner-label: "N300", performance: false, cmd: run_roberta_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "mistral7b", runner-label: "N150", performance: true, cmd: run_mistral7b_perf, owner_id: U03PUAKE719}, # Miguel Tairum
+          { name: "mistral7b", runner-label: "N300", performance: true, cmd: run_mistral7b_perf, owner_id: U03PUAKE719}, # Miguel Tairum
+          { name: "llama3", runner-label: "N300", performance: true, cmd: run_llama3_perf, owner_id: U03PUAKE719}, # Miguel Tairum
+          { name: "falcon7b", runner-label: "N300", performance: true, cmd: run_falcon7b_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
+          { name: "whisper", runner-label: "N300", performance: true, cmd: run_whisper_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
+          { name: "mamba", runner-label: "N300", performance: true, cmd: run_mamba_perf, owner_id: U06ECNVR0EN}, # Evan Smal
         ]
-    name: ${{ matrix.test-group.name }}
+    name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}-${{ matrix.test-group.performance && 'perf' || 'func' }}
     env:
-      ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on:
+      - ${{ matrix.test-group.runner-label }}
+      - in-service
+      - ${{ (matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && 'bare-metal') || 'cloud-virtual-machine' }}
+      - ${{ (matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && 'pipeline-perf') || 'cloud-virtual-machine' }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -62,7 +83,7 @@ jobs:
         with:
           name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
-        if: ${{ matrix.test-group.name == 'N300_performance' }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance }}
         run: sudo cpupower frequency-set -g performance
       - uses: ./.github/actions/ensure-active-weka-mount
       - name: Run demo regression tests
@@ -75,15 +96,15 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e ARCH_NAME=${{ inputs.arch }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
             source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() && matrix.test-group.name != 'whisper' }}
         uses: ./.github/actions/docker-run
         env:
           LOGURU_LEVEL: INFO
@@ -92,19 +113,24 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e ARCH_NAME=${{ inputs.arch }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
-        if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() && matrix.test-group.name != 'whisper' }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -113,5 +139,5 @@ jobs:
             generated/test_reports/
           prefix: "test_reports_"
       - name: Disable Performance mode
-        if: ${{ matrix.test-group.name == 'N300_performance' }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance }}
         run: sudo cpupower frequency-set -g ondemand
