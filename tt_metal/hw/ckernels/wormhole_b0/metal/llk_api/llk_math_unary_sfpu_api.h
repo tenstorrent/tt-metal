@@ -7,6 +7,7 @@
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_abs.h"
 #include "llk_math_eltwise_unary_sfpu_comp.h"
+#include "llk_math_eltwise_unary_sfpu_unary_max.h"
 #include "llk_math_eltwise_unary_sfpu_exp2.h"
 #include "llk_math_eltwise_unary_sfpu_expm1.h"
 #include "llk_math_eltwise_unary_sfpu_heaviside.h"
