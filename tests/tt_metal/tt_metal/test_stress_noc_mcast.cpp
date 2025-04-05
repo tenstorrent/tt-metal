@@ -22,6 +22,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -163,10 +164,10 @@ int main(int argc, char** argv) {
         virtual_offset.y,
         N_RANDS,
         rnd_delay_g,
-        tt::tt_metal::hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
-        tt::tt_metal::hal_ref.get_dev_addr(
-            mcast_from_eth_g ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::TENSIX,
-            HalL1MemAddrType::UNRESERVED),
+        device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
+        mcast_from_eth_g
+            ? tt::tt_metal::hal_ref.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED)
+            : device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
     };
 
     KernelHandle ucast_kernel = tt_metal::CreateKernel(

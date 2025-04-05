@@ -51,20 +51,11 @@ uint32_t get_erisc_l1_unreserved_size() {
     return 0;
 }
 
-uint32_t get_tensix_l1_unreserved_base() {
+uint32_t get_max_worker_l1_unreserved_size() {
     auto& hal_ref = HalSingleton::getInstance();
-    if (hal_ref.get_arch() != tt::ARCH::GRAYSKULL) {
-        return hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-    }
-    return 0;
-}
-
-uint32_t get_tensix_l1_unreserved_size() {
-    auto& hal_ref = HalSingleton::getInstance();
-    if (hal_ref.get_arch() != tt::ARCH::GRAYSKULL) {
-        return hal_ref.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-    }
-    return 0;
+    size_t l1_end = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+                    hal_ref.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    return l1_end - hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
 float get_eps() { return HalSingleton::getInstance().get_eps(); }

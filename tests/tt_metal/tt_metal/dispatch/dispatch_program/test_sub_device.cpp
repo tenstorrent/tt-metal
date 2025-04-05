@@ -298,7 +298,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordin
     const auto sub_device_1_cores = device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
     const auto sub_device_2_cores = device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{1});
 
-    uint32_t cb_addr = hal::get_tensix_l1_unreserved_base();
+    uint32_t cb_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     std::vector<uint32_t> compile_args{cb_addr};
 
     // Start kernels on each sub device and verify their coordinates
@@ -348,7 +348,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixActiveEthTestSubDeviceMyLogic
     device->load_sub_device_manager(sub_device_manager);
 
     uint32_t cb_addr_eth = hal::get_erisc_l1_unreserved_base();
-    uint32_t cb_addr_worker = hal::get_tensix_l1_unreserved_base();
+    uint32_t cb_addr_worker = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     // Start kernels on each sub device and verify their coordinates
     Program program_1 = tt::tt_metal::CreateProgram();
@@ -412,7 +412,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordin
         device->create_sub_device_manager({sub_device_3, sub_device_4}, k_local_l1_size),
     };
 
-    uint32_t cb_addr = hal::get_tensix_l1_unreserved_base();
+    uint32_t cb_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     std::vector<uint32_t> compile_args{cb_addr};
 
     for (int i = 0; i < sub_device_managers.size(); ++i) {

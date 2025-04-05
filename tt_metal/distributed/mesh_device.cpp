@@ -93,6 +93,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
+    size_t worker_l1_size,
     const DispatchCoreConfig& dispatch_core_config,
     const MeshDeviceConfig& config) :
     ScopedDevices(
@@ -102,6 +103,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
         l1_small_size,
         trace_region_size,
         num_command_queues,
+        worker_l1_size,
         dispatch_core_config) {}
 
 MeshDevice::ScopedDevices::ScopedDevices(
@@ -109,9 +111,10 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
+    size_t worker_l1_size,
     const DispatchCoreConfig& dispatch_core_config) {
     opened_devices_ = tt::tt_metal::detail::CreateDevices(
-        device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
+        device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config, {}, worker_l1_size);
 
     for (auto device_id : device_ids) {
         devices_.push_back(opened_devices_.at(device_id));
@@ -165,14 +168,15 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size) {
     auto scoped_devices = std::make_shared<ScopedDevices>(
-        l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config);
+        l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config, config);
     MeshContainer<IDevice*> devices(config.mesh_shape(), scoped_devices->root_devices());
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
 
-    mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
+    mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     return mesh_device;
 }
 
@@ -182,9 +186,10 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size) {
     auto scoped_devices = std::make_shared<ScopedDevices>(
-        device_ids, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
+        device_ids, l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config);
     MeshContainer<IDevice*> devices(MeshShape(1, device_ids.size()), scoped_devices->root_devices());
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
@@ -197,7 +202,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         device_ids.size());
     std::map<int, std::shared_ptr<MeshDevice>> result;
     for (size_t i = 0; i < device_ids.size(); i++) {
-        submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
+        submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
         result[device_ids[i]] = submeshes[i];
     }
 
@@ -210,9 +215,16 @@ std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size) {
     return create_unit_meshes(
-               {device_id}, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, l1_bank_remap)
+               {device_id},
+               l1_small_size,
+               trace_region_size,
+               num_command_queues,
+               dispatch_core_config,
+               l1_bank_remap,
+               worker_l1_size)
         .at(device_id);
 }
 
@@ -711,6 +723,7 @@ bool MeshDevice::initialize(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
+    size_t worker_l1_size,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.

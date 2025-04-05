@@ -573,8 +573,10 @@ def run_llama3_demo(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}], indirect=True
+@pytest.mark.parametrize(  # Worker size is selected to give 120kB ringbuffer size
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872, "worker_l1_size": 1344544}],
+    indirect=True,
 )
 def test_llama_demo(
     weights,
@@ -598,11 +600,6 @@ def test_llama_demo(
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
-
-    assert_msg = (
-        "Ring buffer size not set. Needs to be set env TT_METAL_WORKER_RINGBUFFER_SIZE=122880 (120KB) for best perf"
-    )
-    assert os.environ.get("TT_METAL_WORKER_RINGBUFFER_SIZE") is not None, assert_msg
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
