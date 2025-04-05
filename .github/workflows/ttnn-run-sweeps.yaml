@@ -394,6 +394,7 @@ on:
           - eltwise.binary.gt.gt_forge
           - eltwise.binary.le.le_tensor_pytorch2
           - eltwise.binary.fmod.fmod
+          - eltwise.binary.fmod.fmod_sharded
           - eltwise.binary.fmod.fmod_unary
           - eltwise.binary.fmod.fmod_unary_sharded
           - eltwise.binary.floor_divide.floor_divide_pytorch2
