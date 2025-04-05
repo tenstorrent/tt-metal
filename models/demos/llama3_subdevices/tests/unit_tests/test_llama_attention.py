@@ -179,7 +179,12 @@ def test_llama_attention_inference(
             mesh_shape=model_args.cluster_shape,
         ),
     )
-
+    # Explicitly allocate global CB to avoid memory fragmentation
+    prefetcher_setup.global_circular_buffer = ttnn.create_global_circular_buffer(
+        mesh_device,
+        prefetcher_setup.sender_receiver_mapping,
+        prefetcher_setup.global_cb_size,
+    )
     for i in range(generation_length):
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
         pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim) * 0.05
