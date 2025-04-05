@@ -116,6 +116,7 @@ Checks: >
   -misc-redundant-expression,
   -misc-unconventional-assign-operator,
   -misc-uniqueptr-reset-release,
+  -misc-unused-parameters,
   -misc-unused-using-decls,
   -misc-use-anonymous-namespace,
   -modernize-avoid-bind,
