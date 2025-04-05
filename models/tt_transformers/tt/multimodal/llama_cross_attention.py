@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm

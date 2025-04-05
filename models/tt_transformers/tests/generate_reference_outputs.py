@@ -32,7 +32,8 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
         # Original path - load reference model
         model_args = ModelArgs(mesh_device=None)
         model_args.max_seq_len = total_length
-        tokenizer = Tokenizer(model_args.tokenizer_path)
+        tokenizer = model_args.tokenizer
+        assert tokenizer is not None, "Tokenizer must be provided for non-dummy weights"
 
     # Special-case Hf models as they can load directly from the safetensors much more efficiently
     if model_args.checkpoint_type == CheckpointType.Meta:
@@ -109,7 +110,7 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
                 ref_output = outputs.logits
             else:
                 pt_decode_input = embd(chunk_tokens).view(1, actual_chunk_size, -1)
-                ref_output = model(pt_decode_input, start_pos=chunk_start)
+                ref_output = reference_model(pt_decode_input, start_pos=chunk_start)
 
             # Compute top-5 predictions
             probs = torch.softmax(ref_output, dim=-1)
