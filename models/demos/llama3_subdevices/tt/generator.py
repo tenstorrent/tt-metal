@@ -49,13 +49,6 @@ class Generator:
             self.model = self.model[0]
 
     def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
-        if hasattr(self, "trace_id"):
-            ttnn.release_trace(self.mesh_device, self.trace_id)
-            del self.trace_id
-
-        if hasattr(self, "trace_id_text"):
-            ttnn.release_trace(self.mesh_device, self.trace_id_text)
-            del self.trace_id_text
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
         kv_cache = kv_cache[0]
