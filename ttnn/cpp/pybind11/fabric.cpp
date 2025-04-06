@@ -16,6 +16,7 @@ void py_bind_fabric_api(pybind11::module& module) {
     py::enum_<tt::tt_metal::FabricConfig>(module, "FabricConfig")
         .value("DISABLED", tt::tt_metal::FabricConfig::DISABLED)
         .value("FABRIC_1D", tt::tt_metal::FabricConfig::FABRIC_1D)
+        .value("FABRIC_1D_RING", tt::tt_metal::FabricConfig::FABRIC_1D_RING)
         .value("FABRIC_2D", tt::tt_metal::FabricConfig::FABRIC_2D)
         .value("CUSTOM", tt::tt_metal::FabricConfig::CUSTOM);  // DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, CUSTOM = 4
 
