@@ -42,6 +42,7 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles =
         get_arg_val<uint32_t>(3);  // same arg index as in reader_unary and in reader_unary_transpose_wh_8bank
+    uint32_t pow_2 = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
 
@@ -51,7 +52,7 @@ void kernel_main() {
 
     constexpr bool read_from_dram = get_read_from_dram();
 
-    const InterleavedPow2AddrGen<read_from_dram> src_a = {src_addr, 11};
+    const InterleavedPow2AddrGen<read_from_dram> src_a = {src_addr, pow_2};
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.

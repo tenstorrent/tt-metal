@@ -61,6 +61,7 @@ enum ReduceDim : uint8_t { H = 0, W = 1, HW = 2 };
 enum ReduceType : uint8_t { SUM = 0, AVG = 1, MAX = 2 };
 struct ReduceConfig {
     bool short_init = false;
+    tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH});
     std::vector<uint32_t> shape;
     ReduceDim reduce_dim;
     ReduceType reduce_type = ReduceType::SUM;
@@ -134,12 +135,13 @@ void add_reader_writer_kernels(
     const ReduceConfig& test_config,
     const std::shared_ptr<tt_metal::Buffer>& src_dram_buffer,
     const std::shared_ptr<tt_metal::Buffer>& dst_dram_buffer) {
+    uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0], tile_W = test_config.tile_shape.get_tile_shape()[1];
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
     uint32_t HW = H * W;
     uint32_t N = test_config.shape[0] * test_config.shape[1];
-    uint32_t Wt = W / TILE_WIDTH;
-    uint32_t Ht = H / TILE_HEIGHT;
-    uint32_t num_tensor_tiles = NC * H * W / (TILE_WIDTH * TILE_HEIGHT);
+    uint32_t Wt = W / tile_W;
+    uint32_t Ht = H / tile_H;
+    uint32_t num_tensor_tiles = NC * H * W / (tile_W * tile_H);
     float scaler = get_scaler(test_config);
     switch (test_config.reduce_dim) {
         case ReduceDim::H: {
@@ -213,6 +215,7 @@ void add_reader_writer_kernels(
                     Wt,
                     Ht * Wt,
                     *reinterpret_cast<uint32_t*>(&scaler),
+                    (tile_H * tile_W == 1024) ? 11 : 10,
                 });
 
             uint32_t num_tiles =
@@ -258,13 +261,15 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
 
     CoreCoord core = {0, 0};
 
+    uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0], tile_W = test_config.tile_shape.get_tile_shape()[1];
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
     uint32_t HW = H * W;
     uint32_t N = test_config.shape[0] * test_config.shape[1];
-    TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0, "Error");
+    TT_FATAL((tile_H == 16 && tile_W == 32) || (tile_H == 32 && tile_W == 32), "Error");  // validate tile shape
+    TT_FATAL(W % tile_W == 0 && H % tile_H == 0, "Error");
     TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
-    uint32_t Wt = W / TILE_WIDTH;
-    uint32_t Ht = H / TILE_HEIGHT;
+    uint32_t Wt = W / tile_W;
+    uint32_t Ht = H / tile_H;
 
     uint32_t num_golden_elements;
     switch (test_config.reduce_dim) {
@@ -272,7 +277,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
             num_golden_elements = NC * W * 32 / 2;
             break;  // expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
         case ReduceDim::W:
-            num_golden_elements = NC * H * TILE_WIDTH / 2;
+            num_golden_elements = NC * H * tile_W / 2;
             break;  // expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
         case ReduceDim::HW:
             num_golden_elements = NC * 32 * 32 / 2;
@@ -282,11 +287,11 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
 
     float scaler = get_scaler(test_config);
 
-    uint32_t num_tensor_tiles = NC * H * W / (TILE_WIDTH * TILE_HEIGHT);
+    uint32_t num_tensor_tiles = NC * H * W / (tile_W * tile_H);
     uint32_t divisor = test_config.reduce_dim == ReduceDim::W ? Wt : Ht;
     TT_FATAL(num_tensor_tiles % divisor == 0, "Error");
 
-    uint32_t single_tile_bytes = 2 * 1024;
+    uint32_t single_tile_bytes = 2 * (tile_W * tile_H);
     uint32_t dram_buffer_size = single_tile_bytes * num_tensor_tiles;
 
     uint32_t src_page_size = single_tile_bytes;
@@ -320,7 +325,8 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(
             num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, single_tile_bytes);
+            .set_page_size(src0_cb_index, single_tile_bytes)
+            .set_tile_dims(src0_cb_index, test_config.tile_shape);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
@@ -328,12 +334,17 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
             num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(ouput_cb_index, single_tile_bytes);
+            .set_page_size(ouput_cb_index, single_tile_bytes)
+            .set_tile_dims(ouput_cb_index, test_config.tile_shape);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     tt_metal::CircularBufferConfig cb_temp_reduce_tile_config =
-        tt_metal::CircularBufferConfig(2 * single_tile_bytes, {{CBIndex::c_2, tt::DataFormat::Float16_b}})
-            .set_page_size(CBIndex::c_2, single_tile_bytes);
+        tt_metal::CircularBufferConfig(
+            2 * (2 * TILE_WIDTH * TILE_HEIGHT),
+            {{CBIndex::c_2,
+              tt::DataFormat::Float16_b}})  // full tile size because reader kernel is hard-coded to full tile
+            .set_page_size(CBIndex::c_2, single_tile_bytes)
+            .set_tile_dims(CBIndex::c_2, tt_metal::Tile({32, 32}));
     auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(program, core, cb_temp_reduce_tile_config);
 
     add_reader_writer_kernels(program, core, test_config, src_dram_buffer, dst_dram_buffer);
@@ -343,6 +354,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         uint(Wt),
         uint(NC),
         test_config.at_start,
+        uint((tile_H / 16) * (tile_W / 16)),
     };
 
     std::map<string, string> reduce_defines = {{"REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim)}};
@@ -419,7 +431,8 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         u16_src0_vec,
         test_config.shape,
         tests::utils::TensorLayoutType::TILED_NFACES,
-        tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+        PhysicalSize{tile_H, tile_W});
     std::vector<uint16_t> gold_reduced = test_config.golden_function(
         src_linear, test_config.shape, scaler, uint8_t(test_config.reduce_type), true);  // result is uint16_t untilized
 
@@ -428,7 +441,8 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         gold_reduced,
         test_config.result_shape,
         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-        tests::utils::TensorLayoutType::TILED_NFACES));
+        tests::utils::TensorLayoutType::TILED_NFACES,
+        PhysicalSize{tile_H, tile_W}));
 
     bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
     if (!pass) {
@@ -438,7 +452,10 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     EXPECT_TRUE(pass);
     log_info(
         LogTest,
-        "MathFid = {}, ReduceType = {}, FP32DestAcc = {}, DstSyncFull = {}, at_start = {}",
+        "TileDimH = {}, TileDimW = {}, MathFid = {}, ReduceType = {}, FP32DestAcc = {}, DstSyncFull = {}, at_start = "
+        "{}",
+        test_config.tile_shape.get_tile_shape()[0],
+        test_config.tile_shape.get_tile_shape()[1],
         test_config.math_fidelity,
         test_config.reduce_type,
         test_config.fp32_dest_acc_en,
@@ -798,6 +815,47 @@ TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHWShortInit) {
                             .dst_full_sync_en = dst_full_sync_en,
                             .at_start = at_start,
                             .math_fidelity = MathFidelity(math_fid)};
+                        run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_F(DeviceFixture, TensixComputeReduceWTinyTiles) {
+    tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT / 2, TILE_WIDTH});
+    std::vector<uint32_t> shape = {1, 1, 1 * tile_shape.get_tile_shape()[0], 13 * tile_shape.get_tile_shape()[1]};
+    std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], tile_shape.get_tile_shape()[1]};
+    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
+        // MathFidelity : {0, 2, 3, 4}; so skip value 1
+        if (math_fid == 1) {
+            continue;
+        }
+        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+                    continue;
+                }
+                for (bool dst_full_sync_en : {true, false}) {
+                    for (bool at_start : {true, false}) {
+                        ReduceConfig test_config = {
+                            .tile_shape = tile_shape,
+                            .shape = shape,
+                            .reduce_dim = ReduceDim::W,
+                            .reduce_type = ReduceType(reduce_type),
+                            .data_gen_rand_max = 0.0f,
+                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
+                            .data_gen_offset = 1.0f,
+                            .atol = 1e-2f,
+                            .rtol = 0.08f,
+                            .golden_function = ::unit_tests::compute::gold_reduce_w,
+                            .result_shape = result_shape,
+                            .fp32_dest_acc_en = fp32_dest_acc_en,
+                            .dst_full_sync_en = dst_full_sync_en,
+                            .at_start = at_start,
+                            .math_fidelity = MathFidelity(math_fid),
+                        };
                         run_single_core_reduce_program(this->devices_.at(0), test_config);
                     }
                 }

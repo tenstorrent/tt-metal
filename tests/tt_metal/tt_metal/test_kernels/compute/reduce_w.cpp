@@ -44,6 +44,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
     constexpr bool at_start = get_compile_time_arg_val(3);
+    constexpr uint32_t num_faces = get_compile_time_arg_val(4);
     dummy_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #ifndef SHORT_INIT
     reduce_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
@@ -65,10 +66,10 @@ void MAIN {
 #if (MATH_ONLY == 1)
                 UNPACK((llk_unpack_AB(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0)));
                 // REDUCE_OP is expected to come from add_define
-                reduce_tile_math(reduce_dst_idx);
+                reduce_tile_math(reduce_dst_idx, num_faces);
 #elif (MATH_ONLY == 0)
                 // REDUCE_OP is expected to come from add_define
-                reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx);
+                reduce_tile(tt::CBIndex::c_0, tt::CBIndex::c_2, 0, 0, reduce_dst_idx, num_faces);
 #endif
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }
