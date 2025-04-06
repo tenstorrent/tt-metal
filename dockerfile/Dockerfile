@@ -284,6 +284,7 @@ RUN apt-get remove -y gdb || true \
     && rm -rf /tmp/gdb-build
 
 # Install dev deps
+# libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
