@@ -13,25 +13,12 @@ on:
         required: false
         type: number
         default: 45
-  workflow_dispatch:
-    inputs:
-      arch:
+      docker-image:
         required: true
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-      runner-label:
+        type: string
+      wheel-artifact-name:
         required: true
-        type: choice
-        options:
-          - N150
-          - N300
-          - BH
-      timeout:
-        required: false
-        type: number
-        default: 45
+        type: string
 
 jobs:
   models:
@@ -52,28 +39,23 @@ jobs:
       - in-service
       - cloud-virtual-machine
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/retry-command
-        # For BH we use yyzo machines and they don't have MLPerf mounted
-        if: ${{ inputs.arch != 'blackhole' }}
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
         with:
-          timeout-seconds: 100
-          max-retries: 10
-          backoff-seconds: 60
-          command: ./.github/scripts/cloud_utils/mount_weka.sh
+          submodules: recursive
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
+          docker_image: ${{ inputs.docker-image }}
           install_wheel: true
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e ARCH_NAME=${{ inputs.arch }}
-            -e GITHUB_ACTIONS=true
           run_args: |
             source tests/scripts/run_python_model_tests.sh && run_python_model_tests_${{ inputs.arch }}
       - uses: ./.github/actions/slack-report
@@ -107,21 +89,19 @@ jobs:
       - in-service
       - cloud-virtual-machine
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/retry-command
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
         with:
-          timeout-seconds: 100
-          max-retries: 10
-          backoff-seconds: 60
-          command: ./.github/scripts/cloud_utils/mount_weka.sh
+          submodules: recursive
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }} slow runtime mode tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
+          docker_image: ${{ inputs.docker-image }}
           install_wheel: true
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |

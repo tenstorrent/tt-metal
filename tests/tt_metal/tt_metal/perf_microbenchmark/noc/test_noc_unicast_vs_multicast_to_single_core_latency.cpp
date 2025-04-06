@@ -2,15 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/device.hpp>
-#include "dprint_server.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "tt_cluster.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <map>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/utils.hpp>
 
 using namespace tt;
 
@@ -18,11 +27,12 @@ void measure_latency(const string& kernel_name) {
     const int device_id = 0;
     tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
     CoreCoord producer_logical_core =
-        tt_metal::dispatch_core_manager::instance().prefetcher_core(device->id(), channel, 0);
+        tt_metal::MetalContext::instance().get_dispatch_core_manager().prefetcher_core(device->id(), channel, 0);
     CoreCoord consumer_logical_core =
-        tt_metal::dispatch_core_manager::instance().dispatcher_core(device->id(), channel, 0);
+        tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_core(device->id(), channel, 0);
 
     TT_ASSERT(
         producer_logical_core != consumer_logical_core,

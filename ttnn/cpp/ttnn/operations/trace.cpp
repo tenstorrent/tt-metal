@@ -9,6 +9,8 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/mesh_trace.hpp>
 
+#include <tracy/Tracy.hpp>
+
 namespace ttnn::operations::trace {
 
 uint32_t begin_trace_capture(IDevice* device, QueueId cq_id) {

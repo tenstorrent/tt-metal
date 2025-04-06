@@ -2,35 +2,60 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
-#include <functional>
-#include <random>
-#include <stdexcept>
-#include <string>
-#include <vector>
-
-#include <yaml-cpp/yaml.h>
-
-#include <tt-metalium/bfloat8.hpp>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/global_circular_buffer_impl.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
-
-#include "tests/tt_metal/test_utils/tilization.hpp"
-
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "fmt/base.h"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include "test_common.hpp"
+#include "tests/tt_metal/test_utils/tilization.hpp"
+#include <tt-metalium/tilize_utils.hpp>
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using std::vector;
 using namespace tt;
@@ -598,7 +623,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         input_buffer = CreateBuffer(config);
     }
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     log_info("created sharded tensor");
 

@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <exception>
-#include "gtest/gtest.h"
-
 #include <tt-metalium/shape_base.hpp>
+#include <exception>
+#include <memory>
+
+#include "gtest/gtest.h"
+#include "span.hpp"
 
 namespace tt::tt_metal {
 

@@ -2,17 +2,49 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <assert.h>
+#include <chrono>
+#include <fmt/base.h>
+#include <nlohmann/json_fwd.hpp>
+#include <stdint.h>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <exception>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/program_impl.hpp>
+#include "routing_test_common.hpp"
 #include "rtoptions.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include "span.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include "test_common.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "test_common.hpp"
-#include "routing_test_common.hpp"
-#include "eth_l1_address_map.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;
@@ -307,7 +339,8 @@ int main(int argc, char** argv) {
         log_info(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
 
         for (auto device : device_map) {
-            auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(device.first);
+            auto neighbors =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(device.first);
             std::vector<CoreCoord> device_router_cores;
             std::vector<CoreCoord> device_router_phys_cores;
             uint32_t router_mask = 0;
@@ -318,7 +351,8 @@ int main(int argc, char** argv) {
                         // sender device.
                         router_logical_core = device.second->get_ethernet_sockets(neighbor)[0];
                         router_phys_core = device.second->ethernet_core_from_logical_core(router_logical_core);
-                        auto eth_chan = tt::Cluster::instance()
+                        auto eth_chan = tt::tt_metal::MetalContext::instance()
+                                            .get_cluster()
                                             .get_soc_desc(test_device_id_l)
                                             .logical_eth_core_to_chan_map.at(router_logical_core);
                         routing_plane = control_plane->get_routing_plane_id(eth_chan);

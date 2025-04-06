@@ -9,7 +9,7 @@
 #include <optional>
 #include <vector>
 
-#include "mesh_coord.hpp"
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt {
 namespace stl {

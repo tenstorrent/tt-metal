@@ -2,42 +2,53 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <stddef.h>
+#include <tt-metalium/logger.hpp>
+#include <array>
 #include <cstdint>
-#include <functional>
 #include <optional>
-#include <ostream>
+#include <set>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
-#include <variant>
-#include <vector>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/event.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include <nlohmann/json.hpp>
-#include <tt-metalium/logger.hpp>
-#include "ttnn/device.hpp"
-#include "ttnn/graph/graph_operation_queries.hpp"
-#include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_trace_utils.hpp"
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "impl/context/metal_context.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
-#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
+#include "umd/device/types/cluster_descriptor_types.h"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations {
@@ -191,7 +202,7 @@ class EltwiseUnaryOpIfTest : public TTNNFixtureWithDevice,
 TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const auto& expected_resource_usage_map = std::get<ResourceUsageMap>(GetParam());
-    const BoardType board_type = tt::Cluster::instance().get_board_type(0);
+    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
     }
@@ -208,6 +219,7 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
         EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
     }
 }
@@ -270,7 +282,7 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const auto& dim_arg = std::get<int>(GetParam());
     const auto& expected_resource_usage_map = std::get<ResourceUsageMap>(GetParam());
-    const BoardType board_type = tt::Cluster::instance().get_board_type(0);
+    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
     }
@@ -353,7 +365,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
     const auto& expected_resource_usage_map = std::get<ResourceUsageMap>(GetParam());
-    const BoardType board_type = tt::Cluster::instance().get_board_type(0);
+    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
     }
@@ -484,7 +496,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
     const auto& matmul_program_config =
         std::get<std::optional<ttnn::operations::matmul::MatmulProgramConfig>>(GetParam());
     const auto& expected_resource_usage_map = std::get<ResourceUsageMap>(GetParam());
-    const BoardType board_type = tt::Cluster::instance().get_board_type(0);
+    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
     }
@@ -528,6 +540,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
         EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
 }
@@ -606,10 +619,6 @@ INSTANTIATE_TEST_SUITE_P(
 
 class Conv2dOpIfTest : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(Conv2dOpIfTest, Conv2d) {
-    // Todo(arminaleTT): There is a known problem with calculating conv output size. Once fixed, this test will be
-    // enabled.
-    GTEST_SKIP();
-
     const auto input_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 50176, 3},
         tt::tt_metal::TensorLayout(
@@ -642,11 +651,8 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const auto expected_resource_usage_map = ResourceUsageMap{
         {BoardType::N300,
          ttnn::graph::ResourceUsage{
-             .cb_peak_size_per_core = 0, .l1_buffers_peak_per_core = 0, .l1_output_buffer_per_core = 0}},
-        {BoardType::E150,
-         ttnn::graph::ResourceUsage{
-             .cb_peak_size_per_core = 0, .l1_buffers_peak_per_core = 0, .l1_output_buffer_per_core = 0}}};
-    const BoardType board_type = tt::Cluster::instance().get_board_type(0);
+             .cb_peak_size_per_core = 229440, .l1_buffers_peak_per_core = 190568, .l1_output_buffer_per_core = 0}}};
+    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
     }
@@ -655,7 +661,6 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     // Run the test
     {
         tt::tt_metal::IDevice* device = device_;
-        const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::conv2d,
             device,
@@ -677,9 +682,12 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
             std::nullopt,
             output_spec.tensor_layout().get_memory_config());
 
-        // Todo(arminaleTT): There is a known problem with calculating conv output size. Once fixed, this test will be
-        // expanded
-        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Error);
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+        EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
+        EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
+        EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        ASSERT_TRUE(query.output_tensor_spec.has_value());
+        EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
 }
 

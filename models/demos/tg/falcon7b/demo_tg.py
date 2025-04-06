@@ -10,9 +10,9 @@ from models.utility_functions import is_wormhole_b0
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 16685, "decode_t/s": 4771, "decode_t/s/u": 4.66}, False, None),
-        (True, 1024, {"prefill_t/s": 20488, "decode_t/s": 4576, "decode_t/s/u": 4.47}, False, None),
-        (True, 2048, {"prefill_t/s": 14972, "decode_t/s": 4567, "decode_t/s/u": 4.46}, False, None),
+        (True, 128, {"prefill_t/s": 14800, "decode_t/s": 3677, "decode_t/s/u": 3.59}, False, None),
+        (True, 1024, {"prefill_t/s": 19180, "decode_t/s": 3590, "decode_t/s/u": 3.51}, False, None),
+        (True, 2048, {"prefill_t/s": 13500, "decode_t/s": 3448, "decode_t/s/u": 3.37}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),
@@ -55,6 +55,7 @@ def test_demo_multichip(
     use_program_cache,
     enable_async_mode,
     is_ci_env,
+    ensure_devices_tg,
 ):
     assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
     num_devices = mesh_device.get_num_devices()

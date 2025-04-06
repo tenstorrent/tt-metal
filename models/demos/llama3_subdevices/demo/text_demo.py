@@ -182,10 +182,23 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (  # Batch-32 run (Throughput) - 32 users, small prompt
+        (  # Repeat-5 Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # Batch-32 run (Throughput) - 32 users, small prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            5,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
@@ -251,6 +264,7 @@ def create_tt_model(
     ids=[
         "batch-1",  # latency
         "batch-32",  # throughput
+        "repeat5-batch-32",  # throughput with 5 repeat batches
         "long-context",  # max-length
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
@@ -408,6 +422,7 @@ def test_demo_text(
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
         if batch_idx != 0:
+            model.switch_mode("prefill")
             for layer in model.layers:
                 k_cache, v_cache = layer.attention.layer_past
                 k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
@@ -416,8 +431,6 @@ def test_demo_text(
 
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
-        if batch_idx != 0:
-            model.switch_mode("prefill")
 
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
@@ -439,7 +452,10 @@ def test_demo_text(
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
-        prefilled_token = prefilled_token.repeat(batch_size, 1)
+
+        if prefilled_token.shape[0] != 32:
+            prefilled_token = prefilled_token.repeat(batch_size, 1)
+
         # Keep track of generated outputs to print out every iteration
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
         for user in range(batch_size):

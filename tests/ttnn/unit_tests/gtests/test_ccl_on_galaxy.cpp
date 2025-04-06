@@ -2,19 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
-
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/async_runtime.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include <algorithm>
+#include <memory>
+#include <optional>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
-#include "tt_cluster.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/fabric_types.hpp>
+#include "fmt/base.h"
+#include "gtest/gtest.h"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include "ttnn/async_runtime.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -60,16 +92,16 @@ std::vector<Tensor> run_operation(
 }  // namespace async_detail
 
 bool is_tg_system() {
-    const bool is_galaxy_system = tt::Cluster::instance().is_galaxy_cluster();
-    const size_t num_mmio_devices = tt::Cluster::instance().number_of_pci_devices();
-    const size_t num_devices = tt::Cluster::instance().number_of_user_devices();
+    const bool is_galaxy_system = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
+    const size_t num_mmio_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
+    const size_t num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_user_devices();
     return is_galaxy_system && (num_mmio_devices == 4) && (num_devices == 32);
 }
 
 bool is_tgg_system() {
-    const bool is_galaxy_system = tt::Cluster::instance().is_galaxy_cluster();
-    const size_t num_mmio_devices = tt::Cluster::instance().number_of_pci_devices();
-    const size_t num_devices = tt::Cluster::instance().number_of_user_devices();
+    const bool is_galaxy_system = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
+    const size_t num_mmio_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
+    const size_t num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_user_devices();
     return is_galaxy_system && (num_mmio_devices == 8) && (num_devices == 64);
 }
 
@@ -84,9 +116,9 @@ ttnn::MeshShape get_mesh_shape() {
 }
 
 void validate_num_tunnels_and_tunnel_depth() {
-    const uint32_t num_devices_in_tunnel = tt::Cluster::instance().get_mmio_device_max_tunnel_depth(0);
-    const uint32_t num_mmio_devices = tt::Cluster::instance().number_of_pci_devices();
-    const uint32_t cluster_tunnel_count = tt::Cluster::instance().get_mmio_device_tunnel_count(0);
+    const uint32_t num_devices_in_tunnel = tt::tt_metal::MetalContext::instance().get_cluster().get_mmio_device_max_tunnel_depth(0);
+    const uint32_t num_mmio_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
+    const uint32_t cluster_tunnel_count = tt::tt_metal::MetalContext::instance().get_cluster().get_mmio_device_tunnel_count(0);
     TT_FATAL(
         num_devices_in_tunnel == 4,
         "Expected Galaxy to have tunnel depth of 4, detected tunnel depth of {}",
@@ -109,7 +141,7 @@ std::shared_ptr<bfloat16[]> create_container_for_readback_data(const uint32_t bu
 }
 
 TEST(GalaxyTests, TestAllGatherDeadlock) {
-    if (not tt::Cluster::instance().is_galaxy_cluster()) {
+    if (not tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
     tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
@@ -200,7 +232,7 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
 }
 
 TEST(GalaxyTests, TestReduceScatterDeadlock) {
-    if (not tt::Cluster::instance().is_galaxy_cluster()) {
+    if (not tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
     tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);

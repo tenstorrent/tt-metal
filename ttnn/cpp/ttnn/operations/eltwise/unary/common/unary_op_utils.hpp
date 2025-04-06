@@ -48,6 +48,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::RDIV:
         case UnaryOpType::EXP:
         case UnaryOpType::SOFTPLUS:
+        case UnaryOpType::SIGMOID:
         case UnaryOpType::ADD_UNARY_SFPU:
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:
@@ -65,7 +66,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::FILL:
         case UnaryOpType::ROUND:
         case UnaryOpType::PRELU_SFPU:
-        case UnaryOpType::FMOD: return true;
+        case UnaryOpType::FMOD:
+        case UnaryOpType::MAXIMUM: return true;
         default: return false;
     }
     return false;

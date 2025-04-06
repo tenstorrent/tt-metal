@@ -12,6 +12,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
   tg-nightly-tests:
@@ -20,9 +24,20 @@ jobs:
       matrix:
         test-group: [
           { name: "TG CCL tests", arch: wormhole_b0, cmd: "pytest tests/nightly/tg/ccl", timeout: 70, owner_id: ULMEPM2MA}, # Sean Nijjar
+          {
+            name: "Llama TG Accuracy Test",
+            arch: wormhole_b0,
+            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_subdevices/tests/test_llama_accuracy.py",
+            timeout: 25,
+            owner_id: U071CKL4AFK
+          }, # Ammar Vora
         ]
     name: ${{ matrix.test-group.name }}
-    runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "pipeline-functional"]
+    runs-on:
+      - arch-wormhole_b0
+      - config-tg
+      - pipeline-functional
+      - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -35,7 +50,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:

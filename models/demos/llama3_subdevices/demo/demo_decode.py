@@ -218,10 +218,10 @@ def run_llama3_demo(
             [128000, 2028, 374, 264, 1296]
         ] * model_args.max_batch_size  # "This is a test" encoded prompt
     else:
-        # if instruct_mode:
-        #     encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
-        # else:
-        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
+        if instruct_mode:
+            encoded_prompts = [model_args.encode_prompt(prompt) for prompt in input_prompts]
+        else:
+            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
 
     # Prefill by decode: start at first token; pad to 32 (tile size)
     max_prompt_length = max([len(prompt) for prompt in encoded_prompts])
@@ -494,7 +494,7 @@ def run_llama3_demo(
         (  # full demo, batch 32
             "instruct",
             80,
-            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -509,7 +509,7 @@ def run_llama3_demo(
         (  # quick 1L demo
             "random",
             1,
-            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -524,7 +524,7 @@ def run_llama3_demo(
         (  # Stress test: batch-32 very long generations but at same token index
             "instruct",
             80,
-            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -537,9 +537,9 @@ def run_llama3_demo(
             0,  # start_pos
         ),
         (  # 10 layers for devive perf measurements
-            "random",
+            "instruct",
             10,
-            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len

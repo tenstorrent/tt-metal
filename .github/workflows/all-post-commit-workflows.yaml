@@ -37,9 +37,6 @@ permissions:
 
 run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
-  static-checks:
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
@@ -87,7 +84,9 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      os: ubuntu-22.04
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
     needs: build-artifact
@@ -101,9 +100,10 @@ jobs:
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
-      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fabric Unit Tests
   fabric-unit-tests:
     needs: build-artifact
@@ -154,6 +154,8 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -170,6 +172,8 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit

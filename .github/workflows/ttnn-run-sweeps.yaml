@@ -176,6 +176,9 @@ on:
           - normalization.softmax.softmax
           - normalization.softmax.softmax_sharded
           - normalization.batch_norm.batch_norm
+          - normalization.generality.layernorm
+          - normalization.generality.softmax
+          - normalization.generality.softmax_fused
           - eltwise.unary.identity.identity
           - eltwise.unary.identity.identity_sharded
           - eltwise.unary.neg.neg
@@ -628,7 +631,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
