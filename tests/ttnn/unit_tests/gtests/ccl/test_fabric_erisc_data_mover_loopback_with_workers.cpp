@@ -31,7 +31,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include "span.hpp"

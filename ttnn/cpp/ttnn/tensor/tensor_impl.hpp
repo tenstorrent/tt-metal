@@ -11,7 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include <tracy/Tracy.hpp>

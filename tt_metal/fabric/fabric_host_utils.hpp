@@ -5,7 +5,7 @@
 #pragma once
 
 #include <stdint.h>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <vector>
 
 #include "core_coord.hpp"

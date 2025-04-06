@@ -4,7 +4,7 @@
 
 #include <dispatch_settings.hpp>
 #include <limits.h>
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
 #include <tt-metalium/dispatch_settings.hpp>
 #include "impl/context/metal_context.hpp"
 #include <cstddef>

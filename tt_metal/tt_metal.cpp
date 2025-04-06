@@ -45,7 +45,8 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "logger.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
+#include "impl/program/program_impl.hpp"
 #include "semaphore.hpp"
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
@@ -123,7 +124,7 @@ DataMovementConfigStatus CheckDataMovementConfig(
     for (const auto& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                const KernelGroup* kernel_group = program.kernels_on_core(
+                const KernelGroup* kernel_group = program.get_impl()->kernels_on_core(
                     CoreCoord(x, y), hal_ref.get_programmable_core_type_index(programmable_core));
                 if (kernel_group != nullptr) {
                     bool local_noc0_in_use = false;
@@ -727,8 +728,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
              programmable_core_type_index++) {
             CoreType core_type = hal_ref.get_core_type(programmable_core_type_index);
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
-                launch_msg_t* msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-                go_msg_t* go_msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
+                launch_msg_t* msg =
+                    &program.get_impl()->kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+                go_msg_t* go_msg =
+                    &program.get_impl()->kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
                 msg->kernel_config.host_assigned_id = program.get_runtime_id();
 
                 auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
@@ -787,7 +790,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootl
         const auto& logical_cores = logical_cores_used_in_program[index];
         CoreType core_type = hal_ref.get_core_type(index);
         for (const auto& logical_core : logical_cores) {
-            KernelGroup* kernel_group = program.kernels_on_core(logical_core, index);
+            KernelGroup* kernel_group = program.get_impl()->kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
@@ -840,7 +843,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool fd_bootloa
     for (uint32_t index = 0; index < hal_ref.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal_ref.get_core_type(index);
         uint32_t processor_classes = hal_ref.get_processor_classes_count(index);
-        for (const auto& kg : program.get_kernel_groups(index)) {
+        for (const auto& kg : program.get_impl()->get_kernel_groups(index)) {
             uint32_t kernel_config_base = kg->launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {

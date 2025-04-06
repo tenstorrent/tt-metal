@@ -61,7 +61,8 @@
 #include "multi_producer_single_consumer_queue.hpp"
 #include "profiler_types.hpp"
 #include "program_device_map.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
+#include "impl/program/program_impl.hpp"
 #include "rtoptions.hpp"
 #include "strong_type.hpp"
 #include "system_memory_manager.hpp"
@@ -1058,8 +1059,9 @@ void Device::init_command_queue_device() {
         const auto& logical_dispatch_cores = logical_cores[index];
         CoreType core_type = hal_ref.get_core_type(index);
         for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
-            launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
-            go_msg_t go_msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
+            launch_msg_t msg =
+                command_queue_program.get_impl()->kernels_on_core(logical_dispatch_core, index)->launch_msg;
+            go_msg_t go_msg = command_queue_program.get_impl()->kernels_on_core(logical_dispatch_core, index)->go_msg;
             CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
             tt::llrt::write_launch_msg_to_core(this->id(), virtual_core, &msg, &go_msg, this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
         }
@@ -1094,8 +1096,9 @@ void Device::init_fabric() {
         CoreType core_type = hal_ref.get_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
             launch_msg_t* msg =
-                &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
-            go_msg_t* go_msg = &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
+                &fabric_program_->get_impl()->kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+            go_msg_t* go_msg =
+                &fabric_program_->get_impl()->kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
             msg->kernel_config.host_assigned_id = fabric_program_->get_runtime_id();
 
             auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);

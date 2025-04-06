@@ -22,6 +22,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 
+struct launch_msg_t;
+struct go_msg_t;
+
 namespace tt::tt_metal {
 
 // A physical PCIexpress Tenstorrent device

@@ -11,7 +11,7 @@
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/memory_reporter.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -111,8 +111,8 @@ void py_device_module_types(py::module& m_device) {
     py::class_<IDevice, std::unique_ptr<IDevice, py::nodelete>>(
         m_device, "IDevice", "Base class describing a Tenstorrent accelerator device.");
 
-    py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<Device, py::nodelete>>(
-        m_device, "Device", "Class describing a Tenstorrent accelerator device.");
+    // py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<Device, py::nodelete>>(
+    //     m_device, "Device", "Class describing a Tenstorrent accelerator device.");
 
     py::class_<SubDevice>(m_device, "SubDevice", "Class describing a sub-device of a Tenstorrent accelerator device.");
 
@@ -304,16 +304,16 @@ void device_module(py::module& m_device) {
                 [](IDevice* device) { return tt::tt_metal::hal::get_inf(); },
                 R"doc(Returns Infinity value for current architecture.)doc");
 
-    auto pyDevice = static_cast<py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<tt::tt_metal::Device, py::nodelete>>>(m_device.attr("Device"));
-    pyDevice
-        .def(
-            py::init<>([](int device_id, size_t l1_small_size, size_t trace_region_size) {
-                return tt::tt_metal::Device(device_id, 1, l1_small_size, trace_region_size);
+    /*
+    auto pyDevice = static_cast<py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<tt::tt_metal::Device,
+    py::nodelete>>>(m_device.attr("Device")); pyDevice .def( py::init<>([](int device_id, size_t l1_small_size, size_t
+    trace_region_size) { return tt::tt_metal::Device(device_id, 1, l1_small_size, trace_region_size);
             }),
             "Create device.",
             py::arg("device_id"),
             py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
             py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE);
+    */
 
     m_device.def(
         "CreateDevice",

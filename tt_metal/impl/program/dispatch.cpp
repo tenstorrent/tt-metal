@@ -37,6 +37,7 @@
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
+#include "distributed/mesh_workload_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_core_common.hpp"
@@ -46,7 +47,8 @@
 #include "llrt/hal.hpp"
 #include "math.hpp"
 #include "program_device_map.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
+#include "impl/program/program_impl.hpp"
 #include "runtime_args_data.hpp"
 #include "semaphore.hpp"
 #include "span.hpp"
@@ -407,7 +409,7 @@ void finalize_program_offsets(T& workload, IDevice* device) {
         HalProgrammableCoreType programmable_core_type = hal_ref.get_programmable_core_type(index);
         offset = finalize_rt_args(
             workload.get_kernels(index),
-            workload.get_kernel_groups(index),
+            workload.get_impl()->get_kernel_groups(index),
             config_base_offset,
             index,
             rta_offset,
@@ -420,7 +422,8 @@ void finalize_program_offsets(T& workload, IDevice* device) {
 
         TT_ASSERT(offset == tt::align(offset, hal_ref.get_alignment(HalMemType::L1)));
 
-        offset = finalize_cbs(index, workload.get_kernel_groups(index), offset, cb_offset, cb_size, local_cb_size);
+        offset = finalize_cbs(
+            index, workload.get_impl()->get_kernel_groups(index), offset, cb_offset, cb_size, local_cb_size);
 
         TT_ASSERT(offset == tt::align(offset, hal_ref.get_alignment(HalMemType::L1)));
 
@@ -428,7 +431,7 @@ void finalize_program_offsets(T& workload, IDevice* device) {
             device,
             index,
             workload.get_kernels(index),
-            workload.get_kernel_groups(index),
+            workload.get_impl()->get_kernel_groups(index),
             offset,
             kernel_text_offset,
             kernel_text_size);
@@ -672,7 +675,7 @@ BatchedTransfers assemble_runtime_args_commands(
             // Fast dispatch not supported on IDLE_ETH yet
             continue;
         }
-        for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
+        for (auto& kg : program.get_impl()->get_kernel_groups(programmable_core_type_index)) {
             if (kg->total_rta_size != 0) {
                 uint32_t num_sub_cmds = kg->core_ranges.num_cores();
                 uint32_t max_runtime_args_len = kg->total_rta_size / sizeof(uint32_t);
@@ -707,7 +710,7 @@ BatchedTransfers assemble_runtime_args_commands(
     uint32_t kernel_group_crta_multicast_count = 0;
     {
         uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        for (auto& kg : program.get_kernel_groups(index)) {
+        for (auto& kg : program.get_impl()->get_kernel_groups(index)) {
             bool has_crtas = false;
             for (auto kernel_id : kg->kernel_ids) {
                 if (kernel_id) {
@@ -768,7 +771,7 @@ BatchedTransfers assemble_runtime_args_commands(
 
     if (use_kernel_group_crta_multicast) {
         uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        for (auto& kg : program.get_kernel_groups(index)) {
+        for (auto& kg : program.get_impl()->get_kernel_groups(index)) {
             for (auto kernel_id : kg->kernel_ids) {
                 if (kernel_id) {
                     auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id.value());
@@ -808,7 +811,7 @@ BatchedTransfers assemble_runtime_args_commands(
 
         // Unique RTAs - Unicast
         // Set by the user based on the kernel and core coord
-        for (auto& kg : program.get_kernel_groups(index)) {
+        for (auto& kg : program.get_impl()->get_kernel_groups(index)) {
             if (kg->total_rta_size != 0) {
                 for (const CoreRange& core_range : kg->core_ranges.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -1330,7 +1333,7 @@ void assemble_device_commands(
      */
     // and check for mcast/unicast
     uint32_t programmable_core_index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    for (auto& kernel_group : program.get_kernel_groups(programmable_core_index)) {
+    for (auto& kernel_group : program.get_impl()->get_kernel_groups(programmable_core_index)) {
         kernel_group->launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
         kernel_group->launch_msg.kernel_config.preload = DISPATCH_ENABLE_FLAG_PRELOAD;
         for (uint32_t i = 0; i < NUM_PROGRAMMABLE_CORE_TYPES; i++) {
@@ -1373,7 +1376,7 @@ void assemble_device_commands(
     programmable_core_index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
     // TODO: ugly, can be fixed by looping over indices w/ some work
     if (programmable_core_index != -1) {
-        for (auto& kernel_group : program.get_kernel_groups(programmable_core_index)) {
+        for (auto& kernel_group : program.get_impl()->get_kernel_groups(programmable_core_index)) {
             kernel_group->launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
             kernel_group->launch_msg.kernel_config.preload = DISPATCH_ENABLE_FLAG_PRELOAD;
             // Set the kernel_config_base addrs to 0 when generating the dispatch commands for the program

@@ -5,7 +5,7 @@
 #pragma once
 
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>

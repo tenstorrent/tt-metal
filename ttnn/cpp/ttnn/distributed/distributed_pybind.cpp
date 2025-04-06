@@ -12,6 +12,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/sub_device.hpp>
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082

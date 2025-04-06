@@ -8,7 +8,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
 #include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>

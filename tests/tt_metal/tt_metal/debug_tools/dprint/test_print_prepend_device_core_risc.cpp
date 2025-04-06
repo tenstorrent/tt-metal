@@ -21,7 +21,7 @@
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "rtoptions.hpp"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>

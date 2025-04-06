@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/dev_msgs.h>
+#include "dev_msgs.h"
 #include <algorithm>
 #include <functional>
 

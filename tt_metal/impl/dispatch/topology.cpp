@@ -40,7 +40,7 @@
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_types.hpp"
 #include "metal_soc_descriptor.h"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include "impl/context/metal_context.hpp"
