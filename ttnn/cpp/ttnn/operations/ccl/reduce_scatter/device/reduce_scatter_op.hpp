@@ -24,6 +24,8 @@ struct ReduceScatter {
     const std::optional<size_t> user_defined_num_buffers_per_channel;
     const std::optional<uint32_t> cluster_axis;
     const std::vector<IDevice*> devices;
+    const distributed::MeshDevice* mesh_device = nullptr;
+
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
@@ -69,8 +71,30 @@ Tensor reduce_scatter(
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
     const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
 
+std::vector<Tensor> reduce_scatter(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
+    const uint32_t num_links = 1,
+    const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    const std::optional<size_t> user_defined_num_workers = std::nullopt,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
+
 Tensor reduce_scatter(
     const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
+    const uint32_t num_links = 1,
+    const std::optional<ttnn::MemoryConfig>& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    const std::optional<size_t> user_defined_num_workers = std::nullopt,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
+
+std::vector<Tensor> reduce_scatter(
+    const std::vector<ttnn::Tensor>& input_tensors,
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,

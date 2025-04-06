@@ -88,16 +88,18 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
-    const auto mesh_view = input_tensors[0].mesh_device()->get_view();
+    const auto mesh_view = this->mesh_device->get_view();
     std::vector<IDevice*> devices =
         (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
     uint32_t num_devices = devices.size();
+    IDevice* target_device =
+        input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = 0;
     for (uint32_t i = 0; i < devices.size(); ++i) {
-        if (devices.at(i) == input_tensors[0].mesh_device()->get_device(coord)) {
+        if (devices.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
                 backward_device = devices.at(i - 1);
@@ -168,8 +170,8 @@ const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
 namespace operations {
 namespace experimental {
 namespace ccl {
-
-Tensor all_reduce_async(
+namespace {
+Tensor all_reduce_async_impl(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     const uint32_t cluster_axis,
@@ -185,7 +187,8 @@ Tensor all_reduce_async(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor.mesh_device())};
+    std::vector<Tensor> output_tensors = {
+        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()})};
 
     tt::tt_metal::operation::launch_op(
         [num_preferred_links,
@@ -195,7 +198,8 @@ Tensor all_reduce_async(
          topology,
          multi_device_global_semaphore,
          subdevice_id,
-         enable_persistent_fabric_mode](
+         enable_persistent_fabric_mode,
+         mesh_device = &mesh_device](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -211,12 +215,67 @@ Tensor all_reduce_async(
                     multi_device_global_semaphore,
                     subdevice_id,
                     enable_persistent_fabric_mode,
-                    cluster_axis},
+                    cluster_axis,
+                    mesh_device},
                 {input_tensor, buffer_tensor});
         },
         {input_tensor, buffer_tensor},
         output_tensors);
     return output_tensors.at(0);
+}
+}  // namespace
+
+Tensor all_reduce_async(
+    const Tensor& input_tensor,
+    Tensor& buffer_tensor,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool enable_persistent_fabric_mode) {
+    return all_reduce_async_impl(
+        input_tensor,
+        buffer_tensor,
+        cluster_axis,
+        mesh_device,
+        topology,
+        multi_device_global_semaphore,
+        memory_config,
+        num_preferred_links,
+        subdevice_id,
+        enable_persistent_fabric_mode);
+}
+
+std::vector<Tensor> all_reduce_async(
+    const std::vector<Tensor>& input_tensors,
+    Tensor& buffer_tensor,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool enable_persistent_fabric_mode) {
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (size_t i = 0; i < input_tensors.size(); ++i) {
+        output_tensors.push_back(all_reduce_async_impl(
+            input_tensors[i],
+            buffer_tensor,
+            cluster_axis,
+            mesh_device,
+            topology,
+            multi_device_global_semaphore.global_semaphores[i],
+            memory_config,
+            num_preferred_links,
+            subdevice_id,
+            enable_persistent_fabric_mode));
+    }
+    return output_tensors;
 }
 
 }  // namespace ccl

@@ -117,4 +117,5 @@ protected:
     tt::ARCH arch_;
     size_t num_devices_;
 };
+
 }  // namespace ttnn

@@ -190,7 +190,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
     uint32_t device_index = 0;
     std::optional<chip_id_t> receiver_device_id;
     std::optional<chip_id_t> sender_device_id;
-    const auto& mesh_device = input_tensors[0].mesh_device();
+    auto target_device = input_tensors.at(0).mesh_device() ? input_tensors.at(0).mesh_device()->get_device(mesh_coord)
+                                                           : input_tensors.at(0).device();
     if (this->cluster_axis.has_value()) {
         const auto& mesh_view = mesh_device->get_view();
         TT_FATAL(
@@ -218,10 +219,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
                                : get_chip_id(device_index + this->ring_size - 1);
     } else {
         std::tie(device_index, sender_device_id, receiver_device_id) =
-            ccl::get_device_index_and_sender_receiver_ids(mesh_device->get_device(mesh_coord), this->devices, topology);
+            ccl::get_device_index_and_sender_receiver_ids(target_device, this->devices, topology);
     }
 
-    chip_id_t target_device_id = mesh_device->get_device(mesh_coord)->id();
+    chip_id_t target_device_id = target_device->id();
 
     return all_gather_multi_core_with_workers(
         input_tensors[0],
@@ -241,17 +242,18 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
 namespace operations {
 namespace ccl {
 
-Tensor all_gather(
+namespace {
+Tensor all_gather_impl(
     const Tensor& input_tensor,
     const int32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const ttnn::ccl::Topology topology) {
+    const ttnn::ccl::Topology topology,
+    const std::vector<IDevice*>& devices) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
-    std::vector<IDevice*> devices = input_tensor.active_physical_devices();
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_gather op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
@@ -303,7 +305,7 @@ Tensor all_gather(
             .output_mem_config = memory_config.value_or(input_tensor_padded.memory_config()),
             .topology = ccl_topology,
             .cluster_axis = std::nullopt,
-            .devices = std::move(devices)},
+            .devices = devices},
         {input_tensor_padded});
 
     if (needs_padding) {
@@ -312,12 +314,11 @@ Tensor all_gather(
         return output_tensor.at(0);
     }
 }
-
-Tensor all_gather(
+Tensor all_gather_impl(
     const Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
-    const MeshDevice& mesh_device, /* TODO: This needs to be removed, since the input_tensor has a mesh_device */
+    const MeshDevice& mesh_device,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> user_defined_num_workers,
@@ -350,9 +351,109 @@ Tensor all_gather(
                    .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
                    .topology = topology,
                    .cluster_axis = cluster_axis,
-                   .devices = {}},
+                   .devices = {},
+                   .mesh_device = &mesh_device},
                {input_tensor})
         .at(0);
+}
+}  // namespace
+
+Tensor all_gather(
+    const Tensor& input_tensor,
+    const int32_t dim,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    const ttnn::ccl::Topology topology) {
+    return all_gather_impl(
+        input_tensor,
+        dim,
+        num_links,
+        memory_config,
+        user_defined_num_workers,
+        user_defined_num_buffers_per_channel,
+        topology,
+        input_tensor.active_physical_devices());
+}
+
+std::vector<Tensor> all_gather(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    const ttnn::ccl::Topology topology) {
+    std::vector<IDevice*> devices;
+    devices.reserve(input_tensors.size());
+    for (const auto& input_tensor : input_tensors) {
+        devices.push_back(input_tensor.device());
+    }
+
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (const auto& input_tensor : input_tensors) {
+        output_tensors.push_back(all_gather_impl(
+            input_tensor,
+            dim,
+            num_links,
+            memory_config,
+            user_defined_num_workers,
+            user_defined_num_buffers_per_channel,
+            topology,
+            devices));
+    }
+    return output_tensors;
+}
+
+Tensor all_gather(
+    const Tensor& input_tensor,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    const ttnn::ccl::Topology topology) {
+    return all_gather_impl(
+        input_tensor,
+        dim,
+        cluster_axis,
+        mesh_device,
+        num_links,
+        memory_config,
+        user_defined_num_workers,
+        user_defined_num_buffers_per_channel,
+        topology);
+}
+
+std::vector<Tensor> all_gather(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    const ttnn::ccl::Topology topology) {
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (const auto& input_tensor : input_tensors) {
+        output_tensors.push_back(all_gather_impl(
+            input_tensor,
+            dim,
+            cluster_axis,
+            mesh_device,
+            num_links,
+            memory_config,
+            user_defined_num_workers,
+            user_defined_num_buffers_per_channel,
+            topology));
+    }
+    return output_tensors;
 }
 
 }  // namespace ccl

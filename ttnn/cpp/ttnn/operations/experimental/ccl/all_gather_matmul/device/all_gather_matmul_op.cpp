@@ -148,8 +148,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program_at
 namespace operations {
 namespace experimental {
 namespace ccl {
-
-std::vector<ttnn::Tensor> all_gather_matmul(
+namespace {
+std::vector<ttnn::Tensor> all_gather_matmul_impl(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const uint32_t dim,
@@ -165,12 +165,12 @@ std::vector<ttnn::Tensor> all_gather_matmul(
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid) {
+    const std::optional<const ttnn::CoreGrid> core_grid,
+    const std::vector<IDevice*>& devices) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "AllGatherMatmul is only supported for Fast Dispatch");
 
     std::vector<std::optional<const ttnn::Tensor>> optional_input_tensors = {std::nullopt};
-    std::vector<IDevice*> devices = input_tensor.active_physical_devices();
 
     /* AllGather setup */
     ttnn::AllGather all_gather_struct{
@@ -181,7 +181,8 @@ std::vector<ttnn::Tensor> all_gather_matmul(
         user_defined_num_buffers_per_channel,
         memory_config_ag.value_or(input_tensor.memory_config()),
         ttnn::ccl::Topology::Ring,
-        /*cluster_axis=*/std::nullopt};
+        /*cluster_axis=*/std::nullopt,
+        devices};
 
     // Create the all gather output tensor used as input (activation) to the matmul
     ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
@@ -223,6 +224,94 @@ std::vector<ttnn::Tensor> all_gather_matmul(
                                             std::move(devices)},
         {input_tensor, all_gather_out_tensor, weight_tensor, datacopy_out_tensor},
         optional_input_tensors);
+}
+}  // namespace
+
+std::vector<ttnn::Tensor> all_gather_matmul(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const uint32_t dim,
+    const CoreCoord all_gather_core_grid_offset,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config_ag,
+    std::optional<size_t> user_defined_num_workers,
+    std::optional<size_t> user_defined_num_buffers_per_channel,
+    const std::optional<MemoryConfig>& memory_config_mm,
+    const bool transpose_a,
+    const bool transpose_b,
+    const std::optional<const DataType> dtype,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+    const std::optional<const std::string>& activation,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const ttnn::CoreGrid> core_grid) {
+    std::vector<IDevice*> devices = input_tensor.active_physical_devices();
+    return all_gather_matmul_impl(
+        input_tensor,
+        weight_tensor,
+        dim,
+        all_gather_core_grid_offset,
+        num_links,
+        memory_config_ag,
+        user_defined_num_workers,
+        user_defined_num_buffers_per_channel,
+        memory_config_mm,
+        transpose_a,
+        transpose_b,
+        dtype,
+        program_config,
+        activation,
+        compute_kernel_config,
+        core_grid,
+        devices);
+}
+
+std::vector<ttnn::Tensor> all_gather_matmul(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    const std::vector<ttnn::Tensor>& weight_tensors,
+    const uint32_t dim,
+    const CoreCoord all_gather_core_grid_offset,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config_ag,
+    std::optional<size_t> user_defined_num_workers,
+    std::optional<size_t> user_defined_num_buffers_per_channel,
+    const std::optional<MemoryConfig>& memory_config_mm,
+    const bool transpose_a,
+    const bool transpose_b,
+    const std::optional<const DataType> dtype,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+    const std::optional<const std::string>& activation,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const ttnn::CoreGrid> core_grid) {
+    std::vector<IDevice*> devices;
+    devices.reserve(input_tensors.size());
+    for (const auto& input_tensor : input_tensors) {
+        devices.push_back(input_tensor.device());
+    }
+    std::vector<ttnn::Tensor> output_tensors;
+    for (size_t i = 0; i < input_tensors.size(); i++) {
+        auto results = all_gather_matmul_impl(
+            input_tensors.at(i),
+            weight_tensors.at(i),
+            dim,
+            all_gather_core_grid_offset,
+            num_links,
+            memory_config_ag,
+            user_defined_num_workers,
+            user_defined_num_buffers_per_channel,
+            memory_config_mm,
+            transpose_a,
+            transpose_b,
+            dtype,
+            program_config,
+            activation,
+            compute_kernel_config,
+            core_grid,
+            devices);
+        for (auto& result : results) {
+            output_tensors.push_back(std::move(result));
+        }
+    }
+    return output_tensors;
 }
 
 }  // namespace ccl

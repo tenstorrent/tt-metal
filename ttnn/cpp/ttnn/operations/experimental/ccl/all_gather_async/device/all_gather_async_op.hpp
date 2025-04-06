@@ -32,6 +32,7 @@ enum class AllGatherAsyncVersion {
 };
 
 struct AllGatherAsync {
+    std::vector<IDevice*> devices;
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
@@ -43,6 +44,7 @@ struct AllGatherAsync {
     std::optional<uint32_t> cluster_axis;
 
     AllGatherAsync(
+        std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -52,6 +54,7 @@ struct AllGatherAsync {
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         bool enable_persistent_fabric_mode,
         std::optional<uint32_t> cluster_axis) :
+        devices(std::move(devices)),
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
@@ -154,6 +157,16 @@ Tensor all_gather_async(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     bool enable_persistent_fabric_mode = false);  // TODO make reference
 
+std::vector<Tensor> all_gather_async(
+    const std::vector<Tensor>& input_tensors,
+    const uint32_t dim,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool enable_persistent_fabric_mode = false);
+
 Tensor all_gather_async(
     const Tensor& input_tensor,
     const int32_t dim,
@@ -161,6 +174,19 @@ Tensor all_gather_async(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool enable_persistent_fabric_mode = false);
+
+std::vector<Tensor> all_gather_async(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
