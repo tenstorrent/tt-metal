@@ -862,7 +862,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         log_info("Test must be run on WH");
         return;
     }
-    T3000TestDevice test_fixture;
+    Fabric1DFixture test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
