@@ -14,7 +14,8 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
 )
 from models.experimental.functional_UFLD_v2.reference.UFLD_v2_model import TuSimple34, BasicBlock
-from models.experimental.functional_UFLD_v2.ttnn.ttnn_UFLD_v2 import TtnnUFLDv2, TtnnBasicBlock
+from models.experimental.functional_UFLD_v2.ttnn.ttnn_UFLD_v2 import TtnnUFLDv2
+from models.experimental.functional_UFLD_v2.ttnn.ttnn_Basic_block import TtnnBasicBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
