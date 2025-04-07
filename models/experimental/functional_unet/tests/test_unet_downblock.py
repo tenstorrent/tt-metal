@@ -19,7 +19,7 @@ from models.experimental.functional_unet.tests.common import (
 )
 
 
-@pytest.mark.parametrize("batch, groups", [(1, 2)])
+@pytest.mark.parametrize("batch, groups", [(1, 4)])
 @pytest.mark.parametrize(
     "block_name, input_channels, input_height, input_width",
     [
@@ -63,7 +63,7 @@ def test_unet_downblock(
     check_pcc_pool(torch_output, ttnn_output)
 
 
-@pytest.mark.parametrize("batch, groups", [(1, 2)])
+@pytest.mark.parametrize("batch, groups", [(1, 4)])
 @pytest.mark.parametrize(
     "block_name, input_channels, input_height, input_width",
     [

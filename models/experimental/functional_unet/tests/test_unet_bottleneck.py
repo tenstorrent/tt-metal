@@ -18,7 +18,7 @@ from models.experimental.functional_unet.tests.common import is_n300_with_eth_di
 
 
 @pytest.mark.parametrize("batch", [1])
-@pytest.mark.parametrize("groups", [2])
+@pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_unet_bottleneck(batch: int, groups: int, device: ttnn.Device, reset_seeds):
     torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
@@ -42,7 +42,7 @@ def test_unet_bottleneck(batch: int, groups: int, device: ttnn.Device, reset_see
 
 
 @pytest.mark.parametrize("batch", [1])
-@pytest.mark.parametrize("groups", [2])
+@pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_unet_bottleneck_multi_device(
