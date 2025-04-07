@@ -33,6 +33,7 @@ on:
           - composite.binary.polyval.polyval_survey_test
           - composite.binary.bias_gelu.bias_gelu_survey_test
           - composite.binary.floor_div.floor_div_survey_test
+          - composite.binary.prelu.prelu_survey_test
           - composite.binary.gcd.gcd
           - composite.binary.lcm.lcm
           - composite.binary.lcm.lcm
