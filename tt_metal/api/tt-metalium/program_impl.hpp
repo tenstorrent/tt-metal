@@ -185,7 +185,11 @@ class Program {
     const std::vector<SubDeviceId> &determine_sub_device_ids(const IDevice* device);
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;
-   private:
+
+    size_t calculate_hash() const;
+    void copy_runtime_args_from(const Program& other);
+
+private:
     std::unique_ptr<detail::Program_> pimpl_;
 
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);

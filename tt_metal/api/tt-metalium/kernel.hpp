@@ -99,11 +99,14 @@ class Kernel : public JitBuildSettings {
 
     const std::set<CoreCoord> &cores_with_runtime_args() const { return core_with_runtime_args_; }
 
+    const std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core) const;
     std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
     RuntimeArgsData & runtime_args_data(const CoreCoord &logical_core);
+    const std::vector<std::vector<std::vector<uint32_t>>>& runtime_args() const;
     std::vector< std::vector< std::vector<uint32_t>> > & runtime_args();
     std::vector< std::vector< RuntimeArgsData > > & runtime_args_data();
     void set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count);
+    const std::vector<uint32_t>& common_runtime_args() const;
     std::vector<uint32_t> & common_runtime_args();
     RuntimeArgsData & common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);

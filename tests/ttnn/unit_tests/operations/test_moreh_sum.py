@@ -251,7 +251,7 @@ def test_moreh_sum_enable_cache(input_shape, dim, device, use_program_cache):
     for i in range(2):
         passing = moreh_sum(input_shape, dim, keepdim[i], use_provide_output[i], False, device)
         assert passing
-    assert device.num_program_cache_entries() == 2
+    assert device.num_program_cache_entries() == 1
 
 
 @pytest.mark.parametrize(
@@ -431,7 +431,7 @@ def test_moreh_sum_backward_enable_cache(input_shape, dim, device, use_program_c
     torch.manual_seed(3072)
     keepdim = [True, False]
     use_provide_output = [True, False]
-    num_cache_entires = [2, 2, 2]
+    num_cache_entires = [1, 1, 1]
     for i in range(2):
         passing = moreh_sum_backward(input_shape, dim, keepdim[i], use_provide_output[i], False, device)
         assert passing
