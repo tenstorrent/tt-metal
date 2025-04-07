@@ -208,6 +208,7 @@ def conv2d(
 
         :return: The output tensor, output height & width, and the preprocessed weights & bias.
 
+        :rtype: [ttnn.Tensor]: the output tensor, when return_output_dim = False and return_weights_and_bias = False
         :rtype: [ttnn.Tensor, Tuple[int, int]]: the output tensor, and it's height & width, if return_output_dim = True
         :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height & width, if return_weights_and_bias = True
         :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height & width, if return_output_dim = True and return_weights_and_bias = True
