@@ -3,7 +3,7 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, comp_allclose
 from models.experimental.mochi.tt.dit.attention import AsymmetricAttention as TtAsymmetricAttention
 from models.experimental.mochi.tt.common import (
     get_mochi_dir,
@@ -585,7 +585,7 @@ def test_tt_attn_forward(
         pcc, mse, mae = compute_metrics(ref_out, tt_out)
         metrics.append((name, pcc, mse, mae))
         logger.info(f"{name} - PCC: {pcc}, MSE: {mse}, MAE: {mae}")
-
+        print(comp_allclose(ref_out, tt_out.view(ref_out.shape)))
     passing = all((mse <= max_mse and pcc >= min_pcc) for _, pcc, mse, _ in metrics)
 
     if passing:

@@ -6,6 +6,7 @@ from models.experimental.mochi.tt.common import compute_metrics
 from genmo.mochi_preview.dit.joint_model.temporal_rope import apply_rotary_emb_qk_real
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.experimental.mochi.tt.common import stack_cos_sin
+from models.utility_functions import comp_allclose
 
 
 @pytest.mark.parametrize("batch, seq_len", [(1, 256), (1, 45056)])
@@ -34,7 +35,16 @@ def test_apply_rotary_emb_qk_real(device, batch, seq_len, num_heads, head_dim):
     freqs_sin_tt = ttnn.from_torch(sin_stacked, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     trans_mat_tt = ttnn.from_torch(trans_mat, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-    out_tt = ttnn.experimental.rotary_embedding_llama(xqk_tt, freqs_cos_tt, freqs_sin_tt, trans_mat_tt)
+    kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    out_tt = ttnn.experimental.rotary_embedding_llama(
+        xqk_tt, freqs_cos_tt, freqs_sin_tt, trans_mat_tt, compute_kernel_config=kernel_config
+    )
     out = ttnn.to_torch(out_tt)
 
     # Reshape back to match shape of gt
@@ -45,5 +55,6 @@ def test_apply_rotary_emb_qk_real(device, batch, seq_len, num_heads, head_dim):
 
     # Check if model meets requirements
     print(f"PCC={pcc}, MSE={mse}, MAE={mae}")
+    print(comp_allclose(gt, out.view(gt.shape)))
     pcc_required = 0.99
     assert pcc >= pcc_required, f"Output does not meet PCC requirement {pcc_required}: PCC={pcc}, MSE={mse}, MAE={mae}"

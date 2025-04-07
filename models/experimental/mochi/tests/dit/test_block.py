@@ -4,6 +4,10 @@ import torch
 import ttnn
 from loguru import logger
 
+from models.utility_functions import (
+    comp_allclose,
+)
+
 from genmo.mochi_preview.dit.joint_model.asymm_models_joint import AsymmetricJointBlock
 from models.experimental.mochi.tt.dit.model import AsymmetricJointBlock as TtAsymmetricJointBlock
 from models.experimental.mochi.tt.common import (
@@ -180,6 +184,7 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
         pcc, mse, mae = compute_metrics(ref_out, tt_out)
         metrics.append((name, pcc, mse, mae))
         print(f"{name} - PCC: {pcc}, MSE: {mse}, MAE: {mae}")
+        print(comp_allclose(ref_out, tt_out.view(ref_out.shape)))
 
     passing = all((mse <= max_mse) and (pcc >= min_pcc) for _, pcc, mse, _ in metrics)
 

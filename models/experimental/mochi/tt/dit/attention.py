@@ -464,28 +464,27 @@ class AsymmetricAttention(LightweightModule):
             program_config=self.proj_x_config(m=M),
         )
 
-        out_joint = None  # Default None if uncond
-        if not uncond:
-            if self.update_y:
-                if self.num_devices > 1:
-                    out_joint_1BLX = ttnn.all_gather(
-                        out_joint_1BLX,
-                        dim=3,
-                    )
-                out_joint_1BLY = ttnn.linear(
+        # Project text features if needed
+        if not uncond and self.update_y:
+            if self.num_devices > 1:
+                out_joint_1BLX = ttnn.all_gather(
                     out_joint_1BLX,
-                    self.proj_y,
-                    bias=self.proj_y_bias,
-                    compute_kernel_config=self.mm_compute_kernel_config,
-                    core_grid=ttnn.CoreGrid(y=8, x=8),
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dim=3,
                 )
-                out_joint = out_joint_1BLY
-            else:
-                out_joint = out_joint_1BLX
+            out_joint_1BLY = ttnn.linear(
+                out_joint_1BLX,
+                self.proj_y,
+                bias=self.proj_y_bias,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                core_grid=ttnn.CoreGrid(y=8, x=8),
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        return out_1BNX, out_joint
+        else:
+            out_joint_1BLY = None
+
+        return out_1BNX, out_joint_1BLY
 
     def forward(
         self,

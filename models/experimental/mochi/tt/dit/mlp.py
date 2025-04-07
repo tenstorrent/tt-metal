@@ -48,10 +48,11 @@ class FeedForward(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),
         )
+        fp32_dest_acc = True
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=fp32_dest_acc,
             packer_l1_acc=True,
         )
         # Sharded weights
@@ -59,7 +60,7 @@ class FeedForward(LightweightModule):
         w1_tensor, w3_tensor = torch_weight("w1").chunk(2, dim=-1)
         self.w1 = as_tensor("w1", w1_tensor, ttnn.bfloat16, dim=-1)
         self.w3 = as_tensor("w3", w3_tensor, ttnn.bfloat16, dim=-1)
-        self.w2 = as_tensor("w2", torch_weight("w2"), ttnn.bfloat16, dim=-2)
+        self.w2 = as_tensor("w2", torch_weight("w2"), ttnn.bfloat16, dim=-1)
 
         if seq_shard:
             self.w13_config = partial(
@@ -70,6 +71,7 @@ class FeedForward(LightweightModule):
                 num_out_blocks_h=2,
                 num_out_blocks_w=4,
                 grid_size=(8, 8),
+                fp32_dest_acc_en=fp32_dest_acc,
             )
             self.w2_config = partial(
                 ff_matmul_config,
@@ -77,15 +79,22 @@ class FeedForward(LightweightModule):
                 n=in_features,
                 in0_block_w=8,
                 num_out_blocks_h=2,
-                num_out_blocks_w=1,
+                num_out_blocks_w=2,
                 grid_size=(8, 8),
+                fp32_dest_acc_en=fp32_dest_acc,
             )
         else:
             self.w13_config = partial(
-                matmul_2d_config, k=in_features, n=hidden_size // self.num_devices, grid_size=(8, 8)
+                matmul_2d_config,
+                k=in_features,
+                n=hidden_size // self.num_devices,
+                grid_size=(8, 8),
             )
             self.w2_config = partial(
-                matmul_2d_config, k=hidden_size // self.num_devices, n=in_features, grid_size=(8, 8)
+                matmul_2d_config,
+                k=hidden_size,
+                n=in_features // self.num_devices,
+                grid_size=(8, 8),
             )
 
     def forward(self, x_1BSD: ttnn.Tensor) -> ttnn.Tensor:
@@ -99,7 +108,6 @@ class FeedForward(LightweightModule):
             w1 = ttnn.all_gather(self.w1, dim=-1)
         else:
             w1 = self.w1
-
         w1_out_1BSF = ttnn.linear(
             x_1BSD,
             w1,
@@ -134,9 +142,10 @@ class FeedForward(LightweightModule):
 
         # W2 computation
         if self.seq_shard:
-            w2 = ttnn.all_gather(self.w2, dim=-2)
+            w2 = ttnn.all_gather(self.w2, dim=-1)
         else:
             w2 = self.w2
+            w2_in_1BSF = ttnn.all_gather(w2_in_1BSF, dim=3)
         result_1BSD = ttnn.linear(
             w2_in_1BSF,
             w2,
@@ -145,16 +154,6 @@ class FeedForward(LightweightModule):
             memory_config=w2_in_1BSF.memory_config(),
             program_config=self.w2_config(m=S),
         )
-
-        # # All reduce for multi-chip setups
-        if self.num_devices > 1 and not self.seq_shard:
-            result_1BSD = ttnn.reduce_scatter(
-                result_1BSD,
-                dim=3,
-                math_op=ttnn.ReduceType.Sum,
-                num_links=1,
-                memory_config=result_1BSD.memory_config(),
-            )
 
         result_1BSD = ttnn.reshape(result_1BSD, (1, B, S, D // (1 if self.seq_shard else self.num_devices)))
         return result_1BSD
