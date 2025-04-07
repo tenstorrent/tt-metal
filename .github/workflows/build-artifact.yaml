@@ -128,6 +128,8 @@ jobs:
     runs-on:
       - build
       - in-service
+    # runs-on: tt-beta-ubuntu-2204-xlarge
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
