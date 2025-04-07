@@ -1,0 +1,25 @@
+name: 🧪 Manual tt-metal integration dry run
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch_name:
+        description: "Branch name to check out in tt-metal"
+        required: true
+        default: "main"
+      runs_on:
+        description: "Runner to use for the job"
+        required: true
+        type: choice
+        options:  # List of options for the dropdown
+          - tt-beta-ubuntu-2204-n150-large-stable
+          - tt-beta-ubuntu-2204-n300-large-stable
+        default: "tt-beta-ubuntu-2204-n150-large-stable"
+
+jobs:
+  test-tt-metal:
+    uses: ./.github/workflows/tt-metal-integration-tests.yml
+    with:
+      branch_name: ${{ inputs.branch_name }}
+      runs_on: ${{ inputs.runs_on }}
+    secrets: inherit

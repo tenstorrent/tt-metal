@@ -1,0 +1,78 @@
+on:
+  workflow_call:
+    inputs:
+      branch_name:
+        description: "Branch name to check out in tt-metal"
+        required: true
+        type: string
+      runs_on:
+        description: "Runner to use for the job"
+        required: true
+        type: string
+
+jobs:
+  test-tt-metal:
+    name: 🔧 LLK unit tests
+    env:
+      DOCKER_IMAGE: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64
+      IMAGE_HASH: ec366e61ff1989d6650d8ee0fc636189b3c08c13
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 40
+    steps:
+      - name: Checkout tt-metal repository with submodules
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-metal
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: tt-metal
+          submodules: recursive
+
+      - name: Override LLK submodule branch
+        run: |
+          cd tt-metal/tt_metal/third_party/tt_llk
+
+          if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "PR is from a fork: ${{ github.event.pull_request.head.repo.full_name }}"
+
+            echo "Adding contributor's fork as remote..."
+            git remote add fork https://github.com/${{ github.event.pull_request.head.repo.full_name }}.git
+
+            echo "Fetching branch '${{ github.head_ref }}' from fork..."
+            git fetch fork ${{ github.head_ref }}
+
+            echo "Checking out the fork branch"
+            git checkout FETCH_HEAD
+          else
+            echo "PR is internal (same repo). Using origin to checkout submodule branch"
+
+            echo "Fetching all branches from origin..."
+            git fetch origin +refs/heads/*:refs/remotes/origin/*
+
+            echo "Checking out branch '${{ github.head_ref }}' from origin"
+            git checkout remotes/origin/${{ github.head_ref }}
+          fi
+
+          cd ../../../../
+
+      - name: Log in to Docker registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull Docker image
+        run: |
+          docker pull ${DOCKER_IMAGE}:${IMAGE_HASH}
+
+      - name: Run tests in Docker container
+        run: |
+          docker run --device /dev/tenstorrent --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -v /dev/hugepages-1G:/dev/hugepages-1G \
+            -w /workspace/tt-metal \
+            -e TT_METAL_HOME=/workspace/tt-metal \
+            -e PYTHONPATH=/workspace/tt-metal \
+            ${DOCKER_IMAGE}:${IMAGE_HASH} \
+            bash -c "./build_metal.sh --build-metal-tests && \
+              TT_METAL_SLOW_DISPATCH_MODE=1 ./build_Release/test/tt_metal/unit_tests_llk"
