@@ -438,6 +438,7 @@ class TtTransformer(LightweightModule):
                 self.norm.tt_ccl = self.tt_ccl
                 self.lm_head.tt_ccl = self.tt_ccl
                 self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+                # Re-create global CB for decode (if it was not already created)
                 self.prefetcher_setup.global_circular_buffer = ttnn.create_global_circular_buffer(
                     self.mesh_device,
                     self.prefetcher_setup.sender_receiver_mapping,
@@ -447,7 +448,7 @@ class TtTransformer(LightweightModule):
         else:
             if self.is_decode_setup:
                 del self.prefetcher_setup.global_circular_buffer
-                gc.collect()
+                gc.collect()  # This will also release the traces (inside generator.py)
                 self.tt_ccl.close()
                 self.tt_ccl_decode = self.tt_ccl
                 self.is_decode_setup = False

@@ -101,7 +101,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
             # )
             # logger.info(f"GlobalCB size {self.global_cb_size}")
-            self.global_circular_buffer = None
+            self.global_circular_buffer = None  # Global CB will only be allocated before decode runs
             self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
             self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
             if mesh_sub_device_manager_id_decode is None:
