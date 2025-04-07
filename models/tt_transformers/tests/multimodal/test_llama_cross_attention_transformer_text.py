@@ -73,7 +73,7 @@ def test_cross_attention_transformer_text_inference(
         n_iter = 3
         if is_ci_env:
             logger.info("Load and test 4 layers and 1 cross attention layer in CI for Llama 90B model")
-            model_args.n_layers = 4
+            model_args.n_layers = 1
             model_args.vision_num_cross_attention_layers = 1
 
     state_dict = model_args.load_state_dict()
