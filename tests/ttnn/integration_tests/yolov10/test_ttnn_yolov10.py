@@ -2,28 +2,29 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
 import pytest
+import torch
 from ultralytics import YOLO
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov10.reference.yolov10 import YOLOv10
-from models.experimental.yolov10.tt.bottleneck import TtnnBottleNeck
-from models.experimental.yolov10.tt.scdown import TtnnSCDown
-from models.experimental.yolov10.tt.sppf import TtnnSPPF
-from models.experimental.yolov10.tt.cib import TtnnCIB
-from models.experimental.yolov10.tt.psa import TtnnPSA
-from models.experimental.yolov10.tt.c2f import TtnnC2f
-from models.experimental.yolov10.tt.attention import TtnnAttention
-from models.experimental.yolov10.tt.c2fcib import TtnnC2fCIB
-from models.experimental.yolov10.tt.v10detect import TtnnV10Detect
-from models.experimental.yolov10.tt.yolov10 import TtnnYolov10
 
-from models.experimental.yolov10.tt.model_preprocessing import (
+import ttnn
+from models.demos.yolov10.reference import yolov10
+from models.demos.yolov10.reference.yolov10 import YOLOv10
+from models.demos.yolov10.tt.attention import TtnnAttention
+from models.demos.yolov10.tt.bottleneck import TtnnBottleNeck
+from models.demos.yolov10.tt.c2f import TtnnC2f
+from models.demos.yolov10.tt.c2fcib import TtnnC2fCIB
+from models.demos.yolov10.tt.cib import TtnnCIB
+from models.demos.yolov10.tt.model_preprocessing import (
+    create_yolov10_model_parameters_detect,
     create_yolov10x_input_tensors,
     create_yolov10x_model_parameters,
-    create_yolov10_model_parameters_detect,
 )
+from models.demos.yolov10.tt.psa import TtnnPSA
+from models.demos.yolov10.tt.scdown import TtnnSCDown
+from models.demos.yolov10.tt.sppf import TtnnSPPF
+from models.demos.yolov10.tt.v10detect import TtnnV10Detect
+from models.demos.yolov10.tt.yolov10 import TtnnYolov10
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
