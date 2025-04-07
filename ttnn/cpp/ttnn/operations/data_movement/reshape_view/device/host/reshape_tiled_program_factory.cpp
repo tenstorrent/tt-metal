@@ -103,7 +103,6 @@ struct TileIterator {
         tile_idx_w(0),
         tile_end_h(in_end_h - 1),
         tile_end_w(in_end_w - 1),
-        element_count(0),
         first(true) {};
 
     inline bool next() {
@@ -112,13 +111,9 @@ struct TileIterator {
             return true;
         }
         if (tile_idx_w < tile_end_w) {
-            TT_ASSERT(element_count < this->size());
-            ++element_count;
             ++tile_idx_w;
             return true;
         } else if (tile_idx_h < tile_end_h) {
-            TT_ASSERT(element_count < this->size());
-            ++element_count;
             tile_idx_w = 0;
             ++tile_idx_h;
             return true;
@@ -138,7 +133,6 @@ protected:
     uint32_t tile_idx_w;
     const uint32_t tile_end_h;
     const uint32_t tile_end_w;
-    uint32_t element_count;
     bool first;
 
     inline const uint32_t h() { return start_h + tile_idx_h; }
@@ -269,6 +263,26 @@ Tensor compute_reshape_mapping_host_tensor(
 }
 }  // namespace detail
 
+// Algorithm overview:
+// The host computes the mapping between input shape and the output shapes as a series of data segments that are
+// contiguous for both input and output tensors. The mapping data is stored as 4 integers per segment: input page index,
+// offset of the segment in the input page, offset of the segment in the output page, number of elements in the segment;
+// the ordering of the segments in the map are concomitant with the ordering of the output tensor pages. The mapping
+// data is stored as an auxiliary integer tensor where each page corresponds to a page of the output tensor.
+
+// The device operation is parallelized over output tensor pages, where each core operates on a range of pages.
+
+// The reader kernel loads the mapping tensor page that corresponds to the current output tensor page on which it is
+// operating and pushes it on to the circular buffer. The reader kernel loops over all of the data segments represented
+// by the map and loads the specified input pages, avoiding redundant loads of pages for segments that come from the
+// same input page, and pushes them to the circular buffer.
+
+// The writer kernel pops mapping pages off the circular buffer, corresponding to the current page. It loops through
+// the input tensor pages specified by the map and, as necessary, pops input pages off the circular buffer, again
+// accounting for consecutive segments that come from the same input page. Using the offsets and size supplied by the
+// map, the reader copies the segment from the input page to a scratch page stored in L1. When all segments are written,
+// the scratch page is copied to its output destination.
+
 tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     const Tensor& input_tensor, const Tensor& output_tensor) {
     const auto& input_shape = input_tensor.get_logical_shape();
@@ -308,6 +322,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     // set up CB for mapping metadata
+
+    // PCC fails when this is greater than 1. TODO figure out why.
     constexpr auto reader_cb_len = 1;
 
     auto mapping_page_size = mapping_tensor.get_logical_shape()[-1];
@@ -376,9 +392,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         }
         page_idx_end += increment;
 
-        TT_ASSERT(page_idx_end <= num_output_pages);
-        TT_ASSERT(page_idx_start <= num_output_pages - increment);
-
         const std::vector<uint32_t> reader_runtime_args = {
             input_buffer->address(), mapping_buffer->address(), page_idx_start, page_idx_end};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
@@ -390,8 +403,6 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
         page_idx_start += increment;
     }
-
-    TT_ASSERT(total_pages = num_output_pages, "total_pages: {}", total_pages);
 
     return {.program = std::move(program)};
 }
