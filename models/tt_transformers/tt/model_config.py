@@ -324,6 +324,10 @@ class ModelArgs:
         "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama3.1-70B-Instruct",
     }
 
+    LOCAL_HF_PARAMS = {
+        "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
+    }
+
     def __init__(
         self,
         mesh_device,
@@ -1432,7 +1436,7 @@ class ModelArgs:
             if self.checkpoint_type == CheckpointType.HuggingFace:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
-                config = AutoConfig.from_pretrained(self.CKPT_DIR)
+                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
@@ -1832,7 +1836,7 @@ class ModelArgs:
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.CKPT_DIR)
+                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
