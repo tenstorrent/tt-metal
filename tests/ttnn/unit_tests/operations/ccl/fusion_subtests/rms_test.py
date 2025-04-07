@@ -269,3 +269,4 @@ def run_rms_trace(
     profiler.end("rms-trace")
     signpost("stop")
     time_taken = profiler.get_duration("rms-trace") - profiler.get_duration("rms-trace-warmup")
+    mesh_device.reset_sub_device_stall_group()
