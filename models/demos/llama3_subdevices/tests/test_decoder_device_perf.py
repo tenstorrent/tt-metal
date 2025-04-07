@@ -269,6 +269,14 @@ def average_per_instance_dict(input_dict):
     (800,),
 )
 @pytest.mark.models_device_performance_bare_metal
+# To update:
+# Run FAKE_DEVICE=TG TT_METAL_WORKER_RINGBUFFER_SIZE=122880 TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
+# Copy the printed kernel_duration_per_instance_averaged_dict and dispatch_duration_per_instance_averaged_dict dictionaries
+# Manually compare each entry between old-expected and the new average values
+# - Any perf regressions? Everything as expected?
+# If all looks good, update the expected_kernel_times_dict and expected_dispatch_times_dict with the new average values
+# If the op list changed (new ops, less ops, fused ops), then update mapping_op_code_to_name and give the new ops meaningful names
+# Run at least once again to verify the new expected values are correct and margins hold
 def test_llama_TG_perf_device(
     reset_seeds,
     abs_tolerance_ns,
@@ -485,7 +493,14 @@ def test_llama_TG_perf_device(
     (2000,),
 )
 @pytest.mark.models_device_performance_bare_metal
-# Needs env variable TT_METAL_KERNELS_EARLY_RETURN=1
+# To update:
+# Run FAKE_DEVICE=TG TT_METAL_WORKER_RINGBUFFER_SIZE=122880 TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
+# Copy the printed dispatch_duration_per_instance_averaged_dict dictionary
+# Manually compare each entry between old-expected and the new average values
+# - Any perf regressions? Everything as expected?
+# If all looks good, update the expected_dispatch_times_dict with the new average values
+# If the op list changed (new ops, less ops, fused ops), and not done for the above test, then update mapping_op_code_to_name and give the new ops meaningful names
+# Run at least once again to verify the new expected values are correct and margins hold
 def test_llama_TG_perf_device_non_overlapped_dispatch(
     reset_seeds, abs_tolerance_ns, abs_tolerance_ns_all_reduce, abs_tolerance_ns_all_gather, abs_tolerance_ns_sdpa
 ):
