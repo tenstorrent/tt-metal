@@ -158,7 +158,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         all_cores = input_cores;
     }
     CoreRange all_reader_cores = all_cores.bounding_box();
-    log_debug("Conv2D Width Sharded All Reader Cores = {}", all_reader_cores);
     auto input_num_cores = input_cores.num_cores();
     auto output_num_cores = output_cores.num_cores();
 
@@ -547,6 +546,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         log_debug(LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
         log_debug(LogOp, "packer_l1_acc: {}", packer_l1_acc);
         log_debug(LogOp, "all_cores: {}", all_cores.str());
+        log_debug(LogOp, "all_reader_cores: {}", all_reader_cores.str());
     }
 
     std::string compute_kernel_path =
@@ -887,7 +887,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (bias) {
         bias_base_address = bias.value().buffer()->address();
     }
-    auto total_num_cores = std::max(input_num_cores, output_num_cores);
+    auto total_num_active_cores = std::max(input_num_cores, output_num_cores);
+    auto total_num_cores = all_reader_cores.size();
     for (uint32_t core_index = 0; core_index < total_num_cores; core_index++) {
         uint32_t core_x = core_index % full_core_grid.x;
         uint32_t core_y = core_index / full_core_grid.x;
@@ -904,14 +905,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         rt_args.insert(rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
 
         SetRuntimeArgs(program, act_kernel_id, CoreCoord(core_x, core_y), rt_args);
-        SetRuntimeArgs(
-            program,
-            weights_kernel_id,
-            CoreCoord(core_x, core_y),
-            {core_index * weight_block_w_ntiles,
-             b.buffer()->address(),
-             bias_base_address,
-             (uint32_t)(core_index < output_num_cores)});
+
+        // Weights kernel is not placed on inactive cores.
+        if (core_index < total_num_active_cores) {
+            SetRuntimeArgs(
+                program,
+                weights_kernel_id,
+                CoreCoord(core_x, core_y),
+                {core_index * weight_block_w_ntiles,
+                 b.buffer()->address(),
+                 bias_base_address,
+                 (uint32_t)(core_index < output_num_cores)});
+        }
     }
 
     // Capture conv_reader_indices_buffer to cache this with the program
