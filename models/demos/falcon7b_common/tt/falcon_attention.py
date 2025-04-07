@@ -789,17 +789,13 @@ class TtFalconAttentionDecode(nn.Module):
             )
 
             # Get batch in dim 1
-            attn_output = ttnn.reshape(attn_output, (1, batch, self.padded_local_heads, self.head_dim))
+            attn_output = ttnn.transpose(attn_output, 0, 1)
 
             # Get batch in dim 2
-            attn_output = ttnn.transpose(
-                attn_output,
-                -2,
-                -3,
-            )
+            attn_output = ttnn.transpose(attn_output, -2, -3)
 
             # UNPAD
-            attn_output = attn_output[:, : self.num_heads, :batch, :]  # Specify batch due to ND Issue #15059
+            attn_output = attn_output[:, : self.num_heads, :, :]
         else:
             # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
             if is_wormhole_b0():
