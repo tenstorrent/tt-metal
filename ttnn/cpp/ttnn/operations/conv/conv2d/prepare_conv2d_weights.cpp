@@ -575,10 +575,10 @@ static OptimizedConvBlockConfig get_opt_block_config(
         input_tensor_layout,
         input_memory_config,
         kernel_size,
+        stride,
         groups,
         has_bias,
-        compute_config,
-        disable_shard_height_tiling);
+        compute_config);
 
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;

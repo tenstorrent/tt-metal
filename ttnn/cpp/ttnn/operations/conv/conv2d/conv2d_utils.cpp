@@ -94,6 +94,13 @@ static uint32_t set_shard_width_to_half_tile_if_possible(
 }
 
 bool disable_shard_height_tile(const std::array<uint32_t, 2>& stride, const Conv2dConfig& conv_config) {
+    log_info(
+        tt::LogOp,
+        "stride[0]: {} stride[1] {} conv_config.shard_layout: {} conv_config.output_layout: {}",
+        stride[0],
+        stride[1],
+        conv_config.shard_layout,
+        conv_config.output_layout);
     return stride[0] >= 8 && stride[1] >= 8 && conv_config.shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
            conv_config.output_layout == Layout::ROW_MAJOR;
 }
@@ -768,10 +775,10 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     Layout input_tensor_layout,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
     const uint32_t groups,
     const bool enable_bias,
-    const DeviceComputeKernelConfig& compute_config,
-    bool disable_shard_height_tiling) {
+    const DeviceComputeKernelConfig& compute_config) {
     // If the input tensor is already sharded, or the conv_config has a specified shard layout, we don't need to do
     // anything.
     if ((input_memory_config.has_value() && input_memory_config.value().is_sharded()) ||
@@ -820,6 +827,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         // conv2d params, but these are good enough for L1 usage estimation.
         const ttnn::Shape weights_shape(
             {1, 1, in_channels_padded * kernel_size[0] * kernel_size[1], output_channels_padded});
+        bool disable_shard_height_tiling = disable_shard_height_tile(stride, conv_config);
 
         const ParallelConfig input_parallel_config = determine_parallel_config(
             conv_config.shard_layout.value(),
@@ -882,7 +890,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         uint32_t approx_input_size_per_core = approx_input_size / input_parallel_config.grid.num_cores();
 
         l1_usage.tensor_allocation_size += approx_input_size_per_core;
-        log_debug(
+        log_info(
             tt::LogOp,
             "L1 usage for {}: {}, {}",
             conv_config.shard_layout,
@@ -895,14 +903,16 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     };
 
     core_count_and_size height = get_l1_usage_for_sharding(TensorMemoryLayout::HEIGHT_SHARDED, conv_config);
-
+    log_info(tt::LogOp, "L1 usage for height sharding: {}", height.size);
     // 1d deptwise convs support only height sharding
     if (conv_is_1d_deptwise) {
         return height.conv_config;
     }
 
     const core_count_and_size block = get_l1_usage_for_sharding(TensorMemoryLayout::BLOCK_SHARDED, conv_config);
+    log_info(tt::LogOp, "L1 usage for block sharding: {}", block.size);
     const core_count_and_size width = get_l1_usage_for_sharding(TensorMemoryLayout::WIDTH_SHARDED, conv_config);
+    log_info(tt::LogOp, "L1 usage for width sharding: {}", width.size);
 
     core_count_and_size& winning_config = height;
     // Make sure that BS not only has smaller size but provides at least some slicing along the channels.
@@ -914,8 +924,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         winning_config = width;
     }
 
-    log_debug(LogOp, "Core counts H: {} B: {}, W: {}", height.core_count, block.core_count, width.core_count);
-    log_debug(
+    log_info(LogOp, "Core counts H: {} B: {}, W: {}", height.core_count, block.core_count, width.core_count);
+    log_info(
         LogOp, "Selected shard layout: {}, size: {}", winning_config.conv_config.shard_layout, winning_config.size);
 
     return winning_config.conv_config;

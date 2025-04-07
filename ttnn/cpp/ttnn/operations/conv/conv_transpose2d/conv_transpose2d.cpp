@@ -197,10 +197,10 @@ Result conv_transpose2d(
             ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                                    : std::nullopt,
             kernel_size,
+            stride,
             groups,
             bias_tensor.has_value(),
-            compute_config,
-            false);
+            compute_config);
         auto_shard = true;
     }
 

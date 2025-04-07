@@ -148,10 +148,10 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     Layout input_tensor_layout,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
     const uint32_t groups,
     const bool enable_bias,
-    const DeviceComputeKernelConfig& compute_config,
-    bool disable_shard_height_tiling);
+    const DeviceComputeKernelConfig& compute_config);
 
 template <typename T>
 std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig>

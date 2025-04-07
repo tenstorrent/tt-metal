@@ -373,8 +373,6 @@ Result conv2d_L1(
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
-    bool disable_shard_height_tiling = disable_shard_height_tile(stride, conv_config);
-
     bool auto_shard = false;
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
         // In this case we deduce the shard layout.
@@ -394,12 +392,15 @@ Result conv2d_L1(
             ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                                    : std::nullopt,
             kernel_size,
+            stride,
             groups,
             bias_tensor.has_value(),
-            compute_config,
-            disable_shard_height_tiling);
+            compute_config);
         auto_shard = true;
     }
+
+    bool disable_shard_height_tiling = disable_shard_height_tile(stride, conv_config);
+    log_info(tt::LogOp, "disable_shard_height_tiling: {}", disable_shard_height_tiling);
 
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
