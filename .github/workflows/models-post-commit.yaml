@@ -58,7 +58,7 @@ jobs:
             -e ARCH_NAME=${{ inputs.arch }}
           run_args: |
             source tests/scripts/run_python_model_tests.sh && run_python_model_tests_${{ inputs.arch }}
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -108,7 +108,7 @@ jobs:
             -e SLOW_RUNTIME_MODE=true
           run_args: |
             source tests/scripts/run_python_model_tests.sh && run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}

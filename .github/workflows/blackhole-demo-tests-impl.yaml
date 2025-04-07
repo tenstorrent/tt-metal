@@ -81,7 +81,7 @@ jobs:
         if: ${{ contains(matrix.test-group.name, 'performance') }}
         run: |
           sudo cpupower frequency-set -g ondemand
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}

@@ -62,7 +62,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
