@@ -55,3 +55,34 @@ def prepare_linear_params(device, weights, bias, dtype):
     tt_weights = ttnn.from_torch(torch.permute(weights, (0, 1, 3, 2)), dtype, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = ttnn.from_torch(bias, dtype, device=device, layout=ttnn.TILE_LAYOUT) if bias is not None else None
     return tt_weights, tt_bias
+
+
+def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, act_block_h_override=0):
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    conv_config = ttnn.Conv2dConfig(
+        dtype=act_dtype,
+        weights_dtype=dtype,
+        shard_layout=None,
+        input_channels_alignment=32,
+        deallocate_activation=True,
+        enable_act_double_buffer=False,
+        enable_split_reader=False,
+        enable_subblock_padding=False,
+        reshard_if_not_optimal=True,
+        act_block_w_div=1,
+        act_block_h_override=act_block_h_override,
+        preprocess_weights_on_device=True,
+        always_preprocess_weights=True,
+        transpose_shards=True,
+    )
+
+    dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype
+    tt_weights = ttnn.from_torch(weights, dtype)
+    tt_bias = ttnn.from_torch(bias, dtype) if bias is not None else None
+    return compute_config, conv_config, tt_weights, tt_bias

@@ -52,7 +52,7 @@ class TtTransformer2DModel(nn.Module):
         B, C, H, W = input_shape
         hidden_states = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
-        input_mask_tensor = prepare_gn_mask(self.device, C, 32, self.norm_core_grid.y)
+        input_mask_tensor = prepare_gn_mask(self.device, C, self.norm_groups, self.norm_core_grid.y)
 
         grid_coord = ttnn.CoreCoord(self.norm_core_grid.x - 1, self.norm_core_grid.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
