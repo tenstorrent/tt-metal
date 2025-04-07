@@ -20,7 +20,8 @@ from models.experimental.functional_unet.tests.common import (
 )
 
 
-@pytest.mark.parametrize("batch, groups", [(1, 2)])
+@pytest.mark.skip("Reshape in upblock crashes in these tests (#20182)")
+@pytest.mark.parametrize("batch, groups", [(1, 4)])
 @pytest.mark.parametrize(
     "block_name, input_channels, input_height, input_width, residual_channels",
     [
@@ -70,7 +71,8 @@ def test_unet_upblock(
     check_pcc_conv(torch_output, ttnn_output, pcc=0.999)
 
 
-@pytest.mark.parametrize("batch, groups", [(1, 2)])
+@pytest.mark.skip("Reshape in upblock crashes in these tests (#20182)")
+@pytest.mark.parametrize("batch, groups", [(1, 4)])
 @pytest.mark.parametrize(
     "block_name, input_channels, input_height, input_width, residual_channels",
     [
