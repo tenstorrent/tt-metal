@@ -68,6 +68,7 @@ Compute APIs
   unary_gt_tile
   unary_lt_tile
   unary_max_tile
+  unary_min_tile
 
   cb_wait_front
   cb_pop_front
