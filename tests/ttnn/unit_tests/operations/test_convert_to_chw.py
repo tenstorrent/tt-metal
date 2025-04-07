@@ -6,7 +6,7 @@ import pytest
 import ttnn
 import torch
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from models.utility_functions import (
     skip_for_grayskull,
     skip_for_blackhole,
@@ -49,10 +49,11 @@ def test_convert_to_chw(device, C, HW, core_grid, input_data_type):
     )
     actual = ttnn.experimental.convert_to_chw(input_tensor, memory_config=output_memory_config, dtype=ttnn.bfloat16)
 
-    expected_pcc = 1.0
     if input_data_type == ttnn.bfloat8_b:
         expected_pcc = 0.9999  # bfloat8_b can't be exatcly compared to torch bfloat16
-    assert_with_pcc(expected, ttnn.to_torch(actual), expected_pcc)
+        assert_with_pcc(expected, ttnn.to_torch(actual), expected_pcc)
+    else:
+        assert_equal(expected, ttnn.to_torch(actual))
 
     return actual
 
@@ -100,10 +101,11 @@ def test_convert_to_chw_padded(device, C, HW, core_grid, padded_sharded_dim, inp
 
     actual = ttnn.experimental.convert_to_chw(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
 
-    expected_pcc = 1.0
     if input_data_type == ttnn.bfloat8_b:
         expected_pcc = 0.9999  # bfloat8_b can't be exatcly compared to torch bfloat16
-    assert_with_pcc(expected, ttnn.to_torch(actual), expected_pcc)
+        assert_with_pcc(expected, ttnn.to_torch(actual), expected_pcc)
+    else:
+        assert_equal(expected, ttnn.to_torch(actual))
 
     return actual
 
