@@ -799,7 +799,7 @@ class TtFalconAttentionDecode(nn.Module):
             )
 
             # UNPAD
-            attn_output = attn_output[:, : self.num_heads, :, :]
+            attn_output = attn_output[:, : self.num_heads, :batch, :]  # Specify batch due to ND Issue #15059
         else:
             # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
             if is_wormhole_b0():
