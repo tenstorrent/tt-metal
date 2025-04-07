@@ -40,8 +40,8 @@ inline void calculate_unary_ne_int32(int scalar) {
         }
         v_else {
             v_if(s < 0) {
-                val = reinterpret<vInt>(sfpi::abs(reinterpret<vFloat>(v))) ^ -s;
-                v_if(val != 0) { val = 1; }
+                vInt xor_val = reinterpret<vInt>(sfpi::abs(reinterpret<vFloat>(v))) ^ -s;
+                v_if(xor_val != 0) { val = 1; }
                 v_endif;
             }
             v_else { val = 1; }
