@@ -47,12 +47,12 @@ jobs:
       skip-tt-train: false
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
       version: 22.04
-    secrets: inherit
 
   smoke-tests:
     needs: build-artifact
