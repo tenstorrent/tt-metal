@@ -65,13 +65,12 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::FMOD: return "SFPU_OP_FMOD_INCLUDE";
         case UnaryOpType::FILL: return "SFPU_OP_FILL_INCLUDE";
         case UnaryOpType::ROUND: return "SFPU_OP_ROUND_INCLUDE";
-        case UnaryOpType::EQZ: return "SFPU_OP_COMP_INT_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
 
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
-    UnaryOpType op_type, const std::vector<float>& params, const std::string& idst, const DataType& input_dtype) {
+    UnaryOpType op_type, const std::vector<float>& params, const std::string& idst) {
     std::pair<std::string, std::string> op_init_and_name;
     TT_FATAL(is_parametrized_type(op_type), "operator should support at least one parameter", "Error");
     float param0 = params[0];
@@ -275,7 +274,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
 }
 
 std::pair<string, string> get_op_init_and_func_default(
-    UnaryOpType op_type, std::string idst, const DataType& input_dtype) {
+    UnaryOpType op_type, std::string idst, std::optional<DataType> input_dtype) {
     std::pair<std::string, std::string> op_init_and_name;
     switch (op_type) {
         case UnaryOpType::BITWISE_NOT:
@@ -337,8 +336,10 @@ std::pair<string, string> get_op_init_and_func_default(
             op_init_and_name = {"tiled_prod_tile_init();", fmt::format("tiled_prod_tile({});", idst)};
             break;
         case UnaryOpType::EQZ:
-            if (input_dtype == DataType::INT32) {
-                op_init_and_name = {"eqz_int_tile_init();", fmt::format("eqz_int_tile({});", idst)};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype.value() == DataType::INT32) {
+                op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile_int32({});", idst)};
             } else {
                 op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)};
             }
@@ -387,7 +388,7 @@ std::map<string, string> get_defines_impl(
     const std::string& idst,
     std::string init_def,
     std::string func_def,
-    const DataType& input_dtype) {
+    std::optional<DataType> input_dtype) {
     std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, params, idst, input_dtype);
     std::map<string, string> defines = {{init_def, op_init_and_name.first}, {func_def, op_init_and_name.second}};
     update_macro_defines(op_type, defines);
@@ -449,16 +450,18 @@ std::map<string, string> get_defines(
     const std::optional<std::vector<float>>& params,
     const std::string& id,
     const std::string& idst,
-    const DataType& input_dtype) {
+    std::optional<DataType> input_dtype) {
     std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
-    return get_defines_impl(
-        op_type, params.has_value() ? params.value() : std::vector<float>{}, idst, init_def, func_def, input_dtype);
+    return get_defines_impl(op_type, params.value_or(std::vector<float>{}), idst, init_def, func_def, input_dtype);
 }
 
 std::pair<string, string> get_op_init_and_func(
-    UnaryOpType op_type, const std::vector<float>& params, const std::string& idst, const DataType& input_dtype) {
-    return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
+    UnaryOpType op_type,
+    const std::vector<float>& params,
+    const std::string& idst,
+    std::optional<DataType> input_dtype) {
+    return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst)
                              : get_op_init_and_func_default(op_type, idst, input_dtype);
 }
 
@@ -466,7 +469,7 @@ std::map<string, string> get_block_defines(
     const std::vector<UnaryWithParam>& op_chain,
     const std::string& block_id,
     const std::string& idst,
-    const DataType& input_dtype) {
+    std::optional<DataType> input_dtype) {
     std::vector<std::pair<string, string>> op_init_and_name;
     std::map<string, string> block_defines;
     std::string block_define = "";

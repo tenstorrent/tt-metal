@@ -77,7 +77,7 @@ void add_activation_defines(
     std::map<std::string, std::string>& defines,
     tt::stl::Span<const unary::UnaryWithParam> activations,
     std::string_view operand,
-    const DataType& dtype = DataType::BFLOAT16);
+    std::optional<DataType> dtype = std::nullopt);
 
 uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op);
 

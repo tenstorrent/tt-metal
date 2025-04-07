@@ -515,11 +515,6 @@ def test_unary_ceil(input_shapes, device):
     assert_with_pcc(golden_tensor, output_tensor, 0.999)
 
 
-import pytest
-import torch
-import ttnn
-
-
 @pytest.mark.parametrize(
     "input_shapes",
     [
