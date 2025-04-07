@@ -457,7 +457,9 @@ def test_llama_TG_perf_device(
 
     benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
     # Estimated T/s/u is 1000000 / (80L-duration + ~1240 lmhead+sampling+embeddings + ~300 python-overhead
-    benchmark_data.add_measurement(profiler, 0, step_name, "tsu_estimate", 1000000 / (e2e_estimate_80l + 1240 + 300))
+    benchmark_data.add_measurement(
+        profiler, 0, step_name, "tsu_estimate", 1000000 / (e2e_estimate_80l / 1000 + 1240 + 300)
+    )
 
     benchmark_data.save_partial_run_json(
         profiler,
