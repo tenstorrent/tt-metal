@@ -14,12 +14,13 @@ jobs:
   build-artifact:
     needs: create-tag
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       version: 22.04
       build-wheel: true
-    secrets: inherit
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       version: 22.04
       tracy: true
