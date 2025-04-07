@@ -199,7 +199,8 @@ Result conv_transpose2d(
             kernel_size,
             groups,
             bias_tensor.has_value(),
-            compute_config);
+            compute_config,
+            false);
         auto_shard = true;
     }
 

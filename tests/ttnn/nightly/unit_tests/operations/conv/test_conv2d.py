@@ -3374,7 +3374,7 @@ def test_conv2d_vae_sdxl(
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("packer_l1_acc", [True])
 @pytest.mark.parametrize("has_bias", [True])
-def test_conv_non_tile_mul_height(
+def test_conv_higher_strides(
     device,
     torch_tensor_map,
     use_program_cache,

@@ -70,7 +70,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandl
     bool split_reader,
     bool fp32_dest_acc_en,
     bool packer_l1_acc_en,
-    bool is_non_tile_mul_height,
+    bool disable_shard_height_tiling,
     CBIndices& cb_indices) {
     using tt::tt_metal::CBHandle;
     using tt::tt_metal::CircularBuffer;
@@ -170,9 +170,6 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandl
         num_cb0_tilized_tiles,
         tilized_act_tile_size);
 
-    std::cout << "untilize_out: " << untilize_out << std::endl;
-    std::cout << "interm0_df: " << static_cast<int>(interm0_df) << std::endl;
-    std::cout << "out_df: " << static_cast<int>(out_df) << std::endl;
     if (untilize_out) {
         auto output_shard_shape = output.shard_spec().value().shape;
         std::tie(cb_indices.matmul_partials_cb, cb_matmul_partials) = tt::tt_metal::create_cb(
@@ -191,10 +188,8 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandl
         // uint32_t aligned_output_stick_nbytes = out_tile_size;
         // uint32_t aligned_output_num_pages = num_writer_output_tiles;
         uint32_t aligned_output_stick_nbytes =
-            is_non_tile_mul_height ? shard_shape[1] * output.element_size() : out_tile_size;
-        uint32_t aligned_output_num_pages = is_non_tile_mul_height ? shard_shape[0] : num_writer_output_tiles;
-        std::cout << "aligned_output_stick_nbytes: " << aligned_output_stick_nbytes
-                  << ", aligned_output_num_pages: " << aligned_output_num_pages << std::endl;
+            disable_shard_height_tiling ? shard_shape[1] * output.element_size() : out_tile_size;
+        uint32_t aligned_output_num_pages = disable_shard_height_tiling ? shard_shape[0] : num_writer_output_tiles;
         std::tie(cb_indices.out0_cb, cb_output) = tt::tt_metal::create_cb(
             cb_indices.get_next_cb_index(),
             program,
@@ -400,7 +395,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding,
-    bool is_non_tile_mul_height) {
+    bool disable_shard_height_tiling) {
     using tt::tt_metal::CBHandle;
     using tt::tt_metal::CircularBuffer;
     using tt::tt_metal::CircularBufferConfig;
@@ -928,7 +923,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             num_cores_y,
             num_weight_slices_width);
         uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
-        if (is_non_tile_mul_height) {
+        if (disable_shard_height_tiling) {
             total_num_cores_per_weight_slice = act_matrix_height / parallelization_config.per_core_out_matrix_height;
         } else {
             total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
@@ -1122,7 +1117,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         enable_subblock_padding ? (act_block_h_ntiles_padded * weight_block_w_ntiles) : writer_output_block_num_tiles;
 
     uint32_t aligned_output_num_pages = writer_output_block_num_tiles;
-    if (is_non_tile_mul_height) {
+    if (disable_shard_height_tiling) {
         aligned_output_num_pages = output.shard_spec().value().shape[0];
     }
 
@@ -1208,7 +1203,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             split_reader,
             fp32_dest_acc_en,
             packer_l1_acc_en,
-            is_non_tile_mul_height,
+            disable_shard_height_tiling,
             cb_indices);
     }
     CBHandle cb_sharded_act = std::get<0>(input_output_cbs);
@@ -1481,7 +1476,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         cb_indices.temp_sum_cb,
         partials_cb_uses_output,
         aligned_output_num_pages,
-        is_non_tile_mul_height};
+        disable_shard_height_tiling};
 
     auto writer_mcast_noc = tt::tt_metal::NOC::NOC_0;
     auto reader_noc =
@@ -1828,7 +1823,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding,
-    bool is_non_tile_mul_height) {
+    bool disable_shard_height_tiling) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     ttnn::operations::sliding_window::ParallelConfig parallel_config;
@@ -1899,7 +1894,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         enable_weights_double_buffer,
         enable_split_reader,
         enable_subblock_padding,
-        is_non_tile_mul_height);
+        disable_shard_height_tiling);
 }
 }  // namespace conv2d
 

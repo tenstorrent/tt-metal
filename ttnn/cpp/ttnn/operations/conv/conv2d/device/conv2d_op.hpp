@@ -186,7 +186,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding,
-    bool is_non_tile_mul_height);
+    bool disable_shard_height_tiling);
 
 // new micro op
 struct OptimizedConvNew {
@@ -205,7 +205,7 @@ struct OptimizedConvNew {
     bool enable_weights_double_buffer;
     bool enable_split_reader;
     bool enable_subblock_padding;
-    bool is_non_tile_mul_height;
+    bool disable_shard_height_tiling;
     uint32_t pre_op_l1_allocation_size_bytes;
     OptimizedConvNew(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
@@ -224,7 +224,7 @@ struct OptimizedConvNew {
         bool enable_weights_double_buffer,
         bool enable_split_reader,
         bool enable_subblock_padding,
-        bool is_non_tile_mul_height) :
+        bool disable_shard_height_tiling) :
         output_channels(output_channels),
         groups(groups),
         sliding_window_config(sliding_window_config),
@@ -241,7 +241,7 @@ struct OptimizedConvNew {
         enable_weights_double_buffer(enable_weights_double_buffer),
         enable_split_reader(enable_split_reader),
         enable_subblock_padding(enable_subblock_padding),
-        is_non_tile_mul_height(is_non_tile_mul_height) {}
+        disable_shard_height_tiling(disable_shard_height_tiling) {}
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -312,7 +312,7 @@ Tensor optimized_conv_new(
     bool enable_weights_double_buffer = false,
     bool enable_split_reader = false,
     bool enable_subblock_padding = false,
-    bool is_non_tile_mul_height = false);
+    bool disable_shard_height_tiling = false);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
@@ -338,7 +338,8 @@ conv_op_l1_usage calculate_L1_usage(
     const Conv2dConfig& conv_config,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     bool enable_bias,
-    bool is_1d_depthwise_conv);
+    bool is_1d_depthwise_conv,
+    bool disable_shard_height_tiling);
 
 }  // namespace conv2d
 
