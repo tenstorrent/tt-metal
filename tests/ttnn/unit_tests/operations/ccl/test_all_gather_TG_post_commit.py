@@ -10,8 +10,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.utility_functions import skip_for_grayskull
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler

@@ -9,8 +9,6 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
 
@@ -640,8 +638,6 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
         cluster_axis=0,
         use_all_gather_async=True,
         enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
     )
 
 
@@ -710,8 +706,6 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
         cluster_axis=1,
         use_all_gather_async=True,
         enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
     )
 
 
@@ -794,8 +788,6 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
         cluster_axis=0,
         use_all_gather_async=True,
         enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=False,
     )
 
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
@@ -816,6 +808,4 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
         cluster_axis=1,
         use_all_gather_async=True,
         enable_persistent_fabric=True,
-        create_persistent_fabric=False,
-        teardown_persistent_fabric=True,
     )

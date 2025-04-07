@@ -11,8 +11,6 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
 
@@ -89,9 +87,6 @@ def run_all_reduce_impl(
     if output_dtype is None:
         output_dtype = input_dtype
 
-    create_persistent_fabric = True
-    teardown_persistent_fabric = True
-    enable_persistent_fabric = True
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
     # Use Async mode based on test input config
@@ -330,12 +325,6 @@ def run_all_reduce_impl(
             ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
 
     finally:
-        # if enable_persistent_fabric and teardown_persistent_fabric:
-        #     mesh_device.reset_sub_device_stall_group()
-        #     t1 = time()
-        #     teardown_fabric_interface(mesh_device, wrap_fabric_around_mesh=wrap_mesh, topology=all_reduce_topology)
-        #     t2 = time()
-        #     logger.info(f"Teardown time: {t2 - t1}")
         pass
 
 
