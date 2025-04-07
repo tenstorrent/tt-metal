@@ -8,7 +8,7 @@ import os
 import sys
 from argparse import ArgumentParser
 from loguru import logger  # type: ignore
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # type: ignore
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
@@ -32,18 +32,20 @@ def run_dm_tests(profile, gtest_filter):
     # Configure post proc script
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = log_file_path
+
+    # Set zone_name values to desired zonescopes for capturing specific kernel parts
     setup.timerAnalysis = {
         "reader_kernel_analysis": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "BRISC", "zone_name": "BRISC-KERNEL"},
-            "end": {"risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+            "start": {"risc": "ANY", "zone_name": "READER"},
+            "end": {"risc": "ANY", "zone_name": "READER"},
         },
         "writer_kernel_analysis": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
-            "end": {"risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+            "start": {"risc": "ANY", "zone_name": "WRITER"},
+            "end": {"risc": "ANY", "zone_name": "WRITER"},
         },
         "reader_events": {
             "across": "device",
@@ -170,6 +172,8 @@ def plot_dm_stats(dm_stats):
 
     # Create subfigures for each Test id
     subfigs = fig.subfigures(len(test_ids), 1)
+    if len(test_ids) == 1:
+        subfigs = [subfigs]
 
     for idx, (subfig, test_id) in enumerate(zip(subfigs, test_ids)):
         # Add a title for the current Test id

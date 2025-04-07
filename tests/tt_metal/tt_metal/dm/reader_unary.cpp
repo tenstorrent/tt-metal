@@ -23,17 +23,20 @@ void kernel_main() {
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
 
-    for (uint32_t i = 0; i < num_of_transactions; i++) {
-        // TODO: Change src address to change DRAM/core locations (single/multiple core)
-        uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
+    {
+        DeviceZoneScopedN("READER");
+        for (uint32_t i = 0; i < num_of_transactions; i++) {
+            // TODO: Change src address to change DRAM/core locations (single/multiple core)
+            uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
 
-        cb_reserve_back(cb_id_in0, transaction_num_pages);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read(src_noc_addr, l1_write_addr, transaction_size_bytes);
+            cb_reserve_back(cb_id_in0, transaction_num_pages);
+            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+            noc_async_read(src_noc_addr, l1_write_addr, transaction_size_bytes);
 
-        noc_async_read_barrier();
+            noc_async_read_barrier();
 
-        cb_push_back(cb_id_in0, transaction_num_pages);
-        src_addr += transaction_size_bytes;
+            cb_push_back(cb_id_in0, transaction_num_pages);
+            src_addr += transaction_size_bytes;
+        }
     }
 }
