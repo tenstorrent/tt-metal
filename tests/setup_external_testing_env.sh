@@ -37,10 +37,12 @@ if [[ "$CLEAN" == true ]]; then
 fi
 
 # Check Python version
-PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
-if [[ "$PYTHON_VERSION" < "3.8" ]]; then
-    echo "Error: Python 3.8 or higher is required. Detected version: $PYTHON_VERSION"
+PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
+if [[ "$PYTHON_VERSION" != "3.8"* && "$PYTHON_VERSION" != "3.10"* ]]; then
+    echo "Error: Only Python 3.8 or 3.10 are supported. Detected version: $PYTHON_VERSION"
     exit 1
+else
+    echo "Supported version of Python detected: $PYTHON_VERSION"
 fi
 
 # Deactivate any active virtual environment
@@ -89,8 +91,22 @@ if [[ "$REUSE" == false ]]; then
 
     # Install tt-exalens
     echo "Installing tt-exalens..."
-    wget -O ttexalens-0.1.250326+dev.0c4381a-cp38-cp38-linux_x86_64.whl https://github.com/tenstorrent/tt-exalens/releases/download/0.1/ttexalens-0.1.250326+dev.0c4381a-cp38-cp38-linux_x86_64.whl
-    pip install ttexalens-0.1.250326+dev.0c4381a-cp38-cp38-linux_x86_64.whl
+    if [[ $PYTHON_VERSION == "3.8"* ]]; then
+        EXALENS_WHEEL="ttexalens-0.1.250326+dev.0c4381a-cp38-cp38-linux_x86_64.whl"
+        echo "Python 3.8 detected, using pre-built wheel for tt-exalens $EXALENS_WHEEL"
+    elif [[ $PYTHON_VERSION == "3.10"* ]]; then
+        EXALENS_WHEEL="ttexalens-0.1.250326+dev.0c4381a-cp310-cp310-linux_x86_64.whl"
+        echo "Python 3.10 detected, using pre-built wheel for tt-exalens $EXALENS_WHEEL"
+    else
+        echo "Unsupported Python version: $PYTHON_VERSION"
+        exit 1
+    fi
+    wget -O $EXALENS_WHEEL https://github.com/tenstorrent/tt-exalens/releases/download/0.1/$EXALENS_WHEEL
+    if [ ! -f $EXALENS_WHEEL ]; then
+        echo "Failed to download tt-exalens wheel file"
+        exit 1
+    fi
+    pip install $EXALENS_WHEEL
 
     # Download and extract SFPI release
     ./setup_testing_env.sh
