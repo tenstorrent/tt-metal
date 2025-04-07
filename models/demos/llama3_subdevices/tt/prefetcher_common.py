@@ -31,6 +31,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         mode="decode",
         mesh_sub_device_manager_id_prefill=None,
         mesh_sub_device_manager_id_decode=None,
+        save_tensor_addresses=False,
     ):
         """
         - sub devices
@@ -122,6 +123,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
 
         self.tensors = []
         self.tensor_addrs = []  # List of buffer addresses
+        self.save_tensor_addresses = save_tensor_addresses
 
     def buffer_address(self, tensor):
         addr = []
@@ -165,9 +167,11 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         assert (
             len(self.tensors) >= self.n_tensors
         ), f"Expected at least {self.n_tensors} tensors, got {len(self.tensors)}"
-
-        global global_tt_tensor_address
-        if global_tt_tensor_address is None:
+        if self.save_tensor_addresses:
+            global global_tt_tensor_address
+            if global_tt_tensor_address is None:
+                global_tt_tensor_address = self.get_tensor_addrs()
+        else:
             global_tt_tensor_address = self.get_tensor_addrs()
         self.tt_tensor_address = global_tt_tensor_address
         return self.tensors[: self.n_tensors] + [self.tt_tensor_address]
