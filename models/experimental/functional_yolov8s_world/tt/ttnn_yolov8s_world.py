@@ -304,6 +304,7 @@ class ttnn_C2f:
             input_params=self.input_params[0],
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
+            block_shard=True,
         )
         self.cv2 = ttnn_Conv(
             self.device,

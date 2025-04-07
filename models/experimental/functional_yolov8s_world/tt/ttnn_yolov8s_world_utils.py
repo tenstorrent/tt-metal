@@ -9,7 +9,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
     preprocess_layernorm_parameter,
 )
-from models.experimental.functional_yolov8s_world.reference.yolov8s_world_utils import *
+from models.experimental.functional_yolov8s_world.reference.yolov8s_world import *
 
 
 def ttnn_decode_bboxes(device, distance, anchor_points, xywh=True, dim=1):

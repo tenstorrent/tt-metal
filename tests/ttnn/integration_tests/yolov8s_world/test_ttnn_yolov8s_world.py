@@ -12,7 +12,7 @@ import torch.nn as nn
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.functional_yolov8s_world.reference import yolov8s_world_utils
+from models.experimental.functional_yolov8s_world.reference import yolov8s_world
 from models.experimental.functional_yolov8s_world.tt.ttnn_yolov8s_world import (
     ttnn_Conv,
     ttnn_C2f,
@@ -34,17 +34,6 @@ from ttnn.model_preprocessing import preprocess_model_parameters, ParameterDict,
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
-
-# Enable when using Real weights
-# try:
-#     sys.modules["ultralytics"] = yolov8s_world_utils
-#     sys.modules["ultralytics.nn.tasks"] = yolov8s_world_utils
-#     sys.modules["ultralytics.nn.modules.conv"] = yolov8s_world_utils
-#     sys.modules["ultralytics.nn.modules.block"] = yolov8s_world_utils
-#     sys.modules["ultralytics.nn.modules.head"] = yolov8s_world_utils
-
-# except KeyError:
-#     print("models.experimental.functional_yolov8s_world.reference.yolov8s_world_utils not found.")
 
 
 def move_to_device(object, device):
@@ -127,7 +116,7 @@ def attempt_load(weights, map_location=None):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -135,11 +124,20 @@ def attempt_load(weights, map_location=None):
 @run_for_wormhole_b0()
 def test_Conv(device, input_tensor, use_pretrained_weight, reset_seeds):
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
-    else:
-        torch_model = yolov8s_world_utils.YOLOWorld()
-        torch_model = torch_model.model
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
 
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+
+    else:
+        torch_model = yolov8s_world.YOLOWorld()
+    torch_model = torch_model.model
     torch_model.eval()
 
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -176,7 +174,7 @@ def test_Conv(device, input_tensor, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -184,10 +182,20 @@ def test_Conv(device, input_tensor, use_pretrained_weight, reset_seeds):
 @run_for_wormhole_b0()
 def test_C2f(device, input_tensor, use_pretrained_weight, reset_seeds):
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+
     else:
-        torch_model = yolov8s_world_utils.YOLOWorld()
-        torch_model = torch_model.model
+        torch_model = yolov8s_world.YOLOWorld()
+    torch_model = torch_model.model
     torch_model.eval()
 
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -228,7 +236,7 @@ def test_C2f(device, input_tensor, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -236,10 +244,20 @@ def test_C2f(device, input_tensor, use_pretrained_weight, reset_seeds):
 @run_for_wormhole_b0()
 def test_SPPF(device, input_tensor, use_pretrained_weight, reset_seeds):
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+
     else:
-        torch_model = yolov8s_world_utils.YOLOWorld()
-        torch_model = torch_model.model
+        torch_model = yolov8s_world.YOLOWorld()
+    torch_model = torch_model.model
     torch_model.eval()
 
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -272,7 +290,7 @@ def test_SPPF(device, input_tensor, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -282,10 +300,20 @@ def test_MaxSigmoidAttnBlock(device, use_pretrained_weight, reset_seeds):
     guide = torch.randn(1, 80, 512)
 
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+
     else:
-        torch_model = yolov8s_world_utils.YOLOWorld()
-        torch_model = torch_model.model
+        torch_model = yolov8s_world.YOLOWorld()
+    torch_model = torch_model.model
     torch_model.eval()
 
     ttnn_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -333,7 +361,7 @@ def test_MaxSigmoidAttnBlock(device, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -343,10 +371,20 @@ def test_C2fAttn(device, use_pretrained_weight, reset_seeds):
     guide = torch.randn(1, 80, 512)
 
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+
     else:
-        torch_model = yolov8s_world_utils.YOLOWorld()
-        torch_model = torch_model.model
+        torch_model = yolov8s_world.YOLOWorld()
+    torch_model = torch_model.model
     torch_model.eval()
 
     ttnn_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -398,7 +436,7 @@ def test_C2fAttn(device, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -408,10 +446,20 @@ def test_ImagePoolingAttn(device, use_pretrained_weight, reset_seeds):
     text = torch.randn(1, 80, 512)
 
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+
     else:
-        torch_model = yolov8s_world_utils.YOLOWorld()
-        torch_model = torch_model.model
+        torch_model = yolov8s_world.YOLOWorld()
+    torch_model = torch_model.model
     torch_model.eval()
 
     ttnn_x_0 = ttnn.from_torch(x[0], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -461,7 +509,7 @@ def test_ImagePoolingAttn(device, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -471,10 +519,20 @@ def test_ContrastiveHead(device, use_pretrained_weight, reset_seeds):
     w = torch.randn(1, 80, 512)
 
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+
     else:
-        torch_model = yolov8s_world_utils.YOLOWorld()
-        torch_model = torch_model.model
+        torch_model = yolov8s_world.YOLOWorld()
+    torch_model = torch_model.model
     torch_model.eval()
 
     ttnn_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -508,7 +566,7 @@ def test_ContrastiveHead(device, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -518,10 +576,20 @@ def test_WorldDetect(device, use_pretrained_weight, reset_seeds):
     text = torch.randn(1, 80, 512)
 
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+
     else:
-        torch_model = yolov8s_world_utils.YOLOWorld()
-        torch_model = torch_model.model
+        torch_model = yolov8s_world.YOLOWorld()
+    torch_model = torch_model.model
     torch_model.eval()
 
     ttnn_x_0 = ttnn.from_torch(x[0], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -627,7 +695,7 @@ def test_WorldDetect(device, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -636,10 +704,20 @@ def test_WorldModel(device, use_pretrained_weight, reset_seeds):
     x = torch.randn(1, 3, 640, 640)
 
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+
     else:
-        torch_model = yolov8s_world_utils.YOLOWorld()
-        torch_model = torch_model.model
+        torch_model = yolov8s_world.YOLOWorld()
+    torch_model = torch_model.model
     torch_model.eval()
 
     ttnn_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -693,7 +771,7 @@ def test_WorldModel(device, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -702,10 +780,20 @@ def test_YoloModel(device, use_pretrained_weight, reset_seeds):
     x = torch.randn(1, 3, 640, 640)
 
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+
     else:
-        torch_model = yolov8s_world_utils.YOLOWorld()
-        torch_model = torch_model.model
+        torch_model = yolov8s_world.YOLOWorld()
+    torch_model = torch_model.model
     torch_model.eval()
 
     ttnn_x = x.permute(0, 2, 3, 1)

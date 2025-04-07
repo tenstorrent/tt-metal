@@ -334,7 +334,10 @@ class WorldDetect(nn.Module):
 class WorldModel(nn.Module):
     def __init__(self, model_torch=None, ch=3, nc=None, verbose=True):
         super().__init__()
-        self.txt_feats = model_torch.txt_feats
+        if model_torch != None:
+            self.txt_feats = model_torch.txt_feats
+        else:
+            self.txt_feats = torch.randn(1, nc or 80, 512)
         self.clip_model = None  # CLIP model placeholder
         self.model = nn.Sequential(
             Conv(3, 32, 3, 2),
