@@ -73,7 +73,7 @@ jobs:
         with:
           prefix: "test_reports_"
       - name: Generate gtest annotations on failure
-        uses: ./.github/actions/generate-gtest-failure-message
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@9c49475b94586efa7b5e57212daf1508eafc566d
         if: ${{ failure() }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
