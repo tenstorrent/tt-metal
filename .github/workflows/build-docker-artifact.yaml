@@ -101,7 +101,10 @@ jobs:
       - build-docker
       - in-service
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:

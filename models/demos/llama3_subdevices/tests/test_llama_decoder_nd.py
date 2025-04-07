@@ -137,7 +137,12 @@ def test_llama_decoder_same(
     outs = []
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
-
+        # Explicitly allocate global CB to avoid memory fragmentation
+        prefetcher_setup.global_circular_buffer = ttnn.create_global_circular_buffer(
+            mesh_device,
+            prefetcher_setup.sender_receiver_mapping,
+            prefetcher_setup.global_cb_size,
+        )
         ttnn.dram_prefetcher(
             tt_pf,
             num_layers=1,

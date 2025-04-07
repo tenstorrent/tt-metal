@@ -18,6 +18,7 @@
 #include "fabric_host_utils.hpp"
 #include "metal_soc_descriptor.h"
 #include "impl/context/metal_context.hpp"
+#include <magic_enum/magic_enum.hpp>
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {
@@ -28,16 +29,39 @@ class Program;
 
 namespace tt::tt_fabric {
 
-namespace {
+bool is_1d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config) {
+    return fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING;
+}
 
-tt::tt_fabric::FabricEriscDatamoverConfig get_default_fabric_config() {
+bool is_2d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config) {
+    return fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
+}
+
+Topology get_1d_topology(const tt::tt_metal::FabricConfig& fabric_config) {
+    switch (fabric_config) {
+        case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
+        case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
+        case tt::tt_metal::FabricConfig::DISABLED:
+        case tt::tt_metal::FabricConfig::FABRIC_2D:
+        case tt::tt_metal::FabricConfig::FABRIC_2D_PUSH:
+        case tt::tt_metal::FabricConfig::CUSTOM:
+            TT_THROW("Unsupported fabric config for 1D: {}", magic_enum::enum_name(fabric_config));
+    }
+    return tt::tt_fabric::Topology::Linear;
+}
+
+// TODO: We should store this somewhere instead of constantly regenerating
+tt::tt_fabric::FabricEriscDatamoverConfig get_1d_fabric_config() {
     constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);
-    return tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    tt::tt_metal::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+    Topology topology = get_1d_topology(fabric_config);
+    return tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
 }
-
-}  // namespace
 
 void append_fabric_connection_rt_args(
     chip_id_t src_chip_id,
@@ -85,7 +109,7 @@ void append_fabric_connection_rt_args(
     std::advance(it, link_idx);
     auto fabric_router_channel = *it;
 
-    const auto& edm_config = get_default_fabric_config();
+    const auto& edm_config = get_1d_fabric_config();
     CoreCoord fabric_router_virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
             src_chip_id, fabric_router_channel);
