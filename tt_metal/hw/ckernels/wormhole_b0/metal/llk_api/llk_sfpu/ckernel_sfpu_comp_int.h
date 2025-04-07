@@ -33,7 +33,20 @@ inline void calculate_unary_ne_int32(int scalar) {
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
         vInt val = 0;
-        v_if(v != scalar) { val = 1; }
+        vInt s = scalar;
+        v_if(v >= 0) {
+            v_if(v != scalar) { val = 1; }
+            v_endif;
+        }
+        v_else {
+            v_if(s < 0) {
+                val = reinterpret<vInt>(sfpi::abs(reinterpret<vFloat>(v))) ^ -s;
+                v_if(val != 0) { val = 1; }
+                v_endif;
+            }
+            v_else { val = 1; }
+            v_endif;
+        }
         v_endif;
         dst_reg[0] = val;
         dst_reg++;
