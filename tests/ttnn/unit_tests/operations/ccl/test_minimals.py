@@ -445,9 +445,6 @@ def test_tg_trace_rms_fuse(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
     ],
-    ids=[
-        "concat_heads",
-    ],
 )
 @pytest.mark.parametrize("num_links", [3])
 @pytest.mark.parametrize(

@@ -175,23 +175,22 @@ def test_rms_perf(
 
 
 @pytest.mark.parametrize(
-    "ar_type, warmup_iters, perf_target_us",
+    "warmup_iters, perf_target_us",
     [
-        ("concat_heads", 10, 25),
+        (10, 25),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_fused_all_gather_concat_perf(
-    ar_type,
     warmup_iters,
     perf_target_us,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = f"all_gather_{ar_type}"
+    step_name = f"all_gather_concat_heads"
 
     subdir = "llama_ccl_perf"
-    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_concat_fuse -k {ar_type}"
+    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_concat_fuse"
     cols = ["DEVICE KERNEL"]
     op_name = "AllGatherConcat"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
@@ -211,10 +210,10 @@ def test_fused_all_gather_concat_perf(
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
 
     # Save the measurement
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ar_type}-min-us", measured_min_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ar_type}-max-us", measured_max_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ar_type}-avg-us", measured_avg_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ar_type}-std-us", measured_std_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-concat_heads-min-us", measured_min_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-concat_heads-max-us", measured_max_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-concat_heads-avg-us", measured_avg_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-concat_heads-std-us", measured_std_us)
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=f"all_gather_concat_heads_fused",
