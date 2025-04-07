@@ -11,8 +11,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
 
@@ -208,13 +206,8 @@ def run_reduce_scatter_test(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    # mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-    #     mesh_device,
-    #     [worker_sub_device],
-    #     0,
-    #     0,
-    #     enable_persistent_fabric,
-    # )
+    # sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    # mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -277,8 +270,7 @@ def run_reduce_scatter_test(
             tt_out_tensor_list.append(tt_out_tensor)
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
-    # mesh_device.reset_sub_device_stall_group()
-    # teardown_fabric_interface(mesh_device)
+    mesh_device.reset_sub_device_stall_group()
 
     passed = True
     first_failed_tensor_index = None
@@ -312,7 +304,15 @@ def run_reduce_scatter_test(
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90000, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True
+    "device_params",
+    [
+        {
+            "trace_region_size": 90000,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(

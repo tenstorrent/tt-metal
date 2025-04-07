@@ -12,8 +12,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import 
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows,
 )
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
 
@@ -449,8 +447,6 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
         cluster_axis=0,
         use_reduce_scatter_async=True,
         enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
     )
 
 
@@ -519,8 +515,6 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
         cluster_axis=1,
         use_reduce_scatter_async=True,
         enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
     )
 
 
@@ -656,6 +650,4 @@ def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_po
         trace_mode=trace_mode,
         use_reduce_scatter_async=True,
         enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
     )
