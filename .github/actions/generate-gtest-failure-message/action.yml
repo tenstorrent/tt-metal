@@ -4,7 +4,6 @@ description: "Generate gtest failure message for Github workflow annotations"
 inputs:
   path:
     description: "Paths to pass containing gtest XML files"
-    required: true
     default: "/work/generated/test_reports/"
 
 runs:
