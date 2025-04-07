@@ -508,6 +508,8 @@ Convolution
    ttnn.conv1d
    ttnn.conv2d
    ttnn.conv_transpose2d
+   ttnn.prepare_conv_weights
+   ttnn.prepare_conv_bias
 
 Pooling
 =======
