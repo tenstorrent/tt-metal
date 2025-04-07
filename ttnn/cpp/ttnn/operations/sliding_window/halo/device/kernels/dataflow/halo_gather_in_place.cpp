@@ -245,7 +245,6 @@ void kernel_main() {
     noc_async_write_barrier();
 
     for (uint16_t noc = 0; noc < num_cores; ++noc) {
-        DPRINT << "id=" << noc << " x=" << core_noc_x[noc] << " y=" << core_noc_y[noc] << ENDL();
         const uint64_t ref_semaphore_noc_addr = get_noc_addr(core_noc_x[noc], core_noc_y[noc], semaphore_addr);
         noc_semaphore_inc(ref_semaphore_noc_addr, 1);
     }

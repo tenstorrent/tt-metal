@@ -458,7 +458,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         output_tensor_cores_y.push_back(worker.y);
     }
 
-    // Compute core data and create semaphore
+    // create semaphore
     semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
