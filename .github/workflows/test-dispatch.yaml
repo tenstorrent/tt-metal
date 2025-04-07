@@ -58,12 +58,12 @@ jobs:
   #         echo "deployrunner=${{ inputs.runner-label }}" >> $GITHUB_OUTPUT
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.tracy }}
       version: ${{ inputs.version }}
       build-wheel: true
-    secrets: inherit
   test-dispatch:
     # needs: setup
     needs: build-artifact
