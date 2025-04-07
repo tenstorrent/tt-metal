@@ -13,6 +13,9 @@ inputs:
   hostname:
     description: "Hostname of server"
     required: true
+  working-directory:
+    description: "Current working directory where data and batchfile are located"
+    required: false
 
 runs:
   using: "composite"
@@ -24,4 +27,11 @@ runs:
         chmod go-rwx id_key
     - name: Upload files
       shell: bash
-      run: sftp  -oStrictHostKeyChecking=no -i id_key -b ${{ inputs.sftp-batchfile }} ${{ inputs.username }}@${{ inputs.hostname }}
+      run: |
+        # Change dir to working-directory if its set
+        # Example: when running in containers the batchfile and data files are located under /work
+        if [ -n "${{ inputs.working-directory }}" ]; then
+          echo "Changing dir to ${{ inputs.working-directory }}"
+          cd "${{ inputs.working-directory }}"
+        fi
+        sftp  -oStrictHostKeyChecking=no -i id_key -b ${{ inputs.sftp-batchfile }} ${{ inputs.username }}@${{ inputs.hostname }}
