@@ -184,7 +184,7 @@ const auto g_block_shard_1_1_1600_256_tiled_to_32_cores = ttnn::TensorSpec(
 // Unary tests
 // ============================================================================
 
-class EltwiseUnaryOpIfTest : public TTNNFixtureWithDevice,
+class EltwiseUnaryOpIfTest : public TTNNSuiteFixtureWithDevice,
                              public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ResourceUsageMap>> {};
 
 TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
@@ -261,7 +261,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Softmax tests
 // ============================================================================
 
-class SoftmaxOpIfTest : public TTNNFixtureWithDevice,
+class SoftmaxOpIfTest : public TTNNSuiteFixtureWithDevice,
                         public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, int, ResourceUsageMap>> {};
 
 TEST_P(SoftmaxOpIfTest, Softmax) {
@@ -343,7 +343,7 @@ INSTANTIATE_TEST_SUITE_P(
 // ============================================================================
 
 class EltwiseBinaryOpIfTest
-    : public TTNNFixtureWithDevice,
+    : public TTNNSuiteFixtureWithDevice,
       public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ResourceUsageMap>> {};
 
 TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
@@ -468,7 +468,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Matmul tests
 // ============================================================================
 
-class MatmulOpIfTest : public TTNNFixtureWithDevice,
+class MatmulOpIfTest : public TTNNSuiteFixtureWithDevice,
                        public testing::WithParamInterface<std::tuple<
                            ttnn::TensorSpec,
                            ttnn::TensorSpec,

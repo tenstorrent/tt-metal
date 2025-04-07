@@ -311,7 +311,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
 }  // namespace unit_tests::compute::broadcast
 
 class BroadcastParameterizedDeviceFixture
-    : public DeviceFixture,
+    : public DeviceSuiteFixture,
       public testing::WithParamInterface<unit_tests::compute::broadcast::BroadcastConfig> {};
 
 TEST_P(BroadcastParameterizedDeviceFixture, TensixComputeSingleTileBroadcast) {

@@ -267,7 +267,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "tanh"),
         std::make_tuple(4, "sign")));
 class SingleCoreSingleDeviceSfpuParameterizedApproxFixture
-    : public DeviceFixture,
+    : public DeviceSuiteFixture,
       public testing::WithParamInterface<std::tuple<size_t, string>> {};
 
 TEST_P(SingleCoreSingleDeviceSfpuParameterizedApproxFixture, TensixSfpuCompute) {

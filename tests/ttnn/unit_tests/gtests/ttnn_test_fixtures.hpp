@@ -51,6 +51,36 @@ protected:
     tt::tt_metal::IDevice& getDevice() { return *device_; }
 };
 
+class TTNNSuiteFixtureWithDevice : public ::testing::Test {
+protected:
+    static tt::ARCH arch_;
+    static size_t num_devices_;
+    static tt::tt_metal::IDevice* device_;
+
+    static void SetUpTestSuite() {
+        std::srand(0);
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
+        device_ = tt::tt_metal::CreateDevice(0);
+        ASSERT_NE(device_, nullptr);  // optional safety check
+    }
+
+    static void TearDownTestSuite() {
+        tt::tt_metal::CloseDevice(device_);
+        device_ = nullptr;
+    }
+
+    // Accessor for use in tests
+    static tt::tt_metal::IDevice& getDevice() {
+        return *device_;
+    }
+};
+
+// Static member definitions
+tt::ARCH TTNNSuiteFixtureWithDevice::arch_;
+size_t TTNNSuiteFixtureWithDevice::num_devices_;
+tt::tt_metal::IDevice* TTNNSuiteFixtureWithDevice::device_ = nullptr;
+
 }  // namespace ttnn
 
 namespace ttnn::distributed::test {
@@ -80,5 +110,6 @@ protected:
     }
     std::shared_ptr<MeshDevice> mesh_device_;
 };
+
 
 }  // namespace ttnn::distributed::test

@@ -87,7 +87,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) 
 
 using CombinationInputParams =
     std::tuple<ttnn::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
-class EmptyTensorTest : public ttnn::TTNNFixtureWithDevice,
+class EmptyTensorTest : public ttnn::TTNNSuiteFixtureWithDevice,
                         public ::testing::WithParamInterface<CombinationInputParams> {};
 
 TEST_P(EmptyTensorTest, Combinations) {
