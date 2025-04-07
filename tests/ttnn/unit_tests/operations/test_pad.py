@@ -461,8 +461,13 @@ def _unsqueeze(smaller, larger, fill):
     return [fill] * diff + smaller
 
 
-@pytest.mark.parametrize("shape", [[2, 8], [1, 2, 3, 4], [5, 4, 3, 2, 1], [2, 128], [2, 60], [30, 128], [30, 60]])
-@pytest.mark.parametrize("padding", [[25, 1], [5, 4], [64], [32, 32], [1, 0, 0, 0], [1, 0, 0], [32, 32, 32, 64]])
+@pytest.mark.parametrize(
+    "shape",
+    [[2, 8], [1, 2, 3, 4], [5, 4, 3, 2, 1], [2, 128], [2, 60], [30, 128], [30, 60], [320, 320], [1, 1, 320, 320]],
+)
+@pytest.mark.parametrize(
+    "padding", [[25, 1], [5, 4], [64], [32, 32], [1, 0, 0, 0], [1, 0, 0], [32, 32, 32, 64], [0, 64], [0, 0, 0, 64]]
+)
 def test_pad_tile(shape, padding, device):
     if (shape, padding) in [([5, 4, 3, 2, 1], [1, 0, 0, 0]), ([5, 4, 3, 2, 1], [32, 32, 32, 64])]:
         pytest.xfail("Can't pad upper dims with rank>4")
