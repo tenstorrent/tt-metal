@@ -125,10 +125,7 @@ jobs:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
     timeout-minutes: 30
-    runs-on:
-      - build
-      - in-service
-    # runs-on: tt-beta-ubuntu-2204-xlarge
+    runs-on: tt-beta-ubuntu-2204-xlarge
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
@@ -137,6 +134,8 @@ jobs:
     container:
       image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
       env:
+        CCACHE_REMOTE_STORAGE: "redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}"
+        CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
         CARGO_HOME: /tmp/.cargo
         TT_FROM_PRECOMPILED_DIR: /work
@@ -158,17 +157,14 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
 
     steps:
-      - name: Verify ccache availability
+      - name: Detect ccache rw ability
+        # FIXME: Can we detect the environment we're in so are always in sync with the `environment: ...` line above
+        if: ${{ github.ref != 'refs/heads/main' }}
         shell: bash
         run: |
-          if [ ! -d "/mnt/MLPerf/ccache" ]; then
-            echo "::error title=ccache-mlperf-not-mounted::NFS drive is not mounted; build machine not properly provisioned."
-            exit 1
-          fi
-          if [ ! -d "$HOME/.ccache" ]; then
-            echo "::error title=ccache-not-provisioned::Ccache is not properly provisioned."
-            exit 1
-          fi
+          # ccache does not support false env vars; and GHA does not support conditionally defining an envvar.
+          # So we have to do it this way
+          echo "CCACHE_READONLY=1" >> "$GITHUB_ENV"
 
       - name: Set artifact name
         id: set-artifact-name
