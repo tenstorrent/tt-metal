@@ -38,7 +38,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    bool use_shallow_conv_variant,
     bool transpose_mcast,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -385,7 +384,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    bool use_shallow_conv_variant,
     bool transpose_mcast,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -539,7 +537,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         input_channels_padded);
     // Always use split reader for first conv in resnet which has input channels = 16
     // TODO: Expose option to split readers for 1D convs to python?
-    // bool split_reader = use_shallow_conv_variant;
     if (enable_split_reader) {
         TT_FATAL(not weight_width_sliced, "split reader does not work with 2d conv");
         TT_FATAL(
@@ -1805,7 +1802,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const OptimizedConvBlockConfig& block_config,
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
-    bool use_shallow_conv_variant,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     Tensor& output,
     bool enable_act_double_buffer,
@@ -1853,7 +1849,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             fused_activation,
             parallelization_config,
             block_config,
-            use_shallow_conv_variant,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
             output,
             compute_kernel_config.value(),
@@ -1876,7 +1871,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         fused_activation,
         parallelization_config,
         block_config,
-        use_shallow_conv_variant,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         output,
         compute_kernel_config.value(),
