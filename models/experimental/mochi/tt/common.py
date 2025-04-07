@@ -89,6 +89,7 @@ def matmul_config(
     out_block_w: int = None,
     fuse_batch: bool = False,
     fused_activation=None,
+    fp32_dest_acc_en: bool = False,
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     TILE_SIZE = 32
     per_core_M = math.ceil(m / (TILE_SIZE * grid_size[1]))
@@ -105,7 +106,9 @@ def matmul_config(
     ), f"num_out_blocks_w {num_out_blocks_w} must evenly divide per_core_N {per_core_N}"
     out_block_h = per_core_M / num_out_blocks_h
     out_block_w = per_core_N / num_out_blocks_w
-    out_subblock_h, out_subblock_w = get_subblock_sizes(out_block_h, out_block_w)  # want these to be 1 and 6
+    out_subblock_h, out_subblock_w = get_subblock_sizes(
+        out_block_h, out_block_w, fp32_dest_acc_en=fp32_dest_acc_en
+    )  # want these to be 1 and 6
 
     if in0_block_w is None:
         # in0_block_w = min(4, max(1, k // (TILE_SIZE * grid_size[0])))

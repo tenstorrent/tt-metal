@@ -100,8 +100,12 @@ class AsymmetricAttention(LightweightModule):
         self.k_norm_y = self._create_rmsmorn(".k_norm_y")
 
         # TODO: using qkv_x program config leads to worse PCC
-        self.qkv_x_config = partial(matmul_config, k=dim_x, n=3 * self.num_heads * self.head_dim, grid_size=(8, 8))
-        self.proj_x_config = partial(matmul_config, k=dim_x, n=dim_x, in0_block_w=4, grid_size=(8, 8))
+        self.qkv_x_config = partial(
+            matmul_config, k=dim_x, n=3 * self.num_heads * self.head_dim, grid_size=(8, 8), fp32_dest_acc_en=True
+        )
+        self.proj_x_config = partial(
+            matmul_config, k=dim_x, n=dim_x, in0_block_w=4, grid_size=(8, 8), fp32_dest_acc_en=True
+        )
         self.mm_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
