@@ -122,20 +122,13 @@ using ::testing::Pointwise;
 TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
     auto mesh_device = DistributedEndToEndTests::mesh_device_;
 
-   auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue();
 
-<<<<<<< HEAD
-=======
     int cq_id = cq.id();
 
     EXPECT_GE(cq_id, 0);
->>>>>>> d0154dda13 (add program dispatch success test)
 
-   EXPECT_GE(cq.id(), 0);
-
-
-   auto example_program = CreateProgram();
-
+    auto example_program = CreateProgram();
 
     auto target_tensix_cores = CoreRange{
         CoreCoord{0, 0} /* start_coord */, CoreCoord{0, 1} /* end_coord */
@@ -166,17 +159,14 @@ TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
     Finish(cq);
 }
 
-
-TEST_F(TensorDistributionTest, BufferRoundtripTest) {
-   using tt::tt_metal::distributed::ShardedBufferConfig;
+TEST_F(DistributedEndToEndTests, BufferRoundtripTest) {
+    using tt::tt_metal::distributed::ShardedBufferConfig;
 
     auto mesh_device = DistributedEndToEndTests::mesh_device_;
 
    auto& cq = mesh_device->mesh_command_queue();
 
-
    EXPECT_GE(cq.id(), 0);
-
 
    // Define the shape of the shard and the distributed buffer.
    // We will create a distributed buffer with 2 shards of {32, 32} and distribute it across the devices in the mesh.
