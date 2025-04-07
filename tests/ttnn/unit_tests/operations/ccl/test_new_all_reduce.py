@@ -123,209 +123,205 @@ def run_all_reduce_impl(
 
     logger.info(f"Output shape: {output_shape}")
 
-    try:
-        ##################################
-        ##### Set up input tensors/configs
-        ##################################
+    ##################################
+    ##### Set up input tensors/configs
+    ##################################
 
-        ##### FF2 Case #####
-        M, N = output_shape[2:]
-        N_per_shard = round_up(math.ceil(N / input_num_cores), ttnn.TILE_SIZE)
-        output_N_per_shard = round_up(math.ceil(N / output_num_cores), ttnn.TILE_SIZE)
-        input_shape = [*cluster_shape, M, N]
-        intermediate_shape = [*input_shape[:-1], N * cluster_shape[cluster_axis]]
+    ##### FF2 Case #####
+    M, N = output_shape[2:]
+    N_per_shard = round_up(math.ceil(N / input_num_cores), ttnn.TILE_SIZE)
+    output_N_per_shard = round_up(math.ceil(N / output_num_cores), ttnn.TILE_SIZE)
+    input_shape = [*cluster_shape, M, N]
+    intermediate_shape = [*input_shape[:-1], N * cluster_shape[cluster_axis]]
 
-        input_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                input_core_range_set,
-                [M, N_per_shard],
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        )
-        output_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                output_core_range_set,
-                [M, output_N_per_shard],
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        )
-        intermediate_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                output_core_range_set,
-                [M, output_N_per_shard * cluster_shape[cluster_axis]],
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        )
+    input_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            input_core_range_set,
+            [M, N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            output_core_range_set,
+            [M, output_N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            output_core_range_set,
+            [M, output_N_per_shard * cluster_shape[cluster_axis]],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
 
-        logger.info(f"Input shape: {input_shape[2:]}, Padded shape: {[M, N_per_shard * input_num_cores]}")
-        input_tensor = torch.randn(input_shape)
-        tt_input_tensor = ttnn.from_torch(
-            input_tensor,
+    logger.info(f"Input shape: {input_shape[2:]}, Padded shape: {[M, N_per_shard * input_num_cores]}")
+    input_tensor = torch.randn(input_shape)
+    tt_input_tensor = ttnn.from_torch(
+        input_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=input_dtype,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+    )
+    check_mesh_tensor_alloc(tt_input_tensor)
+
+    intermediate_tensor = torch.zeros(intermediate_shape)
+    tt_intermediate_tensors = []
+    for i in range(num_buffers):
+        tt_intermediate_tensor = ttnn.from_torch(
+            intermediate_tensor,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=input_dtype,
-            memory_config=input_mem_config,
+            memory_config=intermediate_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
-        check_mesh_tensor_alloc(tt_input_tensor)
 
-        intermediate_tensor = torch.zeros(intermediate_shape)
-        tt_intermediate_tensors = []
-        for i in range(num_buffers):
-            tt_intermediate_tensor = ttnn.from_torch(
-                intermediate_tensor,
-                device=mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=input_dtype,
-                memory_config=intermediate_mem_config,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
-            )
+        # Validate that the tensor is allocated in same location across devices
+        check_mesh_tensor_alloc(tt_intermediate_tensor)
+        tt_intermediate_tensors.append(tt_intermediate_tensor)
 
-            # Validate that the tensor is allocated in same location across devices
-            check_mesh_tensor_alloc(tt_intermediate_tensor)
-            tt_intermediate_tensors.append(tt_intermediate_tensor)
+    # All-Reduce Golden
+    # Inputs reduce sequentially for 10 iters
+    output_tensor_goldens_list = []
+    for i in range(num_iters):
+        if i % loopback_size == 0:
+            ar_input_tensor = input_tensor
 
-        # All-Reduce Golden
-        # Inputs reduce sequentially for 10 iters
-        output_tensor_goldens_list = []
-        for i in range(num_iters):
+        output_tensor_goldens_list.append(torch.sum(ar_input_tensor, dim=cluster_axis))
+        ar_input_tensor = torch.concat(
+            [output_tensor_goldens_list[-1].unsqueeze(cluster_axis)] * cluster_shape[cluster_axis], dim=cluster_axis
+        )
+
+    ##################################
+    ##### Run the op
+    ##################################
+
+    def run_op(n_iters, store_all_results=True):
+        outs = []
+        for i in range(n_iters):
             if i % loopback_size == 0:
-                ar_input_tensor = input_tensor
+                tt_input = tt_input_tensor
 
-            output_tensor_goldens_list.append(torch.sum(ar_input_tensor, dim=cluster_axis))
-            ar_input_tensor = torch.concat(
-                [output_tensor_goldens_list[-1].unsqueeze(cluster_axis)] * cluster_shape[cluster_axis], dim=cluster_axis
+            out = ttnn.experimental.all_reduce_async(
+                tt_input,
+                tt_intermediate_tensors[i % num_buffers],
+                cluster_axis=cluster_axis,
+                mesh_device=mesh_device,
+                multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
+                memory_config=output_mem_config,
+                dtype=output_dtype,
+                topology=all_reduce_topology,
+                num_links=num_links,
+                subdevice_id=worker_sub_device_id,
             )
-
-        ##################################
-        ##### Run the op
-        ##################################
-
-        def run_op(n_iters, store_all_results=True):
-            outs = []
-            for i in range(n_iters):
-                if i % loopback_size == 0:
-                    tt_input = tt_input_tensor
-
-                out = ttnn.experimental.all_reduce_async(
-                    tt_input,
-                    tt_intermediate_tensors[i % num_buffers],
-                    cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
-                    memory_config=output_mem_config,
-                    dtype=output_dtype,
-                    topology=all_reduce_topology,
-                    num_links=num_links,
-                    subdevice_id=worker_sub_device_id,
-                )
-                if not trace_mode:
-                    ttnn.synchronize_device(mesh_device)
-                if store_all_results:
-                    outs.append(out)
-
-                # Loop back the output to the input
-                if loopback_size != 1:
-                    tt_input = ttnn.reshard(out, input_mem_config)
-
+            if not trace_mode:
+                ttnn.synchronize_device(mesh_device)
             if store_all_results:
-                return outs
+                outs.append(out)
+
+            # Loop back the output to the input
+            if loopback_size != 1:
+                tt_input = ttnn.reshard(out, input_mem_config)
+
+        if store_all_results:
+            return outs
+        else:
+            return [out]
+
+    if trace_mode:
+        ##### Compile Model #####
+        logger.info("Compiling model")
+        tt_outs = run_op(num_iters, store_all_results=validate_all)
+
+        ##### Capture Trace #####
+        logger.info("Capturing trace")
+        if warmup_iters > 0:
+            trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            tt_outs = run_op(warmup_iters, store_all_results=validate_all)
+            ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        tt_outs = run_op(num_iters, store_all_results=validate_all)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        ##### Run Trace #####
+        logger.info("Starting Trace perf test...")
+        profiler.start("all-reduce-async-trace-warmup")
+        if warmup_iters > 0:
+            ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+            ttnn.release_trace(mesh_device, trace_id_warmup)
+            ttnn.synchronize_device(mesh_device)
+        profiler.end("all-reduce-async-trace-warmup")
+
+        signpost("start")
+        profiler.start("all-reduce-async-trace")
+        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.synchronize_device(mesh_device)
+        profiler.end("all-reduce-async-trace")
+        signpost("stop")
+        time_taken = profiler.get_duration("all-reduce-async-trace") - profiler.get_duration(
+            "all-reduce-async-trace-warmup"
+        )
+        effective_iter = num_iters - warmup_iters
+        logger.info(f"Time taken e2e: {time_taken} s")
+        logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
+        logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
+
+    else:
+        signpost("start")
+        tt_outs = run_op(num_iters, store_all_results=validate_all)
+        signpost("stop")
+
+    ##################################
+    ##### Validation
+    ##################################
+    def validate(tt_out_tensor, output_tensor):
+        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+            # get_device_tensors returns row major, so we need to select the correct golden tensor
+            if cluster_axis == 0:
+                output_tensor_ = output_tensor[i % cluster_shape[not (cluster_axis)]].unsqueeze(0).unsqueeze(0)
             else:
-                return [out]
+                output_tensor_ = output_tensor[i // cluster_shape[cluster_axis]].unsqueeze(0).unsqueeze(0)
 
-        if trace_mode:
-            ##### Compile Model #####
-            logger.info("Compiling model")
-            tt_outs = run_op(num_iters, store_all_results=validate_all)
+            tt_output_tensor = t.cpu().to_torch()
+            # logger.info(f"Checking for device {t.device().id()}")
 
-            ##### Capture Trace #####
-            logger.info("Capturing trace")
-            if warmup_iters > 0:
-                trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                tt_outs = run_op(warmup_iters, store_all_results=validate_all)
-                ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
-                ttnn.synchronize_device(mesh_device)
+            if input_dtype == ttnn.bfloat16:
+                eq, output = comp_pcc(tt_output_tensor, output_tensor_)
+            else:
+                eq, output = comp_pcc(tt_output_tensor, output_tensor_)
+            assert eq, f"{i} FAILED: {output}"
+        logger.info(f"PCC output is: {output}")
 
-            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            tt_outs = run_op(num_iters, store_all_results=validate_all)
-            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-            ttnn.synchronize_device(mesh_device)
-
-            ##### Run Trace #####
-            logger.info("Starting Trace perf test...")
-            profiler.start("all-reduce-async-trace-warmup")
-            if warmup_iters > 0:
-                ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
-                ttnn.release_trace(mesh_device, trace_id_warmup)
-                ttnn.synchronize_device(mesh_device)
-            profiler.end("all-reduce-async-trace-warmup")
-
-            signpost("start")
-            profiler.start("all-reduce-async-trace")
-            ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-            ttnn.release_trace(mesh_device, trace_id)
-            ttnn.synchronize_device(mesh_device)
-            profiler.end("all-reduce-async-trace")
-            signpost("stop")
-            time_taken = profiler.get_duration("all-reduce-async-trace") - profiler.get_duration(
-                "all-reduce-async-trace-warmup"
-            )
-            effective_iter = num_iters - warmup_iters
-            logger.info(f"Time taken e2e: {time_taken} s")
-            logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-            logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
-
-        else:
-            signpost("start")
-            tt_outs = run_op(num_iters, store_all_results=validate_all)
-            signpost("stop")
-
-        ##################################
-        ##### Validation
-        ##################################
-        def validate(tt_out_tensor, output_tensor):
-            for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-                # get_device_tensors returns row major, so we need to select the correct golden tensor
-                if cluster_axis == 0:
-                    output_tensor_ = output_tensor[i % cluster_shape[not (cluster_axis)]].unsqueeze(0).unsqueeze(0)
-                else:
-                    output_tensor_ = output_tensor[i // cluster_shape[cluster_axis]].unsqueeze(0).unsqueeze(0)
-
-                tt_output_tensor = t.cpu().to_torch()
-                # logger.info(f"Checking for device {t.device().id()}")
-
-                if input_dtype == ttnn.bfloat16:
-                    eq, output = comp_pcc(tt_output_tensor, output_tensor_)
-                else:
-                    eq, output = comp_pcc(tt_output_tensor, output_tensor_)
-                assert eq, f"{i} FAILED: {output}"
-            logger.info(f"PCC output is: {output}")
-
-        if validate_all:
-            for tensor_index in range(len(tt_outs)):
-                tt_out_tensor = tt_outs[tensor_index]
-                output_tensor = output_tensor_goldens_list[tensor_index]
-                validate(tt_out_tensor, output_tensor)
-        else:
-            tt_out_tensor = tt_outs[-1]
-            output_tensor = output_tensor_goldens_list[-1]
+    if validate_all:
+        for tensor_index in range(len(tt_outs)):
+            tt_out_tensor = tt_outs[tensor_index]
+            output_tensor = output_tensor_goldens_list[tensor_index]
             validate(tt_out_tensor, output_tensor)
+    else:
+        tt_out_tensor = tt_outs[-1]
+        output_tensor = output_tensor_goldens_list[-1]
+        validate(tt_out_tensor, output_tensor)
 
-        for i in range(mesh_device.get_num_devices()):
-            reshard_op_cnt = 1 if loopback_size > 1 else 0
-            assert (
-                mesh_device.get_devices()[i].num_program_cache_entries() == 1 + reshard_op_cnt
-                or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters + reshard_op_cnt
-            ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
-
-    finally:
-        pass
+    for i in range(mesh_device.get_num_devices()):
+        reshard_op_cnt = 1 if loopback_size > 1 else 0
+        assert (
+            mesh_device.get_devices()[i].num_program_cache_entries() == 1 + reshard_op_cnt
+            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters + reshard_op_cnt
+        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
