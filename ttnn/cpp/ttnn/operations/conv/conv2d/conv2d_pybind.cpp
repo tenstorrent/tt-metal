@@ -456,8 +456,7 @@ void py_bind_conv2d(py::module& module) {
             This is useful when the input tensor is large, and the activation reader is a bottleneck.
             This is only supported for Height Sharded Conv2D.
         )doc");
-    py_conv_config.def_readwrite(
-        "enable_subblock_padding", &Conv2dConfig::enable_subblock_padding, R"doc(enable_subblock_padding is the )doc");
+    py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
     py_conv_config.def_readwrite("in_place", &Conv2dConfig::in_place, R"doc(
             Enables support for in_place halo.
             This re-uses the input tensor as the output for halo, overwriting the input tensor.
