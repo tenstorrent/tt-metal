@@ -5,17 +5,19 @@ import os
 import json
 from pathlib import Path
 import ttnn
-from models.experimental.mochi.asymm_dit_joint import TtAsymmDiTJoint as TtAsymmDiTJoint
 
-# from models.experimental.mochi.tt.dit.model import AsymmDiTJoint as TtAsymmDiTJoint
+# from models.experimental.mochi.asymm_dit_joint import TtAsymmDiTJoint as TtAsymmDiTJoint
+
+from models.experimental.mochi.tt.dit.model import AsymmDiTJoint as TtAsymmDiTJoint
 from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
 from genmo.mochi_preview.dit.joint_model.asymm_models_joint import AsymmDiTJoint as RefAsymmDiTJoint
-from models.experimental.mochi.common import get_mochi_dir, get_cache_path, compute_metrics
 
-# from models.experimental.mochi.tt.common import get_mochi_dir, get_cache_path, compute_metrics
+# from models.experimental.mochi.common import get_mochi_dir, get_cache_path, compute_metrics
+
+from models.experimental.mochi.tt.common import get_mochi_dir, get_cache_path, compute_metrics
 from genmo.mochi_preview.pipelines import (
     get_conditioning,
     compute_packed_indices,
@@ -823,8 +825,8 @@ def test_each_step_post_e2e_optim(mesh_device, use_program_cache, reset_seeds, n
         uncond_y_feat_1BLY, uncond_y_pool_11BX = model.prepare_text_features(
             t5_feat=cond_null["y_feat"][0], t5_mask=cond_null["y_mask"][0]
         )
-        # z_1BNI, N = model.preprocess_input(z_BCTHW)
-        z_1BNI = model.preprocess_input(z_BCTHW)
+        z_1BNI, N = model.preprocess_input(z_BCTHW)
+        # z_1BNI = model.preprocess_input(z_BCTHW)
 
         cond_z_1BNI = model.forward_inner(
             x_1BNI=z_1BNI,
@@ -834,7 +836,7 @@ def test_each_step_post_e2e_optim(mesh_device, use_program_cache, reset_seeds, n
             rope_cos_1HND=rope_cos_1HND,
             rope_sin_1HND=rope_sin_1HND,
             trans_mat=trans_mat,
-            # N=num_visual_tokens,
+            N=N,
             uncond=False,
         )
 
@@ -846,7 +848,7 @@ def test_each_step_post_e2e_optim(mesh_device, use_program_cache, reset_seeds, n
             rope_cos_1HND=rope_cos_1HND,
             rope_sin_1HND=rope_sin_1HND,
             trans_mat=trans_mat,
-            # N=num_visual_tokens,
+            N=N,
             uncond=True,
         )
 
@@ -866,8 +868,11 @@ def test_each_step_post_e2e_optim(mesh_device, use_program_cache, reset_seeds, n
 
         # torch_output = model.reverse_preprocess(z, T, H, W)
         # torch_pred = model.reverse_preprocess(pred, T, H, W)
-        torch_cond = model.reverse_preprocess(cond_z_1BNI, T, H, W)
-        torch_uncond = model.reverse_preprocess(uncond_z_1BNI, T, H, W)
+        # torch_cond = model.reverse_preprocess(cond_z_1BNI, T, H, W)
+        # torch_uncond = model.reverse_preprocess(uncond_z_1BNI, T, H, W)
+
+        torch_cond = model.reverse_preprocess(cond_z_1BNI, T, H, W, N)
+        torch_uncond = model.reverse_preprocess(uncond_z_1BNI, T, H, W, N)
 
         torch_pred = torch_uncond + cfg_scale * (torch_cond - torch_uncond)
         torch_output = z_BCTHW + dsigma * torch_pred

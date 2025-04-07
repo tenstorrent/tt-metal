@@ -156,8 +156,11 @@ class AsymmDiTJoint(LightweightModule):
 
         trans_mat = get_rot_transformation_mat(None)
 
-        tt_rope_cos_1HND = to_tt_tensor(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device, shard_dim=-3)
-        tt_rope_sin_1HND = to_tt_tensor(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device, shard_dim=-3)
+        rope_cos_1HND = pad_vision_seq_parallel(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device.get_num_devices())
+        rope_sin_1HND = pad_vision_seq_parallel(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device.get_num_devices())
+
+        tt_rope_cos_1HND = to_tt_tensor(rope_cos_1HND, self.mesh_device, shard_dim=-2)
+        tt_rope_sin_1HND = to_tt_tensor(rope_sin_1HND, self.mesh_device, shard_dim=-2)
         tt_trans_mat = to_tt_tensor(trans_mat, self.mesh_device)
 
         return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
