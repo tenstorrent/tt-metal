@@ -9,6 +9,7 @@
 #include "tt_metal/api/tt-metalium/edm_fabric_counters.hpp"
 #include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 
+#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
@@ -1001,6 +1002,7 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
 }
 
 void kernel_main() {
+    eth_txq_reg_write(DEFAULT_ETH_TXQ, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
