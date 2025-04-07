@@ -45,8 +45,8 @@ run_python_model_tests_wormhole_b0() {
     # Mamba
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py -k "pretrained_weight_false"
 
-    # Mobilenetv2
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/mobilenetv2/test_ttnn_mobilenetv2.py -k "pretrained_weight_false"
+    # Mobilenetv2git
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py -k "pretrained_weight_false"
 
     # Llama3.1-8B
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
