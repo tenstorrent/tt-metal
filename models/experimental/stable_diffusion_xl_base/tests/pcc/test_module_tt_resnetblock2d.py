@@ -15,6 +15,9 @@ from models.utility_functions import torch_random
     [
         ((1, 320, 128, 128), (1, 1280), 0, 0, False),
         ((1, 320, 64, 64), (1, 1280), 1, 0, True),
+        ((1, 640, 64, 64), (1, 1280), 1, 1, False),
+        ((1, 640, 32, 32), (1, 1280), 2, 0, True),
+        ((1, 1280, 32, 32), (1, 1280), 2, 1, False),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -45,4 +48,4 @@ def test_resnetblock2d(device, temb_shape, input_shape, down_block_id, resnet_id
     output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.994)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.993)

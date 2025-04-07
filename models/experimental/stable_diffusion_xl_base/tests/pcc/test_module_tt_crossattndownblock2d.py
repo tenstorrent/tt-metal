@@ -14,7 +14,7 @@ from models.utility_functions import torch_random
     "input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim, down_block_id, pcc",
     [
         ((1, 320, 64, 64), (1, 1280), (1, 77, 2048), 640, 10, 640, 1, 0.994),
-        ((1, 640, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 2, 0.985),
+        ((1, 640, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 2, 0.976),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -49,15 +49,31 @@ def test_crossattndown(
         torch_input_tensor, temb=torch_temb_tensor, encoder_hidden_states=torch_encoder_tensor
     )
 
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     B, C, H, W = list(ttnn_input_tensor.shape)
 
     ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
-    ttnn_temb_tensor = ttnn.from_torch(torch_temb_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_temb_tensor = ttnn.from_torch(
+        torch_temb_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     ttnn_encoder_tensor = ttnn.from_torch(
-        torch_encoder_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+        torch_encoder_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_output_tensor, output_shape, _ = tt_crosattn.forward(
         ttnn_input_tensor, [B, C, H, W], temb=ttnn_temb_tensor, encoder_hidden_states=ttnn_encoder_tensor

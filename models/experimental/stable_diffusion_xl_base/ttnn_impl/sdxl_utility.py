@@ -6,14 +6,9 @@ import torch
 import ttnn
 
 
-def to_channel_last_ttnn(torch_tensor, dtype, device, memory_config):
+def to_channel_last_ttnn(torch_tensor, dtype, device, memory_config, layout):
     torch_tensor = torch.permute(torch_tensor, (0, 2, 3, 1))
-    ttnn_tensor = ttnn.from_torch(
-        torch_tensor,
-        dtype,
-        device=device,
-        memory_config=memory_config,
-    )
+    ttnn_tensor = ttnn.from_torch(torch_tensor, dtype, device=device, memory_config=memory_config, layout=layout)
     return ttnn_tensor
 
 
@@ -54,3 +49,9 @@ def prepare_gn_beta_gamma(device, weights, bias, num_cores):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     return tt_gamma, tt_bias
+
+
+def prepare_linear_params(device, weights, bias, dtype):
+    tt_weights = ttnn.from_torch(torch.permute(weights, (0, 1, 3, 2)), dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_bias = ttnn.from_torch(bias, dtype, device=device, layout=ttnn.TILE_LAYOUT) if bias is not None else None
+    return tt_weights, tt_bias

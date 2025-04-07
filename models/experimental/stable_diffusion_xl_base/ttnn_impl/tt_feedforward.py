@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import torch
 import ttnn
 
 from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_geglu import TtGEGLU
+from models.experimental.stable_diffusion_xl_base.ttnn_impl.sdxl_utility import prepare_linear_params
 
 
 class TtFeedForward(nn.Module):
@@ -24,12 +24,7 @@ class TtFeedForward(nn.Module):
         weights = state_dict[f"{module_path}.net.2.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.net.2.bias"]
 
-        self.tt_weights = ttnn.from_torch(
-            torch.permute(weights, (0, 1, 3, 2)), ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
-        )
-        self.tt_bias = (
-            ttnn.from_torch(bias, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT) if bias is not None else None
-        )
+        self.tt_weights, self.tt_bias = prepare_linear_params(device, weights, bias, ttnn.bfloat8_b)
 
     def forward(self, hidden_states):
         hidden_states = self.tt_geglu(hidden_states)

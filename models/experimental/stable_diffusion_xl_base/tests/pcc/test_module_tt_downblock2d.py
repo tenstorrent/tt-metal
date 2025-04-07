@@ -38,7 +38,13 @@ def test_downblock2d(device, temb_shape, input_shape, use_program_cache):
     ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
-    ttnn_temb_tensor = ttnn.from_torch(torch_temb_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_temb_tensor = ttnn.from_torch(
+        torch_temb_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     ttnn_output_tensor, output_shape, _ = tt_downblock.forward(ttnn_input_tensor, ttnn_temb_tensor, [B, C, H, W])
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
 

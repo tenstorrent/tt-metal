@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import torch
 import ttnn
-import ttnn.torch_tracer
+
+from models.experimental.stable_diffusion_xl_base.ttnn_impl.sdxl_utility import prepare_linear_params
 
 
 class TtAttention(nn.Module):
@@ -44,34 +44,16 @@ class TtAttention(nn.Module):
         )
 
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
-
-        self.tt_q_weights = ttnn.from_torch(
-            torch.permute(q_weights, (0, 1, 3, 2)), ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
-        )
-
         k_weights = state_dict[f"{module_path}.to_k.weight"].unsqueeze(0).unsqueeze(0)
-
-        self.tt_k_weights = ttnn.from_torch(
-            torch.permute(k_weights, (0, 1, 3, 2)), ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
-        )
-
         v_weights = state_dict[f"{module_path}.to_v.weight"].unsqueeze(0).unsqueeze(0)
-
-        self.tt_v_weights = ttnn.from_torch(
-            torch.permute(v_weights, (0, 1, 3, 2)), ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
-        )
 
         out_weights = state_dict[f"{module_path}.to_out.0.weight"].unsqueeze(0).unsqueeze(0)
         out_bias = state_dict[f"{module_path}.to_out.0.bias"]
 
-        self.tt_out_weights = ttnn.from_torch(
-            torch.permute(out_weights, (0, 1, 3, 2)), ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
-        )
-        self.tt_out_bias = (
-            ttnn.from_torch(out_bias, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-            if out_bias is not None
-            else None
-        )
+        self.tt_q_weights, _ = prepare_linear_params(device, q_weights, None, ttnn.bfloat8_b)
+        self.tt_k_weights, _ = prepare_linear_params(device, k_weights, None, ttnn.bfloat8_b)
+        self.tt_v_weights, _ = prepare_linear_params(device, v_weights, None, ttnn.bfloat8_b)
+        self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, ttnn.bfloat8_b)
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:

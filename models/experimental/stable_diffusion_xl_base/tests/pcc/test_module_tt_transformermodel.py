@@ -37,14 +37,24 @@ def test_transformermodel(
 
     torch_output_tensor = torch_transformerblock(torch_input_tensor, encoder_hidden_states=torch_encoder_tensor).sample
 
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     B, C, H, W = list(ttnn_input_tensor.shape)
 
     ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
     ttnn_encoder_tensor = ttnn.from_torch(
-        torch_encoder_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+        torch_encoder_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_output_tensor = tt_transformerblock.forward(ttnn_input_tensor, [B, C, H, W], None, ttnn_encoder_tensor)
     output_tensor = ttnn.to_torch(ttnn_output_tensor)

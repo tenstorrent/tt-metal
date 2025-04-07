@@ -3,12 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import torch
 import ttnn
 import re
 
 from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_transformerblock import TtBasicTransformerBlock
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.sdxl_utility import prepare_gn_mask, prepare_gn_beta_gamma
+from models.experimental.stable_diffusion_xl_base.ttnn_impl.sdxl_utility import (
+    prepare_gn_mask,
+    prepare_gn_beta_gamma,
+    prepare_linear_params,
+)
 
 
 class TtTransformer2DModel(nn.Module):
@@ -19,7 +22,7 @@ class TtTransformer2DModel(nn.Module):
 
         self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)
         self.norm_groups = 32
-        self.norm_eps = 1e-5
+        self.norm_eps = 1e-6
 
         pattern = re.compile(rf"^{re.escape(module_path)}\.transformer_blocks\.(\d+)")
         transformer_blocks = set(int(match.group(1)) for key in state_dict.keys() if (match := pattern.match(key)))
@@ -39,23 +42,11 @@ class TtTransformer2DModel(nn.Module):
 
         weights = state_dict[f"{module_path}.proj_in.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.proj_in.bias"]
-
-        self.tt_weights_in = ttnn.from_torch(
-            torch.permute(weights, (0, 1, 3, 2)), ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
-        )
-        self.tt_bias_in = (
-            ttnn.from_torch(bias, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT) if bias is not None else None
-        )
+        self.tt_weights_in, self.tt_bias_in = prepare_linear_params(device, weights, bias, ttnn.bfloat8_b)
 
         weights = state_dict[f"{module_path}.proj_out.weight"].unsqueeze(0).unsqueeze(0)
         bias = state_dict[f"{module_path}.proj_out.bias"]
-
-        self.tt_weights_out = ttnn.from_torch(
-            torch.permute(weights, (0, 1, 3, 2)), ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
-        )
-        self.tt_bias_out = (
-            ttnn.from_torch(bias, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT) if bias is not None else None
-        )
+        self.tt_weights_out, self.tt_bias_out = prepare_linear_params(device, weights, bias, ttnn.bfloat8_b)
 
     def forward(self, input_tensor, input_shape, attention_mask=None, encoder_hidden_states=None):
         B, C, H, W = input_shape

@@ -20,9 +20,9 @@ class TtUpsample2D(nn.Module):
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"]
 
-        self.tt_weights = ttnn.from_torch(weights, ttnn.bfloat16)
+        self.tt_weights = ttnn.from_torch(weights, ttnn.float32)
         self.tt_bias = (
-            ttnn.from_torch(bias.unsqueeze(0).unsqueeze(0).unsqueeze(0), ttnn.bfloat16) if bias is not None else None
+            ttnn.from_torch(bias.unsqueeze(0).unsqueeze(0).unsqueeze(0), ttnn.float32) if bias is not None else None
         )
 
         self.input_channels = self.tt_weights.shape[1]
@@ -41,10 +41,10 @@ class TtUpsample2D(nn.Module):
 
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat16,
-            weights_dtype=ttnn.bfloat16,
+            weights_dtype=ttnn.bfloat8_b,
             shard_layout=None,
             input_channels_alignment=32,
-            deallocate_activation=False,
+            deallocate_activation=True,
             enable_act_double_buffer=False,
             enable_split_reader=False,
             enable_subblock_padding=False,

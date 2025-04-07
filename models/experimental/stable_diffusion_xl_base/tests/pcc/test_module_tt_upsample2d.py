@@ -36,7 +36,9 @@ def test_upsample2d(device, input_shape, up_block_id, stride, padding, dilation,
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_upsample(torch_input_tensor)
 
-    ttnn_input_tensor = to_channel_last_ttnn(torch_input_tensor, ttnn.bfloat16, device, ttnn.DRAM_MEMORY_CONFIG)
+    ttnn_input_tensor = to_channel_last_ttnn(
+        torch_input_tensor, ttnn.bfloat16, device, ttnn.L1_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
+    )
     ttnn_output_tensor, output_shape = tt_upsample.forward(ttnn_input_tensor)
     output_tensor = from_channel_last_ttnn(
         ttnn_output_tensor, [input_shape[0], output_shape[1], output_shape[2], output_shape[0]]
