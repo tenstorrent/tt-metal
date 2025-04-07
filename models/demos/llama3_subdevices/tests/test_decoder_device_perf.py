@@ -20,13 +20,11 @@ from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 mapping_op_code_to_name = {
-    "LayerNorm_0": "PreAllGatherLN_0",
-    "LayerNorm_1": "PostAllGatherLN_0",
-    "LayerNorm_2": "PreAllGatherLN_1",
-    "LayerNorm_3": "PostAllGatherLN_1",
-    "AllGatherAsync_0": "AllGatherAsync_LN_0",
-    "AllGatherAsync_1": "AllGatherAsync_SDPA_0",
-    "AllGatherAsync_2": "AllGatherAsync_LN_1",
+    "RMSAllGather_0": "PreRMS_0",
+    "RMSAllGather_1": "PostRMS_0",
+    "RMSAllGather_2": "PreRMS_1",
+    "RMSAllGather_3": "PostRMS_1",
+    "AllGatherAsync_0": "AllGatherAsync_SDPA_0",
     "ShardedToInterleavedDeviceOperation_0": "ShardedToInterleavedDeviceOperation_LN_0",
     "ShardedToInterleavedDeviceOperation_1": "ShardedToInterleavedDeviceOperation_LN_1",
     "InterleavedToShardedDeviceOperation_0": "InterleavedToShardedDeviceOperation_LN_0",
@@ -329,13 +327,11 @@ def test_llama_TG_perf_device(
     print(dispatch_duration_per_instance_averaged_dict)
 
     expected_kernel_times_dict = {
-        "LayerNorm_0": 6954.111111111111,
-        "LayerNorm_1": 6530.777777777777,
-        "LayerNorm_2": 6752.333333333333,
-        "LayerNorm_3": 6543.111111111111,
-        "AllGatherAsync_0": 4205.888888888889,
-        "AllGatherAsync_1": 9638.666666666666,
-        "AllGatherAsync_2": 4095.5555555555557,
+        "RMSAllGather_0": 10000,
+        "RMSAllGather_1": 6530.777777777777,
+        "RMSAllGather_2": 10000,
+        "RMSAllGather_3": 6543.111111111111,
+        "AllGatherAsync_0": 9638.666666666666,
         "ShardedToInterleavedDeviceOperation_0": 3947.222222222222,
         "ShardedToInterleavedDeviceOperation_1": 3388.5555555555557,
         "InterleavedToShardedDeviceOperation_0": 2546.5555555555557,
@@ -362,13 +358,11 @@ def test_llama_TG_perf_device(
     }
 
     expected_dispatch_times_dict = {
-        "LayerNorm_0": 657.6666666666666,
-        "LayerNorm_1": 634.3333333333334,
-        "LayerNorm_2": 661.4444444444445,
-        "LayerNorm_3": 641.0,
-        "AllGatherAsync_0": 2417.5555555555557,
-        "AllGatherAsync_1": 676.4444444444445,
-        "AllGatherAsync_2": 2403.4444444444443,
+        "RMSAllGather_0": 657.6666666666666,
+        "RMSAllGather_1": 634.3333333333334,
+        "RMSAllGather_2": 661.4444444444445,
+        "RMSAllGather_3": 641.0,
+        "AllGatherAsync_0": 676.4444444444445,
         "ShardedToInterleavedDeviceOperation_0": 2211.6666666666665,
         "ShardedToInterleavedDeviceOperation_1": 2212.222222222222,
         "InterleavedToShardedDeviceOperation_0": 631.8888888888889,
@@ -529,13 +523,11 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     print(dispatch_duration_per_instance_averaged_dict)
 
     expected_non_overlapped_dispatch_times_dict = {
-        "LayerNorm_0": 6493.1,
-        "LayerNorm_1": 6190.6,
-        "LayerNorm_2": 6376.6,
-        "LayerNorm_3": 6431.2,
-        "AllGatherAsync_0": 2273.2,
-        "AllGatherAsync_1": 2983.2,
-        "AllGatherAsync_2": 2272.1,
+        "RMSAllGather_0": 10000,
+        "RMSAllGather_1": 6190.6,
+        "RMSAllGather_2": 10000,
+        "RMSAllGather_3": 6431.2,
+        "AllGatherAsync_0": 2983.2,
         "ShardedToInterleavedDeviceOperation_0": 1919.0,
         "ShardedToInterleavedDeviceOperation_1": 1910.2,
         "InterleavedToShardedDeviceOperation_0": 10347.3,
