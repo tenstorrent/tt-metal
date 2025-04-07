@@ -1,0 +1,15 @@
+name: 🧩 tt-metal integration
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+jobs:
+  test-tt-metal:
+    name: "🧪 Running tests (Wormhole)"
+    if: contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
+    uses: ./.github/workflows/tt-metal-integration-tests.yml
+    secrets: inherit
+    with:
+      branch_name: ${{ github.head_ref }}
+      runs_on: tt-beta-ubuntu-2204-n150-large-stable
