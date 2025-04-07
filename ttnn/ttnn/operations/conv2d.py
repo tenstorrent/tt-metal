@@ -52,6 +52,32 @@ def prepare_conv_weights(
     device,
     conv_config=None,
 ):
+    """
+    TTNN Conv2D applies preprocessing to the weights tensors before performing the convolution operation, to convert the weights into a format suitable for the operation.
+    This can be applied just once to the weights and bias tensors, and the resulting tensors can be reused for multiple invocations of the same convolution operation.
+    The exact format of the weights and bias tensors depends on the input tensor parameters and the sharding scheme.
+
+    :param ttnn.Tensor weight_tensor: the weight tensor in PyTorch Conv2d format.
+    :param ttnn.MemoryConfig input_memory_config: the memory configuration for the input tensor.
+    :param ttnn.Tensor input_layout: the layout of the input tensor.
+    :param ttnn.Tensor weights_format: the format of the weights tensor. Currently only supports OIHW. (out_channels, in_channels, kernel_height, kernel_width)
+    :param int: in_channels:  number of input channels.
+    :param int: out_channels:  number of output channels.
+    :param int: batch_size:  batch size.
+    :param int: input_height:  height of the input tensor.
+    :param int: input_width:  width of the input tensor.
+    :param tuple[int  , int] kernel_size: size of the convolving kernel.
+    :param tuple[int, int] stride: stride of the cross-correlation.
+    :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+    :param tuple[int, int] dilation: spacing between kernel elements.
+    :param bool has_bias:  whether the convolution has a bias term.
+    :param int groups:  number of blocked connections from input channels to output channels.
+    :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
+    :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
+
+    :return: The preprocessed weight tensor on device
+    :rtype: [ttnn.Tensor]: The preprocessed bias tensor on device
+    """
     return ttnn._ttnn.operations.conv.prepare_conv_weights(
         weight_tensor=weight_tensor,
         input_memory_config=input_memory_config,
@@ -91,6 +117,33 @@ def prepare_conv_bias(
     device,
     conv_config=None,
 ):
+    """
+    TTNN Conv2D applies preprocessing to the bias tensors before performing the convolution operation, to convert the bias into a format suitable for the operation.
+    This can be applied just once to the weights and bias tensors, and the resulting tensors can be reused for multiple invocations of the same convolution operation.
+    The exact format of the weights and bias tensors depends on the input tensor parameters and the sharding scheme.
+
+    :param ttnn.Tensor bias: the bias tensor in PyTorch Conv2d format.
+    :param ttnn.MemoryConfig input_memory_config: the memory configuration for the input tensor.
+    :param ttnn.Tensor input_layout: the layout of the input tensor.
+    :param ttnn.Tensor weights_format: the format of the weights tensor. Currently only supports OIHW. (out_channels, in_channels, kernel_height, kernel_width)
+    :param int: in_channels:  number of input channels.
+    :param int: out_channels:  number of output channels.
+    :param int: batch_size:  batch size.
+    :param int: input_height:  height of the input tensor.
+    :param int: input_width:  width of the input tensor.
+    :param tuple[int  , int] kernel_size: size of the convolving kernel.
+    :param tuple[int, int] stride: stride of the cross-correlation.
+    :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+    :param tuple[int, int] dilation: spacing between kernel elements.
+    :param ttnn.IDevice device:  the device to use.
+    :param int groups:  number of blocked connections from input channels to output channels.
+    :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
+    :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
+
+    :return: The preprocessed bias tensor on device
+    :rtype: [ttnn.Tensor]: The preprocessed bias tensor on device
+
+    """
     return ttnn._ttnn.operations.conv.prepare_conv_bias(
         bias_tensor=bias_tensor,
         input_memory_config=input_memory_config,
@@ -186,8 +239,8 @@ def conv2d(
     """
     Applies a 2D convolution over an input signal composed of several input planes.
 
-        :param ttnn.Tensor input_tensor:  the input tensor.
-        :param ttnn.Tensor weight_tensor: the weight tensor.
+        :param ttnn.Tensor input_tensor:  the input tensor. This must be in the format [N, H, W, C]. It can be on host or device.
+        :param ttnn.Tensor weight_tensor: the weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w
         :param ttnn.Tensor, None bias_tensor:   optional bias tensor. Default: None
         :param ttnn.IDevice device:  the device to use.
         :param int: in_channels:  number of input channels.
@@ -212,6 +265,8 @@ def conv2d(
         :rtype: [ttnn.Tensor, Tuple[int, int]]: the output tensor, and it's height & width, if return_output_dim = True
         :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height & width, if return_weights_and_bias = True
         :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height & width, if return_output_dim = True and return_weights_and_bias = True
+
+    For more information, refer to https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md
     """
     (
         conv_output,
