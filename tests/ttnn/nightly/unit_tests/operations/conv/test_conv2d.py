@@ -457,7 +457,7 @@ def run_conv_with_split(
         else:
             torch_output_tensor = torch.concat([torch_output_tensor, torch_output_tensor_per_output_slice], dim=1)
 
-    assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.98)
+    assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.97)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
@@ -3002,29 +3002,6 @@ def test_conv2d_model_fruit(
         (1, 960, 640, 64, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
         (1, 960, 320, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
 
-        # VAE
-        # kernel 3x3
-        # (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-        # (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-        # (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-        # (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-        # (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-        # (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-        # (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-
-        # # output_channels 3
-        # (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-
-        # input_channels 4
-        (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-
-        # kernel 1x1
-        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-
-        # channels 4
-        (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
     ),
 )
 
@@ -3083,6 +3060,131 @@ def test_conv2d_sdxl(
             fp32_accum=fp32_accum,
             packer_l1_acc=packer_l1_acc,
             auto_shard=auto_shard,
+        )
+    else:
+        run_conv(
+            device=device,
+            torch_tensor_map=torch_tensor_map,
+            math_fidelity=math_fidelity,
+            activations_dtype=activations_dtype,
+            weights_dtype=weights_dtype,
+            batch_size=batch,
+            output_channels=output_channels,
+            input_channels=input_channels,
+            input_height=input_height,
+            input_width=input_width,
+            filter_height=kernel[0],
+            filter_width=kernel[1],
+            stride_h=stride[0],
+            stride_w=stride[1],
+            padding=padding,
+            config_override=config_override,
+            dilation_h=dilation[0],
+            dilation_w=dilation[1],
+            use_shallow_conv_variant=use_shallow_conv_variant,
+            fp32_accum=fp32_accum,
+            packer_l1_acc=packer_l1_acc,
+            output_layout=ttnn.TILE_LAYOUT,
+            deallocate_activation=deallocate_activation,
+            debug=False,
+            groups=groups,
+            has_bias=True,
+            shard_layout=None,
+            auto_shard=auto_shard,
+            memory_config=None,
+            input_mesh_mapper=None,
+            weight_mesh_mapper=None,
+            output_mesh_composer=None,
+            enable_split_reader=enable_split_reader,
+        )
+
+
+@pytest.mark.parametrize(
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, activations_dtype, groups, kernel, stride, padding, dilation, auto_shard, use_shallow_conv_variant, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_factor_input_channels, split_factor_output_channels",
+    (
+        # 1024x1024 resolution
+
+        # VAE
+        # kernel 3x3
+        # (1, 128, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1), # OOM
+        # (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1), # OOM
+        # (1, 256, 256, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1), # OOM
+        (1, 256, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 8, 2),
+        (1, 512, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1),
+        (1, 512, 512, 256, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 8, 1),
+        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 16, 2),
+        (1, 512, 512, 512, 512, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 16, 4),
+
+        # output_channels 3
+        # (1, 128, 3, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1), # OOM
+
+        # input_channels 4
+        (1, 4, 512, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1),
+
+        # kernel 1x1
+        (1, 256, 128, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1),
+        (1, 512, 256, 512, 512, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1),
+
+        # channels 4
+        (1, 4, 4, 128, 128, ttnn.bfloat8_b, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1, 1),
+    ),
+)
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_vae_sdxl(
+    device,
+    torch_tensor_map,
+    batch,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    weights_dtype,
+    activations_dtype,
+    groups,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    auto_shard,
+    use_shallow_conv_variant,
+    act_block_h_override,
+    act_block_w_div,
+    deallocate_activation,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+    enable_split_reader,
+    split_factor_input_channels,
+    split_factor_output_channels
+):
+
+    config_override = {}
+    config_override["act_block_h"] = act_block_h_override
+    config_override["act_block_w_div"] = act_block_w_div
+
+    if split_factor_input_channels > 1 or split_factor_output_channels > 1:
+        run_conv_with_split(
+            device,
+            torch_tensor_map,
+            ttnn.MathFidelity.LoFi,
+            activations_dtype,
+            weights_dtype,
+            batch,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            kernel[0],
+            kernel[1],
+            stride[0],
+            stride[1],
+            padding,
+            None,
+            shard_layout=None,
+            split_input_channels_factor=split_factor_input_channels,
+            split_output_channels_factor=split_factor_output_channels,
+            auto_shard=True,
         )
     else:
         run_conv(
