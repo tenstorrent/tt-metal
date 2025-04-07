@@ -520,7 +520,6 @@ FORCE_INLINE void check_worker_connections(
             // if constexpr (enable_fabric_counters) {
             //     sender_channel_counters->add_connection();
             // }
-            did_something = true;
             channel_connection_established = true;
             local_sender_channel_worker_interface.cache_producer_noc_addr();
             if constexpr (enable_first_level_ack) {
@@ -532,7 +531,6 @@ FORCE_INLINE void check_worker_connections(
             }
         }
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
-        did_something = true;
         channel_connection_established = false;
         local_sender_channel_worker_interface.template teardown_connection<true>(
             local_sender_channel_worker_interface.local_rdptr.get_ptr());
@@ -620,9 +618,6 @@ void run_sender_channel_step(
             increment_local_update_ptr_val(
                 to_sender_packets_acked_streams[sender_channel_index], -acks_since_last_check);
         }
-        did_something = did_something || (completions_since_last_check + acks_since_last_check) > 0;
-    } else {
-        did_something = did_something || (completions_since_last_check > 0);
     }
 
     auto check_connection_status =
@@ -678,6 +673,7 @@ void run_receiver_channel_step(
             can_forward_packet_completely(cached_routing_fields, downstream_edm_interface);
         bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         if (can_send_to_all_local_chip_receivers && trid_flushed) {
+            did_something = true;
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
             receiver_forward_packet(
