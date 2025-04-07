@@ -65,32 +65,32 @@ def run_argmax(device, tensor_shape, dim, keepdim) -> list:
         ttnn_error_msg = str(e)
 
     if torch_errored != ttnn_errored:
-        return [
+        return (
             False,
             f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})",
-        ]
+        )
 
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:
         logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
-        return [True, ""]
+        return (True, "")
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
     pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
 
     if not pcc_result:
-        return [False, msg]
+        return (False, msg)
 
     # Convert torch dtype from uint64 to int32
     # Note: torch does not have uint32
     torch_result = torch_result.to(torch.int32)
 
     atol = rtol = 0.1
-    return [
+    return (
         torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True),
         f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}",
-    ]
+    )
 
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
