@@ -25,7 +25,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
         (torch.Size([1, 1, 2, 4])),
     ),
 )
-@pytest.mark.parametrize("dim", (-1,))
+@pytest.mark.parametrize("dim", (-1, None))
 @pytest.mark.parametrize("memconfig", (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG))
 class TestArgmax:
     def test_argmax(self, input_shapes, dim, memconfig, device):
