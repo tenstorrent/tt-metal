@@ -327,10 +327,10 @@ def test_llama_TG_perf_device(
     print(dispatch_duration_per_instance_averaged_dict)
 
     expected_kernel_times_dict = {
-        "RMSAllGather_0": 10000,
-        "RMSAllGather_1": 6530.777777777777,
-        "RMSAllGather_2": 10000,
-        "RMSAllGather_3": 6543.111111111111,
+        "RMSAllGather_0": 11077,
+        "RMSAllGather_1": 6720.666666666667,
+        "RMSAllGather_2": 10733.666666666666,
+        "RMSAllGather_3": 6670.222222222223,
         "AllGatherAsync_0": 9638.666666666666,
         "ShardedToInterleavedDeviceOperation_0": 3947.222222222222,
         "ShardedToInterleavedDeviceOperation_1": 3388.5555555555557,
@@ -353,8 +353,8 @@ def test_llama_TG_perf_device(
         "NLPConcatHeadsDecodeDeviceOperation_0": 6665.0,
         "ReshardDeviceOperation_0": 1752.7777777777778,
         "BinaryDeviceOperation_0": 2408.8888888888887,
-        "BinaryDeviceOperation_1": 11838.444444444445,
-        "BinaryDeviceOperation_2": 2435.5555555555557,
+        "BinaryDeviceOperation_1": 2676.5555555555557,
+        "BinaryDeviceOperation_2": 13164.333333333334,
     }
 
     expected_dispatch_times_dict = {
