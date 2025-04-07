@@ -29,6 +29,9 @@ on:
       - reopened
       - synchronize
       - ready_for_review
+  push:
+    branches:
+      - main # Builds on main will populate the shared ccache to speed up builds on branches
 
 concurrency:
   # Use github.run_id on main branch (or any protected branch)
