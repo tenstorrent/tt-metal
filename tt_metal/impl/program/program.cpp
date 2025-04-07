@@ -1716,21 +1716,13 @@ size_t detail::Program_::calculate_hash() const {
     auto hash_kernel = [&](const std::shared_ptr<Kernel>& kernel) -> size_t {
         size_t hash = std::hash<std::string>()(kernel->kernel_source().source_);
         hash = hash_combine(hash, std::hash<CoreRangeSet>()(kernel->core_range_set()));
-        auto cores = corerange_to_cores(kernel->core_range_set());
-        for (const auto& core : cores) {
-            hash = hash_combine(hash, kernel->runtime_args(core).size());
-        }
         auto defines = kernel->defines();
         hash = hash_combine(hash, defines.size());
         for (const auto& [key, value] : defines) {
             hash = hash_combine(hash, std::hash<std::string>()(key));
             hash = hash_combine(hash, std::hash<std::string>()(value));
         }
-        auto& common_runtime_args = kernel->common_runtime_args();
-        hash = hash_combine(hash, common_runtime_args.size());
-        for (const auto& arg : common_runtime_args) {
-            hash = hash_combine(hash, arg);
-        }
+        hash = hash_combine(hash, kernel->common_runtime_args().size());
         auto config = kernel->config();
         auto config_hash = std::visit(
             tt::stl::overloaded{
@@ -1802,24 +1794,22 @@ size_t detail::Program_::calculate_hash() const {
         hash = hash_combine(hash, circular_buffer->globally_allocated());
         auto& config = circular_buffer->config();
         hash = hash_combine(hash, std::hash<uint32_t>()(config.total_size()));
-        for (const auto& data_format : config.data_formats()) {
-            hash = hash_combine(hash, std::hash<std::optional<tt::DataFormat>>()(data_format));
-        }
-        for (const auto& page_size : config.page_sizes()) {
-            hash = hash_combine(hash, std::hash<std::optional<uint32_t>>()(page_size));
-        }
-        for (const auto& tile : config.tiles()) {
+        hash = hash_combine(hash, config.buffer_indices().size());
+        for (const auto& buffer_index : config.buffer_indices()) {
+            hash = hash_combine(hash, buffer_index);
+            hash =
+                hash_combine(hash, std::hash<std::optional<tt::DataFormat>>()(config.data_formats().at(buffer_index)));
+            hash = hash_combine(hash, std::hash<std::optional<uint32_t>>()(config.page_sizes().at(buffer_index)));
+            const auto& tile = config.tiles().at(buffer_index);
             if (tile.has_value()) {
                 hash = hash_combine(hash, tile->get_width());
                 hash = hash_combine(hash, tile->get_height());
                 hash = hash_combine(hash, tile->get_transpose_of_faces());
             } else {
                 hash = hash_combine(hash, 0);
+                hash = hash_combine(hash, 0);
+                hash = hash_combine(hash, 0);
             }
-        }
-        hash = hash_combine(hash, config.buffer_indices().size());
-        for (const auto& buffer_index : config.buffer_indices()) {
-            hash = hash_combine(hash, buffer_index);
         }
         hash = hash_combine(hash, config.local_buffer_indices().size());
         for (const auto& buffer_index : config.local_buffer_indices()) {
@@ -1867,6 +1857,11 @@ void detail::Program_::copy_runtime_args_from(const Program_& other) {
         auto cores = corerange_to_cores(kernel_from.core_range_set());
         for (const auto& core : cores) {
             kernel_to.set_runtime_args(core, kernel_from.runtime_args(core));
+        }
+        auto& common_runtime_args_data_to = kernel_to.common_runtime_args_data();
+        auto& common_runtime_args_data_from = kernel_from.common_runtime_args_data();
+        for (size_t i = 0; i < kernel_from.common_runtime_args().size(); ++i) {
+            common_runtime_args_data_to[i] = common_runtime_args_data_from[i];
         }
     };
 

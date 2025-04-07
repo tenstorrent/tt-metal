@@ -279,6 +279,8 @@ const std::vector<uint32_t>& Kernel::common_runtime_args() const { return this->
 
 std::vector<uint32_t> &Kernel::common_runtime_args() { return this->common_runtime_args_; }
 
+const RuntimeArgsData& Kernel::common_runtime_args_data() const { return this->common_runtime_args_data_; }
+
 RuntimeArgsData &Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
 // Ensure that unique and common runtime args do not overflow reserved region in L1.

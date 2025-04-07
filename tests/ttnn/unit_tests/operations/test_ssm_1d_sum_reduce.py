@@ -69,7 +69,7 @@ def test_ssm_1d_sum_reduce_with_program_cache(device, use_program_cache):
     mem_config = ttnn.L1_MEMORY_CONFIG
     dtype = ttnn.bfloat16
 
-    for _ in range(1):
+    for _ in range(2):
         H, W, latent = 32, 163840, 32
         run_ssm_1d_sum_reduce(H, W, latent, dtype, mem_config, mem_config, device)
         H, W, latent = 64, 163840, 32

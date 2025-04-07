@@ -287,7 +287,7 @@ void set_or_update_runtime_arguments(
         } else {
             handle_args(program, reader_kernel_id, core, std::array<uint32_t, 13>{0});
             handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
-            handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
+            handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
 

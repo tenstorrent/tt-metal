@@ -108,6 +108,7 @@ class Kernel : public JitBuildSettings {
     void set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count);
     const std::vector<uint32_t>& common_runtime_args() const;
     std::vector<uint32_t> & common_runtime_args();
+    const RuntimeArgsData& common_runtime_args_data() const;
     RuntimeArgsData & common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
