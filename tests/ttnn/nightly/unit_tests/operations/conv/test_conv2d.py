@@ -201,14 +201,12 @@ def run_conv(
             weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
             mesh_mapper=weight_mesh_mapper,
         )
-    if slice_config:
-        tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
-    else:
-        tt_input_tensor = ttnn.from_torch(
-            torch_input_tensor,
-            activations_dtype if activations_dtype == ttnn.float32 else ttnn.bfloat16,
-            mesh_mapper=input_mesh_mapper,
-        )
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        activations_dtype if activations_dtype == ttnn.float32 else ttnn.bfloat16,
+        mesh_mapper=input_mesh_mapper,
+    )
 
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
