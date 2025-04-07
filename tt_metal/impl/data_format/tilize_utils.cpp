@@ -8,10 +8,23 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
 #include <type_traits>
+#include <ostream>
 
 #include "assert.hpp"
 #include "constants.hpp"
 #include <tt_stl/span.hpp>
+
+namespace tests::utils {
+std::ostream& operator<<(std::ostream& os, TensorLayoutType layout) {
+    switch (layout) {
+        case TensorLayoutType::LIN_ROW_MAJOR: os << "LIN_ROW_MAJOR"; break;
+        case TensorLayoutType::TILED_SWIZZLED: os << "TILED_SWIZZLED"; break;
+        case TensorLayoutType::TILED_NFACES: os << "TILED_NFACES"; break;
+        default: os << "Unknown TensorLayoutType";
+    }
+    return os;
+}
+}  // namespace tests::utils
 
 TensAddr::TensAddr(const std::vector<std::uint32_t>& shape) : sh(shape) {}
 

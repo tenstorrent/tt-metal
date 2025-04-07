@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <optional>
 #include <vector>
+#include <iosfwd>
 
 namespace tests::utils {
 enum class TensorLayoutType {
@@ -21,6 +22,7 @@ enum class TensorLayoutType {
     TILED_NFACES =
         2,  // row-major of tiles, each tile is N (N = 1, 2, or 4) faces, each face is row-major, faces are swizzled
 };
+std::ostream& operator<<(std::ostream& os, TensorLayoutType layout);
 }  // namespace tests::utils
 
 using PhysicalSize = std::array<uint32_t, 2>;
