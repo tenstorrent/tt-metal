@@ -143,15 +143,12 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
                             man_shifted,
                             man,
                             select_mask);  // Choose new mantissa or keep old mantissa based on 0 initial condition.
-                        // Assert if the exponent and corresponding mantissa for a datum are non-zero and the
-                        // subtraction bias (shift_cnt) for that data is greater than the exponent value
-                        TT_ASSERT(
-                            !(_mm256_movemask_ps(
-                                  _mm256_castsi256_ps(_mm256_cmpgt_epi32(exp_vector, _mm256_setzero_si256()))) &
-                              _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpgt_epi32(shift_cnt, exp_vector))) &
-                              !_mm256_movemask_ps(_mm256_castsi256_ps(select_mask))),
-                            "Device returned incorrect data for Bfp8 formats: The Shift Count for a non-zero exponent "
-                            "is greater than the exponent value.");
+                        // Flush denormals to zero
+                        // Check if shift > exp and mantissa is not zero
+                        __m256i mask_shift_gt_exp = _mm256_cmpgt_epi32(shift_cnt, exp_vector);
+                        __m256i mask_nonzero_mantissa = _mm256_xor_si256(select_mask, _mm256_set1_epi32(-1));
+                        __m256i mask_denormal = _mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
+
                         exp_vector = _mm256_blendv_epi8(
                             _mm256_sub_epi32(exp_vector, _mm256_add_epi32(rebias_offset, shift_cnt)),
                             _mm256_setzero_si256(),
@@ -163,6 +160,9 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
                         man = _mm256_sll_epi32(man, _mm_set_epi64x(0, 16));                // Shift mantissa
                         man = _mm256_or_si256(
                             sign, _mm256_or_si256(exp_vector, man));  // Store final value in mantissa register and save
+
+                        // Zero out lanes where mask_denormal is true
+                        man = _mm256_blendv_epi8(man, _mm256_setzero_si256(), mask_denormal);
 
                         uint32_t float_data_index;
                         if (row_major_output) {
