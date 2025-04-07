@@ -191,7 +191,20 @@ void HWCommandQueue::increment_num_entries_in_completion_q() {
     // Increment num_entries_in_completion_q and inform reader thread
     // that there is work in the completion queue to process
     std::lock_guard lock(this->reader_thread_cv_mutex_);
+    tt::log_info(
+        "increment_num_entries_in_completion_q num_entries_in_completion_q_: {}, num_completed_completion_q_reads_: "
+        "{}, thread_id: {}",
+        this->num_entries_in_completion_q_.load(),
+        this->num_completed_completion_q_reads_.load(),
+        std::hash<std::thread::id>{}(std::this_thread::get_id()));
     this->num_entries_in_completion_q_++;
+    tt::log_info(
+        "increment_num_entries_in_completion_q after increment num_entries_in_completion_q_: {}, "
+        "num_completed_completion_q_reads_: "
+        "{}, thread_id: {}",
+        this->num_entries_in_completion_q_.load(),
+        this->num_completed_completion_q_reads_.load(),
+        std::hash<std::thread::id>{}(std::this_thread::get_id()));
     this->reader_thread_cv_.notify_one();
 }
 
@@ -311,6 +324,7 @@ void HWCommandQueue::enqueue_read_profiler_control_vector(
     const HalProgrammableCoreType core_type = this->device_->get_programmable_core_type(virtual_core);
     profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
 
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
     profiler_dispatch::ProfilerDispatchParams dispatch_params(
         virtual_core,
         reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
@@ -529,6 +543,12 @@ void HWCommandQueue::read_completion_queue() {
             if (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
                 num_events_to_read = this->num_entries_in_completion_q_ - this->num_completed_completion_q_reads_;
             }
+            tt::log_info(
+                "read_completion_queue num_entries_in_completion_q_: {}, num_completed_completion_q_reads_: {}, "
+                "thread_id: {}",
+                this->num_entries_in_completion_q_.load(),
+                this->num_completed_completion_q_reads_.load(),
+                std::hash<std::thread::id>{}(std::this_thread::get_id()));
         }
         if (num_events_to_read > 0) {
             ZoneScopedN("CompletionQueueReader");
@@ -537,6 +557,7 @@ void HWCommandQueue::read_completion_queue() {
                 auto read_descriptor = *(this->issued_completion_q_reads_.pop());
                 {
                     ZoneScopedN("CompletionQueueWait");
+                    // look at watcher log for more details - look at waypoints
                     this->manager_.completion_queue_wait_front(
                         this->id_, this->exit_condition_);  // CQ DISPATCHER IS NOT HANDSHAKING WITH HOST RN
                 }
@@ -563,7 +584,12 @@ void HWCommandQueue::read_completion_queue() {
                         } else if constexpr (std::is_same_v<T, ReadProfilerControlVectorDescriptor>) {
                             ZoneScopedN("CompletionQueueReadProfilerControlVector");
                             profiler_dispatch::read_profiler_control_vector_from_completion_queue(
-                                read_descriptor, mmio_device_id, channel, this->id_, this->manager_);
+                                read_descriptor,
+                                mmio_device_id,
+                                channel,
+                                this->id_,
+                                this->manager_,
+                                this->exit_condition_);
                         }
                     },
                     read_descriptor);
@@ -571,6 +597,12 @@ void HWCommandQueue::read_completion_queue() {
             {
                 std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex_);
                 this->num_completed_completion_q_reads_ += num_events_to_read;
+                tt::log_info(
+                    "read_completion_queue after increment num_entries_in_completion_q_: {}, "
+                    "num_completed_completion_q_reads_: {}, thread_id: {}",
+                    this->num_entries_in_completion_q_.load(),
+                    this->num_completed_completion_q_reads_.load(),
+                    std::hash<std::thread::id>{}(std::this_thread::get_id()));
                 this->reads_processed_cv_.notify_one();
             }
         } else if (this->exit_condition_) {

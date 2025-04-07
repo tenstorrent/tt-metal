@@ -49,6 +49,7 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
     const CoreCoord& worker_core,
+    const ProfilerDumpState state,
     const std::optional<ProfilerOptionalMetadata>& metadata,
     std::ofstream& log_file_ofs,
     nlohmann::ordered_json& noc_trace_json_log) {
@@ -81,17 +82,33 @@ void DeviceProfiler::readRiscProfilerResults(
             worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
-    // std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
-    //     device_id,
-    //     worker_core,
-    //     reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-    //     kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+    std::vector<std::uint32_t> control_buffer;
+    const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+    if (USE_FAST_DISPATCH) {
+        if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
+            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+                control_buffer = tt::llrt::read_hex_vec_from_core(
+                    device_id,
+                    worker_core,
+                    reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+            }
+        } else {
+            control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
+            device->command_queue().enqueue_read_profiler_control_vector(worker_core, control_buffer.data(), true);
+        }
+    } else {
+        if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
+            control_buffer = tt::llrt::read_hex_vec_from_core(
+                device_id,
+                worker_core,
+                reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+        }
+    }
 
-    std::vector<std::uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
-    device->command_queue().enqueue_read_profiler_control_vector(worker_core, control_buffer.data(), true);
-
-    if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
-        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
+    if (control_buffer.empty() || ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
+                                   (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0))) {
         return;
     }
 
@@ -779,7 +796,7 @@ void DeviceProfiler::dumpResults(
             log_error("Could not open kernel profiler dump file '{}'", log_path);
         } else {
             for (const auto& worker_core : worker_cores) {
-                readRiscProfilerResults(device, worker_core, metadata, log_file_ofs, noc_trace_json_log);
+                readRiscProfilerResults(device, worker_core, state, metadata, log_file_ofs, noc_trace_json_log);
             }
 
             // if defined, used profiler_noc_events_report_path to write json log. otherwise use output_dir

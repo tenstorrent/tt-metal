@@ -673,9 +673,9 @@ void InitDeviceProfiler(IDevice* device) {
             tt_metal_device_profiler_map.at(device_id).output_dram_buffer->address();
         setControlBuffer(device_id, control_buffer);
 
-        std::vector<uint32_t> inputs_DRAM(
-            tt_metal_device_profiler_map.at(device_id).output_dram_buffer->size() / sizeof(uint32_t), 0);
-        tt_metal::detail::WriteToBuffer(tt_metal_device_profiler_map.at(device_id).output_dram_buffer, inputs_DRAM);
+        // std::vector<uint32_t> inputs_DRAM(
+        //     tt_metal_device_profiler_map.at(device_id).output_dram_buffer->size() / sizeof(uint32_t), 0);
+        // tt_metal::detail::WriteToBuffer(tt_metal_device_profiler_map.at(device_id).output_dram_buffer, inputs_DRAM);
     }
     tt::log_info("Finish init device profiler for device {}", device->id());
 #endif

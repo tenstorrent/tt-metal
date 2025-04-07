@@ -37,7 +37,8 @@ void read_profiler_control_vector_from_completion_queue(
     chip_id_t mmio_device_id,
     uint16_t channel,
     uint8_t cq_id,
-    SystemMemoryManager& sysmem_manager);
+    SystemMemoryManager& sysmem_manager,
+    std::atomic<bool>& exit_condition);
 
 }  // namespace profiler_dispatch
 
