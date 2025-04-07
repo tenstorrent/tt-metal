@@ -304,6 +304,9 @@ Result conv2d_DRAM(
             conv2d_L1(
                 queue_id,
                 sliced_input_tensor,
+                // TODO: Add check to ensure that the shard_layout and memory_config are the same as the last slice to
+                // re-use the weights tensor.
+                // TODO: Add caching mechanism for multiple weights tensors, depending on the memory configs.
                 first_run ? weight_tensor : weight_tensor_on_device,
                 device,
                 in_channels,
