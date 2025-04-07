@@ -230,7 +230,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
     // L1 capacity is 1 MB, error when shard size cannot exceed that (L1 error)
     // So 1024 * 1024 / 64 = x * x = 128 * 128 => x = 128
 
-    // Fails: (when num dram banks isnt 1, 1)
+    // Fails: (when num dram banks isnt 1, 1), possibly due to the noc_addr_from_bank_id function in kernel
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});

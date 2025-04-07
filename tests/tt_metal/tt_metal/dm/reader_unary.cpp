@@ -18,21 +18,21 @@ void kernel_main() {
     constexpr uint32_t test_id = get_compile_time_arg_val(6);
 
     constexpr uint32_t transaction_size_bytes = transaction_num_pages * page_size_bytes;
+    constexpr uint32_t total_num_pages = num_of_transactions * transaction_num_pages;
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
 
+    cb_reserve_back(cb_id_in0, total_num_pages);
     {
         DeviceZoneScopedN("READER");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             // TODO: Change src address to change DRAM/core locations (single/multiple core)
             uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
-
-            cb_reserve_back(cb_id_in0, transaction_num_pages);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-            noc_async_read(src_noc_addr, l1_write_addr, transaction_size_bytes);
 
+            noc_async_read(src_noc_addr, l1_write_addr, transaction_size_bytes);
             noc_async_read_barrier();
 
             cb_push_back(cb_id_in0, transaction_num_pages);
