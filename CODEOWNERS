@@ -74,9 +74,8 @@ tt_metal/distributed/**/requirements*.txt @tenstorrent/metalium-developers-infra
 tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
 tests/tt_metal/distributed/**/requirements*.txt @tenstorrent/metalium-developers-infra @cfjchu @tt-asaigal @omilyutin-tt
 
-# metal - fw, llks, risc-v
+# metal - fw, llks
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
-tt_metal/hw/cmake/sfpi-version.cmake @nathan-TT
 tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @aliuTT @ubcheema
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
@@ -87,6 +86,11 @@ tt_metal/include/dataflow_kernel_api.h @davorchap @ntarafdar @rtawfik01 @rdjogoT
 tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT
 tt_metal/tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
+
+# sfpi
+tt_metal/hw/cmake/sfpi-version.cmake @nathan-TT
+tests/tt_metal/tt-metal/sfpi @nathan-TT
+tests/tt_metal/tt_metal/test_kernels/sfpi @nathan-TT
 
 # metal - profiler
 tt_metal/**/profiler/ @mo-tenstorrent
