@@ -104,7 +104,7 @@ jobs:
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
 
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
