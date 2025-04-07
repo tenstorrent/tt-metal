@@ -33,7 +33,7 @@ def test_unary_max_fill_val_fp32(input_shapes, input_val, scalar, device):
     torch_input = torch.ones(input_shapes, dtype=torch.float32) * input_val
 
     golden_function = ttnn.get_golden_function(ttnn.minimum)
-    golden = golden_function(torch_input, scalar, device=device)
+    golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
 
     tt_in = ttnn.from_torch(
         torch_input,
@@ -74,7 +74,7 @@ def test_unary_max_fill_val_bf16(input_shapes, input_val, scalar, device):
     torch_input = torch.ones(input_shapes, dtype=torch.bfloat16) * input_val
 
     golden_function = ttnn.get_golden_function(ttnn.minimum)
-    golden = golden_function(torch_input, scalar, device=device)
+    golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
 
     tt_in = ttnn.from_torch(
         torch_input,
@@ -111,7 +111,7 @@ def test_unary_max_bf16(input_shapes, low, high, scalar, device):
     torch_input = torch_input[:num_elements].reshape(input_shapes).nan_to_num(0.0)
 
     golden_function = ttnn.get_golden_function(ttnn.minimum)
-    golden = golden_function(torch_input, scalar, device=device)
+    golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
 
     tt_in = ttnn.from_torch(
         torch_input,
@@ -148,7 +148,7 @@ def test_unary_max_fp32(input_shapes, low, high, scalar, device):
     torch_input = torch_input[:num_elements].reshape(input_shapes)
 
     golden_function = ttnn.get_golden_function(ttnn.minimum)
-    golden = golden_function(torch_input, scalar, device=device)
+    golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
 
     tt_in = ttnn.from_torch(
         torch_input,
