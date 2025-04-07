@@ -32,6 +32,8 @@ jobs:
   pr-comment:
     name: Post comment on PR
     runs-on: ubuntu-latest
+    # This job will only run if the PR is not from a fork (can't post comments to forks)
+    if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Check if comment already exists
         id: check-comment
