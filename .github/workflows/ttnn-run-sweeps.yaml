@@ -35,6 +35,7 @@ on:
           - composite.binary.floor_div.floor_div_survey_test
           - composite.binary.prelu.prelu_survey_test
           - composite.binary.pow.pow_survey_test
+          - composite.binary.bitwise_and.bitwise_and_survey_test
           - composite.binary.gcd.gcd
           - composite.binary.lcm.lcm
           - composite.binary.lcm.lcm
@@ -43,6 +44,7 @@ on:
           - eltwise.unary.relu.relu_pytorch2
           - eltwise.unary.gelu.gelu
           - eltwise.unary.gelu.gelu_pytorch2
+          - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
           - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu_pytorch2
           - eltwise.unary.abs.abs
