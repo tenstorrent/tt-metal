@@ -20,7 +20,7 @@ void PlusOne::validate_with_output_tensors(
         "Only ROW_MAJOR layout is supported for inputs!");
 
     auto input_shape = input_tensor_a.get_padded_shape();
-    TT_FATAL(input_shape.size() == 1, "must have 1 dimension");
+    TT_FATAL(input_shape.size() == 1 || input_shape.size() == 2, "must have 1 or 2 dimension(s)");
 }
 
 std::vector<ttnn::TensorSpec> PlusOne::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
