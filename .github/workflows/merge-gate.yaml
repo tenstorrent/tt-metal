@@ -36,6 +36,7 @@ jobs:
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
     if: github.event_name != 'pull_request'
     uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
     with:
       version: 22.04
 

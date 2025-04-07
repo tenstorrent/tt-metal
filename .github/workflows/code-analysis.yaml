@@ -97,6 +97,13 @@ jobs:
           # So we have to do it this way
           echo "CCACHE_READONLY=1" >> "$GITHUB_ENV"
 
+      - name: Check Redis credentials
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+
       - name: Create ccache tmpdir
         run: |
           mkdir -p /tmp/ccache
