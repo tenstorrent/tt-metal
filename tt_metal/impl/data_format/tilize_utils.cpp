@@ -48,7 +48,6 @@ std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) == 0) ? 
 
 std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + tile_val - 1) & ~(tile_val - 1); }
 
-// TODO: add support for batches
 // Converts a linear non-zero-padded row-major tensor to 32-swizzled tilized row-major tensor
 template <typename T>
 std::vector<T> convert_layout_row_major_to_tile_swizzled(
@@ -85,7 +84,6 @@ std::vector<T> convert_layout_row_major_to_tile_swizzled(
     return tilized_result;
 }
 
-// TODO: add support for batches
 // Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
 template <typename T>
 std::vector<T> convert_layout_tile_swizzled_to_row_major(
@@ -275,6 +273,141 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
     return result;
 }
 
+// TODO: implement transpose_within_face and transpose_of_faces
+template <typename T>
+std::vector<T> convert_layout_row_major_to_tile_nfaces(
+    tt::stl::Span<const T> in_row_major,
+    const PhysicalSize& shape,
+    std::optional<PhysicalSize> tile_shape,
+    std::optional<PhysicalSize> face_shape,
+    const bool transpose_face,
+    const bool transpose_face_order) {
+    ZoneScoped;
+
+    uint32_t H = shape[0];
+    uint32_t W = shape[1];
+    uint32_t B = in_row_major.size() / (H * W);
+
+    TT_ASSERT(in_row_major.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
+    TT_ASSERT((in_row_major.size() % (H * W)) == 0, "Input size must be divisible by H and W");
+
+    std::vector<T> tilized_input;
+    tilized_input.reserve(in_row_major.size());
+
+    uint32_t block_num_elements = H * W;
+    uint32_t num_batches = in_row_major.size() / block_num_elements;
+
+    auto write_face = [&](uint32_t face_idx, uint32_t face_height, uint32_t face_width, uint32_t stride) {
+        size_t offset = tilized_input.size();
+        tilized_input.resize(offset + face_height * face_width);
+        T* dst = tilized_input.data() + offset;
+        const T* src = in_row_major.data() + face_idx;
+        for (uint32_t i = 0; i < face_height; i++) {
+            std::memcpy(dst, src, face_width * sizeof(T));
+            dst += face_width;
+            src += stride;
+        }
+    };
+
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+    auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
+    auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
+
+    uint32_t row_tiles = H / tile_H;
+    uint32_t col_tiles = W / tile_W;
+    uint32_t row_of_tiles_num_elements = tile_H * W;
+    TT_ASSERT((H % tile_H == 0) and (W % tile_W == 0), "m and n must be divisible by {} and {}", tile_H, tile_W);
+
+    uint32_t batch_start = 0;
+    for (size_t b = 0; b < num_batches; b++) {
+        uint32_t tile_start = batch_start;
+        for (uint32_t row_tile = 0; row_tile < row_tiles; row_tile++) {
+            uint32_t row_tile_start = tile_start;
+            for (uint32_t col_tile = 0; col_tile < col_tiles; col_tile++) {
+                uint32_t face0_id = row_tile_start;
+                uint32_t face1_id = face0_id + face_W;
+                uint32_t face2_id = face0_id + W * face_H;
+                uint32_t face3_id = face2_id + face_W;
+
+                write_face(face0_id, face_H, face_W, W);
+                write_face(face1_id, face_H, face_W, W);
+                write_face(face2_id, face_H, face_W, W);
+                write_face(face3_id, face_H, face_W, W);
+                row_tile_start += tile_W;
+            }
+            tile_start += row_of_tiles_num_elements;
+        }
+        batch_start += block_num_elements;
+    }
+
+    return tilized_input;
+}
+
+// TODO: implement transpose_within_face and transpose_of_faces
+template <typename T>
+std::vector<T> convert_layout_tile_nfaces_to_row_major(
+    tt::stl::Span<const T> in_nfaces,
+    const PhysicalSize& shape,
+    std::optional<PhysicalSize> tile_shape,
+    std::optional<PhysicalSize> face_shape,
+    const bool transpose_face,
+    const bool transpose_face_order) {
+    ZoneScoped;
+
+    uint32_t H = shape[0];
+    uint32_t W = shape[1];
+    uint32_t B = in_nfaces.size() / (H * W);
+
+    TT_ASSERT(in_nfaces.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
+    TT_ASSERT((in_nfaces.size() % (H * W)) == 0, "Input size must be divisible by H and W");
+
+    std::vector<T> untilized_input(in_nfaces.size());
+
+    uint32_t block_num_elements = H * W;
+    uint32_t num_blocks = in_nfaces.size() / block_num_elements;
+
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+    auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
+    auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
+    uint32_t row_tiles = H / tile_H;
+    uint32_t col_tiles = W / tile_W;
+    uint32_t row_of_tiles_num_elements = tile_H * W;
+    TT_ASSERT((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
+
+    const auto untilize_row_of_tiles =
+        [&](std::vector<T>& out_data, tt::stl::Span<const T> in_data, uint32_t row_tile_start) {
+            uint32_t face_stride = face_H * face_W;
+
+            for (uint32_t j = 0; j < W / tile_W; j++) {
+                for (uint32_t face_h_in_tile = 0; face_h_in_tile < tile_H / face_H; face_h_in_tile++) {
+                    for (uint32_t face_w_in_tile = 0; face_w_in_tile < tile_W / face_W; face_w_in_tile++) {
+                        for (uint32_t h = 0; h < face_H; h++) {
+                            size_t src_idx = row_tile_start + j * tile_H * tile_W + face_h_in_tile * face_H * tile_W +
+                                             face_w_in_tile * face_H * face_W + h * face_H;
+                            size_t dst_idx = row_tile_start + (face_h_in_tile * face_H + h) * W + j * tile_W +
+                                             face_w_in_tile * face_W;
+                            std::memcpy(&out_data[dst_idx], &in_data[src_idx], face_W * sizeof(T));
+                        }
+                    }
+                }
+            }
+        };
+
+    uint32_t block_start = 0;
+    for (size_t i = 0; i < num_blocks; i++) {
+        uint32_t row_tile_start = block_start;
+        for (uint32_t row_tile = 0; row_tile < row_tiles; row_tile++) {
+            untilize_row_of_tiles(untilized_input, in_nfaces, row_tile_start);
+            row_tile_start += row_of_tiles_num_elements;
+        }
+        block_start += block_num_elements;
+    }
+
+    return untilized_input;
+}
+
 template <typename T>
 std::vector<T> convert_layout(
     tt::stl::Span<const T> inp,
@@ -305,10 +438,8 @@ std::vector<T> convert_layout(
             if (outL == tests::utils::TensorLayoutType::TILED_SWIZZLED) {
                 return convert_layout_row_major_to_tile_swizzled<T>(inp, shape, tile_shape);
             } else if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
-                // TODO: Implement direct conversion. Double conversion is not optimal
-                auto swiz32 = convert_layout_row_major_to_tile_swizzled<T>(inp, shape, tile_shape);
-                return convert_layout_tile_swizzled_to_tile_nfaces<T>(
-                    swiz32, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+                return convert_layout_row_major_to_tile_nfaces(
+                    inp, shape, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else {
                 TT_ASSERT(false && "Unsupported conversion.");
             }
@@ -318,10 +449,8 @@ std::vector<T> convert_layout(
                 return convert_layout_tile_nfaces_to_tile_swizzled<T>(
                     inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else if (outL == tests::utils::TensorLayoutType::LIN_ROW_MAJOR) {
-                // TODO: Implement direct conversion. Double conversion is not optimal
-                auto swiz32 = convert_layout_tile_nfaces_to_tile_swizzled<T>(
-                    inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
-                return convert_layout_tile_swizzled_to_row_major<T>(swiz32, shape, tile_shape);
+                return convert_layout_tile_nfaces_to_row_major(
+                    inp, shape, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else {
                 TT_ASSERT(false && "Unsupported conversion");
             }
@@ -376,7 +505,6 @@ std::vector<T> untilize_swizzled(const std::vector<T>& input, uint32_t m, uint32
         tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
 }
 
-// TODO: reuse convert_layout (requires batch support)
 template <typename T>
 std::vector<T> tilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n) {
     TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
@@ -389,7 +517,6 @@ std::vector<T> tilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n
         tests::utils::TensorLayoutType::TILED_NFACES);
 }
 
-// TODO: reuse convert_layout (requires batch support)
 template <typename T>
 std::vector<T> untilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n) {
     TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
@@ -447,5 +574,15 @@ template std::vector<uint16_t> untilize_nfaces<uint16_t>(const std::vector<uint1
 template std::vector<uint32_t> untilize_nfaces<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
 template std::vector<bfloat16> untilize_nfaces<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
 template std::vector<float> untilize_nfaces<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
+
+template std::vector<uint16_t> tilize_nfaces_ref<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
+template std::vector<uint32_t> tilize_nfaces_ref<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
+template std::vector<bfloat16> tilize_nfaces_ref<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
+template std::vector<float> tilize_nfaces_ref<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
+
+template std::vector<uint16_t> untilize_nfaces_ref<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
+template std::vector<uint32_t> untilize_nfaces_ref<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
+template std::vector<bfloat16> untilize_nfaces_ref<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
+template std::vector<float> untilize_nfaces_ref<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
 
 // clang-format on
