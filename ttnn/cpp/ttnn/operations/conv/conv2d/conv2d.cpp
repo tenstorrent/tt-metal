@@ -164,7 +164,14 @@ Result conv2d_DRAM(
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
-
+    TT_FATAL(
+        input_tensor_on_device.dtype() == tt_metal::DataType::BFLOAT16, "Input Tensor to Conv DRAM should be BFLOAT16");
+    TT_FATAL(
+        input_tensor_on_device.layout() == tt_metal::Layout::ROW_MAJOR,
+        "Input Tensor to Conv DRAM should be in Row Major Layout");
+    TT_FATAL(
+        input_tensor_on_device.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+        "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
     // Tensor dram_output_tensor = ttnn::zeros(     //Kept for debugging. Will remove later.
     //         ttnn::Shape({batch_size, output_height, output_width, out_channels}),
     //         conv_config.dtype,
@@ -265,8 +272,8 @@ Result conv2d_DRAM(
                 input_slice_height,
                 input_slice_width,
                 compute_grid_size,
-                input_tensor.layout(),
-                std::make_optional(input_tensor.memory_config()),
+                input_tensor_on_device.layout(),
+                std::make_optional(input_tensor_on_device.memory_config()),
                 kernel_size,
                 groups,
                 bias_tensor.has_value(),
@@ -279,7 +286,7 @@ Result conv2d_DRAM(
         }
         auto sliced_input_tensor = ttnn::slice(
             queue_id,
-            input_tensor,
+            input_tensor_on_device,
             std::array<uint32_t, 4>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
             std::array<uint32_t, 4>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
             std::array<uint32_t, 4>{
@@ -289,7 +296,6 @@ Result conv2d_DRAM(
                 1,
             }  // Step,
         );
-        log_info(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
         auto conv_config_l1 = conv_config;
         conv_config_l1.reshard_if_not_optimal = true;
         conv_config_l1.output_layout = Layout::TILE;
