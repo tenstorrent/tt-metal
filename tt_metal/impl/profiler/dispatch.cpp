@@ -5,6 +5,7 @@
 #include "dispatch.hpp"
 #include <cstdint>
 #include "dispatch/device_command.hpp"
+#include "dispatch/device_command_calculator.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -12,13 +13,22 @@ namespace profiler_dispatch {
 
 void issue_read_profiler_control_vector_command_sequence(const ProfilerDispatchParams& dispatch_params) {
     // accounts for padding
-    const uint32_t pcie_alignment = hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST);
+    // const uint32_t pcie_alignment = hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST);
+    // const uint32_t cmd_sequence_sizeB =
+    //     pcie_alignment * num_worker_counters +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+    //     pcie_alignment +                        // CQ_PREFETCH_CMD_STALL
+    //     pcie_alignment +  // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST
+    //     pcie_alignment;   // CQ_PREFETCH_CMD_RELAY_LINEAR or CQ_PREFETCH_CMD_RELAY_PAGED
+
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
-    const uint32_t cmd_sequence_sizeB =
-        pcie_alignment * num_worker_counters +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        pcie_alignment +                        // CQ_PREFETCH_CMD_STALL
-        pcie_alignment +  // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST
-        pcie_alignment;   // CQ_PREFETCH_CMD_RELAY_LINEAR or CQ_PREFETCH_CMD_RELAY_PAGED
+    DeviceCommandCalculator calculator;
+    for (uint32_t i = 0; i < num_worker_counters; ++i) {
+        calculator.add_dispatch_wait();
+    }
+    calculator.add_prefetch_stall();
+    calculator.add_dispatch_write_linear_host();
+    calculator.add_prefetch_relay_linear();
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
@@ -60,12 +70,18 @@ void read_profiler_control_vector_from_completion_queue(
     chip_id_t mmio_device_id,
     uint16_t channel,
     uint8_t cq_id,
-    SystemMemoryManager& sysmem_manager) {
+    SystemMemoryManager& sysmem_manager,
+    std::atomic<bool>& exit_condition) {
+    // sysmem_manager.completion_queue_wait_front(cq_id, exit_condition);
+    // if (exit_condition) {
+    //     return;
+    // }
+    // std::this_thread::sleep_for(std::chrono::seconds(10));
     uint32_t read_ptr = sysmem_manager.get_completion_queue_read_ptr(cq_id);
-    tt::Cluster::instance().read_sysmem(
-        (char*)(uint64_t(read_descriptor.dst) + sizeof(CQDispatchCmd)),
+    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+        (char*)(uint64_t(read_descriptor.dst)),
         kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-        read_ptr,
+        read_ptr + sizeof(CQDispatchCmd),
         mmio_device_id,
         channel);
     sysmem_manager.completion_queue_pop_front(1, cq_id);
