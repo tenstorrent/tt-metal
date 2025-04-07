@@ -144,7 +144,7 @@ jobs:
           export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
           ${{ matrix.test-group.cmd }}
 
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
