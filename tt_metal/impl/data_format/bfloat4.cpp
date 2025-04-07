@@ -100,6 +100,8 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                 for (int i = 0; i < subtile_rows; ++i) {
                     subtile_r = tr * subtile_rows + i;
                     for (int j = 0; j < subtile_cols; j += 2 * num_elements_in_dword) {
+                        __m256i mask_denormal0 = _mm256_setzero_si256();
+                        __m256i mask_denormal1 = _mm256_setzero_si256();
                         subtile_c = tc * subtile_cols + j;
                         data_index =
                             (tr * (subtiles_in_tile_col * face_HW / num_elements_in_dword) +
@@ -176,16 +178,12 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                 man0 = _mm256_blendv_epi8(
                                     man_shifted, man0, select_mask);  // Choose new mantissa or keep old mantissa based
                                                                       // on 0 initial condition.
-                                // Assert if the exponent and corresponding mantissa for a datum are non-zero and the
-                                // subtraction bias (shift_cnt) for that data is greater than the exponent value
-                                TT_ASSERT(
-                                    !(_mm256_movemask_ps(_mm256_castsi256_ps(
-                                          _mm256_cmpgt_epi32(exp_vector0, _mm256_setzero_si256()))) &
-                                      _mm256_movemask_ps(
-                                          _mm256_castsi256_ps(_mm256_cmpgt_epi32(shift_cnt, exp_vector0))) &
-                                      !_mm256_movemask_ps(_mm256_castsi256_ps(select_mask))),
-                                    "Device returned incorrect data for Bfp8 formats: The Shift Count for a non-zero "
-                                    "exponent is greater than the exponent value.");
+                                // Flush denormals to zero
+                                // Check if shift > exp and mantissa is not zero
+                                __m256i mask_shift_gt_exp = _mm256_cmpgt_epi32(shift_cnt, exp_vector0);
+                                __m256i mask_nonzero_mantissa = _mm256_xor_si256(select_mask, _mm256_set1_epi32(-1));
+                                mask_denormal0 = _mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
+
                                 exp_vector0 = _mm256_blendv_epi8(
                                     _mm256_sub_epi32(exp_vector0, _mm256_add_epi32(rebias_offset, shift_cnt)),
                                     _mm256_setzero_si256(),
@@ -195,14 +193,11 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                 man1 = _mm256_blendv_epi8(
                                     man_shifted, man1, select_mask);  // Choose new mantissa or keep old mantissa based
                                                                       // on 0 initial condition.
-                                TT_ASSERT(
-                                    !(_mm256_movemask_ps(_mm256_castsi256_ps(
-                                          _mm256_cmpgt_epi32(exp_vector1, _mm256_setzero_si256()))) &
-                                      _mm256_movemask_ps(
-                                          _mm256_castsi256_ps(_mm256_cmpgt_epi32(shift_cnt, exp_vector1))) &
-                                      !_mm256_movemask_ps(_mm256_castsi256_ps(select_mask))),
-                                    "Device returned incorrect data for Bfp8 formats: The Shift Count for a non-zero "
-                                    "exponent is greater than the exponent value.");
+                                // Flush denormals to zero
+                                // Check if shift > exp and mantissa is not zero
+                                __m256i mask_shift_gt_exp = _mm256_cmpgt_epi32(shift_cnt, exp_vector1);
+                                __m256i mask_nonzero_mantissa = _mm256_xor_si256(select_mask, _mm256_set1_epi32(-1));
+                                mask_denormal1 = _mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
                                 exp_vector1 = _mm256_blendv_epi8(
                                     _mm256_sub_epi32(exp_vector1, _mm256_add_epi32(rebias_offset, shift_cnt)),
                                     _mm256_setzero_si256(),
@@ -224,6 +219,9 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                             sign1,
                             _mm256_or_si256(exp_vector1, man1));  // Store final value in mantissa register and save
 
+                        // Zero out lanes where mask_denormal is true
+                        man0 = _mm256_blendv_epi8(man0, _mm256_setzero_si256(), mask_denormal0);
+                        man1 = _mm256_blendv_epi8(man1, _mm256_setzero_si256(), mask_denormal1);
                         uint32_t float_data_index;
                         if (row_major_output) {
                             float_data_index = subtile_c + (tile_W * subtile_r) + (tile_index * num_float_in_tile);
