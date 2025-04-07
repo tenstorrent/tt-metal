@@ -124,6 +124,12 @@ TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
 
    auto& cq = mesh_device->mesh_command_queue();
 
+<<<<<<< HEAD
+=======
+    int cq_id = cq.id();
+
+    EXPECT_GE(cq_id, 0);
+>>>>>>> d0154dda13 (add program dispatch success test)
 
    EXPECT_GE(cq.id(), 0);
 
@@ -144,7 +150,6 @@ TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
     auto runtime_args = std::vector<uint32_t>{};
     SetRuntimeArgs(example_program, compute_kernel_id, target_tensix_cores, runtime_args);
 
-    // TODO: print this out and check the contents write a more thorough test
     auto rt_args_out = GetRuntimeArgs(example_program, compute_kernel_id);
     EXPECT_EQ(rt_args_out.size(), 2);
 
@@ -154,9 +159,9 @@ TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
 
     AddProgramToMeshWorkload(mesh_workload, std::move(example_program), target_devices);
 
-    auto& program = mesh_workload.get_programs().at(target_devices);
-
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
+
+    EXPECT_EQ(mesh_workload.get_last_used_command_queue()->id(), cq_id);
 
     Finish(cq);
 }
