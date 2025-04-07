@@ -6,7 +6,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-
+#include <tt-metalium/sub_device.hpp>
 
 #include <tt-metalium/bfloat16.hpp>
 
@@ -18,9 +18,6 @@
 #include "gmock/gmock.h"
 #include "host_api.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-
-
-
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -59,58 +56,59 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_src0_config);
 
-   constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
-   CircularBufferConfig cb_src1_config =
-       CircularBufferConfig(num_input_tiles * tile_size_bytes, {{src1_cb_index, tt::DataFormat::Float16_b}})
-           .set_page_size(src1_cb_index, tile_size_bytes);
-   CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src1_config);
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt_metal::CircularBufferConfig cb_src1_config =
+        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src1_cb_index, single_tile_size);
+    auto cb_src1 = tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_src1_config);
 
+    uint32_t output_cb_index = tt::CBIndex::c_16;
+    uint32_t num_output_tiles = 2;
+    tt_metal::CircularBufferConfig cb_output_config =
+        tt_metal::CircularBufferConfig(
+            num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(output_cb_index, single_tile_size);
+    auto cb_output = tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_output_config);
 
-   constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
-   constexpr uint32_t num_output_tiles = 1;
-   CircularBufferConfig cb_output_config =
-       CircularBufferConfig(num_output_tiles * tile_size_bytes, {{output_cb_index, tt::DataFormat::Float16_b}})
-           .set_page_size(output_cb_index, tile_size_bytes);
-   CBHandle cb_output = tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_output_config);
+    auto binary_reader_kernel = tt_metal::CreateKernel(
+        *program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp",
+        cores_for_program,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
+    auto unary_writer_kernel = tt_metal::CreateKernel(
+        *program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+        cores_for_program,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-   // Add data movement kernels
-   KernelHandle reader = CreateKernel(
-       program,
-       "tt_metal/programming_examples/contributed/vecadd/kernels/interleaved_tile_read.cpp",
-       target_tensix_core,
-       DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    std::vector<uint32_t> compute_kernel_args = {};
 
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = false;
+    std::map<string, string> binary_defines = {
+        {"ELTWISE_OP", op_id_to_op_define[eltwise_op_index]},
+        {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op_index]}};
+    auto eltwise_binary_kernel = tt_metal::CreateKernel(
+        *program,
+        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        cores_for_program,
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 
-   KernelHandle writer = CreateKernel(
-       program,
-       "tt_metal/programming_examples/contributed/vecadd/kernels/tile_write.cpp",
-       target_tensix_core,
-       DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(*program, eltwise_binary_kernel, cores_for_program, {num_tiles, 1});
 
+    const std::array<uint32_t, 7> reader_args = {
+        src0_buf->address(), 0, num_tiles, src1_buf->address(), 0, num_tiles, 0};
 
-   // Create the eltwise binary kernel
-   auto compute = CreateKernel(
-       program,
-       "tt_metal/programming_examples/contributed/vecadd/kernels/add.cpp",
-       target_tensix_core,
-       ComputeConfig{
-           .math_fidelity = MathFidelity::HiFi4,
-           .fp32_dest_acc_en = false,
-           .math_approx_mode = false,
-           .compile_args = {},
-           .defines = {{"ELTWISE_OP", "add_tiles"}, {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"}}});
+    const std::array<uint32_t, 3> writer_args = {output_buf->address(), 0, num_tiles};
 
+    SetRuntimeArgs(*program, unary_writer_kernel, cores_for_program, writer_args);
+    SetRuntimeArgs(*program, binary_reader_kernel, cores_for_program, reader_args);
 
-   // Set runtime arguments for each device
-   SetRuntimeArgs(program, reader, target_tensix_core, {a->address(), b->address(), num_tiles});
-   SetRuntimeArgs(program, writer, target_tensix_core, {c->address(), num_tiles});
-   SetRuntimeArgs(program, compute, target_tensix_core, {num_tiles});
-
-
-   return program;
+    return program;
 }
-
 
 namespace ttnn::distributed::test {
 
@@ -131,7 +129,7 @@ TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
     auto example_program = CreateProgram();
 
     auto target_tensix_cores = CoreRange{
-        CoreCoord{0, 0} /* start_coord */, CoreCoord{0, 1} /* end_coord */
+        CoreCoord{0, 0} /* start_coord */, CoreCoord{1, 1} /* end_coord */
     };
 
     auto compute_kernel_id = CreateKernel(
@@ -164,29 +162,28 @@ TEST_F(DistributedEndToEndTests, BufferRoundtripTest) {
 
     auto mesh_device = DistributedEndToEndTests::mesh_device_;
 
-   auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device->mesh_command_queue();
 
-   EXPECT_GE(cq.id(), 0);
+    EXPECT_GE(cq.id(), 0);
 
-   // Define the shape of the shard and the distributed buffer.
-   // We will create a distributed buffer with 2 shards of {32, 32} and distribute it across the devices in the mesh.
-   auto shard_shape = Shape2D{32, 32};
-   auto distributed_buffer_shape = Shape2D{32 * mesh_device->num_rows(), 32 * mesh_device->num_cols()};
-   uint32_t tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::UInt32);
+    // Define the shape of the shard and the distributed buffer.
+    // We will create a distributed buffer with 2 shards of {32, 32} and distribute it across the devices in the mesh.
+    auto shard_shape = Shape2D{32, 32};
+    auto distributed_buffer_shape = Shape2D{32 * mesh_device->num_rows(), 32 * mesh_device->num_cols()};
+    uint32_t tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::UInt32);
 
+    uint32_t distributed_buffer_size_bytes =
+        mesh_device->num_rows() * 32 * mesh_device->num_cols() * 32 * tile_size_bytes;
 
-   uint32_t distributed_buffer_size_bytes = mesh_device->num_rows()*32 * mesh_device->num_cols()*32 * tile_size_bytes;
-
-
-   auto local_buffer_config = DeviceLocalBufferConfig{
-       .page_size = tile_size_bytes,
-       .buffer_type = BufferType::L1,
-       .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-       .bottom_up = false};
-   auto distributed_buffer_config = ShardedBufferConfig{
-       .global_size = distributed_buffer_size_bytes,
-       .global_buffer_shape = distributed_buffer_shape,
-       .shard_shape = shard_shape};
+    auto local_buffer_config = DeviceLocalBufferConfig{
+        .page_size = tile_size_bytes,
+        .buffer_type = BufferType::L1,
+        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        .bottom_up = false};
+    auto distributed_buffer_config = ShardedBufferConfig{
+        .global_size = distributed_buffer_size_bytes,
+        .global_buffer_shape = distributed_buffer_shape,
+        .shard_shape = shard_shape};
 
     auto mesh_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
 
@@ -337,16 +334,13 @@ TEST_F(DistributedEndToEndTraceTests, EltwiseAddTest) {
     bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(result_data.data());
     bfloat16* golden_bf16 = reinterpret_cast<bfloat16*>(golden_data.data());
 
-   auto total_values = result_data.size() * 2;
-
+    auto total_values = result_data.size() * 2;
 
     for (int i = 0; i < total_values; i++) {
         EXPECT_TRUE(is_close(c_bf16[i].to_float(), golden_bf16[i].to_float()));
     }
 }
 
-<<<<<<< HEAD
-=======
 TEST_F(DistributedEndToEndTraceTests, EltwiseMulTest) {
     constexpr uint32_t MUL_OP_ID = 1;
 
@@ -572,4 +566,3 @@ TEST_F(DistributedEndToEndTraceTests, SimulEltwiseTest) {
 }
 
 }  // namespace ttnn::distributed::test
->>>>>>> 6013d6b69b (added untraced test, simul test)
