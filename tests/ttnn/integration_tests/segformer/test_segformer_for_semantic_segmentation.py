@@ -106,18 +106,17 @@ def test_segformer_for_semantic_segmentation(device, is_ci_env):
 
     ttnn_model = TtSegformerForSemanticSegmentation(config, parameters)
 
-    sharded_input_enabled = 0
+    sharded_input_enabled = 1
 
     if not sharded_input_enabled:
         torch_input_tensor_permuted = torch.permute(inputs.pixel_values, (0, 2, 3, 1))
-        # ttnn_input_tensor = ttnn.from_torch(
-        #     torch_input_tensor_permuted,
-        #     dtype=ttnn.bfloat16,
-        #     memory_config=ttnn.L1_MEMORY_CONFIG,
-        #     device=device,
-        #     layout=ttnn.TILE_LAYOUT,
-        # )
-        ttnn_input_tensor = ttnn.from_torch(torch_input_tensor_permuted, dtype=ttnn.bfloat16)
+        ttnn_input_tensor = ttnn.from_torch(
+            torch_input_tensor_permuted,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+        )
     else:
         torch_input_tensor_permuted = torch.permute(inputs.pixel_values, (0, 2, 3, 1))
         N, H, W, C = torch_input_tensor_permuted.shape
@@ -130,17 +129,20 @@ def test_segformer_for_semantic_segmentation(device, is_ci_env):
             }
         )
         n_cores = 64
-        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(
+            shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardMode.PHYSICAL
+        )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
-        ttnn_input_tensor = ttnn.from_torch(
+        ttnn_input_tensor_unpadded = ttnn.from_torch(
             torch_input_tensor_permuted,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=input_mem_config,
         )
+        ttnn_input_tensor = ttnn.pad(ttnn_input_tensor_unpadded, [N, H, W, 32], [0, 0, 0, 0], 0)
 
     ttnn_output = ttnn_model(
         device,
@@ -156,7 +158,4 @@ def test_segformer_for_semantic_segmentation(device, is_ci_env):
     h = w = int(math.sqrt(ttnn_output.shape[-1]))
     ttnn_final_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
 
-    print(torch_output.logits)
-    print()
-    print(ttnn_final_output)
     assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.985)

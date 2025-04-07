@@ -81,7 +81,6 @@ class TtSegformerEncoder:
         return_dict: Optional[bool] = True,
         parameters=None,
     ) -> Union[Tuple, TtBaseModelOutput]:
-        # device = pixel_values.device()
         all_hidden_states = () if output_hidden_states else None
         all_hidden_states_unfolded = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
@@ -93,12 +92,10 @@ class TtSegformerEncoder:
             embedding_layer, block_layer = x[0], x[1]
             # first, obtain patch embeddings
             hidden_states, height, width = embedding_layer(
-                # hidden_states = embedding_layer(
                 device,
                 pixel_values=hidden_states,
                 parameters=parameters[f"patch_embeddings"][idx],
             )
-            # height = width = int(math.sqrt(hidden_states.shape[-2]))
 
             # second, send embeddings through blocks
             for i, blk in enumerate(block_layer):

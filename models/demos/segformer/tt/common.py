@@ -47,15 +47,15 @@ class Conv:
             transpose_shards=False,
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
-            reallocate_halo_output=False,
-            enable_act_double_buffer=False,
+            reallocate_halo_output=True,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             output_layout=self.output_layout,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
+            math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
@@ -77,33 +77,32 @@ class Conv:
             "conv_config": conv_config,
         }
 
-        # if not ttnn.is_tensor_storage_on_device(self.weights):
-        # self.weights = ttnn.prepare_conv_weights(
-        #    weight_tensor=self.weights,
-        #    weights_format="OIHW",
-        #    input_memory_config=input_tensor.memory_config(),
-        #    input_layout=input_tensor.get_layout(),
-        #    has_bias=True,
-        #    **conv_kwargs,
-        # )
-        # self.bias = ttnn.prepare_conv_bias(
-        #     bias_tensor=self.bias,
-        #     input_memory_config=input_tensor.memory_config(),
-        #     input_layout=input_tensor.get_layout(),
-        #     **conv_kwargs,
-        # )
-        # self.weights = ttnn.to_device(self.weights, device)
-        # self.bias = ttnn.to_device(self.bias, device)
+        if not ttnn.is_tensor_storage_on_device(self.weights):
+            self.weights = ttnn.prepare_conv_weights(
+                weight_tensor=self.weights,
+                weights_format="OIHW",
+                input_memory_config=input_tensor.memory_config(),
+                input_layout=input_tensor.get_layout(),
+                has_bias=True,
+                **conv_kwargs,
+            )
+            self.bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.bias,
+                input_memory_config=input_tensor.memory_config(),
+                input_layout=input_tensor.get_layout(),
+                **conv_kwargs,
+            )
+            self.weights = ttnn.to_device(self.weights, device)
+            self.bias = ttnn.to_device(self.bias, device)
 
-        # workaround for above until prepare_conv_bias padding problem is fixed in metal
-        [output_tensor, [_out_height, _out_width], [self.weights, self.bias]] = ttnn.conv2d(
+        [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
             **conv_kwargs,
             compute_config=compute_config,
             return_output_dim=True,
-            return_weights_and_bias=True,
+            return_weights_and_bias=False,
         )
 
         return output_tensor, _out_height, _out_width
