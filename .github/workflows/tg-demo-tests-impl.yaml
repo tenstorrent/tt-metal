@@ -66,6 +66,9 @@ jobs:
         if: ${{ (matrix.test-group.name == 'TG Falcon7b demo tests') && !cancelled() }}
         run: |
           python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          ls -la generated/benchmark_data
+          ls -la /work/generated/benchmark_data
+          cat /work/.github/actions/upload-data-via-sftp
       - name: Upload benchmark data
         if: ${{ (matrix.test-group.name == 'TG Falcon7b demo tests') && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
