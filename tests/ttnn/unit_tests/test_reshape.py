@@ -363,6 +363,7 @@ def test_reshape_tile_layout_only_change_shape(device):
         ((16, 33, 1), (176, 3, 1)),
         ((2888, 49, 96), (8, 19, 19, 7, 7, 96)),  # issue 12153
         ((5, 4, 208, 156), (3, 13, 8, 2080)),  # issue 14513
+        ((22, 23, 1), (1, 22, 23)),
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
