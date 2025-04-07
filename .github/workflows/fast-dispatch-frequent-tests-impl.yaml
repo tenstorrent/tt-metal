@@ -77,7 +77,7 @@ jobs:
           path: generated/test_reports/
           prefix: "test_reports_"
       - name: Generate gtest annotations on failure
-        uses: ./.github/actions/generate-gtest-failure-message
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
         with:
           path: generated/test_reports/
