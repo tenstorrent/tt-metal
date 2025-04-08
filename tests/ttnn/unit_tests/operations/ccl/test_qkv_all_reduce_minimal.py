@@ -347,13 +347,6 @@ def run_all_reduce_qkv_heads_perf_impl(
         # Run the op
         logger.info("Starting Trace perf test...")
 
-        # profiler.start("all-reduce-qkv-heads-trace-warmup")
-        # if warmup_iters > 0:
-        #     ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
-        #     ttnn.release_trace(mesh_device, trace_id_warmup)
-        #     ttnn.synchronize_device(mesh_device)
-        # profiler.end("all-reduce-qkv-heads-trace-warmup")
-
         signpost("start")
         profiler.start("all-reduce-qkv-heads-trace")
         ttnn.execute_trace(mesh_device, trace_id, blocking=False)
@@ -362,9 +355,6 @@ def run_all_reduce_qkv_heads_perf_impl(
         profiler.end("all-reduce-qkv-heads-trace")
 
         signpost("stop")
-        # time_taken = profiler.get_duration("all-reduce-qkv-heads-trace") - profiler.get_duration(
-        #     "all-reduce-qkv-heads-trace-warmup"
-        # )
 
         # input = [8, 4, 32, 1280]
 
@@ -558,7 +548,12 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
         # Compile Run
         logger.info("Compiling model")
 
-        tt_qkv_reduced, q_dummy, k_dummy, v_dummy = ttnn.experimental.all_reduce_create_qkv_heads(
+        (
+            tt_qkv_reduced,
+            q_heads_pre_rot_1BQD,
+            k_heads_pre_rot_1BKD,
+            v_heads_1BKD,
+        ) = ttnn.experimental.all_reduce_create_qkv_heads(
             tt_qkv,
             tt_intermediate_tensors[0],
             cluster_axis=cluster_axis,
@@ -582,8 +577,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
 
         # Get non-distributed tensors
         q_non_distributed = ttnn.to_torch(
-            # q_heads_pre_rot_1BQD,
-            q_dummy,
+            q_heads_pre_rot_1BQD,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(0, 1),
@@ -592,8 +586,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
         )
         # [1, 8, 1[32], 128] -> [8, 32, 1[32], 128]
         k_non_distributed = ttnn.to_torch(
-            # k_heads_pre_rot_1BKD,
-            k_dummy,
+            k_heads_pre_rot_1BKD,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(0, 1),
@@ -602,8 +595,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
         )
         # [1, 8, 1[32], 128] -> [8, 32, 1[32], 128]
         v_non_distributed = ttnn.to_torch(
-            # v_heads_1BKD,
-            v_dummy,
+            v_heads_1BKD,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(0, 1),
@@ -863,28 +855,6 @@ def run_all_reduce_qkv_heads_impl(
         ##################################
         ##### Run the op
         ##################################
-        # tt_qkv Shape([1, 1, 32, 1280])
-        # tt_qkv_reduced Shape([1, 1, 32, 1280])
-        # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=4)]},shape={32, 32},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
-        # tt_qkv_reduced, q_dummy, k_dummy, v_dummy = ttnn.experimental.all_reduce_create_qkv_heads(
-        #     tt_qkv,
-        #     tt_intermediate_tensors[0],
-        #     cluster_axis=cluster_axis,
-        #     mesh_device=mesh_device,
-        #     multi_device_global_semaphore=ccl_semaphore_handles[0],
-        #     queue_id=0,
-        #     num_heads=8,
-        #     memory_config=output_mem_config,
-        #     topology=ALL_GATHER_TOPOLOGY,
-        #     num_links=num_links,
-        #     subdevice_id=worker_sub_device_id,
-        #     num_kv_heads=1,
-        #     final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-        #     overlap_qk_coregrid=False,
-        #     batch_offset=batch_offset_tt_tensor,
-        #     slice_size=8,
-        # )  # [1, 1, 32, 1280]
-
         tt_qkv_reduced = ttnn.experimental.all_reduce_async(
             tt_qkv,
             tt_intermediate_tensors[0],
@@ -1132,7 +1102,12 @@ def run_all_reduce_qkv_heads_fuse_impl(
         # tt_qkv Shape([1, 1, 32, 1280])
         # tt_qkv_reduced Shape([1, 1, 32, 1280])
         # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=4)]},shape={32, 32},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
-        tt_qkv_reduced, q_dummy, k_dummy, v_dummy = ttnn.experimental.all_reduce_create_qkv_heads(
+        (
+            tt_qkv_reduced,
+            q_heads_pre_rot_1BQD,
+            k_heads_pre_rot_1BKD,
+            v_heads_1BKD,
+        ) = ttnn.experimental.all_reduce_create_qkv_heads(
             tt_qkv,
             tt_intermediate_tensors[0],
             cluster_axis=cluster_axis,
@@ -1155,30 +1130,9 @@ def run_all_reduce_qkv_heads_fuse_impl(
         # 32 BS is split into 8 Mini BS across 4 devices
         ttnn.synchronize_device(mesh_device)
 
-        # (
-        #     q_heads_pre_rot_1BQD,  # Shape([1, 8, 8, 128])
-        #     k_heads_pre_rot_1BKD,  # Shape([1, 8, 1, 128])
-        #     v_heads_1BKD,  # Shape([1, 8, 1, 128])
-        # ) = ttnn.experimental.nlp_create_qkv_heads_decode(
-        #     tt_qkv_reduced,
-        #     num_heads=8,
-        #     num_kv_heads=1,
-        #     memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-        #     overlap_qk_coregrid=False,
-        #     batch_offset=batch_offset_tt_tensor,
-        #     slice_size=8,
-        # )  # [1, 8, 8[32], 128], [1, 8, 1[32], 128], [1, 8, 1[32], 128]
-        # q MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=0)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
-        # k MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=1) - (x=7,y=1)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
-        # v MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=0)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
-        # breakpoint()
-        # After ConcatMesh2dToTensor
-        # [1, 8, 8[32], 128] -> [8, 32, 8[32], 128]
-
         # Get non-distributed tensors
         q_non_distributed = ttnn.to_torch(
-            # q_heads_pre_rot_1BQD,
-            q_dummy,
+            q_heads_pre_rot_1BQD,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(0, 1),
@@ -1187,8 +1141,7 @@ def run_all_reduce_qkv_heads_fuse_impl(
         )
         # [1, 8, 1[32], 128] -> [8, 32, 1[32], 128]
         k_non_distributed = ttnn.to_torch(
-            # k_heads_pre_rot_1BKD,
-            k_dummy,
+            k_heads_pre_rot_1BKD,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(0, 1),
@@ -1197,8 +1150,7 @@ def run_all_reduce_qkv_heads_fuse_impl(
         )
         # [1, 8, 1[32], 128] -> [8, 32, 1[32], 128]
         v_non_distributed = ttnn.to_torch(
-            # v_heads_1BKD,
-            v_dummy,
+            v_heads_1BKD,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(0, 1),
