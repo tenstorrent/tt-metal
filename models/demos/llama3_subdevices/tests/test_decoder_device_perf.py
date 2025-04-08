@@ -364,12 +364,12 @@ def test_llama_TG_perf_device(
         "NLPCreateHeadsDecodeDeviceOperation_0": 8568.222222222223,
         "RotaryEmbeddingLlamaFusedQK_0": 5023.888888888889,
         "PagedUpdateCacheDeviceOperation_0": 5606.444444444444,
-        "ScaledDotProductAttentionDecode_0": 20472.11111111111,
+        "ScaledDotProductAttentionDecode_0": 23724.222222222223,
         "NLPConcatHeadsDecodeDeviceOperation_0": 6665.0,
         "ReshardDeviceOperation_0": 1752.7777777777778,
         "BinaryDeviceOperation_0": 2408.8888888888887,
         "BinaryDeviceOperation_1": 4572.777777777777,
-        "BinaryDeviceOperation_2": 2435.5555555555557,
+        "BinaryDeviceOperation_2": 4574.0,
     }
 
     expected_dispatch_times_dict = {
@@ -377,8 +377,8 @@ def test_llama_TG_perf_device(
         "RMSAllGather_1": 634.3333333333334,
         "RMSAllGather_2": 661.4444444444445,
         "RMSAllGather_3": 641.0,
-        "AllGatherAsync_1": 676.4444444444445,
-        "AllGatherAsync_3": 1698.7777777777778,
+        "AllGatherAsync_0": 676.4444444444445,
+        "AllGatherAsync_1": 1698.7777777777778,
         "ShardedToInterleavedDeviceOperation_0": 2211.6666666666665,
         "ShardedToInterleavedDeviceOperation_1": 2212.222222222222,
         "InterleavedToShardedDeviceOperation_0": 631.8888888888889,
@@ -540,7 +540,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = merge_device_rows(df)
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
-    df_layers = df_model[4:-12]
+    df_layers = df_model[4:-11]
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
@@ -557,12 +557,12 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     print(dispatch_duration_per_instance_averaged_dict)
 
     expected_non_overlapped_dispatch_times_dict = {
-        "RMSAllGather_0": 10000,
+        "RMSAllGather_0": 7260,
         "RMSAllGather_1": 6190.6,
-        "RMSAllGather_2": 10000,
+        "RMSAllGather_2": 7326,
         "RMSAllGather_3": 6431.2,
         "AllGatherAsync_0": 2273.2,
-        "AllGatherAsync_2": 2272.1,
+        "AllGatherAsync_1": 2272.1,
         "ShardedToInterleavedDeviceOperation_0": 1919.0,
         "ShardedToInterleavedDeviceOperation_1": 1910.2,
         "InterleavedToShardedDeviceOperation_0": 10347.3,
