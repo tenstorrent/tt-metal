@@ -72,6 +72,7 @@ done
 # I would prefer to not be using -dev packages for runtime dependencies
 # But I have not been able to verify any alternative package
 
+# Packages needed at runtime and therefore needed by release docker image
 ub_runtime_packages()
 {
     UB_RUNTIME_LIST=(\
@@ -81,6 +82,7 @@ ub_runtime_packages()
      libnuma-dev \
      libc++-17-dev \
      libc++abi-17-dev \
+     libstdc++6 \
     )
 }
 
@@ -182,16 +184,33 @@ install_llvm() {
     fi
 }
 
-# Install g++-12 if on Ubuntu 22.04
-install_gcc12() {
-    if [ $VERSION == "22.04" ]; then
-        echo "Detected Ubuntu 22.04, installing g++-12..."
-        apt-get install -y --no-install-recommends g++-12 gcc-12
-        update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
-        update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
-        update-alternatives --set gcc /usr/bin/gcc-12
-        update-alternatives --set g++ /usr/bin/g++-12
-    fi
+install_gcc() {
+    case "$VERSION" in
+        "22.04")
+            GCC_VER=12
+            ;;
+        "24.04")
+            GCC_VER=14
+            ;;
+        *)
+            echo "Unknown or unsupported Ubuntu version: $VERSION"
+            echo "Falling back to installing default g++..."
+            apt-get install -y --no-install-recommends g++
+            echo "Using g++ version: $(g++ --version | head -n1)"
+            return
+            ;;
+    esac
+
+    echo "Detected Ubuntu $VERSION, installing g++-$GCC_VER..."
+
+    apt-get install -y --no-install-recommends g++-$GCC_VER gcc-$GCC_VER
+
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-$GCC_VER $GCC_VER
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-$GCC_VER $GCC_VER
+    update-alternatives --set gcc /usr/bin/gcc-$GCC_VER
+    update-alternatives --set g++ /usr/bin/g++-$GCC_VER
+
+    echo "Using g++ version: $(g++ --version | head -n1)"
 }
 
 # We don't really want to have hugepages dependency
@@ -218,12 +237,12 @@ install() {
             build)
                 prep_ubuntu_build
                 install_llvm
-		install_gcc12
+		install_gcc
                 ;;
             baremetal)
                 prep_ubuntu_build
                 install_llvm
-		install_gcc12
+		install_gcc
                 configure_hugepages
                 ;;
         esac
