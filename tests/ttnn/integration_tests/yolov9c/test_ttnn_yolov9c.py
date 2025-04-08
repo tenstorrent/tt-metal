@@ -18,7 +18,6 @@ from models.experimental.functional_yolov9c.tt.model_preprocessing import (
 )
 from models.experimental.functional_yolov9c.tt import ttnn_yolov9c
 from models.experimental.functional_yolov9c.reference import yolov9c
-from models.experimental.functional_yolov9c.demo.demo_utils import attempt_load
 from ultralytics import YOLO
 
 
