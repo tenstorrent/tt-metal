@@ -3033,8 +3033,6 @@ def test_conv2d_sdxl(
     enable_split_reader,
     split_input_channels_factor
 ):
-    if (input_channels == 1920 or input_channels == 2560) and input_height == 32 and input_width == 32 and kernel[0] == 1 and kernel[1] == 1 and is_blackhole():
-        pytest.skip("Temporary skip until #19831 is not closed")
 
     config_override = {}
     config_override["act_block_h"] = act_block_h_override

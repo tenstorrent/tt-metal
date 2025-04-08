@@ -138,6 +138,7 @@ void kernel_main() {
             DPRINT << "noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
             DPRINT << "tile_id: " << tile_id << "\n";
 
+            // This issues a flush barrier
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
                 pkt_hdr_forward,
@@ -153,7 +154,6 @@ void kernel_main() {
             }
             tile_id++;
         }
-        noc_async_writes_flushed();
 
         cb_pop_front(cb0_id, packet_size_in_pages);
     }
@@ -190,14 +190,13 @@ void kernel_main() {
 
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
-        while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
+        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
         DPRINT << "waitval done\n";
     }
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
-        const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
-        noc_inline_dw_write(dest_noc_addr, 0);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
         DPRINT << "reset done\n";
     }
 
@@ -206,5 +205,6 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
+
     DPRINT << "DONE \n";
 }

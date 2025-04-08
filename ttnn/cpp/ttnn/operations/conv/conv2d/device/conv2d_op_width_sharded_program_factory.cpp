@@ -39,7 +39,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const std::optional<unary::UnaryWithParam>& fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    bool use_shallow_conv_variant,
     bool transpose_mcast,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -178,14 +177,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
                                                                               // by 8 not 16.
     // Always use split reader for first conv in resnet which has input channels = 16
     // TODO: Expose option to split readers for 1D convs to python?
-    // bool split_reader = use_shallow_conv_variant;
     if (enable_split_reader) {
         TT_FATAL(not weight_width_sliced, "split reader does not work with 2d conv");
         TT_FATAL(
             (act_block_h_ntiles / block_config.out_subblock_h_ntiles) >= 2,
             "split reader needs to have at leaset two subblocks");
     }
-    bool split_reader = use_shallow_conv_variant or enable_split_reader;
+    bool split_reader = enable_split_reader;
     if (split_reader) {
         TT_FATAL(
             block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0,

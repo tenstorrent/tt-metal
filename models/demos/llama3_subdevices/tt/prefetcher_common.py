@@ -10,6 +10,8 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
 )
 from tests.ttnn.unit_tests.operations.prefetcher_common import get_core_ranges
 
+global_tt_tensor_address = None
+
 
 def get_buffer_address(tensor):
     addr = []
@@ -21,7 +23,16 @@ def get_buffer_address(tensor):
 
 
 class TtLlamaPrefetcherSetup(LightweightModule):
-    def __init__(self, mesh_device, n_tensors, n_layers, mode="decode"):
+    def __init__(
+        self,
+        mesh_device,
+        n_tensors,
+        n_layers,
+        mode="decode",
+        mesh_sub_device_manager_id_prefill=None,
+        mesh_sub_device_manager_id_decode=None,
+        save_tensor_addresses=False,
+    ):
         """
         - sub devices
         - global cb
@@ -62,10 +73,19 @@ class TtLlamaPrefetcherSetup(LightweightModule):
 
         if mode == "prefill":
             self.all_sub_device = ttnn.SubDevice([self.all_core_range_set])
-            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-                mesh_device, [self.all_sub_device], 0, 0, True
-            )
-            self.mesh_sub_device_manager_id = mesh_sub_device_manager_id
+            if mesh_sub_device_manager_id_prefill is None:
+                mesh_sub_device_manager_id_prefill = create_and_load_sub_device_manager_with_fabric_interface(
+                    mesh_device, [self.all_sub_device], 0, 0, True
+                )
+            else:
+                mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_prefill)
+                ttnn.initialize_edm_fabric(
+                    mesh_device,
+                    wrap_fabric_around_mesh=False,
+                    context_switch_interval_override=None,
+                    topology=ttnn.Topology.Linear,
+                )
+            self.mesh_sub_device_manager_id_prefill = mesh_sub_device_manager_id_prefill
             self.all_sub_device_id = ttnn.SubDeviceId(0)
             self.worker_sub_device_id = self.all_sub_device_id
         else:
@@ -78,22 +98,32 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # TODO: Above calculation is not accurate, need to find a better lower bound
             self.global_cb_size = 600 * 1088
             self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
-            self.global_circular_buffer = ttnn.create_global_circular_buffer(
-                self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
-            )
-            logger.info(f"GlobalCB size {self.global_cb_size}")
-
+            # self.global_circular_buffer = ttnn.create_global_circular_buffer(
+            #     self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
+            # )
+            # logger.info(f"GlobalCB size {self.global_cb_size}")
+            self.global_circular_buffer = None  # Global CB will only be allocated before decode runs
             self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
             self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
-            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-                mesh_device, [self.prefetcher_sub_device, self.worker_sub_device], 1, 0, True
-            )
-            self.mesh_sub_device_manager_id = mesh_sub_device_manager_id
+            if mesh_sub_device_manager_id_decode is None:
+                mesh_sub_device_manager_id_decode = create_and_load_sub_device_manager_with_fabric_interface(
+                    mesh_device, [self.prefetcher_sub_device, self.worker_sub_device], 1, 0, True
+                )
+            else:
+                mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_decode)
+                ttnn.initialize_edm_fabric(
+                    mesh_device,
+                    wrap_fabric_around_mesh=False,
+                    context_switch_interval_override=None,
+                    topology=ttnn.Topology.Linear,
+                )
+            self.mesh_sub_device_manager_id_decode = mesh_sub_device_manager_id_decode
             self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
             self.worker_sub_device_id = ttnn.SubDeviceId(1)
 
         self.tensors = []
         self.tensor_addrs = []  # List of buffer addresses
+        self.save_tensor_addresses = save_tensor_addresses
 
     def buffer_address(self, tensor):
         addr = []
@@ -137,5 +167,11 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         assert (
             len(self.tensors) >= self.n_tensors
         ), f"Expected at least {self.n_tensors} tensors, got {len(self.tensors)}"
-
-        return self.tensors[: self.n_tensors] + [self.get_tensor_addrs()]
+        if self.save_tensor_addresses:
+            global global_tt_tensor_address
+            if global_tt_tensor_address is None:
+                global_tt_tensor_address = self.get_tensor_addrs()
+        else:
+            global_tt_tensor_address = self.get_tensor_addrs()
+        self.tt_tensor_address = global_tt_tensor_address
+        return self.tensors[: self.n_tensors] + [self.tt_tensor_address]

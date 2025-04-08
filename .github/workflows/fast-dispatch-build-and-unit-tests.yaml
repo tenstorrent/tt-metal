@@ -13,34 +13,12 @@ on:
         required: false
         type: number
         default: 45
-      os:
-        required: false
-        type: string
-        default: "ubuntu-20.04"
-  workflow_dispatch:
-    inputs:
-      arch:
+      docker-image:
         required: true
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-      runner-label:
-        required: true
-        type: choice
-        options:
-          - E150
-          - N150
-          - N300
-          - BH
-      timeout:
-        required: false
-        type: number
-        default: 45
-      os:
-        required: false
         type: string
-        default: "ubuntu-20.04"
+      wheel-artifact-name:
+        required: true
+        type: string
 
 jobs:
   fd-tests:
@@ -49,7 +27,6 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        os: ["${{ inputs.os }}"]
         test-group: [
           {name: eager unit tests 1, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 },
           {name: eager unit tests 2, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2 },
@@ -68,16 +45,19 @@ jobs:
       - cloud-virtual-machine
       - in-service
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          docker_os_arch: tt-metalium/${{ inputs.os }}-dev-amd64
+          docker_image: ${{ inputs.docker-image }}
           install_wheel: true
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
@@ -85,7 +65,7 @@ jobs:
             -e GITHUB_ACTIONS=true
           run_args: |
             ${{ matrix.test-group.cmd }}
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -94,8 +74,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
+          path: generated/test_reports/
           prefix: "test_reports_"
       - name: Generate system logs on failure
         uses: ./.github/actions/generate-system-logs
