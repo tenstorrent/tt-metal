@@ -48,6 +48,10 @@ def unpack_bfp16(packed_list, unpack_src, pack_dst):
         for i in range(0, len(limited_packed_list), 2)
     ]
 
+    if unpack_src == pack_dst:
+        for i in range(0, len(result), 2):
+            result[i], result[i + 1] = result[i + 1], result[i]
+
     # Patch Up! Fixes incorrect reading of numbers in L1:
     # When input format i.e `unpack_src` is BFP8_b but the result is packed into a different format then consecutive pairs of numbers are inverted in L1.
     # Instead of being placed as (a,b,c,d,e,f,...) in L1, they are placed as (b,a,d,c,f,e,...).

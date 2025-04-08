@@ -36,11 +36,9 @@ void run_kernel()
 
     std::uint32_t tile_size = 128;
 
-    _llk_unpack_AB_matmul_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(
-        UNPACK_A_IN, UNPACK_B_IN, UNPACK_A_OUT, UNPACK_B_OUT, FACE_R_DIM, FACE_R_DIM, 0, 4, 4, tile_size, tile_size);
-    _llk_unpack_AB_matmul_init_<>(0, ct_dim, rt_dim, kt_dim, FACE_R_DIM, FACE_R_DIM, 4, 4, false, false);
-    _llk_unpack_AB_matmul_<>(
-        L1_ADDRESS(buffer_A), L1_ADDRESS(buffer_B), 0, 0, tile_size, tile_size, FACE_R_DIM, FACE_R_DIM, false, false, ct_dim, rt_dim, kt_dim);
+    _llk_unpack_AB_matmul_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_A_IN, UNPACK_B_IN, UNPACK_A_OUT, UNPACK_B_OUT);
+    _llk_unpack_AB_matmul_init_<>();
+    _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A), L1_ADDRESS(buffer_B), 0, 0, tile_size, tile_size);
 }
 
 #endif
@@ -55,7 +53,7 @@ void run_kernel()
 {
     _llk_math_matmul_init_<MATH_FIDELITY, DstTileFaceLayout::RowMajor>();
     _llk_math_pack_sync_init_<DstSync::SyncFull, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<true, false>(MATH_FORMAT, MATH_FORMAT);
+    _llk_math_hw_configure_<false, false>(MATH_FORMAT, MATH_FORMAT);
     _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
     _llk_math_matmul_<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(0);
     _llk_math_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
@@ -77,16 +75,12 @@ void run_kernel()
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<false, is_fp32_dest_acc_en, false>(PACK_IN, PACK_OUT, 16 * 16 * 4);
-#else
-    _llk_pack_hw_configure_<false, is_fp32_dest_acc_en>(PACK_IN, PACK_OUT, 16 * 16 * 4);
-#endif
-
-    _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false>(PACK_OUT);
-
-#ifdef ARCH_BLACKHOLE
+    _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false, false>(PACK_OUT);
     _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, is_fp32_dest_acc_en>();
 #else
-    _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, false, false>();
+    _llk_pack_hw_configure_<false, is_fp32_dest_acc_en>(PACK_IN, PACK_OUT, 16 * 16 * 4);
+    _llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false>(PACK_OUT);
+    _llk_pack_dest_init_<DstSync::SyncFull, DstTileFaceLayout::RowMajor, false, is_fp32_dest_acc_en>();
 #endif
 
     _llk_packer_wait_for_math_done_();
