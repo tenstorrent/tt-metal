@@ -233,11 +233,11 @@ class TtLlamaMLP(LightweightModule):
         # ttnn.deallocate(x)
 
         try:
-            w1_out_reduced = self.tt_ccl.line_all_reduce(
-                w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1"
+            w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
             )
-            w3_out_reduced = self.tt_ccl.line_all_reduce(
-                w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3"
+            w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
             )
 
         except Exception as e:
@@ -251,11 +251,13 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
-
+        w2_in_gathered = self.tt_ccl.line_all_gather(
+            w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
+        )
         # ttnn.deallocate(w3_out)
         # ttnn.deallocate(w1_out)
         w2_out = ttnn.linear(
-            w2_in,
+            w2_in_gathered,
             self.w2,
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
             dtype=ttnn.bfloat8_b,
