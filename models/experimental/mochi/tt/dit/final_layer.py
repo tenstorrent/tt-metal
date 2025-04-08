@@ -98,7 +98,7 @@ class FinalLayer(LightweightModule):
         )
 
         # Apply activation to conditioning
-        c = ttnn.silu(c)
+        # c = ttnn.silu(c)
 
         # Apply modulation layer
         mod = ttnn.linear(

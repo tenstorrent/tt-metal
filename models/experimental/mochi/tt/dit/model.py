@@ -140,6 +140,8 @@ class AsymmDiTJoint(LightweightModule):
         t5_y_pool = self.t5_y_embedder(t5_feat, t5_mask)
         y_feat_BLY = self.t5_yproj(t5_feat)
 
+        return y_feat_BLY, t5_y_pool
+
         tt_y_feat_1BLY = to_tt_tensor(unsqueeze_to_4d(y_feat_BLY), self.mesh_device)  # Add dim for ttnn format
         tt_y_pool_11BX = to_tt_tensor(unsqueeze_to_4d(t5_y_pool), self.mesh_device)
 
@@ -338,8 +340,12 @@ class AsymmDiTJoint(LightweightModule):
 
         # Global vector embedding for conditionings
         c_t_BX = self.t_embedder(1 - sigma)
-        c_t_11BX = to_tt_tensor(unsqueeze_to_4d(c_t_BX), self.mesh_device)  # Add dims for ttnn format
-        c_11BX = c_t_11BX + y_pool_11BX
+        c_11BX = c_t_BX + y_pool_11BX
+        c_11BX = torch.nn.functional.silu(c_11BX)
+
+        c_11BX = to_tt_tensor(unsqueeze_to_4d(c_11BX), self.mesh_device)  # Add dims for ttnn format
+        y_feat_1BLY = to_tt_tensor(unsqueeze_to_4d(y_feat_1BLY), self.mesh_device)  # Add dim for ttnn format
+        # tt_y_pool_11BX = to_tt_tensor(unsqueeze_to_4d(y_pool_11BX), self.mesh_device)
 
         # Run blocks
         for block in self.blocks:
