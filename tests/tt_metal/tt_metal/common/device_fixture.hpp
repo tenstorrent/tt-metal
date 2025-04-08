@@ -11,6 +11,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/device_pool.hpp>
+#include <limits>
+#include <algorithm>
 
 namespace tt::tt_metal {
 
@@ -56,6 +58,19 @@ protected:
         DispatchFixture(l1_small_size, trace_region_size) {}
 
     size_t num_devices_;
+
+public:
+    std::pair<unsigned, unsigned> worker_grid_minimum_dims(void) {
+        constexpr size_t UMAX = std::numeric_limits<unsigned>::max();
+        std::pair<size_t, size_t> min_dims = {UMAX, UMAX};
+        for (auto device : devices_) {
+            auto coords = device->compute_with_storage_grid_size();
+            min_dims.first = std::min(min_dims.first, coords.x);
+            min_dims.second = std::min(min_dims.second, coords.y);
+        }
+
+        return min_dims;
+    }
 };
 
 class DeviceFixtureWithL1Small : public DeviceFixture {
