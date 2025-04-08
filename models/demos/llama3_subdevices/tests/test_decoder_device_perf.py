@@ -27,6 +27,7 @@ mapping_op_code_to_name = {
     "AllGatherAsync_0": "AllGatherAsync_LN_0",
     "AllGatherAsync_1": "AllGatherAsync_SDPA_0",
     "AllGatherAsync_2": "AllGatherAsync_LN_1",
+    "AllGatherAsync_3": "AllGatherAsync_Binary_Mult",
     "ShardedToInterleavedDeviceOperation_0": "ShardedToInterleavedDeviceOperation_LN_0",
     "ShardedToInterleavedDeviceOperation_1": "ShardedToInterleavedDeviceOperation_LN_1",
     "InterleavedToShardedDeviceOperation_0": "InterleavedToShardedDeviceOperation_LN_0",
@@ -42,9 +43,9 @@ mapping_op_code_to_name = {
     "Matmul_4": "FF2_MM",
     "AllReduceAsync_0": "AllReduceAsync_QKV",
     "AllReduceAsync_1": "AllReduceAsync_DO",
-    "AllReduceAsync_2": "AllReduceAsync_FF1",
-    "AllReduceAsync_3": "AllReduceAsync_FF3",
-    "AllReduceAsync_4": "AllReduceAsync_FF2",
+    "AllReduceAsync_2": "AllReduceAsync_FF2",
+    "LlamaReduceScatterDeviceOperation_0": "ReduceScatter_FF1",
+    "LlamaReduceScatterDeviceOperation_1": "ReduceScatter_FF3",
     "NLPCreateHeadsDecodeDeviceOperation_0": "CreateHeads",
     "RotaryEmbeddingLlamaFusedQK_0": "RotaryEmbeddingLlamaFusedQK",
     "PagedUpdateCacheDeviceOperation_0": "PagedUpdateCache",
@@ -257,6 +258,10 @@ def average_per_instance_dict(input_dict):
     (3000,),
 )
 @pytest.mark.parametrize(
+    "abs_tolerance_ns_reduce_scatter",
+    (2000,),
+)
+@pytest.mark.parametrize(
     "abs_tolerance_ns_all_gather",
     (1500,),
 )
@@ -281,6 +286,7 @@ def test_llama_TG_perf_device(
     reset_seeds,
     abs_tolerance_ns,
     abs_tolerance_ns_all_reduce,
+    abs_tolerance_ns_reduce_scatter,
     abs_tolerance_ns_all_gather,
     abs_tolerance_ns_sdpa,
     abs_tolerance_ns_op_to_op,
@@ -344,6 +350,7 @@ def test_llama_TG_perf_device(
         "AllGatherAsync_0": 4205.888888888889,
         "AllGatherAsync_1": 9638.666666666666,
         "AllGatherAsync_2": 4095.5555555555557,
+        "AllGatherAsync_3": 9642.0,
         "ShardedToInterleavedDeviceOperation_0": 3947.222222222222,
         "ShardedToInterleavedDeviceOperation_1": 3388.5555555555557,
         "InterleavedToShardedDeviceOperation_0": 2546.5555555555557,
@@ -352,12 +359,12 @@ def test_llama_TG_perf_device(
         "Matmul_1": 8584.111111111111,
         "Matmul_2": 10554.555555555555,
         "Matmul_3": 12118.888888888889,
-        "Matmul_4": 16474.222222222223,
+        "Matmul_4": 17000.0,
         "AllReduceAsync_0": 15395.555555555555,
         "AllReduceAsync_1": 21078.333333333332,
-        "AllReduceAsync_2": 20948.777777777777,
-        "AllReduceAsync_3": 21195.444444444445,
-        "AllReduceAsync_4": 21145.777777777777,
+        "AllReduceAsync_2": 21145.777777777777,
+        "LlamaReduceScatterDeviceOperation_0": 10600.555555555555,
+        "LlamaReduceScatterDeviceOperation_1": 11251.222222222223,
         "NLPCreateHeadsDecodeDeviceOperation_0": 8568.222222222223,
         "RotaryEmbeddingLlamaFusedQK_0": 5023.888888888889,
         "PagedUpdateCacheDeviceOperation_0": 5606.444444444444,
@@ -365,7 +372,7 @@ def test_llama_TG_perf_device(
         "NLPConcatHeadsDecodeDeviceOperation_0": 6665.0,
         "ReshardDeviceOperation_0": 1752.7777777777778,
         "BinaryDeviceOperation_0": 2408.8888888888887,
-        "BinaryDeviceOperation_1": 11838.444444444445,
+        "BinaryDeviceOperation_1": 4572.777777777777,
         "BinaryDeviceOperation_2": 2435.5555555555557,
     }
 
@@ -377,6 +384,7 @@ def test_llama_TG_perf_device(
         "AllGatherAsync_0": 2417.5555555555557,
         "AllGatherAsync_1": 676.4444444444445,
         "AllGatherAsync_2": 2403.4444444444443,
+        "AllGatherAsync_3": 1698.7777777777778,
         "ShardedToInterleavedDeviceOperation_0": 2211.6666666666665,
         "ShardedToInterleavedDeviceOperation_1": 2212.222222222222,
         "InterleavedToShardedDeviceOperation_0": 631.8888888888889,
@@ -388,9 +396,9 @@ def test_llama_TG_perf_device(
         "Matmul_4": 658.7777777777778,
         "AllReduceAsync_0": 609.0,
         "AllReduceAsync_1": 626.5555555555555,
-        "AllReduceAsync_2": 641.2222222222222,
-        "AllReduceAsync_3": 629.7777777777778,
-        "AllReduceAsync_4": 637.1111111111111,
+        "AllReduceAsync_2": 637.1111111111111,
+        "LlamaReduceScatterDeviceOperation_0": 708.1111111111111,
+        "LlamaReduceScatterDeviceOperation_1": 736.1111111111111,
         "NLPCreateHeadsDecodeDeviceOperation_0": 761.1111111111111,
         "RotaryEmbeddingLlamaFusedQK_0": 540.7777777777778,
         "PagedUpdateCacheDeviceOperation_0": 773.8888888888889,
@@ -398,7 +406,7 @@ def test_llama_TG_perf_device(
         "NLPConcatHeadsDecodeDeviceOperation_0": 620.5555555555555,
         "ReshardDeviceOperation_0": 655.2222222222222,
         "BinaryDeviceOperation_0": 653.6666666666666,
-        "BinaryDeviceOperation_1": 717.4444444444445,
+        "BinaryDeviceOperation_1": 661.0,
         "BinaryDeviceOperation_2": 647.7777777777778,
     }
 
@@ -418,6 +426,8 @@ def test_llama_TG_perf_device(
             # Verify kernel duration is within tolerance
             if "AllReduceAsync" in op_code_with_id:
                 tolerance = abs_tolerance_ns_all_reduce
+            elif "LlamaReduceScatterDeviceOperation" in op_code_with_id:
+                tolerance = abs_tolerance_ns_reduce_scatter
             elif "AllGatherAsync" in op_code_with_id:
                 tolerance = abs_tolerance_ns_all_gather
             elif "ScaledDotProductAttentionDecode" in op_code_with_id:
@@ -485,6 +495,10 @@ def test_llama_TG_perf_device(
     (1500,),
 )
 @pytest.mark.parametrize(
+    "abs_tolerance_ns_reduce_scatter",
+    (1500,),
+)
+@pytest.mark.parametrize(
     "abs_tolerance_ns_all_gather",
     (1500,),
 )
@@ -502,7 +516,12 @@ def test_llama_TG_perf_device(
 # If the op list changed (new ops, less ops, fused ops), and not done for the above test, then update mapping_op_code_to_name and give the new ops meaningful names
 # Run at least once again to verify the new expected values are correct and margins hold
 def test_llama_TG_perf_device_non_overlapped_dispatch(
-    reset_seeds, abs_tolerance_ns, abs_tolerance_ns_all_reduce, abs_tolerance_ns_all_gather, abs_tolerance_ns_sdpa
+    reset_seeds,
+    abs_tolerance_ns,
+    abs_tolerance_ns_all_reduce,
+    abs_tolerance_ns_reduce_scatter,
+    abs_tolerance_ns_all_gather,
+    abs_tolerance_ns_sdpa,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
@@ -551,6 +570,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         "AllGatherAsync_0": 2273.2,
         "AllGatherAsync_1": 2983.2,
         "AllGatherAsync_2": 2272.1,
+        "AllGatherAsync_3": 4342.0,
         "ShardedToInterleavedDeviceOperation_0": 1919.0,
         "ShardedToInterleavedDeviceOperation_1": 1910.2,
         "InterleavedToShardedDeviceOperation_0": 10347.3,
@@ -562,9 +582,9 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         "Matmul_4": 6029.3,
         "AllReduceAsync_0": 7349.4,
         "AllReduceAsync_1": 6484.7,
-        "AllReduceAsync_2": 11900.0,
-        "AllReduceAsync_3": 11874.1,
-        "AllReduceAsync_4": 6475.9,
+        "AllReduceAsync_2": 6475.9,
+        "LlamaReduceScatterDeviceOperation_0": 8058.9,
+        "LlamaReduceScatterDeviceOperation_1": 7359.9,
         "NLPCreateHeadsDecodeDeviceOperation_0": 8156.7,
         "RotaryEmbeddingLlamaFusedQK_0": 2844.3,
         "PagedUpdateCacheDeviceOperation_0": 4670.5,
@@ -588,6 +608,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             benchmark_data.add_measurement(profiler, 0, step_name, op_name + "_dispatch", avg_dispatch_duration)
             if "AllReduceAsync" in op_code_with_id:
                 tolerance = abs_tolerance_ns_all_reduce
+            elif "LlamaReduceScatterDeviceOperation" in op_code_with_id:
+                tolerance = abs_tolerance_ns_reduce_scatter
             elif "AllGatherAsync" in op_code_with_id:
                 tolerance = abs_tolerance_ns_all_gather
             elif "ScaledDotProductAttentionDecode" in op_code_with_id:
