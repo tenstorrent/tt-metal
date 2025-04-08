@@ -134,7 +134,11 @@ struct Conv2dConfig {
 
 struct Conv2dSliceConfig {
     // Determines the dimension along which the input & output tensors are sliced.
-    //  Slices based on [N, H, W, C] shape.
+    // Slices based on [N, H, W, C] shape.
+    // Using width slicing is more efficient as it reduces memory usage. This is because the overlap of data between
+    // cores is minimized in width slicing, reducing the size of the Halo output. If the Height & Width dimensions are
+    // similar, then use Width slicing. Use Height slicing if the Height dimension is significantly larger than the
+    // Width dimension.
     enum class SliceType : bool { HEIGHT, WIDTH };
     SliceType slice_type = SliceType::WIDTH;
 
