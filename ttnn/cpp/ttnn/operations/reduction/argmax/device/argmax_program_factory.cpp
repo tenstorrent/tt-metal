@@ -35,12 +35,10 @@ operation::ProgramWithCallbacks argmax_single_core(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
 
     const auto& input_shape = input.get_padded_shape();
-    const uint32_t rank = input_shape.size();
-    uint32_t num_intermed0_units = 1;
-    for (size_t i = 0; i < rank - 1; ++i) {
-        num_intermed0_units *= input_shape[i];  // Multiply all dimensions except the last
-    }
-    const uint32_t W = input_shape[rank - 1];  // Last dimension i.e. reduction dimension
+    const uint32_t B = input_shape[0];
+    const uint32_t C = input_shape[1];
+    const uint32_t H = input_shape[2];
+    const uint32_t W = input_shape[3];
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
@@ -51,6 +49,7 @@ operation::ProgramWithCallbacks argmax_single_core(
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t intermed0_cb_index = tt::CBIndex::c_1;
+    uint32_t num_intermed0_units = B * C * H;
     uint32_t aligned_intermed0_unit_size = num_intermed0_units * output_unit_size;
     tt::tt_metal::CircularBufferConfig intermed0_cb_config =
         tt::tt_metal::CircularBufferConfig(aligned_intermed0_unit_size, {{intermed0_cb_index, output_cb_data_format}})
@@ -69,8 +68,11 @@ operation::ProgramWithCallbacks argmax_single_core(
         dst_is_dram,
         aligned_input_unit_size,
         aligned_intermed0_unit_size,
-        num_intermed0_units,
+        B,
+        C,
+        H,
         W,
+        dim.value_or(0),
         (uint32_t)(not dim.has_value()),
     };
 
