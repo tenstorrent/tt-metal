@@ -1140,7 +1140,6 @@ ttnn::Tensor prepare_conv_weights(
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt;
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-
     tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
         weight_tensor,
         bias_tensor,
@@ -1153,9 +1152,7 @@ ttnn::Tensor prepare_conv_weights(
         device,
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,
-        input_width,
-        true  // setting to default value
-    );
+        input_width);
 
     return weight_tensor_on_device;
 }
