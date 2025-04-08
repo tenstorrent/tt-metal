@@ -107,7 +107,7 @@ def run_llama3_demo(
 ):
     # Creat batch output file
     benchmark_data = BenchmarkData()
-    profiler_step_name = "tg-llama-demo"
+    profiler_step_name = "tg-llama-demo-e2e"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_directory = "models/demos/llama3/demo/output"
     os.makedirs(output_directory, exist_ok=True)
@@ -487,8 +487,8 @@ def run_llama3_demo(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg-llama-demo",
-            ml_model_name="llama70b-tg",
+            run_type=f"tg-llama-demo-e2e",
+            ml_model_name="tg-llama",
         )
 
 
