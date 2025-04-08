@@ -67,7 +67,7 @@ RMSAllGather create_rms_struct(
         backward_device);
 }
 
-const tt::tt_metal::operation::Hash RMSAllGather::compute_program_hash(
+tt::tt_metal::operation::Hash RMSAllGather::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");

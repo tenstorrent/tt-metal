@@ -811,7 +811,7 @@ Tensor Tensor::to_layout(Layout target_layout, distributed::MeshDevice* mesh_dev
     return tensor_ops::tensor_to_layout(*this, target_layout, mesh_device);
 }
 
-const std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
+std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
 
 void Tensor::print() const { tensor_ops::tensor_print(*this); }
 
@@ -830,7 +830,7 @@ Tensor Tensor::unpad_from_tile(const ttnn::Shape& output_tensor_shape) const {
     return tensor_ops::tensor_unpad_from_tile(*this, output_tensor_shape);
 }
 
-const bool Tensor::is_sharded() const {
+bool Tensor::is_sharded() const {
     return is_tensor_on_device_or_multidevice(*this) ? this->memory_config().is_sharded() : false;
 }
 
@@ -883,9 +883,7 @@ bool Tensor::is_host_tensor() const {
 
 bool Tensor::is_device_tensor() const { return !is_host_tensor(); }
 
-const ttnn::Shape Tensor::strides() const {
-    return ttnn::Shape(tt::tt_metal::compute_strides(this->get_padded_shape()));
-}
+ttnn::Shape Tensor::strides() const { return ttnn::Shape(tt::tt_metal::compute_strides(this->get_padded_shape())); }
 
 uint32_t Tensor::volume() const { return get_padded_shape().volume(); }
 

@@ -75,7 +75,7 @@ struct SenderReceiverPair {
     std::shared_ptr<tt_metal::Buffer> sender_buffer = nullptr;
     std::shared_ptr<tt_metal::Buffer> receiver_buffer = nullptr;
 
-    const bool operator==(const SenderReceiverPair& other) const {
+    bool operator==(const SenderReceiverPair& other) const {
         bool same_s_r = sender.chip == other.sender.chip && sender.x == other.sender.x && sender.y == other.sender.y &&
                         receiver.chip == other.receiver.chip && receiver.x == other.receiver.x &&
                         receiver.y == other.receiver.y;

@@ -227,7 +227,7 @@ public:
 
     Tensor unpad_from_tile(const ttnn::Shape& output_tensor_shape) const;
 
-    const std::string write_to_string() const;
+    std::string write_to_string() const;
     void print() const;
 
     Tensor extract_shard(const CoreCoord& core) const;
@@ -273,7 +273,7 @@ public:
     StorageType storage_type() const;
     bool is_host_tensor() const;
     bool is_device_tensor() const;
-    const ttnn::Shape strides() const;
+    ttnn::Shape strides() const;
     uint32_t volume() const;
 
     // todo: rename volume to get_volume to indicate that its blocking
@@ -335,7 +335,7 @@ public:
     const MemoryConfig& memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
     const std::optional<ShardSpec>& shard_spec() const { return this->memory_config().shard_spec; }
 
-    const bool is_sharded() const;
+    bool is_sharded() const;
 
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;

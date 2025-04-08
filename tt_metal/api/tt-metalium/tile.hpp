@@ -66,7 +66,7 @@ struct Tile {
     const bool get_transpose_within_face() const { return transpose_within_face; }
     const bool get_transpose_of_faces() const { return transpose_of_faces; }
 
-    const uint32_t get_tile_size(const DataFormat& format) const;
+    uint32_t get_tile_size(const DataFormat& format) const;
 
     // operators
     bool operator==(const Tile& other) const;
