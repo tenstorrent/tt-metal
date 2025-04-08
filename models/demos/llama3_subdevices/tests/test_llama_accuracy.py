@@ -268,7 +268,7 @@ def test_tt_model_acc(
             )
             tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
             tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-                tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
+                tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids
             )
             tt_out_tok = ttnn.to_torch(
                 tt_out_tok,
@@ -335,7 +335,7 @@ def test_tt_model_acc(
         )
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
         tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-            tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
+            tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids
         )
         if not use_reference_file:
             tt_logits = ttnn.to_torch(
