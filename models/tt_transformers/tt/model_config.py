@@ -1406,6 +1406,9 @@ class ModelArgs:
             if self.checkpoint_type == CheckpointType.HuggingFace:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
+                logger.info(
+                    f"Loading state dict for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
+                )
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
@@ -1806,6 +1809,7 @@ class ModelArgs:
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
+                logger.info(f"Loading dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
