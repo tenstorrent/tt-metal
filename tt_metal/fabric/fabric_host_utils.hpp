@@ -9,7 +9,7 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include <vector>
 

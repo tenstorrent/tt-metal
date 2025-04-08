@@ -29,6 +29,9 @@ on:
       - reopened
       - synchronize
       - ready_for_review
+  push:
+    branches:
+      - main # Builds on main will populate the shared ccache to speed up builds on branches
 
 concurrency:
   # Use github.run_id on main branch (or any protected branch)
@@ -45,6 +48,7 @@ jobs:
   build:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       version: "22.04"
       toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
@@ -73,7 +77,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "tt-beta-ubuntu-2204-n300-large-stable",
+          "tt-beta-ubuntu-2204-n150-large-stable",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
