@@ -89,6 +89,9 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
             echo "Redis password is missing. Did you forget 'secrets: inherit'?"
