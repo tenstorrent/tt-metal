@@ -58,15 +58,15 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "num_devices, num_links",
+    "num_devices",
     [
-        (4, 3),
+        4,
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat8_b,
+        ttnn.bfloat16,
     ],
 )
 @pytest.mark.parametrize(
@@ -77,11 +77,12 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
 )
 @pytest.mark.parametrize("shard_grid_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize(
-    "tensor_mem_layout, output_shape, dim, input_shard_shape,input_shard_grid,output_shard_shape, output_shard_grid, layout",
+    "tensor_mem_layout, output_shape, num_links, dim, input_shard_shape,input_shard_grid,output_shard_shape, output_shard_grid, layout",
     (
         (  # AllGather after SDPA
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             (1, 32, 32, 128),
+            3,
             1,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
@@ -98,6 +99,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             (1, 1, 32, 3840),
             3,
+            3,
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
             (32, 160),
@@ -107,6 +109,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
         (  # AllGather for layernorm
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             (1, 1, 32, 128),
+            1,
             3,
             (32, 32),
             CORE_RANGE_SET_1x1,
