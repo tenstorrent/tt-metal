@@ -44,9 +44,7 @@ void test_matmul(tt::tt_metal::IDevice* device) {
     ttnn::Shape shapea({B_original, 1, Mt_original * TILE_HEIGHT, Kt_original * TILE_WIDTH});
     ttnn::Shape shapeb({B_original, 1, Kt_original * TILE_HEIGHT, Nt_original * TILE_WIDTH});
     Tensor input_tensor_a = ttnn::random::random(shapea).to_layout(Layout::TILE).to_device(device);
-    ;
     Tensor input_tensor_b = ttnn::random::random(shapeb).to_layout(Layout::TILE).to_device(device);
-    ;
 
     Tensor golden = ttnn::matmul(input_tensor_a, input_tensor_b);
 
