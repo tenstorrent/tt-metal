@@ -190,7 +190,7 @@ install_gcc() {
             GCC_VER=12
             ;;
         "24.04")
-            GCC_VER=13
+            GCC_VER=14
             ;;
         *)
             echo "Unknown or unsupported Ubuntu version: $VERSION"
