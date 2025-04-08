@@ -1793,7 +1793,6 @@ size_t detail::Program_::calculate_hash() const {
         size_t hash = std::hash<CoreRangeSet>()(circular_buffer->core_ranges());
         hash = hash_combine(hash, circular_buffer->globally_allocated());
         auto& config = circular_buffer->config();
-        hash = hash_combine(hash, std::hash<uint32_t>()(config.total_size()));
         hash = hash_combine(hash, config.buffer_indices().size());
         for (const auto& buffer_index : config.buffer_indices()) {
             hash = hash_combine(hash, buffer_index);
@@ -1820,8 +1819,6 @@ size_t detail::Program_::calculate_hash() const {
             hash = hash_combine(hash, buffer_index);
         }
         hash = hash_combine(hash, config.dynamic_cb());
-        hash = hash_combine(hash, config.max_size());
-        hash = hash_combine(hash, config.buffer_size());
         return hash;
     };
 
