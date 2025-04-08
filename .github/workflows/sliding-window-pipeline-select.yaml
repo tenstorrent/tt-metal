@@ -75,6 +75,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        target: ['wormhole_b0', 'blackhole']
         test-group:
           - name: ttnn nightly conv tests
             cmd: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
@@ -85,7 +86,7 @@ jobs:
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: 'wormhole_b0'
+        ARCH_NAME: ${{ matrix.version }}
         LOGURU_LEVEL: INFO
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -97,7 +98,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - ${{ 'N150' }}
+      - ${{ matrix.target == 'wormhole_b0' && 'N150' || 'BH' }}
       - "in-service"
     steps:
       - name: ⬇️  Setup Job
