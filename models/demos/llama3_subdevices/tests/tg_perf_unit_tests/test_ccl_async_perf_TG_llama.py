@@ -177,7 +177,7 @@ def test_rms_perf(
 @pytest.mark.parametrize(
     "warmup_iters, perf_target_us",
     [
-        (10, 25),
+        (5, 17),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

@@ -18,7 +18,6 @@ from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import run_rm
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test import (
     run_concat_fuse_impl,
-    run_gather_concat_impl,
 )
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -454,7 +453,7 @@ def test_tg_trace_rms_fuse(
         # ttnn.bfloat8_b,
     ],
 )
-@pytest.mark.parametrize("num_iters, warmup_iters", [[30, 5]])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[75, 5]])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
