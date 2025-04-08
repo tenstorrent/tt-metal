@@ -512,7 +512,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSigmoid::invoke(
     std::vector<Tensor> grad_tensor;
     bool approximate_mode = false;
     Tensor sig_result = ttnn::sigmoid(input, (int)unary::VecMode::RC, approximate_mode, output_mem_config);
-    Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, output_mem_config);
+    Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
     Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
     Tensor prod_term_2 = ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(prod_term_2);
