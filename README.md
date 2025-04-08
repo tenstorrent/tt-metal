@@ -1,13 +1,36 @@
-# tt-llk: CPP Low Level Kernels (LLK) & test infrastructure #
+<div align="center">
+<h1>
+
+[Bounties](https://github.com/tenstorrent/tt-llk/issues?q=is%3Aissue%20state%3Aopen%20label%3Abounty) | [Buy](https://tenstorrent.com/cards/) | [Discord](https://discord.gg/tvhGzHQwaj) | [Join Us](https://job-boards.greenhouse.io/tenstorrent)
+
+</h1>
+
+<img src="./docs/common/_static/tt_llk_logo.png" alt="llk logo" height="180"/>
+
+<br><br>
+**TT-LLK** is Tenstorrent's Low Level Kernel library.
+
+[![C++](https://img.shields.io/badge/C++-20-green.svg)](#)
+[![Python](https://img.shields.io/badge/python-3.8%20|%203.10-green.svg)](#)
+</div>
 
 ## Overview ##
 
-This repository contains header-only low level kernels for Tenstorrent AI chips (Grayskull (deprecated), Wormhole_B0, and Blackhole), which represent foundational primitives of compute used as building blocks for higher level software stacks that implement ML OPs. Alongside the kernels is a test environment used for validating LLK APIs.
+This repository contains header-only low-level kernels for Tenstorrent AI chips, including Grayskull (deprecated), Wormhole, and Blackhole.
+
+These kernels serve as foundational compute primitives, acting as building blocks for higher-level software stacks that implement machine learning (ML) operations.
+
+Additionally, the repository includes a test environment designed to validate LLK APIs.
 
 ## Install ##
 
-1. Clone repository
-2. Set up test environment per testing [README](https://github.com/tenstorrent/tt-llk/blob/main/tests/README.md)
+1. **Clone the repository**
+
+    Clone this repository to your local computer.
+
+2. **Set up the test environment**
+
+    Follow the instructions in the [testing README](https://github.com/tenstorrent/tt-llk/blob/main/tests/README.md) to set up the test environment.
 
 ## Software dependencies ##
 
@@ -15,11 +38,27 @@ Test environment requires SFPI compiler for building, which is automatically ing
 
 ## Contributing ##
 
-1. Go over [CONTRIBUTING](https://github.com/tenstorrent/tt-llk/blob/main/CONTRIBUTING.md) guide
-2. Create a new branch.
-3. Make your changes and commit.
-4. Add new tests to cover your changes if needed and run existing ones.
-5. Start a pull request (PR).
+We welcome contributions to improve tt-llk! Please follow these steps to get started:
+
+1. **Read the Guidelines**
+
+    Familiarize yourself with our [CONTRIBUTING](https://github.com/tenstorrent/tt-llk/blob/main/CONTRIBUTING.md) guide and [CODE OF CONDUCT](https://github.com/tenstorrent/tt-llk/blob/main/CODE_OF_CONDUCT.md).
+
+2. **Create a Branch**
+
+    Create a new branch for your changes.
+
+3. **Make Changes**
+
+    Implement your changes and commit them with clear and descriptive messages.
+
+4. **Add Tests**
+
+    If applicable, add new tests to cover your changes and ensure all existing tests pass.
+
+5. **Submit a Pull Request**
+
+    Open a pull request (PR) to propose your changes for review.
 
 ## Tenstorrent Bounty Program Terms and Conditions ##
 
