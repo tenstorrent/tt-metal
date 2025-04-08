@@ -72,6 +72,7 @@ jobs:
         id: tags
         run: |
           HASH=$(cat \
+            .github/workflows/build-docker-artifact.yaml \
             install_dependencies.sh \
             dockerfile/Dockerfile \
             tt_metal/python_env/requirements-dev.txt \
@@ -91,13 +92,11 @@ jobs:
             echo "ci-build-exists=true" >> $GITHUB_OUTPUT
             echo "ci-test-exists=true" >> $GITHUB_OUTPUT
             echo "dev-exists=true" >> $GITHUB_OUTPUT
-            echo "release-exists=true" >> $GITHUB_OUTPUT
           else
             echo "${{ steps.tags.outputs.dev-tag }} does not exist"
             echo "ci-build-exists=false" >> $GITHUB_OUTPUT
             echo "ci-test-exists=false" >> $GITHUB_OUTPUT
             echo "dev-exists=false" >> $GITHUB_OUTPUT
-            echo "release-exists=false" >> $GITHUB_OUTPUT
           fi
 
   # Assume if dev-tag does not exist, the others will not exist either
