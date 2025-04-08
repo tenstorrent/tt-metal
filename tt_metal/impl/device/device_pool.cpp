@@ -208,7 +208,6 @@ void DevicePool::init_profiler_devices() const {
         }
     }
     detail::ProfilerSync(ProfilerSyncState::INIT);
-    log_info(tt::LogMetal, "Profiler sync init finish");
 #endif
 }
 

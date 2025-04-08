@@ -544,7 +544,6 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
 }
 
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
-    log_info(tt::LogTest, "Writing to buffer of size {}", buffer.size());
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
