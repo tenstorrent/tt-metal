@@ -325,15 +325,18 @@ class TtLlamaAttention(LightweightModule):
             batch_offset=self.batch_offset_tt_tensor,
             slice_size=8,
         )
+        breakpoint()
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
+        breakpoint()
         ttnn.deallocate(xqkv_reduced)
+        breakpoint()
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
         )
-
+        breakpoint()
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
 
