@@ -9,6 +9,7 @@ import ttnn
 import tempfile
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import comp_allclose_and_pcc, is_grayskull, skip_for_blackhole
 
 
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
@@ -17,6 +18,7 @@ from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 #######
 # Test MultiDevice Initialization, Open/Close
 #######
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_mesh_device_open_close_explicit(silicon_arch_name, silicon_arch_wormhole_b0):
     """Manually open and close multi-device"""
     num_pcie_devices = ttnn.get_num_pcie_devices()
@@ -27,6 +29,7 @@ def test_mesh_device_open_close_explicit(silicon_arch_name, silicon_arch_wormhol
     ttnn.close_mesh_device(multi_device)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_multi_device_subset_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     """Manually open and close multi-device"""
     num_pcie_devices = ttnn.get_num_pcie_devices()
@@ -43,16 +46,19 @@ def test_multi_device_subset_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     ttnn.close_mesh_device(multi_device)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
     """Using `mesh_device` pytest fixture defined in conftest.py"""
     pass
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
     """Using `mesh_device` pytest fixture defined in conftest.py"""
     pass
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_multi_device_open_close_using_context_manager(silicon_arch_name, silicon_arch_wormhole_b0):
     """Using context manager to open and close multi-device"""
     if ttnn.get_num_devices() < 4:
@@ -63,6 +69,7 @@ def test_multi_device_open_close_using_context_manager(silicon_arch_name, silico
         pass
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_multi_device_open_close_galaxy_mesh(silicon_arch_name, silicon_arch_wormhole_b0):
     if ttnn.get_num_devices() < 32:
         pytest.skip("Test is only valid on Galaxy")
@@ -94,6 +101,7 @@ def test_multi_device_open_close_galaxy_mesh(silicon_arch_name, silicon_arch_wor
 #######
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -120,6 +128,7 @@ def test_ttnn_to_multi_device_multiple_times(mesh_device, layout, memory_config,
     assert_with_pcc(torch_tensor, torch_loop_back_tensor, pcc=0.9999)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -145,6 +154,7 @@ def test_ttnn_to_and_from_multi_device_shard(mesh_device, layout, memory_config,
     assert_with_pcc(torch_tensor, torch_loop_back_tensor, pcc=0.9999)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -173,6 +183,7 @@ def test_multi_device_check_per_device_shard(mesh_device, layout, memory_config,
         shard_offset += shard_size
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -203,6 +214,7 @@ def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
         assert torch.all(full_tensor == loopback_replicated_tensor)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -224,6 +236,7 @@ def test_ttnn_multi_device_all_gather(pcie_mesh_device):
         assert torch.all(device_tensor_torch == full_tensor)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -246,6 +259,7 @@ def test_multi_device_single_op_unary(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -275,6 +289,7 @@ def test_multi_device_single_op_binary(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -299,6 +314,7 @@ def test_multi_device_multi_op(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -328,6 +344,7 @@ def test_multi_device_data_parallel_matmul_op(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.993)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -384,6 +401,7 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype):
             assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.991)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -420,6 +438,7 @@ def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_c
         assert_with_pcc(input_tensor, torch_loaded_tensor, pcc=expected_pcc)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -446,6 +465,7 @@ def test_multi_device_permute(mesh_device, layout, memory_config, dtype):
     assert_with_pcc(torch_golden, torch_loop_back_tensor, pcc=0.9999)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -464,6 +484,7 @@ def test_max(mesh_device):
     print(weights_ex0_1SB1)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -488,6 +509,7 @@ def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
         assert torch.all(device_tensor_torch == full_tensor)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
@@ -555,6 +577,7 @@ def test_sharded_matmul(t3k_mesh_device):
     print(attn_1B4P)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_4b_tensor(mesh_device):
     tensor = ttnn.from_torch(
         torch.randn(1, 1, 32, 32),
@@ -582,6 +605,7 @@ def test_4b_tensor(mesh_device):
     )
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_slicing(mesh_device):
     tensor = ttnn.from_torch(
         torch.randn(1, 32, 32, 32),
@@ -595,6 +619,7 @@ def test_slicing(mesh_device):
     assert all([device_tensor.shape == tensor.shape for device_tensor in ttnn.get_device_tensors(tensor)])
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_clone(mesh_device):
     results_11BH = ttnn.from_torch(
         torch.randn(1, 1, 32, 128),
@@ -608,6 +633,7 @@ def test_clone(mesh_device):
     print(results_11BH)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_device_shard_to_torch(mesh_device):
     """Test `ttnn.get_device_tensor(..) API"""
     torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
@@ -631,6 +657,7 @@ def test_device_shard_to_torch(mesh_device):
         assert_with_pcc(torch_device_tensor, torch_output_golden[..., i * 32 : (i + 1) * 32], pcc=0.999)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize("height", [7])
 @pytest.mark.parametrize("width", [3])
 def test_validate_as_tensor(tmp_path, mesh_device, height, width):
@@ -670,10 +697,12 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         assert torch.allclose(ttnn.to_torch(device_tensor), torch_input_tensor)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_visualize_mesh_device(t3k_mesh_device):
     ttnn.visualize_mesh_device(t3k_mesh_device)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x2_grid")], indirect=True)
 def test_all_gather_multiple_submeshes(mesh_device):
     """Test all_gather with multiple submeshes"""
@@ -700,6 +729,7 @@ def test_all_gather_multiple_submeshes(mesh_device):
         model(submesh)
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 8), id="1x8_line")], indirect=True)
 def test_line_all_gather_after_reshape(mesh_device):
     if mesh_device.get_num_devices() < 8:
@@ -722,6 +752,7 @@ def test_line_all_gather_after_reshape(mesh_device):
     )
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_distribute_api(mesh_device):
     torch_hidden_states = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
     with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
@@ -733,6 +764,7 @@ def test_distribute_api(mesh_device):
         )
 
 
+@skip_for_blackhole("Does not work for BH. Issue #19635")
 def test_heterogenous_operation_dispatch():
     if ttnn.get_num_devices() < 8:
         pytest.skip()
