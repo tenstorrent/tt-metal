@@ -62,32 +62,26 @@ void kernel_main() {
 
     uint32_t device_batch_offset = 0;
     if constexpr (PHASES_TO_READ == 2) {
-        {
-            DeviceZoneScopedN("BATCH-OFFSET-BRISC");
-
-            const InterleavedAddrGen<true> addrg = {
-                .bank_base_address = batch_offset_tensor_addr, .page_size = index_stick_size};
-            cb_reserve_back(cb_batch_offset_id, 1);
-            uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
-            // Read the batch offset 1 page to read
-            uint64_t batch_offset_index_noc_addr = get_noc_addr(0, addrg);
-            noc_async_read(batch_offset_index_noc_addr, index_cb_wr_ptr, index_stick_size);
-            noc_async_read_barrier();
-            cb_push_back(cb_batch_offset_id, 1);
-            volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
-            // Always pick 1st value in tensor as batch offset
-            device_batch_offset = index_ptr[0];
-        }
+        const InterleavedAddrGen<true> addrg = {
+            .bank_base_address = batch_offset_tensor_addr, .page_size = index_stick_size};
+        cb_reserve_back(cb_batch_offset_id, 1);
+        uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
+        // Read the batch offset 1 page to read
+        uint64_t batch_offset_index_noc_addr = get_noc_addr(0, addrg);
+        noc_async_read(batch_offset_index_noc_addr, index_cb_wr_ptr, index_stick_size);
+        noc_async_read_barrier();
+        cb_push_back(cb_batch_offset_id, 1);
+        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
+        // Always pick 1st value in tensor as batch offset
+        device_batch_offset = index_ptr[0];
     }
+
     if constexpr (PHASES_TO_READ == 1) {
-        {
-            DeviceZoneScopedN("BATCH-OFFSET-NCRISC");
-            cb_wait_front(cb_batch_offset_id, 1);
-            uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
-            volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
-            // Always pick 1st value in tensor as batch offset
-            device_batch_offset = index_ptr[0];
-        }
+        cb_wait_front(cb_batch_offset_id, 1);
+        uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
+        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
+        // Always pick 1st value in tensor as batch offset
+        device_batch_offset = index_ptr[0];
     }
 
     if constexpr (PHASES_TO_READ == 1) {  // only do the semaphore in reading kernel(NCRISC), as all reduce reduction
@@ -99,22 +93,16 @@ void kernel_main() {
         noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
         noc_semaphore_set(signal_semaphore_addr_ptr, 0);
 
-        {
-            DeviceZoneScopedN("SEMAPHORE-RESET");
-        }
-
         // 2. Signal compute kernel to start processing
         cb_push_back(cb_id, total_num_reduction_tiles);
     }
+
     // 3. QV/K read and write kernels start here:
     // 3.1 set up the device batch offset for each of the device.
 
     // 3.2 start to process the reading side of data(half of the data processed in NCRISC kernel and half on BRISC
     // kernel)
-    {
-        DeviceZoneScopedN("CB-WAIT");
-        cb_wait_front(cb_id_reduction_out, block_num_tiles);
-    }
+    cb_wait_front(cb_id_reduction_out, block_num_tiles);
 
     constexpr uint32_t tile_size = head_size / head_size_num_tiles;
     constexpr uint32_t HALF_TILE_ELEMENTS = FACE_HEIGHT * TILE_WIDTH;
@@ -127,7 +115,7 @@ void kernel_main() {
              ++i_output_core) {  // i_output_core is also the row number modulo 8 from input tile
 
             uint32_t tile_index_all_cores = i_tile_per_core + index_in_cores * block_num_tiles;
-            DeviceZoneScopedN("ALL-CORE-LOOP");
+
             uint32_t device_batch_offset_per_output_core = device_batch_offset + i_output_core;
             uint32_t in_tile_offset_by_batch =
                 device_batch_offset_per_output_core < 16
