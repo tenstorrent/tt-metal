@@ -19,8 +19,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all history so 'origin/main' is available
-          fetch-refs: true  # Ensure all refs are fetched
+          fetch-depth: 0  # Fetch all history and all branches / tags so 'origin/main' is available
 
       - name: Set up Python
         uses: actions/setup-python@v4

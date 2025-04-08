@@ -100,7 +100,7 @@ jobs:
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -109,8 +109,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
+          path: generated/test_reports/
           prefix: "test_reports_"
       - name: Disable performance mode
         if: always()
@@ -202,7 +201,7 @@ jobs:
           path: |
             ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
             ${{ steps.check-perf-report.outputs.perf_report_filename_reduce_scatter }}
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -211,8 +210,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
+          path: generated/test_reports/
           prefix: "test_reports_"
       - name: Disable performance mode
         if: always()

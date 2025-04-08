@@ -8,7 +8,7 @@
 #include <event.hpp>
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
-#include <program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <trace_buffer.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
