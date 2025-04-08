@@ -51,9 +51,6 @@ def test_segformer_mlp(
     mlp_id,
     is_ci_env,
 ):
-    if is_ci_env:
-        pytest.skip("Skip in CI, model is WIP, issue# 13357")
-
     torch_input_tensor = torch.randn(batch_size, input_dim, height, width)
     torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     config = torch_model.config

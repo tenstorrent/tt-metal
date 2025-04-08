@@ -69,9 +69,6 @@ def test_segformer_overlap_patch_embeddings(
     reset_seeds,
     is_ci_env,
 ):
-    if is_ci_env:
-        pytest.skip("Skip in CI, model is WIP, issue# 13357")
-
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
 
     torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")

@@ -89,9 +89,6 @@ def move_to_device(object, device):
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_encoder(batch_size, num_channels, height, width, device, reset_seeds, is_ci_env):
-    if is_ci_env:
-        pytest.skip("Skip in CI, model is WIP, issue# 13357")
-
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
     torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     config = torch_model.config
