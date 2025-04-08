@@ -28,7 +28,7 @@
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/persistent_kernel_cache.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/utils.hpp>
 
