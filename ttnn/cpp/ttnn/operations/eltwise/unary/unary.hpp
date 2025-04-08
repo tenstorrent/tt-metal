@@ -44,6 +44,17 @@ struct ExecuteUnaryWithFastAndApproximateMode {
 };
 
 template <UnaryOpType unary_op_type>
+struct ExecuteUnaryWithVectorAndFastAndApproximateMode {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const int vector_mode = (int32_t)VecMode::RC,
+        const bool parameter = false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFloatParameter {
     static Tensor invoke(
         QueueId queue_id,
@@ -68,7 +79,6 @@ struct Sigmoid_accurate {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
-
 struct Unary_chain {
     static Tensor invoke(
         QueueId queue_id,
@@ -215,6 +225,12 @@ struct Tanh {
         ttnn::operations::unary::ExecuteUnaryWithFastAndApproximateMode<                        \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
+#define REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type) \
+    constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op<                          \
+        "ttnn::" #operation_name,                                                                          \
+        ttnn::operations::unary::ExecuteUnaryWithVectorAndFastAndApproximateMode<                          \
+            ttnn::operations::unary::UnaryOpType::operation_type>>();
+
 #define REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(operation_name, operation_type) \
     constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op<     \
         "ttnn::" #operation_name,                                                     \
@@ -271,7 +287,9 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erfc, ERFC);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
-REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
+
+// Unaries with vector mode and fast and approximate mode
+REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
 
 // Unaries with float parameter
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(elu, ELU);
