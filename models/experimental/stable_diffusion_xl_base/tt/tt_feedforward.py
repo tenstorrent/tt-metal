@@ -5,8 +5,8 @@
 import torch.nn as nn
 import ttnn
 
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_geglu import TtGEGLU
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.sdxl_utility import prepare_linear_params
+from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
 
 class TtFeedForward(nn.Module):

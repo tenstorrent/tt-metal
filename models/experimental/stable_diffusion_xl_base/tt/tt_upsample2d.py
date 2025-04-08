@@ -5,10 +5,10 @@
 import torch.nn as nn
 import ttnn
 
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.sdxl_utility import prepare_conv_params
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
 
 
-class TtDownsample2D(nn.Module):
+class TtUpsample2D(nn.Module):
     def __init__(self, device, state_dict, module_path, stride, padding, dilation, groups):
         super().__init__()
 
@@ -17,6 +17,7 @@ class TtDownsample2D(nn.Module):
         self.padding = padding
         self.dilation = dilation
         self.groups = groups
+        self.scale_factor = 2  # fixed number for now
 
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
@@ -30,7 +31,13 @@ class TtDownsample2D(nn.Module):
         self.kernel_w = self.tt_weights.shape[2]
         self.kernel_h = self.tt_weights.shape[3]
 
-    def forward(self, hidden_states, input_shape):
+    def interpolate(self, hidden_states):
+        hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
+        B, H, W, C = list(hidden_states.shape)
+        return hidden_states, [B, C, H, W]
+
+    def forward(self, hidden_states):
+        hidden_states, input_shape = self.interpolate(hidden_states)
         B, C, H, W = input_shape
 
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
@@ -49,11 +56,10 @@ class TtDownsample2D(nn.Module):
             input_width=W,
             conv_config=conv_config,
             compute_config=compute_config,
-            groups=1,
+            groups=self.groups,
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
 
-        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         return tt_output_tensor_on_device, [self.output_channels, out_height, out_width]

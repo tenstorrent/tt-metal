@@ -6,8 +6,8 @@ import torch.nn as nn
 import ttnn
 import re
 
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_transformerblock import TtBasicTransformerBlock
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.sdxl_utility import (
+from models.experimental.stable_diffusion_xl_base.tt.tt_transformerblock import TtBasicTransformerBlock
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_gn_mask,
     prepare_gn_beta_gamma,
     prepare_linear_params,

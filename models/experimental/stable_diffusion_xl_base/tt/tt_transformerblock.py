@@ -4,8 +4,8 @@
 
 import torch.nn as nn
 import ttnn
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_attention import TtAttention
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_feedforward import TtFeedForward
+from models.experimental.stable_diffusion_xl_base.tt.tt_attention import TtAttention
+from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
 
 
 class TtBasicTransformerBlock(nn.Module):

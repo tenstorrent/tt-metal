@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch
 import ttnn
 
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.sdxl_utility import (
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_gn_mask,
     prepare_gn_beta_gamma,
     prepare_conv_params,

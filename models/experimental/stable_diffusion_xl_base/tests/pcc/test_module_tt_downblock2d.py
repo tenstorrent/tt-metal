@@ -4,7 +4,7 @@
 import torch
 import pytest
 import ttnn
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_downblock2d import TtDownBlock2D
+from models.experimental.stable_diffusion_xl_base.tt.tt_downblock2d import TtDownBlock2D
 from diffusers import DiffusionPipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random

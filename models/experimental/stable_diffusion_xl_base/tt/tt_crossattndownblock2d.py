@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_transformermodel import TtTransformer2DModel
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_resnetblock2d import TtResnetBlock2D
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_downsample2d import TtDownsample2D
+from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
+from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
+from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDownsample2D
 
 
 class TtCrossAttnDownBlock2D(nn.Module):
