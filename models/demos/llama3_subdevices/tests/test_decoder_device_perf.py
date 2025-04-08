@@ -293,9 +293,9 @@ def test_llama_TG_perf_device(
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = "tg-llama-decoder"
+    step_name = "tg-llama-demo-device-perf-default"
     batch_size = 32
-    subdir = "tg-llama-decoder"
+    subdir = "tg-llama-demo-device-perf-default"
     num_iterations = 1
     num_layers = 10
 
@@ -475,12 +475,14 @@ def test_llama_TG_perf_device(
 
     benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
     # Estimated T/s/u is 1000000 / (80L-duration + ~1240 lmhead+sampling+embeddings + ~300 python-overhead
-    benchmark_data.add_measurement(profiler, 0, step_name, "tsu_estimate", 1000000 / (e2e_estimate_80l + 1240 + 300))
+    benchmark_data.add_measurement(
+        profiler, 0, step_name, "tsu_estimate", 1000000 / (e2e_estimate_80l / 1000 + 1240 + 300)
+    )
 
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg-llama-decoder",
-        ml_model_name="llama70b-tg-decoder",
+        run_type=f"tg-llama-demo-device-perf-default",
+        ml_model_name="tg-llama",
     )
 
     assert passing
@@ -525,9 +527,9 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = "tg-llama-decoder"
+    step_name = "tg-llama-demo-device-perf-non-overlapped-dispatch"
     batch_size = 32
-    subdir = "tg-llama-decoder"
+    subdir = "tg-llama-demo-device-perf-non-overlapped-dispatch"
     num_iterations = 1
     num_layers = 10
 
@@ -632,8 +634,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg-llama-decoder",
-        ml_model_name="llama70b-tg-decoder",
+        run_type=f"tg-llama-demo-device-perf-non-overlapped-dispatch",
+        ml_model_name="tg-llama",
     )
 
     assert passing
