@@ -27,25 +27,25 @@ namespace {
 void PrintHostDataType(const HostDataType& data) {
     std::visit(
         tt::stl::overloaded{
-            [](const std::shared_ptr<std::vector<uint8_t>>& value) {
+            [](const std::shared_ptr<std::vector<uint8_t>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint8_t>>");
             },
-            [](const std::shared_ptr<std::vector<uint16_t>>& value) {
+            [](const std::shared_ptr<std::vector<uint16_t>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint16_t>>");
             },
-            [](const std::shared_ptr<std::vector<int32_t>>& value) {
+            [](const std::shared_ptr<std::vector<int32_t>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<int32_t>>");
             },
-            [](const std::shared_ptr<std::vector<uint32_t>>& value) {
+            [](const std::shared_ptr<std::vector<uint32_t>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint32_t>>");
             },
-            [](const std::shared_ptr<std::vector<float>>& value) {
+            [](const std::shared_ptr<std::vector<float>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<float>>");
             },
-            [](const std::shared_ptr<std::vector<bfloat16>>& value) {
+            [](const std::shared_ptr<std::vector<bfloat16>>& /*value*/) {
                 log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<bfloat16>>");
             },
-            [](const void* value) { log_info(tt::LogMetalTrace, "HostDataType contains: const void*"); },
+            [](const void* /*value*/) { log_info(tt::LogMetalTrace, "HostDataType contains: const void*"); },
             [](auto&&) { log_info(tt::LogMetalTrace, "HostDataType contains: Unknown type"); }},
         data);
 }
@@ -63,7 +63,7 @@ void CaptureCommand(tt::tt_metal::flatbuffer::CommandType cmd_type, ::flatbuffer
 }
 }  // namespace
 
-void CaptureReplayTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, bool blocking) {
+void CaptureReplayTrace(IDevice* /*device*/, uint8_t cq_id, uint32_t trace_id, bool blocking) {
     auto& ctx = LightMetalCaptureContext::get();
     log_debug(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {} blocking: {}", __FUNCTION__, cq_id, trace_id, blocking);
     auto cmd = tt::tt_metal::flatbuffer::CreateReplayTraceCommand(ctx.get_builder(), cq_id, trace_id, blocking);
@@ -77,14 +77,14 @@ void CaptureEnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::EnqueueTraceCommand, cmd.Union());
 }
 
-void CaptureLoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id) {
+void CaptureLoadTrace(IDevice* /*device*/, uint8_t cq_id, uint32_t trace_id) {
     auto& ctx = LightMetalCaptureContext::get();
     log_debug(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {}", __FUNCTION__, cq_id, trace_id);
     auto cmd = tt::tt_metal::flatbuffer::CreateLoadTraceCommand(ctx.get_builder(), trace_id, cq_id);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::LoadTraceCommand, cmd.Union());
 }
 
-void CaptureReleaseTrace(IDevice* device, uint32_t trace_id) {
+void CaptureReleaseTrace(IDevice* /*device*/, uint32_t trace_id) {
     auto& ctx = LightMetalCaptureContext::get();
     log_debug(tt::LogMetalTrace, "{}: trace_id: {}", __FUNCTION__, trace_id);
     auto cmd = tt::tt_metal::flatbuffer::CreateReleaseTraceCommand(ctx.get_builder(), trace_id);
@@ -240,7 +240,7 @@ void CaptureEnqueueWriteBuffer(
 void CaptureEnqueueReadBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    void* dst,
+    void* /*dst*/,
     bool blocking) {
     auto& ctx = LightMetalCaptureContext::get();
 
@@ -393,7 +393,7 @@ void CaptureSetRuntimeArgsUint32VecPerCore(
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsUint32VecPerCoreCommand, cmd.Union());
 }
 void CaptureSetRuntimeArgs(
-    IDevice* device,
+    IDevice* /*device*/,
     const std::shared_ptr<Kernel>& kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::shared_ptr<RuntimeArgs>& runtime_args) {

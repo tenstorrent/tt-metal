@@ -554,7 +554,7 @@ CoreCoord MeshDevice::ethernet_core_from_logical_core(const CoreCoord& logical_c
         return device->ethernet_core_from_logical_core(logical_core);
     });
 }
-std::unordered_set<CoreCoord> MeshDevice::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
+std::unordered_set<CoreCoord> MeshDevice::get_active_ethernet_cores(bool /*skip_reserved_tunnel_cores*/) const {
     TT_THROW("get_active_ethernet_cores() is not supported on MeshDevice - use individual devices instead");
 }
 
@@ -562,19 +562,19 @@ std::unordered_set<CoreCoord> MeshDevice::get_inactive_ethernet_cores() const {
     TT_THROW("get_inactive_ethernet_cores() is not supported on MeshDevice - use individual devices instead");
 }
 
-bool MeshDevice::is_inactive_ethernet_core(CoreCoord logical_core) const {
+bool MeshDevice::is_inactive_ethernet_core(CoreCoord /*logical_core*/) const {
     TT_THROW("is_inactive_ethernet_core() is not supported on MeshDevice - use individual devices instead");
 }
 
-std::tuple<chip_id_t, CoreCoord> MeshDevice::get_connected_ethernet_core(CoreCoord eth_core) const {
+std::tuple<chip_id_t, CoreCoord> MeshDevice::get_connected_ethernet_core(CoreCoord /*eth_core*/) const {
     TT_THROW("get_connected_ethernet_core() is not supported on MeshDevice - use individual devices instead");
 }
 
-bool MeshDevice::is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores) const {
+bool MeshDevice::is_active_ethernet_core(CoreCoord /*logical_core*/, bool /*skip_reserved_tunnel_cores*/) const {
     TT_THROW("is_active_ethernet_core() is not supported on MeshDevice - use individual devices instead");
 }
 
-std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t connected_chip_id) const {
+std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t /*connected_chip_id*/) const {
     TT_THROW("get_ethernet_sockets() is not supported on MeshDevice - use individual devices instead");
 }
 
@@ -708,11 +708,11 @@ void MeshDevice::load_trace(const uint8_t cq_id, const uint32_t trace_id, const 
 
 // Dispatch and initialization
 bool MeshDevice::initialize(
-    const uint8_t num_hw_cqs,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    bool minimal) {
+    const uint8_t /*num_hw_cqs*/,
+    size_t /*l1_small_size*/,
+    size_t /*trace_region_size*/,
+    tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
+    bool /*minimal*/) {
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     auto sub_devices = {
@@ -764,7 +764,7 @@ void MeshDevice::synchronize() {
 }
 WorkExecutorMode MeshDevice::get_worker_mode() { return WorkExecutorMode::SYNCHRONOUS; }
 bool MeshDevice::is_worker_queue_empty() const { return true; }
-void MeshDevice::push_work(std::function<void()> work, bool blocking) {
+void MeshDevice::push_work(std::function<void()> work, bool /*blocking*/) {
     // Execute inline synchronously.
     // Using a lock to provide the same call serialization guarantee as an async single device scheduling.
     std::lock_guard lock(push_work_mutex_);

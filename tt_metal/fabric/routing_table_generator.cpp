@@ -158,7 +158,7 @@ std::vector<std::vector<std::vector<std::pair<chip_id_t, mesh_id_t>>>> RoutingTa
 }
 
 void RoutingTableGenerator::generate_intermesh_routing_table(
-    const InterMeshConnectivity& inter_mesh_connectivity, const IntraMeshConnectivity& intra_mesh_connectivity) {
+    const InterMeshConnectivity& inter_mesh_connectivity, const IntraMeshConnectivity& /*intra_mesh_connectivity*/) {
     for (mesh_id_t src_mesh_id = 0; src_mesh_id < this->inter_mesh_table_.size(); src_mesh_id++) {
         auto paths = get_paths_to_all_meshes(src_mesh_id, inter_mesh_connectivity);
         for (chip_id_t src_chip_id = 0; src_chip_id < this->inter_mesh_table_[src_mesh_id].size(); src_chip_id++) {
