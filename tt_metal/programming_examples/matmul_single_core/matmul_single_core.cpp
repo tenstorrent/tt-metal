@@ -23,7 +23,7 @@ void golden_matmul(
     uint32_t M,
     uint32_t N,
     uint32_t K,
-    uint32_t B) {
+    uint32_t /*B*/) {
     std::uint32_t idx_c = 0;
     std::uint32_t idx_a = 0;
     std::uint32_t idx_b = 0;
@@ -206,7 +206,7 @@ void matmul_single_core(
 
 ///////////////////////////////////////
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {

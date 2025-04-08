@@ -50,7 +50,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
-        GITHUB_ACTIONS: true
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -72,11 +72,10 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ls -lart /mnt/MLPerf/tt_dnn-models/tt/Falcon/tiiuae/falcon-40b-instruct/
-          export GTEST_OUTPUT=xml:generated/test_reports/
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
           ${{ matrix.test-group.cmd }}
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -85,15 +84,10 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
           prefix: "test_reports_"
       - name: Generate gtest annotations on failure
-        uses: ./.github/actions/generate-gtest-failure-message
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
-        with:
-          path: |
-            /work/generated/test_reports/
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

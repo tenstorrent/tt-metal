@@ -135,7 +135,7 @@ public:
 };
 
 TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
-    GTEST_SKIP() << "WH di/dt hang, need to skip CI and run locally only";
+    GTEST_SKIP() << "Benchmark is not intended to be run as part of CI and can be manually run locally";
 
     // Parse test config
     const MatmulTestConfig& test_config = std::get<0>(GetParam());
@@ -174,7 +174,14 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     const int num_out_blocks_h = MatmulShape.num_out_blocks_h;
     const int num_out_blocks_w = MatmulShape.num_out_blocks_w;
 
+    // Validate user compute grid is feasible
     TT_FATAL(grid_size.height() > 0 && grid_size.width() > 0, "Invalid grid size");
+
+    auto compute_grid_size = device->compute_with_storage_grid_size();
+    if (compute_grid_size.y < grid_size.height() || compute_grid_size.x < grid_size.width()) {
+        GTEST_SKIP() << "Skipping test as requested compute grid size " << grid_size
+                     << " exceeds available compute grid " << compute_grid_size.str();
+    }
 
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     std::string artifacts_dir = std::string(tt_metal_home) + "/generated";
@@ -360,7 +367,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     double tflops = 2.0 * m * k * n / 1e12 / inference_time_avg_s;
     int cycle_per_tile = get_cycles_per_tile_for_fidelity(math_fidelity);
     int num_cores_user_grid = grid_size.height() * grid_size.width();
-    auto compute_grid_size = device->compute_with_storage_grid_size();
+
     int num_cores_full_grid = compute_grid_size.x * compute_grid_size.y;
     const double dim_per_tile = (double)m * (double)k * (double)n / tile_h / tile_w;
     double ideal_cycle_full_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_full_grid;
@@ -628,14 +635,6 @@ INSTANTIATE_TEST_SUITE_P(
              /*in0_block_w_div=*/2,
              /*num_out_blocks_h=*/1,
              /*num_out_blocks_w=*/1},
-            {/*m=*/3072,
-             /*k=*/4096,
-             /*n=*/4096,
-             /*in0_sharded=*/true,
-             /*out_sharded=*/true,
-             /*in0_block_w_div=*/1,
-             /*num_out_blocks_h=*/2,
-             /*num_out_blocks_w=*/2},
             {/*m=*/4096,
              /*k=*/4096,
              /*n=*/4096,

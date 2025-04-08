@@ -4,7 +4,7 @@
 #pragma once
 
 #include <device_impl.hpp>
-#include <program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <map>
 #include <string>

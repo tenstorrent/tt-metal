@@ -195,6 +195,19 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
+        (  # Repeat-5 Batch-32 run (Throughput) - 32 users, small prompt
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            5,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
@@ -251,6 +264,7 @@ def create_tt_model(
     ids=[
         "batch-1",  # latency
         "batch-32",  # throughput
+        "repeat5",  # throughput with 5 repeat batches
         "long-context",  # max-length
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
@@ -261,12 +275,11 @@ def create_tt_model(
     "optimizations",
     [
         LlamaOptimizations.performance,
-        LlamaOptimizations.accuracy,
     ],
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872, "num_command_queues": 1, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    [{"trace_region_size": 25000000, "num_command_queues": 1, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -308,6 +321,7 @@ def test_demo_text(
 
     mesh_device.enable_async(True)
     enable_trace = True  # Use tracing for better perf
+    prefill_enable_trace = repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
@@ -408,38 +422,45 @@ def test_demo_text(
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
         if batch_idx != 0:
+            model.switch_mode("prefill")
             for layer in model.layers:
                 k_cache, v_cache = layer.attention.layer_past
                 k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
-        logger.info("Starting prefill warmup...")
-        profiler.start(f"compile_prefill", iteration=batch_idx)
-        if batch_idx != 0:
-            model.switch_mode("prefill")
+        if batch_idx == 0:
+            logger.info("Starting prefill warmup...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
 
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-        )
-        profiler.end(f"compile_prefill", iteration=batch_idx)
-        logger.info("Finished prefill warmup")
+            logits = generator.prefill_forward_text(
+                input_tokens_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=prefill_enable_trace,
+            )
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Finished prefill warmup")
 
         logger.info(f"Starting prefill...")
+
         profiler.start(f"inference_prefill", iteration=batch_idx)
+
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt[0].unsqueeze(0),
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
+            enable_trace=prefill_enable_trace,
         )
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
-        prefilled_token = prefilled_token.repeat(batch_size, 1)
+
+        if prefilled_token.shape[0] != 32:
+            prefilled_token = prefilled_token.repeat(batch_size, 1)
+
         # Keep track of generated outputs to print out every iteration
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
         for user in range(batch_size):
@@ -513,9 +534,10 @@ def test_demo_text(
 
             # Always print perf after every iteration
             tokens_per_second_per_user = 1 / decode_iteration_time
-            logger.info(
-                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
+            if repeat_batches == 1:
+                logger.info(
+                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+                )
 
             current_pos += 1
 
@@ -536,8 +558,8 @@ def test_demo_text(
                             users_decoding = False
 
             # Print out generated outputs for each user at the end of every iteration
-            if not is_ci_env:
-                for user in range(batch_size):
+            if not is_ci_env and repeat_batches == 1:
+                for user in range(1):
                     text = "".join(tokenizer.decode(all_outputs[user]))
                     if len(text) > 100:
                         text = "..." + text[-97:]
