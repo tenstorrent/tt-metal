@@ -268,20 +268,20 @@ std::vector<T> convert_layout(
     switch (inL) {
         case tests::utils::TensorLayoutType::TILED_SWIZZLED:
             if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
-                return convert_layout_tile_swizzled_to_tile_nfaces<T>(
+                return reference::convert_layout_tile_swizzled_to_tile_nfaces<T>(
                     inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else if (outL == tests::utils::TensorLayoutType::LIN_ROW_MAJOR) {
-                return convert_layout_row_major_to_tile_swizzled<T>(inp, shape, tile_shape);
+                return reference::convert_layout_row_major_to_tile_swizzled<T>(inp, shape, tile_shape);
             } else {
                 TT_ASSERT(false && "Unsupported conversion.");
             }
             break;
         case tests::utils::TensorLayoutType::LIN_ROW_MAJOR:
             if (outL == tests::utils::TensorLayoutType::TILED_SWIZZLED) {
-                return convert_layout_tile_swizzled_to_row_major<T>(inp, shape, tile_shape);
+                return reference::convert_layout_tile_swizzled_to_row_major<T>(inp, shape, tile_shape);
             } else if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
                 auto swiz32 = convert_layout_tile_swizzled_to_row_major<T>(inp, shape, tile_shape);
-                return convert_layout_tile_swizzled_to_tile_nfaces<T>(
+                return reference::convert_layout_tile_swizzled_to_tile_nfaces<T>(
                     swiz32, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else {
                 TT_ASSERT(false && "Unsupported conversion.");
@@ -289,12 +289,12 @@ std::vector<T> convert_layout(
             break;
         case tests::utils::TensorLayoutType::TILED_NFACES:
             if (outL == tests::utils::TensorLayoutType::TILED_SWIZZLED) {
-                return convert_layout_tile_nfaces_to_tile_swizzled<T>(
+                return reference::convert_layout_tile_nfaces_to_tile_swizzled<T>(
                     inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else if (outL == tests::utils::TensorLayoutType::LIN_ROW_MAJOR) {
-                auto swiz32 = convert_layout_tile_nfaces_to_tile_swizzled<T>(
+                auto swiz32 = reference::convert_layout_tile_nfaces_to_tile_swizzled<T>(
                     inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
-                return convert_layout_row_major_to_tile_swizzled<T>(swiz32, shape, tile_shape);
+                return reference::convert_layout_row_major_to_tile_swizzled<T>(swiz32, shape, tile_shape);
             } else {
                 TT_ASSERT(false && "Unsupported conversion");
             }

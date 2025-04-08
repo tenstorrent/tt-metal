@@ -575,14 +575,4 @@ template std::vector<uint32_t> untilize_nfaces<uint32_t>(const std::vector<uint3
 template std::vector<bfloat16> untilize_nfaces<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
 template std::vector<float> untilize_nfaces<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
 
-template std::vector<uint16_t> tilize_nfaces_ref<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
-template std::vector<uint32_t> tilize_nfaces_ref<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
-template std::vector<bfloat16> tilize_nfaces_ref<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
-template std::vector<float> tilize_nfaces_ref<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
-
-template std::vector<uint16_t> untilize_nfaces_ref<uint16_t>(const std::vector<uint16_t>& input, uint32_t m, uint32_t n);
-template std::vector<uint32_t> untilize_nfaces_ref<uint32_t>(const std::vector<uint32_t>& input, uint32_t m, uint32_t n);
-template std::vector<bfloat16> untilize_nfaces_ref<bfloat16>(const std::vector<bfloat16>& input, uint32_t m, uint32_t n);
-template std::vector<float> untilize_nfaces_ref<float>(const std::vector<float>& input, uint32_t m, uint32_t n);
-
 // clang-format on
