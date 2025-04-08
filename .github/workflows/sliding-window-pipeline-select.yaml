@@ -46,7 +46,7 @@ jobs:
   post-commit:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/all-post-commit.yaml
+    uses: ./.github/workflows/all-post-commit-workflows.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
