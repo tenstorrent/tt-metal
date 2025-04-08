@@ -711,7 +711,7 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
     ZoneScoped;
     std::string name = fmt::format("Device Dump {}", device->id());
     ZoneName(name.c_str(), name.size());
-    std::scoped_lock<std::mutex> lock(device_mutex);  // make this parallel safe
+    std::scoped_lock<std::mutex> lock(device_mutex);
     const auto& dispatch_core_config = get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
