@@ -246,7 +246,7 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
     uint16_t total_values = result_data.size() * 2;
 
     for (uint16_t i = 0; i < total_values; i++) {
-        EXPECT_THAT(is_close(c_bf16[i].to_float(), golden_bf16[i].to_float()), true);
+        EXPECT_EQ(c_bf16, golden_bf16);
     }
 }
 
