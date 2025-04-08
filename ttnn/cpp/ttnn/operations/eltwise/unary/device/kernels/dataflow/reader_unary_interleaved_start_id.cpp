@@ -22,6 +22,7 @@ void kernel_main() {
     const InterleavedAddrGenFast<src_is_dram> s = {
         .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
 
+#ifndef LLK_PERF_NO_DM
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_tiles;
@@ -36,4 +37,5 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, onetile);
     }
+#endif
 }

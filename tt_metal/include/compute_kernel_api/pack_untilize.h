@@ -39,17 +39,29 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb) {
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb) {
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
+#if !defined(LLK_PACK_PERF) && !defined(LLK_UNPACK_PERF)
         MATH((llk_math_wait_for_dest_available()));
+#endif
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
+#ifndef LLK_PACK_PERF
             UNPACK(
                 (llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(icb, c)));
+#endif
+#if !defined(LLK_PACK_PERF) && !defined(LLK_UNPACK_PERF)
             MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(c)));
+#endif
         }
+#if !defined(LLK_PACK_PERF) && !defined(LLK_UNPACK_PERF)
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
 
         PACK((llk_packer_wait_for_math_done()));
+#endif
+#ifndef LLK_UNPACK_PERF
         PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(1 /*num_blocks*/, ocb)));
+#endif
+#if !defined(LLK_PACK_PERF) && !defined(LLK_UNPACK_PERF)
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+#endif
     }
 }
 
