@@ -1907,7 +1907,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            wrapper = HfDecoderWrapper(layer, self.head_dim, layer.self_attn.rotary_emb)
             return wrapper
 
     def reference_attention(self):
