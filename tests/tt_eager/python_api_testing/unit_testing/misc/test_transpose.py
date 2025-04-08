@@ -172,7 +172,7 @@ def test_transpose_cn_program_cache(dtype, device, use_program_cache):
     H = 32 * 4
     W = 32 * 3
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=0, dim1=1, expected_program_cache_size=2, input_dtype=dtype)
+    transpose(input_shape, device, dim0=0, dim1=1, expected_program_cache_size=1, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -197,7 +197,7 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     H = H * 3
     W = W
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=2, input_dtype=dtype)
+    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=1, input_dtype=dtype)
 
     # changing shape, single core
     N = 1
@@ -205,8 +205,7 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     H = 32
     W = 32
     input_shape = (N, C, H, W)
-    # CACHE MISS since its single core
-    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=3, input_dtype=dtype)
+    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=1, input_dtype=dtype)
 
 
 @skip_for_blackhole("GH #15234")
@@ -271,7 +270,6 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
     )
 
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
-    # shape change also changes shard_spec as shard_shape is dependent on input_shape (resulting in CACHE MISS)
     transpose(
         input_shape,
         device,
@@ -280,7 +278,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
         input_mem_config=mem_config,
         output_mem_config=mem_config,
         input_dtype=input_dtype,
-        expected_program_cache_size=2,
+        expected_program_cache_size=1,
     )
 
     # changing shape
@@ -304,7 +302,6 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
 
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
 
-    # shape change also changes shard_spec as shard_shape is dependent on input_shape (resulting in CACHE MISS)
     # tensor cannot fit in L1 for fp32
     if input_dtype != ttnn.float32:
         transpose(
@@ -315,7 +312,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
             input_mem_config=mem_config,
             output_mem_config=mem_config,
             input_dtype=input_dtype,
-            expected_program_cache_size=3,
+            expected_program_cache_size=1,
         )
 
 
