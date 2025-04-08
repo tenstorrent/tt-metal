@@ -50,7 +50,7 @@ run_python_model_tests_wormhole_b0() {
 
     #UFLD_V2
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/UFLD_v2/test_ttnn_UFLD_v2.py::test_UFD_V2_Model
-    
+
     # Llama3.1-8B
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
     # Llama3.2-1B
