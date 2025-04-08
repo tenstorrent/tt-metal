@@ -427,8 +427,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
-    CoreCoord noc_00;
-    uint32_t num_cores_x = 0;
     uint32_t semaphore_id = 0;
     uint32_t remote_temp_cb_id = 0;
     std::vector<uint32_t> output_tensor_cores_x;
@@ -460,15 +458,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         output_tensor_cores_y.push_back(worker.y);
     }
 
-    // Compute core data and create semaphore
-    auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
-        auto num_cores_x = device->compute_with_storage_grid_size().x;
-        auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
-                                           : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
-        return device->worker_core_from_logical_core(core_coord);
-    };
-    noc_00 = core_id_to_noc_coords(0);
-    num_cores_x = device->compute_with_storage_grid_size().x;
+    // create semaphore
     semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
@@ -497,9 +487,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         is_width_sharded,
         aligned_input_nstick_nbytes,
         true,
-        ncores_nhw,
-        ncores_c,
-        num_cores_x,
+        cores.size(),
         semaphore_id,
         max_out_nsticks_per_core};
 
