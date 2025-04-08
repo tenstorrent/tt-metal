@@ -1104,6 +1104,8 @@ def test_slice_height_sharded(device, dims, slice_dim, slice_size, cores, layout
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
     torch_input = torch.randint(-10, 10, dims)
+    torch_input = torch.tensor(range(dims[1] * dims[2])).reshape(1, dims[1], dims[2], 1)
+    torch_input = torch.broadcast_to(torch_input, dims)
     core_range = num_to_core_range_set(cores)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
@@ -1131,7 +1133,7 @@ def test_slice_height_sharded(device, dims, slice_dim, slice_size, cores, layout
         # [[2, 256, 256, 64], 128, 16],
         # [[2, 256, 128, 32], 16, 8],
         # [[2, 256, 256, 128], 64, 64],
-        [[2, 63, 63, 15], 8, 8]
+        [[2, 8, 8, 15], 2, 2]
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -1140,7 +1142,8 @@ def test_slice_height_sharded(device, dims, slice_dim, slice_size, cores, layout
 def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, orientation):
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
-    torch_input = torch.randint(-10, 10, dims)
+    torch_input = torch.tensor(range(dims[1] * dims[2])).reshape(1, dims[1], dims[2], 1)
+    torch_input = torch.broadcast_to(torch_input, dims)
     core_range = num_to_core_range_set(cores)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
@@ -1169,7 +1172,12 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         output = ttnn.to_torch(this_ttnn_output)
         assert_with_pcc(this_torch_output, output[:, :, :, : this_torch_output.shape[3]], 0.9999)
         if output.shape[3] > this_torch_output.shape[3]:
-            this_torch_output = torch.pad(this_torch_output, (0, output.shape[3] - this_torch_output.shape[3]))
+            this_torch_output = torch.nn.functional.pad(
+                this_torch_output,
+                (0, output.shape[3] - this_torch_output.shape[3]),
+                mode="constant",
+                value=0,
+            )
             assert_with_pcc(this_torch_output, output, 0.9999)
 
 
