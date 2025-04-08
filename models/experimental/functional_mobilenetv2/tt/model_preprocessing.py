@@ -5,6 +5,12 @@
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
+from models.experimental.functional_mobilenetv2.reference.mobilenetv2 import (
+    Mobilenetv2,
+    Conv2dNormActivation,
+    InvertedResidual,
+)  # Import Conv2dNormActivation
+import torch.nn as nn
 
 
 def create_mobilenetv2_input_tensors(batch=1, input_channels=3, input_height=224, input_width=224):
@@ -24,12 +30,12 @@ def create_mobilenetv2_input_tensors(batch=1, input_channels=3, input_height=224
 def fold_batch_norm2d_into_conv2d(conv, bn):
     if not bn.track_running_stats:
         raise RuntimeError("BatchNorm2d must have track_running_stats=True to be folded into Conv2d")
-    weight = conv.weight
+    weight = conv.weight.data
     running_mean = bn.running_mean
-    running_var = bn.running_var
+    running_var = bn.running_var.data
     eps = bn.eps
-    scale = bn.weight
-    shift = bn.bias
+    scale = bn.weight.data
+    shift = bn.bias.data
     weight = weight * (scale / torch.sqrt(running_var + eps))[:, None, None, None]
     bias = shift - running_mean * (scale / torch.sqrt(running_var + eps))
     bias = torch.reshape(bias, (1, 1, 1, -1))
@@ -40,18 +46,37 @@ def fold_batch_norm2d_into_conv2d(conv, bn):
 
 def create_mobilenetv2_model_parameters(model, device):
     model_parameters = {}
+    conv_bn_counter = 0
+    counter = 0
 
-    for i in range(1, 53):
-        model_parameters[i] = fold_batch_norm2d_into_conv2d(model.__getattr__(f"c{i}"), model.__getattr__(f"b{i}"))
+    for name, module in model.named_modules():
+        if isinstance(module, InvertedResidual):
+            for idx, submodule in enumerate(module.conv):
+                if isinstance(submodule, nn.Conv2d):
+                    bn = (
+                        module.conv[idx + 1]
+                        if idx + 1 < len(module.conv) and isinstance(module.conv[idx + 1], nn.BatchNorm2d)
+                        else None
+                    )
+                    if bn:
+                        weight_ttnn, bias_ttnn = fold_batch_norm2d_into_conv2d(submodule, bn)
+                        model_parameters[f"conv_{counter}_weight"] = weight_ttnn
+                        model_parameters[f"conv_{counter}_bias"] = bias_ttnn
+                        counter += 1
 
-    model_parameters["l1"] = {}
-    model_parameters["l1"]["weight"] = model.l1.weight
-    model_parameters["l1"]["bias"] = model.l1.bias
+        elif isinstance(module, Conv2dNormActivation):
+            if len(module) == 3 and isinstance(module[0], nn.Conv2d) and isinstance(module[1], nn.BatchNorm2d):
+                conv = module[0]
+                bn = module[1]
+                weight_ttnn, bias_ttnn = fold_batch_norm2d_into_conv2d(conv, bn)
+                model_parameters[f"fused_conv_{conv_bn_counter}_weight"] = weight_ttnn
+                model_parameters[f"fused_conv_{conv_bn_counter}_bias"] = bias_ttnn
+                conv_bn_counter += 1
 
-    model_parameters["l1"]["weight"] = preprocess_linear_weight(model_parameters["l1"]["weight"], dtype=ttnn.bfloat16)
-    model_parameters["l1"]["bias"] = preprocess_linear_bias(model_parameters["l1"]["bias"], dtype=ttnn.bfloat16)
-
-    model_parameters["l1"]["weight"] = ttnn.to_device(model_parameters["l1"]["weight"], device)
-    model_parameters["l1"]["bias"] = ttnn.to_device(model_parameters["l1"]["bias"], device)
+        elif isinstance(module, nn.Linear):
+            model_parameters["classifier_1_weight"] = preprocess_linear_weight(module.weight.data, dtype=ttnn.float32)
+            model_parameters["classifier_1_bias"] = preprocess_linear_bias(module.bias.data, dtype=ttnn.float32)
+            model_parameters["classifier_1_weight"] = ttnn.to_device(model_parameters["classifier_1_weight"], device)
+            model_parameters["classifier_1_bias"] = ttnn.to_device(model_parameters["classifier_1_bias"], device)
 
     return model_parameters

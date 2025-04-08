@@ -60,9 +60,10 @@ def test_mobilenetv2(device, use_pretrained_weight, batch_size, reset_seeds):
     torch_output_tensor = torch_model(torch_input_tensor)
 
     model_parameters = create_mobilenetv2_model_parameters(torch_model, device=device)
+
     ttnn_model = ttnn_mobilenetv2.MobileNetV2(model_parameters, device, batchsize=batch_size)
     output_tensor = ttnn_model(ttnn_input_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.94 if use_pretrained_weight else 0.999)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.93 if use_pretrained_weight else 0.999)

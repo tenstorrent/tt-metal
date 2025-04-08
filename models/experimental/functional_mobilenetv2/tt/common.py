@@ -116,3 +116,57 @@ class MobileNetV2Conv2D:
         )
 
         return x, h, w
+
+
+class InvertedResidual:
+    def __init__(
+        self, model_params, device, batchsize, expand_ratio, stride, in_channels, out_channels, id, block_shard=True
+    ):
+        self.device = device
+        self.batchsize = batchsize
+        self.stride = stride
+        self.expand_ratio = expand_ratio
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.block_shard = block_shard
+        self.id = id
+        hidden_dim = int(round(in_channels * expand_ratio))
+        self.use_res_connect = self.stride == 1 and in_channels == out_channels
+
+        self.conv1 = None
+        if expand_ratio != 1:
+            self.conv1 = MobileNetV2Conv2D(
+                [1, 1, 0, hidden_dim],
+                (model_params[f"fused_conv_{id * 3 - id}_weight"], model_params[f"fused_conv_{id * 3 - id}_bias"]),
+                device,
+                batchsize,
+                block_shard=False if id == 6 and (11 < id <= 16) else self.block_shard,
+            )
+        self.conv2 = MobileNetV2Conv2D(
+            [3, stride, 1, hidden_dim],
+            (model_params[f"fused_conv_{id * 3 -id +1}_weight"], model_params[f"fused_conv_{id * 3 - id + 1}_bias"]),
+            device,
+            batchsize,
+            groups=hidden_dim,
+            block_shard=self.block_shard,
+        )
+        self.conv3 = MobileNetV2Conv2D(
+            [1, 1, 0, out_channels],
+            (model_params[f"conv_{id}_weight"], model_params[f"conv_{id}_bias"]),
+            device,
+            batchsize,
+            block_shard=False if (10 <= id <= 16) else self.block_shard,
+        )
+
+    def __call__(self, x):
+        identity = x
+        if self.conv1 is not None:
+            out, h, w = self.conv1(x)
+            out = ttnn.relu6(out)
+            x = out
+        out, h, w = self.conv2(x)
+        out = ttnn.relu6(out)
+        out, h, w = self.conv3(out)
+        if self.use_res_connect:
+            return ttnn.add(identity, out)
+        return out
