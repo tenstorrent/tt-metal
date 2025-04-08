@@ -71,7 +71,7 @@ jobs:
           cat /work/.github/actions/upload-data-via-sftp/action.yaml
       - name: Upload benchmark data
         if: ${{ (matrix.test-group.name == 'TG Falcon7b demo tests') && !cancelled() }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@031e2f80dc9dfa4b5753d1f6fb1a8027c5fd5b41
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@6ff122dfc90962dabcb7e7048728a0647cfd01ae
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
