@@ -221,10 +221,10 @@ run_t3000_llama3.2-90b-vision_freq_tests() {
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.2-90B -- use repacked weights when acceptable for faster testing
   llama90b_repacked=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/repacked
+  LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 2400; fail+=$?
   LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
   LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
   LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
-  LLAMA_DIR=$llama90b_repacked WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
