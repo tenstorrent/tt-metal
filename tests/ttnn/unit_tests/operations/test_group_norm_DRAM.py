@@ -18,7 +18,7 @@ from models.utility_functions import skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        (1, 2560, 1, 512, 32, 1, 8, 8),  # base case
+        (8, 768, 1, 512, 32, 2, 8, 8),  # base case
         (1, 640, 128, 128, 32, 2, 4, 8),  # Stable Diffusion XL Variant 1
         (1, 960, 128, 128, 32, 2, 2, 8),  # Stable Diffusion XL Variant 2
     ],
@@ -34,6 +34,8 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+    # torch_weight  = torch.ones((C,), dtype=torch.bfloat16)
+    #       torch_bias = torch.zeros((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
     )

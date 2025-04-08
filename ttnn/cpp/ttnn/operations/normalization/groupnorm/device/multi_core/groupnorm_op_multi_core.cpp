@@ -1785,29 +1785,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
-        if (gamma_stick_size_is_power_of_two) {
-            uint32_t gamma_log2_stick_size =
-                gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
-            writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)gamma_log2_stick_size);
-            writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)gamma_log2_stick_size);
-        } else {
-            writer_mcast_sender_compile_time_args_group_1.push_back(gamma_stick_size);
-            writer_mcast_sender_compile_time_args_group_2.push_back(gamma_stick_size);
-        }
+        writer_mcast_sender_compile_time_args_group_1.push_back(gamma_stick_size);
+        writer_mcast_sender_compile_time_args_group_2.push_back(gamma_stick_size);
     } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
         auto beta_stick_size = beta.value().get_padded_shape()[3] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
         writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
-        if (beta_stick_size_is_power_of_two) {
-            uint32_t beta_log2_stick_size =
-                beta_stick_size_is_power_of_two ? (std::uint32_t)std::log2(beta_stick_size) : 0;
-            writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)beta_log2_stick_size);
-            writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)beta_log2_stick_size);
-        } else {
-            writer_mcast_sender_compile_time_args_group_1.push_back(beta_stick_size);
-            writer_mcast_sender_compile_time_args_group_2.push_back(beta_stick_size);
-        }
+        writer_mcast_sender_compile_time_args_group_1.push_back(beta_stick_size);
+        writer_mcast_sender_compile_time_args_group_2.push_back(beta_stick_size);
     } else {
         writer_mcast_sender_compile_time_args_group_1.push_back(0);
         writer_mcast_sender_compile_time_args_group_2.push_back(0);
