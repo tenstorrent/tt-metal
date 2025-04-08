@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
  * 3. Read result back and compare to golden.
  * */
 
-int main(int argc, char** argv) {
+int main() {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }

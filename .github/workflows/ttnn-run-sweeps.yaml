@@ -479,7 +479,6 @@ on:
           - reduction.traces.mean_traces
           - reduction.traces.sum_traces
           - reduction.traces.topk_traces
-          - reduction.generality.argmax
           - reduction.generality.reduction_all_ranks
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
