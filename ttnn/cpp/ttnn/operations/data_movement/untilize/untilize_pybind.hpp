@@ -56,7 +56,7 @@ void bind_untilize(py::module& module) {
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("use_multicore") = true,
+            py::arg("use_multicore") = false,
             py::arg("use_pack_untilize") = true,
             py::arg("sub_core_grids") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,

@@ -17,6 +17,7 @@ void kernel_main() {
     constexpr uint32_t ublock_size_tiles = 1;
     uint32_t ublock_size_bytes = get_tile_size(cb_id_in0) * ublock_size_tiles;
 
+#ifndef LLK_PERF_NO_DM
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
@@ -30,4 +31,5 @@ void kernel_main() {
         cb_push_back(cb_id_in0, ublock_size_tiles);
         src_addr += ublock_size_bytes;
     }
+#endif
 }

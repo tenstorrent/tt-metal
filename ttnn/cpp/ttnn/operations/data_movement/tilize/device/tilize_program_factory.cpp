@@ -112,7 +112,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     const bool llk_perf_no_dm = std::getenv("TT_LLK_PERF_NO_DM");
     if (enabe_llk_perf) {
         if (llk_perf_no_dm) {
-            llk_perf_defines["LLK_TILIZE_PERF_NO_DM"] = "1";
+            llk_perf_defines["LLK_PERF_NO_DM"] = "1";
         }
 
         if (llk_perf_block) {

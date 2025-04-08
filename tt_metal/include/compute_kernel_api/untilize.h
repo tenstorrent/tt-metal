@@ -45,28 +45,42 @@ ALWI void untilize_init_short(uint32_t icb) {
  */
 template <int N = 1>
 ALWI void untilize_block(uint32_t icb, uint32_t block, uint32_t ocb) {
+#ifndef LLK_PACK_PERF
     UNPACK((llk_unpack_untilize(icb, block)));
+#endif
 
+#ifndef LLK_UNPACK_PERF
     for (uint32_t t = 0; t < block / N; t++) {
+#if !defined(LLK_PACK_PERF) && !defined(LLK_MATH_PERF)
         MATH((llk_math_wait_for_dest_available()));
+#endif
 
+#ifndef LLK_PACK_PERF
         // Datacopy
         for (int reg_id = 0; reg_id < N; reg_id++) {
             MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(reg_id)));
         }
+#endif
 
+#if !defined(LLK_PACK_PERF) && !defined(LLK_MATH_PERF)
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
 
         PACK((llk_packer_wait_for_math_done()));
+#endif
 
+#ifndef LLK_MATH_PERF
         // Datacopy
         for (int reg_id = 0; reg_id < N; reg_id++) {
             PACK((llk_pack<false, false, DST_ACCUM_MODE>(reg_id, ocb)));
         }
+#endif
 
+#if !defined(LLK_PACK_PERF) && !defined(LLK_MATH_PERF)
         // Release dest
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+#endif
     }
+#endif
 }
 
 /**

@@ -48,6 +48,7 @@ void kernel_main() {
         cb_pop_front(cb_id_out0, num_tiles);
     };
 
+#ifndef LLK_PERF_NO_DM
     uint32_t stick_id = start_stick_id;
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         // Get Base Addresses
@@ -64,4 +65,5 @@ void kernel_main() {
         //     write_tiles(num_leftover_tiles_in_row, leftover_width_in_row);
         // }
     }
+#endif
 }

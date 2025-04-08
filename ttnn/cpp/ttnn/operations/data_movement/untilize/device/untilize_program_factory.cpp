@@ -961,12 +961,40 @@ operation::ProgramWithCallbacks untilize_single_core(
         (std::uint32_t)log2_stick_size,
     };
 
+    // Set llk specific defines for perf measurement
+    std::map<string, string> llk_perf_defines;
+    const bool enabe_llk_perf = std::getenv("TT_ENABLE_LLK_PERF");
+    const bool llk_perf_block = std::getenv("TT_LLK_PERF_BLOCK");
+    const bool llk_perf_no_dm = std::getenv("TT_LLK_PERF_NO_DM");
+    if (enabe_llk_perf) {
+        if (llk_perf_no_dm) {
+            llk_perf_defines["LLK_PERF_NO_DM"] = "1";
+        }
+
+        if (llk_perf_block) {
+            llk_perf_defines["LLK_PERF_BLOCK"] = "1";
+        } else {
+            llk_perf_defines["LLK_PERF_OP"] = "1";
+        }
+
+        const bool llk_perf_unpack = std::getenv("TT_LLK_PERF_UNPACK");
+        const bool llk_perf_math = std::getenv("TT_LLK_PERF_MATH");
+        const bool llk_perf_pack = std::getenv("TT_LLK_PERF_PACK");
+        if (llk_perf_unpack) {
+            llk_perf_defines["LLK_UNPACK_PERF"] = "1";
+        } else if (llk_perf_math) {
+            llk_perf_defines["LLK_MATH_PERF"] = "1";
+        } else if (llk_perf_pack) {
+            llk_perf_defines["LLK_PACK_PERF"] = "1";
+        }
+    }
+
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, llk_perf_defines));
 
     // Untilized writer
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -974,7 +1002,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
         "writer_unary_stick_layout_split_rows_interleaved.cpp",
         core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, llk_perf_defines));
 
     std::vector<uint32_t> compute_args = {
         uint32_t(num_tiles / num_tiles_per_block),  // per_core_block_cnt
@@ -984,18 +1012,19 @@ operation::ProgramWithCallbacks untilize_single_core(
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
-        log_debug(tt::LogOp, "Using slow untilize.");
+        log_info(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
     } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
+        log_info(tt::LogOp, "Using fast pack untilize.");
     }
 
     auto untilize_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel,
         core,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = llk_perf_defines});
 
     tt::tt_metal::SetRuntimeArgs(
         program, unary_reader_kernel_id, core, {src0_buffer->address(), uint32_t(num_tiles), 0});
