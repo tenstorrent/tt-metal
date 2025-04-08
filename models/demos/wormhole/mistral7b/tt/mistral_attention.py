@@ -462,7 +462,16 @@ class TtMistralAttention(nn.Module):
                 # scores softmax
                 attn_1BQP_presoftmax = attn_1BQP[:, :, :, :layer_slice]
                 attn_1BQP = ttnn.softmax(attn_1BQP_presoftmax, dim=-1)
-                attn_1BQP = ttnn.pad(attn_1BQP, ((0, 0), (0, 0), (0, 0), (0, 0)), value=0.0)
+                attn_1BQP = ttnn.pad(
+                    attn_1BQP,
+                    (
+                        (0, 0),
+                        (0, 0),
+                        (0, attn_1BQP.padded_shape[-2] - attn_1BQP.shape[-2]),
+                        (0, attn_1BQP.padded_shape[-1] - attn_1BQP.shape[-1]),
+                    ),
+                    value=0.0,
+                )
 
                 # attention matmul
                 attn_output_1B_Q_8D = ttnn.matmul(

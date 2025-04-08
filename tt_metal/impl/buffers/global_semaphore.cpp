@@ -19,7 +19,7 @@
 
 #include "mesh_device.hpp"
 #include "reflection.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -68,7 +68,7 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
         std::vector<uint32_t> host_buffer(num_cores, reset_value);
         if (device->using_slow_dispatch()) {
             detail::WriteToBuffer(*buffer.get_buffer(), host_buffer);
-            tt::Cluster::instance().l1_barrier(device->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
         } else {
             if (auto mesh_buffer = buffer.get_mesh_buffer()) {
                 distributed::EnqueueWriteMeshBuffer(

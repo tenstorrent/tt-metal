@@ -4,7 +4,7 @@
 
 #include "dev_msgs.h"
 #include "device.hpp"
-#include "dispatch/dispatch_core_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_mem_map.hpp"
@@ -15,7 +15,7 @@
 #include "tt_align.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "impl/context/metal_context.hpp"
 
 enum class CoreType;
 
@@ -40,7 +40,7 @@ void write_go_signal(
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
-    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     auto sub_device_index = *sub_device_id;
 
@@ -60,7 +60,7 @@ void write_go_signal(
     // There is no need for dispatch_d to barrier before sending the dispatch_s notification or go signal,
     // since this go signal is not preceeded by NOC txns for program config data
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         uint16_t index_bitmask = 1 << sub_device_index;
         go_signal_cmd_sequence.add_notify_dispatch_s_go_signal_cmd(
             0,                                   /* wait */

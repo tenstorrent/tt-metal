@@ -30,7 +30,7 @@
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "system_memory_manager.hpp"
 #include "tracy/TracyTTDevice.hpp"
 
@@ -58,6 +58,9 @@ struct DisptachMetaData {
 
     // Worker's runtime id
     uint32_t worker_runtime_id = 0;
+
+    // dispatch command subtype.
+    std::string cmd_subtype = "";
 };
 
 class DeviceProfiler {

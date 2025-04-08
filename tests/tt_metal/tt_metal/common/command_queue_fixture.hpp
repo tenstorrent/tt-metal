@@ -94,7 +94,7 @@ protected:
         const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
         const chip_id_t mmio_device_id = 0;
         std::vector<chip_id_t> chip_ids;
-        if (tt::Cluster::instance().get_board_type(0) == BoardType::UBB) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
             for (unsigned int id = 0; id < tt::tt_metal::GetNumAvailableDevices(); id++) {
                 chip_ids.push_back(id);
             }

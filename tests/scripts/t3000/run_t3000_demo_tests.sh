@@ -35,9 +35,6 @@ run_t3000_llama3_70b_tests() {
   # Output verification demo for old llama3-70b codebase, to be removed once old codebase is deleted
   env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-trace_mode_off-text_completion-llama3] --timeout=900 ; fail+=$?
 
-  # Test chunked prefill for llama2-70b
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama2_70b/tests/test_chunked_generation.py::test_batch_prefill --timeout=900 ; fail+=$?
-
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))

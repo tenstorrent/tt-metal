@@ -45,7 +45,7 @@
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "dev_msgs.h"
-#include "dispatch/dispatch_core_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "dprint_server.hpp"
 #include "hal.hpp"
@@ -61,7 +61,7 @@
 #include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include "strong_type.hpp"
@@ -72,7 +72,7 @@
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
@@ -434,7 +434,7 @@ KernelGroup::KernelGroup(
     const detail::Program_& program,
     uint32_t programmable_core_type_index,
     kernel_id_array_t kernel_ids,
-    bool erisc_is_idle,
+    bool /*erisc_is_idle*/,
     uint32_t max_local_cb_end_index,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges) :
@@ -1449,10 +1449,11 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         //      - eth kernels cannot be on idle eth cores
         bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
-        const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+        const auto& dispatch_core_config =
+            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
         const std::vector<CoreCoord>& storage_cores =
-            DispatchQueryManager::instance().get_logical_storage_cores_on_user_chips();
+            MetalContext::instance().get_dispatch_query_manager().get_logical_storage_cores_on_user_chips();
         bool on_storage_only_core =  std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
             return kernel->is_on_logical_core(storage_core);
         });
@@ -1461,7 +1462,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         // Kernels used to implement fast dispatch can be placed on dispatch cores
         if (not slow_dispatch and not fd_bootloader_mode) {
             const std::vector<CoreCoord>& dispatch_cores =
-                DispatchQueryManager::instance().get_logical_dispatch_cores_on_user_chips();
+                MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
             bool on_dispatch_core = std::any_of(dispatch_cores.begin(), dispatch_cores.end(), [&kernel, &dispatch_core_type](const CoreCoord &dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
@@ -1532,13 +1533,13 @@ void detail::Program_::set_runtime_id(uint64_t id) { this->runtime_id = id; }
 
 void Program::set_runtime_id(uint64_t id) { pimpl_->set_runtime_id(id); }
 
-uint32_t Program::get_sem_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type) {
+uint32_t Program::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
     return base_addr + get_program_config(hal_ref.get_programmable_core_type_index(programmable_core_type)).sem_offset;
 }
 
-uint32_t Program::get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type) {
+uint32_t Program::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
     return base_addr + get_program_config(hal_ref.get_programmable_core_type_index(programmable_core_type)).cb_offset;

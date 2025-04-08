@@ -21,7 +21,7 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
@@ -202,7 +202,7 @@ class EltwiseUnaryOpIfTest : public TTNNFixtureWithDevice,
 TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const auto& expected_resource_usage_map = std::get<ResourceUsageMap>(GetParam());
-    const BoardType board_type = tt::Cluster::instance().get_board_type(0);
+    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
     }
@@ -282,7 +282,7 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const auto& dim_arg = std::get<int>(GetParam());
     const auto& expected_resource_usage_map = std::get<ResourceUsageMap>(GetParam());
-    const BoardType board_type = tt::Cluster::instance().get_board_type(0);
+    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
     }
@@ -365,7 +365,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
     const auto& expected_resource_usage_map = std::get<ResourceUsageMap>(GetParam());
-    const BoardType board_type = tt::Cluster::instance().get_board_type(0);
+    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
     }
@@ -496,7 +496,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
     const auto& matmul_program_config =
         std::get<std::optional<ttnn::operations::matmul::MatmulProgramConfig>>(GetParam());
     const auto& expected_resource_usage_map = std::get<ResourceUsageMap>(GetParam());
-    const BoardType board_type = tt::Cluster::instance().get_board_type(0);
+    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
     }
@@ -652,7 +652,7 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
         {BoardType::N300,
          ttnn::graph::ResourceUsage{
              .cb_peak_size_per_core = 229440, .l1_buffers_peak_per_core = 190568, .l1_output_buffer_per_core = 0}}};
-    const BoardType board_type = tt::Cluster::instance().get_board_type(0);
+    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
     }

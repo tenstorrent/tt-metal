@@ -8,7 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
@@ -95,7 +95,7 @@ protected:
     }
 
     void TearDown() override {
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
         // Close all opened devices
         for (unsigned int id = 0; id < devices_.size(); id++) {
             // The test may ahve closed the device already, so only close if active.

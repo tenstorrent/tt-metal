@@ -30,9 +30,10 @@
 #include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {
@@ -42,7 +43,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto* control_plane = tt::Cluster::instance().get_control_plane();
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
@@ -59,15 +60,15 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     chip_id_t dst_physical_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(dst_mesh_chip_id);
 
     // get a port to connect to
-    std::vector<chan_id_t> eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
+    std::set<chan_id_t> eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
         src_mesh_chip_id.first, src_mesh_chip_id.second, RoutingDirection::E);
     if (eth_chans.size() == 0) {
         GTEST_SKIP() << "No active eth chans to connect to";
     }
 
-    auto edm_port = eth_chans[0];
-    CoreCoord edm_eth_core =
-        tt::Cluster::instance().get_virtual_eth_core_from_channel(src_physical_device_id, edm_port);
+    auto edm_port = *(eth_chans.begin());
+    CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+        src_physical_device_id, edm_port);
 
     auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
     auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
@@ -114,10 +115,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
         num_hops};
 
     // append the EDM connection rt args
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
-    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
+    const auto edm_config = get_1d_fabric_config();
 
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
@@ -199,7 +197,7 @@ TEST_F(Fabric1DFixture, TestUnicastConnAPI) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto* control_plane = tt::Cluster::instance().get_control_plane();
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
@@ -320,7 +318,7 @@ TEST_F(Fabric1DFixture, TestMCastConnAPI) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // use control plane to find a mesh with 3 devices
     auto user_meshes = control_plane->get_user_physical_mesh_ids();

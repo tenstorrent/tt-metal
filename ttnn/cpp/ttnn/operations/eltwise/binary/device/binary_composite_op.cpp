@@ -117,9 +117,8 @@ Tensor ExecuteMinimum::invoke(
 
 Tensor ExecuteMinimum::invoke(
     const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_diff = ttnn::subtract(input_a, value, std::nullopt, output_mem_config);
-    Tensor result = ttnn::where(t_diff, value, input_a);
-    return result;
+    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<
+        ttnn::operations::unary::UnaryOpType::MINIMUM>::invoke(ttnn::DefaultQueueId, input_a, value, output_mem_config);
 }
 
 // maximum(a,b) = a + (b - a > 0 )*(b-a)
@@ -132,9 +131,8 @@ Tensor ExecuteMaximum::invoke(
 
 Tensor ExecuteMaximum::invoke(
     const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_diff = ttnn::rsub(input_a, value, output_mem_config);
-    Tensor result = ttnn::where(t_diff, value, input_a);
-    return result;
+    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<
+        ttnn::operations::unary::UnaryOpType::MAXIMUM>::invoke(ttnn::DefaultQueueId, input_a, value, output_mem_config);
 }
 
 Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {

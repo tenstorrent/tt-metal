@@ -52,7 +52,7 @@ static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
 namespace {
 
 inline std::string get_soc_description_file(
-    const tt::ARCH& arch, tt::TargetDevice target_device, const std::string& output_dir = "") {
+    const tt::ARCH& arch, tt::TargetDevice target_device, [[maybe_unused]] const std::string& output_dir = "") {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
     std::string tt_metal_home;
     if (getenv("TT_METAL_HOME")) {
@@ -87,11 +87,6 @@ inline std::string get_soc_description_file(
 }
 }  // namespace
 namespace tt {
-
-Cluster& Cluster::instance() {
-    static Cluster inst;
-    return inst;
-}
 
 Cluster::Cluster() {
     ZoneScoped;
@@ -502,7 +497,7 @@ CoreCoord Cluster::get_physical_coordinate_from_logical_coordinates(
 }
 
 CoreCoord Cluster::get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip);
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip);
     tt::umd::CoreCoord logical_core =
         get_soc_desc(chip).translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
     return {logical_core.x, logical_core.y};
@@ -510,7 +505,7 @@ CoreCoord Cluster::get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCo
 
 const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_x(chip_id_t chip_id) const {
     std::unordered_map<int, int> worker_logical_to_virtual_x;
-    const auto& soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
+    const auto& soc_desc = this->get_soc_desc(chip_id);
     for (const tt::umd::CoreCoord& logical_core : soc_desc.get_cores(CoreType::TENSIX, CoordSystem::LOGICAL)) {
         tt::umd::CoreCoord translated_core = soc_desc.translate_coord_to(logical_core, CoordSystem::TRANSLATED);
         worker_logical_to_virtual_x[logical_core.x] = translated_core.x;
@@ -520,7 +515,7 @@ const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_x(chip
 
 const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip_id_t chip_id) const {
     std::unordered_map<int, int> worker_logical_to_virtual_y;
-    const auto& soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
+    const auto& soc_desc = this->get_soc_desc(chip_id);
     for (const tt::umd::CoreCoord& logical_core : soc_desc.get_cores(CoreType::TENSIX, CoordSystem::LOGICAL)) {
         tt::umd::CoreCoord translated_core = soc_desc.translate_coord_to(logical_core, CoordSystem::TRANSLATED);
         worker_logical_to_virtual_y[logical_core.y] = translated_core.y;
@@ -593,7 +588,7 @@ void Cluster::read_dram_vec(
 }
 
 void Cluster::write_core(
-    const void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool /*small_access*/) const {
     chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
@@ -609,7 +604,7 @@ void Cluster::write_core(
 }
 
 void Cluster::read_core(
-    void *mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool /*small_access*/) const {
     int chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
@@ -1033,7 +1028,7 @@ void Cluster::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
     } else {
         this->release_ethernet_cores_for_fabric_routers();
     }
-    tt::Cluster::instance().get_control_plane()->configure_routing_tables_for_fabric_ethernet_channels();
+    this->get_control_plane()->configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 void Cluster::reserve_ethernet_cores_for_fabric_routers() {
@@ -1178,7 +1173,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
     std::vector<chip_id_t> non_mmio_devices;
     std::vector<chip_id_t> mmio_devices = target_mmio_devices;
     if (mmio_devices.size() == 0) {
-        mmio_devices.reserve(tt::Cluster::instance().number_of_pci_devices());
+        mmio_devices.reserve(this->number_of_pci_devices());
         for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
             mmio_devices.emplace_back(assoc_mmio_device);
         }
