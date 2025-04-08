@@ -414,7 +414,7 @@ class TtLlamaAttention(LightweightModule):
         # print("done matmul")
 
         dense_out_reduced = self.tt_ccl.line_all_reduce(
-            dense_out_ttnn, cluster_axis=0, num_links=3, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            dense_out_ttnn, cluster_axis=0, num_links=4, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
         )
         ttnn.deallocate(dense_out_ttnn)
 
