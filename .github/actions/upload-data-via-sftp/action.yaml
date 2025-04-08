@@ -24,7 +24,7 @@ runs:
       shell: bash
       run: |
         # Change dir to path if its set
-        # Example: when running in containers the batchfile and data files are located under /work
+        # If provided, generate key file in inputs.path location for the upload step
         if [ -n "${{ inputs.path }}" ]; then
           echo "Changing dir to ${{ inputs.path }}"
           cd "${{ inputs.path }}"
