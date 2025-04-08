@@ -146,11 +146,14 @@ tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
-tests/ttnn/unit_tests/operations/matmul/ @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
-tests/ttnn/unit_tests/operations/fused/ @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
-tests/ttnn/unit_tests/operations/reduce/ @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/ttnn/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/ttnn/unit_tests/operations/fused/ @yugaoTT @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/ttnn/unit_tests/operations/reduce/ @bbradelTT @sjameelTT @nsorabaTT @vsureshTT @edwinleeTT
 tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/nightly/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/ttnn/nightly/unit_tests/operations/fused/ @yugaoTT @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/ttnn/nightly/unit_tests/operations/reduce/ @bbradelTT @sjameelTT @nsorabaTT @vsureshTT @edwinleeTT
 tests/ttnn/integration_tests/resnet/ @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
@@ -182,7 +185,7 @@ models/*/mnist/ @esmalTT @uaydonat
 models/*/roberta/ @sraizada-tt @uaydonat
 models/*/squeezebert/ @cfjchu @uaydonat
 models/demos/ttnn_falcon7b @cfjchu @uaydonat
-models/*/vgg/ @bbradelTT @uaydonat
+models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT
 models/demos/wormhole @uaydonat
 models/demos/t3000 @uaydonat
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
