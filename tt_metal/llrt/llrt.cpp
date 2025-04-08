@@ -174,7 +174,7 @@ bool test_load_write_read_risc_binary(
 
 void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address) {
     log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
-    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
+    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t /*addr*/, uint32_t len_words) {
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
     });

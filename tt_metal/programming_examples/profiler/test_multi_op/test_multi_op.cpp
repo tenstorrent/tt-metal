@@ -43,7 +43,7 @@ void RunCustomCycle(tt_metal::IDevice* device, int fastDispatch) {
     }
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

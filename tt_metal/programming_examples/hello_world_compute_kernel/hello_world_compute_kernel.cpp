@@ -9,7 +9,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-int main(int argc, char** argv) {
+int main() {
     // Initialize Program and Device
 
     constexpr CoreCoord core = {0, 0};

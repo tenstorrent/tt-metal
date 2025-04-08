@@ -13,7 +13,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-int main(int argc, char** argv) {
+int main() {
     // get program/device
     int device_id = 0;
     IDevice* device = CreateDevice(device_id);

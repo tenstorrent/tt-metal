@@ -376,7 +376,7 @@ void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
 }
 
-void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions &build_options) const {
+void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
     jit_build_genfiles_kernel_include(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t tensix_core_type = hal_ref.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -388,7 +388,7 @@ void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions &bui
         this);
 }
 
-void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions &build_options) const {
+void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
     jit_build_genfiles_kernel_include(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t erisc_core_type = hal_ref.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -400,7 +400,7 @@ void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions &build_o
         this);
 }
 
-void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions &build_options) const {
+void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
     jit_build_genfiles_triscs_src(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t tensix_core_type = hal_ref.get_programmable_core_type_index(this->get_kernel_programmable_core_type());

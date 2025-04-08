@@ -667,7 +667,7 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& co
     }
 }
 
-void WatcherDeviceReader::DumpRingBuffer(CoreDescriptor& core, const mailboxes_t* mbox_data, bool to_stdout) {
+void WatcherDeviceReader::DumpRingBuffer(CoreDescriptor& /*core*/, const mailboxes_t* mbox_data, bool to_stdout) {
     const debug_ring_buf_msg_t* ring_buf_data = &mbox_data->watcher.debug_ring_buf;
     string out = "";
     if (ring_buf_data->current_ptr != DEBUG_RING_BUFFER_STARTING_INDEX) {

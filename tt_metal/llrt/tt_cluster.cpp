@@ -52,7 +52,7 @@ static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
 namespace {
 
 inline std::string get_soc_description_file(
-    const tt::ARCH& arch, tt::TargetDevice target_device, const std::string& output_dir = "") {
+    const tt::ARCH& arch, tt::TargetDevice target_device, [[maybe_unused]] const std::string& output_dir = "") {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
     std::string tt_metal_home;
     if (getenv("TT_METAL_HOME")) {
@@ -588,7 +588,7 @@ void Cluster::read_dram_vec(
 }
 
 void Cluster::write_core(
-    const void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool /*small_access*/) const {
     chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
@@ -604,7 +604,7 @@ void Cluster::write_core(
 }
 
 void Cluster::read_core(
-    void *mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool /*small_access*/) const {
     int chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
