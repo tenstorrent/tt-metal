@@ -6,14 +6,12 @@
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
-#include <tt-metalium/math.hpp>
+#include "ttnn/operations/pool/pool_utils.hpp"
 
+namespace ttnn::operations::pool {
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
-
-namespace ttnn::operations::pool {
 
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
     Program& program,
@@ -38,8 +36,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
     uint32_t nblocks) {
-    TT_FATAL(pool_type == Pool2DType::MAX_POOL2D, "Currently only support max pool2d (#12151)");
-
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
@@ -96,7 +92,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto core_range = all_cores;
     auto core_range_cliff = CoreRangeSet();
     uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
-    uint32_t in_nhw_per_core_cliff = 0;
     uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
 
     uint32_t ncores_w = grid_size.x;
@@ -122,9 +117,19 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t in_scalar_cb_id = next_cb_index++;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     uint32_t in_scalar_cb_npages = 1;
-
     tt::tt_metal::create_cb(in_scalar_cb_id, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id, in_scalar_cb_pagesize, in_scalar_cb_npages);
+
+    // For avgpool, instantiate and use this CB, which consists of 1s. We don't want to divide
+    // twice by kernel size for large kernel case.
+    uint32_t in_one_cb_id = 32;
+    if (pool_type == Pool2DType::AVG_POOL2D) {
+        in_one_cb_id = next_cb_index++;
+        uint32_t in_one_cb_pagesize = tile_size(in_df);
+        uint32_t in_one_cb_npages = 1;
+        tt::tt_metal::create_cb(in_one_cb_id, program, all_cores, in_one_cb_pagesize, in_one_cb_npages, in_df);
+        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_one_cb_id, in_one_cb_pagesize, in_one_cb_npages);
+    }
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
@@ -218,7 +223,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
 
-#if 1
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
         log_debug(tt::LogOp, "in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
@@ -263,13 +267,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "is_in_sharded: {}", input.memory_config().is_sharded());
         log_debug(tt::LogOp, "is_out_sharded: {}", output.memory_config().is_sharded());
     }
-#endif
 
     /**
      * Reader Kernel: input rows -> input cb
      */
+    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_hw) << 16;
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
+    uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
+
     std::vector<uint32_t> reader0_ct_args = {
         out_nhw_per_core,
         kernel_size_h,
@@ -277,12 +283,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         pad_w,
         in_nbytes_c,
         in_w,
-        in_cb_page_padded * in_cb_npages / tile_w,
         input_shape[3] / num_shards_c,
-        nblocks,
         split_reader,  // enable split reader
         0,             // split reader id
+        bf16_scalar,
         bf16_one_u32,
+        bf16_init_value,
         in_nblocks_c,
         in_cb_sz,
         max_rows_for_reduction,
@@ -292,7 +298,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         raw_in_cb_id,
         in_reader_indices_cb_id,
         in_scalar_cb_id,
-        max_pool_partials_cb_id};
+        max_pool_partials_cb_id,
+        in_one_cb_id};
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -301,12 +308,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         pad_w,
         in_nbytes_c,
         in_w,
-        in_cb_page_padded * in_cb_npages / tile_w,
         input_shape[3] / num_shards_c,
-        nblocks,
         split_reader,  // enable split reader
         1,             // split reader id
+        bf16_scalar,
         bf16_one_u32,
+        bf16_init_value,
         in_nblocks_c,
         in_cb_sz,
         max_rows_for_reduction,
@@ -316,21 +323,22 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         raw_in_cb_id,
         in_reader_indices_cb_id,
         in_scalar_cb_id,
-        max_pool_partials_cb_id};
+        max_pool_partials_cb_id,
+        in_one_cb_id};
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
         reader_kernel_fname =
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_max_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
+            "reader_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
     } else if (is_wide_reduction) {
         reader_kernel_fname =
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_max_pool_2d_multi_core_sharded_with_halo_wide.cpp";
+            "reader_pool_2d_multi_core_sharded_with_halo_wide.cpp";
     } else {
         reader_kernel_fname =
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp";
+            "reader_pool_2d_multi_core_sharded_with_halo_v2.cpp";
     }
 
     auto reader0_config = tt::tt_metal::DataMovementConfig{
@@ -352,16 +360,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     std::vector<uint32_t> compute_ct_args = {
         in_ntiles_hw,
         in_ntiles_c,
-        in_ntiles_hw * in_ntiles_c,
         kernel_size_hw,
         out_h,
         out_w,
-        tt::div_up(output_shape[2], tt::constants::TILE_HEIGHT),
-        tt::div_up(output_shape[3], num_shards_c * tt::constants::TILE_WIDTH),
-        nblocks,
-        out_w_loop_count,
-        1,
-        out_nhw_per_core,
         split_reader,                // enable split reader
         out_nhw_per_core / nblocks,  // loop count with blocks
         input_shape[3] / num_shards_c,
@@ -371,23 +372,22 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_id_1,
         in_scalar_cb_id,
         out_cb_id,
-        max_pool_partials_cb_id};
+        max_pool_partials_cb_id,
+        in_one_cb_id};
 
-    auto reduce_op = tt::tt_metal::ReduceOpMath::MAX;
-    auto reduce_dim = tt::tt_metal::ReduceOpDim::H;
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
         .fp32_dest_acc_en = false,
         .math_approx_mode = false,
         .compile_args = compute_ct_args,
-        .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
+        .defines = get_defines(pool_type)};
     std::string compute_kernel_fname;
     if (is_large_kernel) {
         compute_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/max_pool_multi_core_large_kernel.cpp";
+            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core_large_kernel.cpp";
     } else {
         // both regular and wide reductions
-        compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/max_pool_multi_core.cpp";
+        compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core.cpp";
     }
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);

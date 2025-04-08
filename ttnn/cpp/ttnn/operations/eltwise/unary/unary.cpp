@@ -135,24 +135,7 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERF>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERFC>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
-
-template <UnaryOpType unary_op_type>
-Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
-    QueueId queue_id,
-    const Tensor& input_tensor,
-    const int mode,
-    const bool parameter,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        queue_id,
-        input_tensor,
-        {UnaryWithParam{unary_op_type, {static_cast<float>(mode), static_cast<float>(parameter)}}},
-        memory_config,
-        optional_output_tensor);
-}
-
-template struct ExecuteUnaryWithVectorAndFastAndApproximateMode<UnaryOpType::SIGMOID>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::SIGMOID>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
@@ -209,7 +192,7 @@ Tensor LogSigmoid::invoke(
     return detail::unary_impl(
         queue_id,
         input,
-        {UnaryWithParam(UnaryOpType::SIGMOID, {(int)VecMode::RC, false}), UnaryWithParam(UnaryOpType::LOG)},
+        {UnaryWithParam(UnaryOpType::SIGMOID, 0), UnaryWithParam(UnaryOpType::LOG)},
         memory_config,
         optional_output_tensor);
 }
