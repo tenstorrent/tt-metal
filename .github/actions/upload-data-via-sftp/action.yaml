@@ -23,6 +23,12 @@ runs:
     - name: Create key file
       shell: bash
       run: |
+        # Change dir to path if its set
+        # Example: when running in containers the batchfile and data files are located under /work
+        if [ -n "${{ inputs.path }}" ]; then
+          echo "Changing dir to ${{ inputs.path }}"
+          cd "${{ inputs.path }}"
+        fi
         echo "${{ inputs.ssh-private-key }}" > id_key
         chmod go-rwx id_key
     - name: Upload files
