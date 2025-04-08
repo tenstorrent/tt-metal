@@ -19,6 +19,7 @@ Pool2D::program_factory_t Pool2D::select_program_factory(const operation_attribu
 
 void validate_pool2d(
     const Tensor& input,
+    const Pool2DType pool_type,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     const MemoryConfig& out_mem_config) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
@@ -46,14 +47,20 @@ void validate_pool2d(
             input_shape[3],
             num_shards_c);
     }
+
+    TT_FATAL(
+        sliding_window_config.ceil_mode == false || pool_type == Pool2DType::MAX_POOL2D,
+        "Ceil mode set to true not supported for avg pool op");
 }
 
 void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_pool2d(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
+    return validate_pool2d(
+        tensors.input_tensor_, op_attr.pool_type_, op_attr.sliding_window_config_, op_attr.memory_config_);
 }
 
 void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_pool2d(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
+    return validate_pool2d(
+        tensors.input_tensor_, op_attr.pool_type_, op_attr.sliding_window_config_, op_attr.memory_config_);
 }
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(

@@ -45,7 +45,7 @@ xlsxwriter==3.0.8
 tiktoken==0.3.3
 tqdm==4.66.3
 enlighten==1.12.4
-sentencepiece==0.1.97
+sentencepiece==0.2.0
 numba>=0.58.1
 librosa==0.10.0
 timm==0.6.13
