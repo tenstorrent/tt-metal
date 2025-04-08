@@ -61,7 +61,7 @@
 #include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include "strong_type.hpp"

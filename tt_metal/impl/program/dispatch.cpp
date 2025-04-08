@@ -46,7 +46,7 @@
 #include "llrt/hal.hpp"
 #include "math.hpp"
 #include "program_device_map.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "runtime_args_data.hpp"
 #include "semaphore.hpp"
 #include "span.hpp"

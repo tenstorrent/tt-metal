@@ -29,7 +29,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "rtoptions.hpp"
 #include <tt-metalium/semaphore.hpp>
 #include "span.hpp"

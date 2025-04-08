@@ -29,7 +29,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt/hal.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"

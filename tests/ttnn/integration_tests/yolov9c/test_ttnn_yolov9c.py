@@ -19,14 +19,13 @@ from models.experimental.functional_yolov9c.tt.model_preprocessing import (
 from models.experimental.functional_yolov9c.tt import ttnn_yolov9c
 from models.experimental.functional_yolov9c.reference import yolov9c
 from models.experimental.functional_yolov9c.demo.demo_utils import attempt_load
+from ultralytics import YOLO
 
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [
-        False,
-    ],
+    [True],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolov9c(use_pretrained_weight, device, use_program_cache, reset_seeds):
@@ -34,7 +33,7 @@ def test_yolov9c(use_pretrained_weight, device, use_program_cache, reset_seeds):
     state_dict = None
 
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov9c.pt", map_location="cpu")
+        torch_model = YOLO("yolov9c.pt")
         state_dict = torch_model.state_dict()
 
     torch_model = yolov9c.YoloV9()
