@@ -132,7 +132,7 @@ jobs:
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
       wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
     container:
-      image: ${{ needs.build-docker-image.outputs.ci-build || 'docker-image-unresolved!'}}
+      image: ${{ needs.build-docker-image.outputs.ci-build-docker-image || 'docker-image-unresolved!'}}
       env:
         CCACHE_REMOTE_STORAGE: "redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
         CCACHE_REMOTE_ONLY: "true"
