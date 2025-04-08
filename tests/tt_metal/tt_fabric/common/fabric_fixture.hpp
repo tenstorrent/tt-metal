@@ -135,7 +135,6 @@ public:
     }
 
     void RunProgramNonblocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
-        tt::log_info("RunProgramNonblocking");
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program, false);
         } else {
@@ -145,7 +144,6 @@ public:
     }
 
     void WaitForSingleProgramDone(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
-        tt::log_info("WaitForSingleProgramDone");
         if (this->slow_dispatch_) {
             // Wait for the program to finish
             tt::tt_metal::detail::WaitProgramDone(device, program);
