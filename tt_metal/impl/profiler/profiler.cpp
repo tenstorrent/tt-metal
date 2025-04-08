@@ -2,27 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <iostream>
-#include <fstream>
-#include <iomanip>
-#include <filesystem>
-
-#include <host_api.hpp>
-#include <tt_metal.hpp>
-#include "profiler.hpp"
-#include "profiler_state.hpp"
-#include "profiler_paths.hpp"
-#include "hostdevcommon/profiler_common.h"
-#include <rtoptions.hpp>
 #include <dev_msgs.h>
 #include <device.hpp>
-#include "tools/profiler/event_metadata.hpp"
+#include <host_api.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <nlohmann/json.hpp>
+#include <rtoptions.hpp>
+#include <tracy/TracyTTDevice.hpp>
+#include <tt_metal.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <functional>
+#include <iostream>
 
+#include "assert.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
-#include "tracy/Tracy.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-
 #include "llrt.hpp"
+#include "logger.hpp"
+#include "metal_soc_descriptor.h"
+#include "profiler.hpp"
+#include "profiler_paths.hpp"
+#include "profiler_state.hpp"
+#include "tools/profiler/event_metadata.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_backend_api_types.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/xy_pair.h>
 
 namespace tt {
 
@@ -44,13 +56,16 @@ void DeviceProfiler::readRiscProfilerResults(
     HalProgrammableCoreType CoreType;
     int riscCount;
 
-    if (tt::Cluster::instance().is_worker_core(worker_core, device_id)) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(worker_core, device_id)) {
         CoreType = HalProgrammableCoreType::TENSIX;
         riscCount = 5;
     } else {
-        auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
-        bool is_active_eth_core = active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
-                                      device_id, worker_core)) != active_eth_cores.end();
+        auto active_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        bool is_active_eth_core =
+            active_eth_cores.find(
+                tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+                    device_id, worker_core)) != active_eth_cores.end();
 
         CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
                                       : tt_metal::HalProgrammableCoreType::IDLE_ETH;
@@ -59,7 +74,9 @@ void DeviceProfiler::readRiscProfilerResults(
     }
     profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
-    uint32_t coreFlatID = tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id).at(worker_core);
+    uint32_t coreFlatID =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
+            worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
@@ -328,6 +345,8 @@ void DeviceProfiler::logPacketData(
         if (!ret.second) {
             return;
         }
+        // Reset the command subtype, in case it isn't set during the command.
+        this->current_dispatch_meta_data.cmd_subtype = "";
     }
 
     if (packet_type == kernel_profiler::TS_DATA) {
@@ -344,7 +363,21 @@ void DeviceProfiler::logPacketData(
                 } else if (zone_name.find("runtime_host_id_dispatch") != std::string::npos) {
                     this->current_dispatch_meta_data.worker_runtime_id = (uint32_t)data;
                     metaData["workers_runtime_id"] = this->current_dispatch_meta_data.worker_runtime_id;
+                } else if (zone_name.find("packed_data_dispatch") != std::string::npos) {
+                    this->current_dispatch_meta_data.cmd_subtype = fmt::format(
+                        "{}{}",
+                        data & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST ? "MCAST," : "",
+                        magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteType>(
+                            (data >> 1) << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT)));
+                    metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
+                } else if (zone_name.find("packed_large_data_dispatch") != std::string::npos) {
+                    this->current_dispatch_meta_data.cmd_subtype =
+                        fmt::format("{}", magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteLargeType>(data)));
+                    metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
                 }
+                std::string cmd_name = this->current_dispatch_meta_data.cmd_subtype != ""
+                                           ? this->current_dispatch_meta_data.cmd_subtype
+                                           : this->current_dispatch_meta_data.cmd_type;
                 tracy::TTDeviceEvent event = tracy::TTDeviceEvent(
                     this->current_dispatch_meta_data.worker_runtime_id,
                     this->current_zone_it->chip_id,
@@ -355,10 +388,7 @@ void DeviceProfiler::logPacketData(
                     this->current_zone_it->timestamp,
                     this->current_zone_it->line,
                     this->current_zone_it->file,
-                    fmt::format(
-                        "{}:{}",
-                        this->current_dispatch_meta_data.worker_runtime_id,
-                        this->current_dispatch_meta_data.cmd_type),
+                    fmt::format("{}:{}", this->current_dispatch_meta_data.worker_runtime_id, cmd_name),
                     this->current_zone_it->zone_phase);
                 device_events.erase(this->current_zone_it);
                 auto ret = device_events.insert(event);
@@ -608,7 +638,8 @@ CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, con
     bool coord_is_translated =
         c.x >= hal_ref.get_virtual_worker_start_x() && c.y >= hal_ref.get_virtual_worker_start_y();
     if (device_architecture == tt::ARCH::WORMHOLE_B0 && coord_is_translated) {
-        const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
+        const metal_SocDescriptor& soc_desc =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
         // disable linting here; slicing is __intended__
         // NOLINTBEGIN
         return soc_desc.translate_coord_to(c, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
@@ -700,7 +731,7 @@ void DeviceProfiler::dumpResults(
     ZoneScoped;
 
     auto device_id = device->id();
-    device_core_frequency = tt::Cluster::instance().get_device_aiclk(device_id);
+    device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
 
     generateZoneSourceLocationsHashes();
 

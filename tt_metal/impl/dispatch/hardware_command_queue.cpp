@@ -5,27 +5,47 @@
 #include "hardware_command_queue.hpp"
 
 #include <device.hpp>
-#include "dprint_server.hpp"
 #include <event.hpp>
-#include <tt_stl/overloaded.hpp>
-#include <trace_buffer.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
-
-#include "tt_cluster.hpp"
-
-#include "work_executor.hpp"
-
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
 #include <program_impl.hpp>
+#include <trace_buffer.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt_stl/overloaded.hpp>
+#include <algorithm>
+#include <array>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "assert.hpp"
+#include "buffers/dispatch.hpp"
+#include "dispatch/device_command.hpp"
+#include "impl/context/metal_context.hpp"
+#include "dispatch/host_runtime_commands.hpp"
+#include "dprint_server.hpp"
+#include "event/dispatch.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "logger.hpp"
+#include "program_device_map.hpp"
+#include "rtoptions.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include "work_executor.hpp"
 
-#include "rtoptions.hpp"
+namespace tt {
+namespace tt_metal {
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 namespace {
@@ -57,33 +77,39 @@ HWCommandQueue::HWCommandQueue(
     this->num_entries_in_completion_q_ = 0;
     this->num_completed_completion_q_reads_ = 0;
 
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
-    this->size_B_ = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel) / device_->num_hw_cqs();
-    if (tt::Cluster::instance().is_galaxy_cluster()) {
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+    this->size_B_ =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(mmio_device_id, channel) /
+        device_->num_hw_cqs();
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
         // Galaxy puts 4 devices per host channel until umd can provide one channel per device.
         this->size_B_ = this->size_B_ / 4;
     }
 
     CoreCoord enqueue_program_dispatch_core;
-    CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type();
+    CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     if (this->device_->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
         // dispatch_s exists with this configuration. Workers write to dispatch_s
-        enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_s_core(device_->id(), channel, id);
+        enqueue_program_dispatch_core =
+            MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_->id(), channel, id);
     } else {
         if (device_->is_mmio_capable()) {
             enqueue_program_dispatch_core =
-                dispatch_core_manager::instance().dispatcher_core(device_->id(), channel, id);
+                MetalContext::instance().get_dispatch_core_manager().dispatcher_core(device_->id(), channel, id);
         } else {
             enqueue_program_dispatch_core =
-                dispatch_core_manager::instance().dispatcher_d_core(device_->id(), channel, id);
+                MetalContext::instance().get_dispatch_core_manager().dispatcher_d_core(device_->id(), channel, id);
         }
     }
     this->virtual_enqueue_program_dispatch_core_ =
         device_->virtual_core_from_logical_core(enqueue_program_dispatch_core, core_type);
 
     tt_cxy_pair completion_q_writer_location =
-        dispatch_core_manager::instance().completion_queue_writer_core(device_->id(), channel, this->id_);
+        MetalContext::instance().get_dispatch_core_manager().completion_queue_writer_core(
+            device_->id(), channel, this->id_);
 
     this->completion_queue_writer_core_ = CoreCoord(completion_q_writer_location.x, completion_q_writer_location.y);
 
@@ -204,7 +230,7 @@ void HWCommandQueue::enqueue_read_buffer(
                 dispatch_params,
                 sub_device_ids,
                 cores[core_id],
-                dispatch_core_manager::instance().get_dispatch_core_type());
+                MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
             if (dispatch_params.pages_per_txn > 0) {
                 this->issued_completion_q_reads_.push(
                     buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
@@ -223,7 +249,10 @@ void HWCommandQueue::enqueue_read_buffer(
             dispatch_params_variant);
 
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            *dispatch_params, buffer_obj, sub_device_ids, dispatch_core_manager::instance().get_dispatch_core_type());
+            *dispatch_params,
+            buffer_obj,
+            sub_device_ids,
+            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
         if (dispatch_params->pages_per_txn > 0) {
             this->issued_completion_q_reads_.push(
                 buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
@@ -253,7 +282,7 @@ void HWCommandQueue::enqueue_write_buffer(
     Buffer& buffer_obj = get_buffer_object(buffer);
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-    auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
+    auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 
     buffer_dispatch::write_to_device_buffer(
         data, buffer_obj, region, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
@@ -263,7 +292,9 @@ void HWCommandQueue::enqueue_write_buffer(
     }
 }
 
-CoreType HWCommandQueue::get_dispatch_core_type() { return dispatch_core_manager::instance().get_dispatch_core_type(); }
+CoreType HWCommandQueue::get_dispatch_core_type() {
+    return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+}
 
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
@@ -449,8 +480,10 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
 }
 
 void HWCommandQueue::read_completion_queue() {
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
     while (true) {
         uint32_t num_events_to_read = 0;
         {

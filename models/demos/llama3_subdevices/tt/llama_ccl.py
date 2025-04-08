@@ -459,7 +459,6 @@ class TT_CCL:
             return ttnn_tensor_out
         persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
-
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
@@ -616,7 +615,7 @@ def tt_sharded_distributed_rmsnorm(
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
-    # ttnn.deallocate(tt_stats)
+
     # print("mem cfg")
 
     # Note: Persistent output buffer used, do not deallocate output!

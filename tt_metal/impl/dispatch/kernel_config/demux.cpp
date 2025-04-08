@@ -2,22 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "demux.hpp"
-#include "dispatch.hpp"
-#include "eth_tunneler.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
-
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "device.hpp"
+#include "dispatch.hpp"
+#include "impl/context/metal_context.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "eth_tunneler.hpp"
+#include "hal.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
 void DemuxKernel::GenerateStaticConfigs() {
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
-    uint16_t channel =
-        tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id_);  // TODO: this can be mmio
-    logical_core_ = dispatch_core_manager::instance().demux_core(servicing_device_id_, channel, placement_cq_id_);
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
+        servicing_device_id_);  // TODO: this can be mmio
+    logical_core_ = MetalContext::instance().get_dispatch_core_manager().demux_core(
+        servicing_device_id_, channel, placement_cq_id_);
     static_config_.endpoint_id_start_index = 0xD1;
     static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
     static_config_.rx_queue_size_words = 0x10000 >> 4;
@@ -161,7 +175,8 @@ void DemuxKernel::CreateKernel() {
     TT_ASSERT(compile_args.size() == 30);
     const auto& grid_size = device_->grid_size();
     tt_cxy_pair my_virtual_core =
-        tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(logical_core_, GetCoreType());
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            logical_core_, GetCoreType());
     std::map<string, string> defines = {
         // All of these unused, remove later
         {"MY_NOC_X",

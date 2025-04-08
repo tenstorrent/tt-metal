@@ -2,21 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/core/span.hpp>
 #include <tt-metalium/blockfloat_common.hpp>
-
-#include <algorithm>
-#include <iostream>
-#include <random>
+#include <tt_stl/span.hpp>
+#include <array>
 #include <vector>
-#include <immintrin.h>
 
 #include "assert.hpp"
-#include "tt_backend_api_types.hpp"
-#include "tracy/Tracy.hpp"
-#include "tile.hpp"
-#include <tt_stl/span.hpp>
-
+#include "constants.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "math.hpp"
+#include "tile.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_backend_api_types.hpp"
 
 uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a) {
     TT_ASSERT(vec.size() == 16);
@@ -203,17 +202,16 @@ uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_exp_a) {
     constexpr uint32_t MANTISSA_BFP_SHIFT = 24 - MANTISSA_BFP_WIDTH;
     constexpr uint32_t MANTISSA_BFP_MAX_VAL = (1 << MANTISSA_BFP_WIDTH) - 1;
 
-    // check for both +/- 0.0
-    constexpr uint32_t EXP_MANTISSA_BMSK = ((1U << 31) - 1);
-    bool is_zero = ((input & EXP_MANTISSA_BMSK) == 0);
-
-    if (is_zero) {
-        return 0;
-    }
-
     uint32_t mantissa = input & 0x007fffff;
     uint32_t exp = (input & 0x7f800000) >> 23;
     uint32_t sign = (input & 0x80000000) >> 31;
+
+    // check for both +/- 0.0 or +/- denormal
+    bool is_zero_or_denormal = (exp == 0);
+
+    if (is_zero_or_denormal) {
+        return 0;
+    }
 
     if (is_exp_a) {
         int32_t se = static_cast<int32_t>(exp);

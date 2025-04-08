@@ -3,15 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/distributed/coordinate_translation.hpp"
-#include "tt_metal/api/tt-metalium/tt_metal.hpp"
-#include "tt_cluster.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+#include "assert.hpp"
+#include "control_plane.hpp"
 #include "indestructible.hpp"
+#include "logger.hpp"
+#include "mesh_coord.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/types/cluster_descriptor_types.h>
+
 namespace tt::tt_metal::distributed {
 
 const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translation_map() {
     static tt::stl::Indestructible<MeshContainer<PhysicalMeshCoordinate>> kTranslationMap([]() {
-        const auto* control_plane = tt::Cluster::instance().get_control_plane();
+        const auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         TT_FATAL(control_plane != nullptr, "Control plane must be initialized before MeshDevice can be created.");
 
         const auto mesh_ids = control_plane->get_user_physical_mesh_ids();

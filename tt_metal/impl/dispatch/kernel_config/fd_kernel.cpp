@@ -3,28 +3,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fd_kernel.hpp"
+
 #include <host_api.hpp>
-#include <tt_metal.hpp>
+#include <utility>
+#include <variant>
+
+#include "data_types.hpp"
+#include "demux.hpp"
+#include "device.hpp"
+#include "dispatch.hpp"
 #include "dispatch/kernel_config/fabric_router_vc.hpp"
 #include "dispatch_core_common.hpp"
-#include "dprint_server.hpp"
-
-#include "kernel_types.hpp"
-#include "prefetch.hpp"
-#include "dispatch.hpp"
 #include "dispatch_s.hpp"
-#include "mux.hpp"
-#include "demux.hpp"
+#include "dprint_server.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "kernel_types.hpp"
+#include "mux.hpp"
+#include "prefetch.hpp"
 #include "rtoptions.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
 
 // Helper function to get upstream device in the tunnel from current device, not valid for mmio
 chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-    for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    for (auto tunnel :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 // MMIO device doesn't have an upsream, just return itself
@@ -38,8 +47,10 @@ chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {
 
 // Same thing for downstream, is ambiuous for mmio device though if it drives more than one tunnel
 chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id) {
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-    for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    for (auto tunnel :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (int idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 // End of tunnel doesn't have downstream, just return itself
@@ -53,8 +64,10 @@ chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id) {
 
 // Helper function to get the tunnel stop of current device
 uint32_t FDKernel::GetTunnelStop(chip_id_t device_id) {
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-    for (auto tunnel : tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id)) {
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    for (auto tunnel :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
         for (uint32_t idx = 0; idx < tunnel.size(); idx++) {
             if (tunnel[idx] == device_id) {
                 return idx;

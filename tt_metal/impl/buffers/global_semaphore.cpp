@@ -2,23 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <global_semaphore.hpp>
-
-#include <cstdint>
-#include <memory>
-#include <vector>
-
 #include <assert.hpp>
-#include <core_coord.hpp>
-#include <tt_metal.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <host_api.hpp>
 #include <buffer.hpp>
 #include <buffer_constants.hpp>
+#include <core_coord.hpp>
 #include <device.hpp>
-#include "llrt/hal.hpp"
+#include <global_semaphore.hpp>
+#include <host_api.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt_metal.hpp>
+#include <cstdint>
+#include <memory>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "tt_cluster.hpp"
+#include "mesh_device.hpp"
+#include "reflection.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -67,7 +68,7 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
         std::vector<uint32_t> host_buffer(num_cores, reset_value);
         if (device->using_slow_dispatch()) {
             detail::WriteToBuffer(*buffer.get_buffer(), host_buffer);
-            tt::Cluster::instance().l1_barrier(device->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
         } else {
             if (auto mesh_buffer = buffer.get_mesh_buffer()) {
                 distributed::EnqueueWriteMeshBuffer(

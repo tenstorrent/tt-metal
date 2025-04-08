@@ -2,23 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
 #include <gtest/gtest.h>
+#include <magic_enum/magic_enum.hpp>
+#include <stdint.h>
+#include <compare>
 #include <filesystem>
-#include <unordered_set>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <variant>
+#include <vector>
 
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "detail/kernel_cache.hpp"
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include "hal.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include "kernel.hpp"
-#include "kernel_types.hpp"
-#include "logger.hpp"
-#include "persistent_kernel_cache.hpp"
-#include "tt_metal.hpp"
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/utils.hpp>
 
 using namespace tt::tt_metal;
 

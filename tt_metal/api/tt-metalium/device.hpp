@@ -14,14 +14,14 @@
 #include <unordered_set>
 #include <vector>
 
-#include "hostdevcommon/common_values.hpp"
-#include "hostdevcommon/kernel_structs.h"  // Not used here, but leaked to programming examples
-#include "work_executor_types.hpp"
-#include "data_types.hpp"
-#include "program_device_map.hpp"
-#include "hal_types.hpp"
-#include "command_queue_interface.hpp"
-#include "sub_device_types.hpp"
+#include <hostdevcommon/common_values.hpp>
+#include <hostdevcommon/kernel_structs.h>  // Not used here, but leaked to programming examples
+#include <tt-metalium/work_executor_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/program_device_map.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/allocator_types.hpp>
 
 #include <tt_stl/span.hpp>

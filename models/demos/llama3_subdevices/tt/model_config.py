@@ -107,7 +107,7 @@ class LlamaOptimizations:
         """Configuration optimized for accuracy
         Only 3.1-70B uses bfp4 MLPs in this configuration
         """
-        return cls(bfp4_mlp=model_name == "3.1-70B")
+        return cls(bfp4_mlp="70B" in model_name)
 
     @classmethod
     def performance(cls, model_name):
@@ -150,6 +150,7 @@ class TtModelArgs:
 
     LOCAL_LLAMA_PARAMS = {
         "LLAMA3_1_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama3.1-70B-Instruct",
+        "LLAMA3_3_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama3.3-70B-Instruct",
     }
 
     def __init__(
@@ -260,6 +261,8 @@ class TtModelArgs:
                 local_params = "LLAMA3_2_11B_PARAMS"
             elif "3.1-70B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_70B_PARAMS"
+            elif "3.3-70B" in self.CKPT_DIR:
+                local_params = "LLAMA3_3_70B_PARAMS"
             else:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
@@ -918,11 +921,11 @@ class TtModelArgs:
             self.model_config["LM_HEAD_PREFILL_PROGCFG"] = self.matmul_1d_config_from_tensor_shapes(
                 in0_shape=(1, 1, 32, 2048),
                 in1_shape=(1, 1, 2048, 16384),
-                grid=ttnn.CoreGrid(x=7, y=8),  # (7,10) leads to hangs
+                grid=ttnn.CoreGrid(x=7, y=7),  # (7,10) leads to hangs
                 act=None,
                 is_fp32_accumulate=False,
-                # overwrite_subblock_w=None,
-                # overwrite_subblock_h=None,
+                # overwrite_subblock_w=1,
+                # overwrite_subblock_h=1,
             )
 
             attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)

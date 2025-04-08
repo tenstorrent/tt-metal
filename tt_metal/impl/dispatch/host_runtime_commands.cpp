@@ -4,49 +4,50 @@
 
 #include "host_runtime_commands.hpp"
 
-#include <array>
-#include <chrono>
-#include <cstddef>
-#include <fstream>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <tuple>
-#include <type_traits>
-#include <utility>
-#include <variant>
-
-#include <buffer.hpp>
-#include <math.hpp>
-#include <dev_msgs.h>
-#include "llrt/hal.hpp"
-#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include <assert.hpp>
+#include <buffer.hpp>
+#include <event.hpp>
+#include <host_api.hpp>
 #include <logger.hpp>
 #include <tt_metal.hpp>
-#include <host_api.hpp>
-#include <circular_buffer_constants.h>
-#include <circular_buffer.hpp>
+#include <chrono>
+#include <fstream>
+#include <functional>
+#include <memory>
+#include <string>
+#include <thread>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "command_queue.hpp"
+#include "device.hpp"
+#include "dispatch/device_command.hpp"
+#include "impl/context/metal_context.hpp"
 #include "dprint_server.hpp"
-#include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "tt_metal/impl/dispatch/data_collection.hpp"
-#include "dispatch_core_manager.hpp"
-#include <event.hpp>
-#include <kernel.hpp>
-#include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/impl/buffers/dispatch.hpp"
-#include "umd/device/tt_xy_pair.h"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
-
-#include "llrt/hal.hpp"
+#include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
-
-#include "tracy/Tracy.hpp"
-
+#include "llrt/hal.hpp"
+#include "program_impl.hpp"
 #include "rtoptions.hpp"
+#include "span.hpp"
+#include "system_memory_manager.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_metal/impl/debug/watcher_server.hpp"
+#include "tt_metal/impl/dispatch/data_collection.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "tt_metal/impl/program/dispatch.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
+
+namespace tt {
+namespace tt_metal {
+class WorkerConfigBufferMgr;
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 
@@ -118,7 +119,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     unicast_cores_launch_message_wptr(unicast_cores_launch_message_wptr),
     sub_device_id(sub_device_id) {
     this->device = device;
-    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
+    this->dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
 }
 
@@ -147,7 +148,8 @@ void EnqueueProgramCommand::process() {
     RecordProgramRun(program);
 
     // Access the program dispatch-command cache
-    auto& cached_program_command_sequence = program.get_cached_program_command_sequences().begin()->second;
+    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+    auto& cached_program_command_sequence = program.get_cached_program_command_sequences().at(command_hash);
     // Update the generated dispatch commands based on the state of the CQ and the ring buffer
     program_dispatch::update_program_dispatch_commands(
         program,
@@ -188,7 +190,7 @@ void EnqueueTerminateCommand::process() {
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-    if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         // Terminate dispatch_s if enabled
         cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
         HugepageDeviceCommand dispatch_s_command_sequence(cmd_region, cmd_sequence_sizeB);

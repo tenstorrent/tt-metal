@@ -2,35 +2,99 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <range/v3/view/filter.hpp>
-#include <range/v3/view/transform.hpp>
-
-#include <circular_buffer_types.hpp>
-#include "common/executor.hpp"
-#include <profiler.hpp>
-#include "tt_metal/detail/kernel_cache.hpp"
-#include <persistent_kernel_cache.hpp>
-#include <memory_reporter.hpp>
-#include <tt_metal.hpp>
-#include <graph_tracking.hpp>
-#include <host_api.hpp>
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
-#include <semaphore.hpp>
-#include "dprint_server.hpp"
+#include <circular_buffer_types.hpp>
 #include <device.hpp>
-#include <command_queue.hpp>
-#include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/jit_build/genfiles.hpp"
-#include "tt_metal/jit_build/build_env_manager.hpp"
-#include "llrt.hpp"
-#include "program_command_sequence.hpp"
-#include "tracy/Tracy.hpp"
+#include <graph_tracking.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <memory_reporter.hpp>
+#include <persistent_kernel_cache.hpp>
+#include <semaphore.hpp>
 #include <tt_align.hpp>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <bitset>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <future>
+#include <initializer_list>
+#include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_constants.h"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "dev_msgs.h"
+#include "impl/context/metal_context.hpp"
+#include "dispatch_core_common.hpp"
+#include "dprint_server.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "jit_build/build.hpp"
+#include "jit_build_options.hpp"
+#include "kernel.hpp"
+#include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
+#include "lightmetal/lightmetal_capture.hpp"
+#include "llrt.hpp"
+#include "logger.hpp"
+#include "profiler_state.hpp"
+#include "program_command_sequence.hpp"
+#include "program_device_map.hpp"
+#include "program_impl.hpp"
+#include "rtoptions.hpp"
+#include "span.hpp"
+#include "strong_type.hpp"
+#include "sub_device_types.hpp"
+#include "system_memory_manager.hpp"
+#include "tile.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_memory.h"
+#include "tt_metal/detail/kernel_cache.hpp"
+#include "tt_metal/impl/dispatch/device_command.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/impl/program/dispatch.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+#include "tt_metal/jit_build/genfiles.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/xy_pair.h>
+#include "util.hpp"
+#include "utils.hpp"
+
+namespace tt {
+class tt_hlk_desc;
+enum CBIndex : std::uint8_t;
+namespace tt_metal {
+class CommandQueue;
+class EnqueueProgramCommand;
+namespace detail {
+class Internal_;
+}  // namespace detail
+namespace experimental {
+class GlobalCircularBuffer;
+}  // namespace experimental
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -137,14 +201,15 @@ class Program_ {
     bool is_finalized() const;
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);
-    bool is_cached() const { return this->cached_; }
+    bool is_cached() const { return this->cached_device_hash_.has_value(); }
     ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const {
         if (auto it = this->binaries_on_device_.find(device_id); it != this->binaries_on_device_.end()) {
             return it->second;
         }
         return ProgramBinaryStatus::NotSent;
     }
-    void set_cached() { this->cached_ = true; }
+    void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
+    const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
     void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
         this->binaries_on_device_[device_id] = status;
     }
@@ -172,7 +237,9 @@ class Program_ {
        ProgramTransferInfo program_transfer_info;
 
        bool finalized_;
-       bool cached_;
+       // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
+       // the same device
+       std::optional<uint64_t> cached_device_hash_;
 
        // TODO: Should map based on the hash of the configured sub-devices
        // This way we can cache it agnostic of the device
@@ -233,6 +300,7 @@ class Program_ {
     // Counts how much space is needed for each core + each launch buffer msg queue.
     std::vector<uint32_t> program_config_sizes_;
 
+    // The rta_updates from one cached command sequence may reference data in another cached command sequence.
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
 
     friend std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
@@ -315,7 +383,7 @@ detail::Program_::Program_() :
     runtime_id(0),
     local_circular_buffer_allocation_needed_(false),
     finalized_(false),
-    cached_(false) {
+    cached_device_hash_(std::nullopt) {
     uint32_t programmable_core_count = hal_ref.get_programmable_core_type_count();
     for (uint32_t i = 0; i < programmable_core_count; i++) {
         kernels_.push_back({});
@@ -1255,11 +1323,6 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
     auto& sub_device_ids_map = this->sub_device_ids_[device->id()];
     auto sub_device_ids = sub_device_ids_map.find(sub_device_manager_id);
     if (this->compiled_.empty() || sub_device_ids == sub_device_ids_map.end()) {
-        if (!this->compiled_.empty()) {
-            TT_FATAL(
-                sub_device_ids_map.empty(),
-                "Multiple sub device managers are not currently supported for a single program");
-        }
         if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr || sub_device_manager_id == device->get_default_sub_device_manager_id()) {
             // No sub device manager, nothing to validate
             auto [sub_device_ids, _] =
@@ -1315,24 +1378,33 @@ void Program::set_launch_msg_sem_offsets() { pimpl_->set_launch_msg_sem_offsets(
 void Program::populate_dispatch_data(IDevice* device) { pimpl_->populate_dispatch_data(device); }
 
 void Program::generate_dispatch_commands(IDevice* device) {
-    uint64_t command_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
+    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+
+    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
     if (not hal_ref.is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the command hash, to always assert on programs being reused across devices.
-        command_hash = (command_hash << 32) | (device->id());
+        // id into the device hash, to always assert on programs being reused across devices.
+        device_hash = (device_hash << 32) | (device->id());
+    }
+    if (!pimpl_->is_cached()) {
+        pimpl_->set_cached(device_hash);
+    } else {
+        TT_FATAL(
+            *pimpl_->get_cached() == device_hash,
+            "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate "
+            "virtualization is enabled (only enabled on Wormhole and above).");
     }
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
-    if (!pimpl_->is_cached()) {
+    if (!cached_program_command_sequences.contains(command_hash)) {
+        // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(device)[0];
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
         program_dispatch::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
+        // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
+        // This means programs will contain stale entries in the cache until the program is deleted
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
-        pimpl_->set_cached();
-    } else {
-        auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
-        TT_FATAL(cached_cmd_iter != cached_program_command_sequences.end(), "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate virtualization is enabled (only enabled on Wormhole and above).");
     }
 }
 
@@ -1377,10 +1449,11 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         //      - eth kernels cannot be on idle eth cores
         bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
-        const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+        const auto& dispatch_core_config =
+            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
         const std::vector<CoreCoord>& storage_cores =
-            DispatchQueryManager::instance().get_logical_storage_cores_on_user_chips();
+            MetalContext::instance().get_dispatch_query_manager().get_logical_storage_cores_on_user_chips();
         bool on_storage_only_core =  std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
             return kernel->is_on_logical_core(storage_core);
         });
@@ -1389,7 +1462,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         // Kernels used to implement fast dispatch can be placed on dispatch cores
         if (not slow_dispatch and not fd_bootloader_mode) {
             const std::vector<CoreCoord>& dispatch_cores =
-                DispatchQueryManager::instance().get_logical_dispatch_cores_on_user_chips();
+                MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
             bool on_dispatch_core = std::any_of(dispatch_cores.begin(), dispatch_cores.end(), [&kernel, &dispatch_core_type](const CoreCoord &dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;

@@ -3,23 +3,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <vector>
+#include <stdint.h>
+#include <cstddef>
 #include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "umd/device/tt_soc_descriptor.h"
-#include "hostdevcommon/common_values.hpp"
-#include "core_coord.hpp"
-#include "dispatch_core_common.hpp"
-#include "buffer.hpp"
-#include "profiler_types.hpp"
-#include "profiler_optional_metadata.hpp"
-#include "fabric_types.hpp"
+#include <hostdevcommon/common_values.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/profiler_types.hpp>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+
+namespace tt {
+namespace tt_metal {
+enum class FabricConfig : uint32_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
-class Program;
 class Buffer;
 class IDevice;
+class Program;
 
 namespace detail {
 

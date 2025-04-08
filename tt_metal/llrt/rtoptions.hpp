@@ -11,12 +11,18 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
+#include <map>
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
+#include <umd/device/types/xy_pair.h>
+
+enum class CoreType;
 
 namespace tt {
 
@@ -136,6 +142,8 @@ class RunTimeOptions {
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
+
+    bool skip_eth_cores_with_retrain = false;
 
     RunTimeOptions();
 
@@ -329,6 +337,8 @@ public:
     inline const std::filesystem::path& get_simulator_path() { return simulator_path; }
 
     inline bool get_erisc_iram_enabled() { return erisc_iram_enabled; }
+
+    inline bool get_skip_eth_cores_with_retrain() { return skip_eth_cores_with_retrain; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

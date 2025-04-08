@@ -5,11 +5,41 @@
 #include <mesh_buffer.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
-#include <tt_metal.hpp>
-
+#include <stdint.h>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
+#include <algorithm>
+#include <cstddef>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "hal.hpp"
+#include "kernel_types.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_device.hpp"
+#include "program_device_map.hpp"
+#include "program_impl.hpp"
+#include "semaphore.hpp"
+#include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/distributed/mesh_workload_utils.hpp"
+#include "util.hpp"
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Kernel;
+enum class HalProgrammableCoreType;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -246,9 +276,9 @@ std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevic
     return sub_devices_;
 }
 
-ProgramCommandSequence& MeshWorkload::get_dispatch_cmds_for_program(Program& program) {
+ProgramCommandSequence& MeshWorkload::get_dispatch_cmds_for_program(Program& program, uint64_t command_hash) {
     // Get the dispatch commands associated with this program
-    return program.get_cached_program_command_sequences().begin()->second;
+    return program.get_cached_program_command_sequences().at(command_hash);
 }
 
 // The functions below are for testing purposes only

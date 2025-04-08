@@ -257,7 +257,7 @@ COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-met
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 
 RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
-    python3 -m pip install setuptools wheel && \
+    python3 -m pip install setuptools wheel==0.45.1 && \
     python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
 
@@ -284,6 +284,7 @@ RUN apt-get remove -y gdb || true \
     && rm -rf /tmp/gdb-build
 
 # Install dev deps
+# libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
@@ -291,6 +292,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nano \
     openssh-server \
     vim \
+    libgl1-mesa-glx \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 #############################################################

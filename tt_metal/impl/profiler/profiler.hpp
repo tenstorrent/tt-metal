@@ -4,22 +4,44 @@
 
 #pragma once
 
+#include <nlohmann/json.hpp>
+#include <stdint.h>
 #include <chrono>
-#include <string>
-#include <unordered_map>
-#include <iostream>
+#include <cstddef>
 #include <filesystem>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include "buffer.hpp"
-#include "program_impl.hpp"
+#include "common/TracyTTDeviceData.hpp"
+#include "core_coord.hpp"
+#include "hostdevcommon/profiler_common.h"
+#include "profiler_optional_metadata.hpp"
+#include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
-#include "profiler_paths.hpp"
-#include "profiler_optional_metadata.hpp"
+#include "program_impl.hpp"
+#include "system_memory_manager.hpp"
 #include "tracy/TracyTTDevice.hpp"
-#include "common/TracyTTDeviceData.hpp"
 
-#include <nlohmann/json.hpp>
+namespace tt {
+enum class ARCH;
+namespace tt_metal {
+class Buffer;
+class IDevice;
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 using std::chrono::duration;
 using std::chrono::duration_cast;
@@ -36,6 +58,9 @@ struct DisptachMetaData {
 
     // Worker's runtime id
     uint32_t worker_runtime_id = 0;
+
+    // dispatch command subtype.
+    std::string cmd_subtype = "";
 };
 
 class DeviceProfiler {

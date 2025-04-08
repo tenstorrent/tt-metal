@@ -155,7 +155,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             break;
         case UnaryOpType::FMOD:
             op_init_and_name = {
-                "fmod_tile_init();",
+                fmt::format(
+                    "fmod_tile_init({:#x}u, {:#x}u);",
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(1.0f / param0)),
                 fmt::format(
                     "fmod_tile({}, {:#x}u, {:#x}u);",
                     idst,
@@ -217,6 +220,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "unary_lt_tile_init();",
                 fmt::format("unary_lt_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
+        case UnaryOpType::SIGMOID:
+            op_init_and_name = {
+                fmt::format("sigmoid_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("sigmoid_tile<{1}u>({0});", idst, (uint32_t)param0)};
+            break;
         case UnaryOpType::SOFTPLUS: {
             TT_ASSERT(params.size() == 2, "Expected softplus to take 2 parameters");
             float param1 = params[1];
@@ -245,6 +253,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     (uint32_t)datatype_to_dataformat_converter((DataType)params[0]),
                     (uint32_t)datatype_to_dataformat_converter((DataType)params[1]))};
             break;
+        case UnaryOpType::MAXIMUM:
+            op_init_and_name = {
+                "unary_max_tile_init();",
+                fmt::format("unary_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            break;
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
     return op_init_and_name;
@@ -261,9 +274,6 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
         case UnaryOpType::RSQRT: op_init_and_name = {"rsqrt_tile_init();", fmt::format("rsqrt_tile({});", idst)}; break;
         case UnaryOpType::RELU: op_init_and_name = {"relu_tile_init();", fmt::format("relu_tile({});", idst)}; break;
         case UnaryOpType::SQRT: op_init_and_name = {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)}; break;
-        case UnaryOpType::SIGMOID:
-            op_init_and_name = {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)};
-            break;
         case UnaryOpType::LOG: op_init_and_name = {"log_tile_init();", fmt::format("log_tile({});", idst)}; break;
         case UnaryOpType::TANH: op_init_and_name = {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)}; break;
         case UnaryOpType::SIGNBIT:
@@ -288,6 +298,9 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
         case UnaryOpType::I0: op_init_and_name = {"i0_tile_init();", fmt::format("i0_tile({});", idst)}; break;
         case UnaryOpType::I1: op_init_and_name = {"i1_tile_init();", fmt::format("i1_tile({});", idst)}; break;
         case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init();", fmt::format("exp_tile({});", idst)}; break;
+        case UnaryOpType::SIGMOID:
+            op_init_and_name = {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)};
+            break;
         case UnaryOpType::ERF: op_init_and_name = {"erf_tile_init();", fmt::format("erf_tile({0});", idst)}; break;
         case UnaryOpType::ERFC: op_init_and_name = {"erfc_tile_init();", fmt::format("erfc_tile({});", idst)}; break;
         case UnaryOpType::ERFINV:
@@ -377,7 +390,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
     } else if (name == "sigmoid") {
-        return UnaryWithParam(UnaryOpType::SIGMOID);
+        return UnaryWithParam(UnaryOpType::SIGMOID, static_cast<float>(false));
+    } else if (name == "sigmoid_approx") {
+        return UnaryWithParam(UnaryOpType::SIGMOID, static_cast<float>(true));
     } else if (name == "sqrt") {
         return UnaryWithParam(UnaryOpType::SQRT);
     } else if (name == "exp") {

@@ -2,21 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "mux.hpp"
-#include "dispatch.hpp"
-#include "eth_router.hpp"
-#include "eth_tunneler.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
-
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "device.hpp"
+#include "dispatch.hpp"
+#include "impl/context/metal_context.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "eth_tunneler.hpp"
+#include "hal.hpp"
+#include "impl/context/metal_context.hpp"
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
 void MuxKernel::GenerateStaticConfigs() {
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
-    logical_core_ = dispatch_core_manager::instance().mux_d_core(device_->id(), channel, this->cq_id_);
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+    logical_core_ =
+        MetalContext::instance().get_dispatch_core_manager().mux_d_core(device_->id(), channel, this->cq_id_);
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
     static_config_.reserved = 0;
     static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;

@@ -2,34 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <ctype.h>
-#include <iostream>
-#include <vector>
-#include <stdexcept>
-#include <string>
-#include <unordered_set>
 #include <assert.hpp>
+#include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
+#include <core_coord.hpp>
+#include <ctype.h>
+#include <dev_msgs.h>
+#include <fmt/base.h>
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
-#include <dev_msgs.h>
-
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
-#include <fmt/base.h>
-#include "llrt.hpp"
-#include <tt_cluster.hpp>
-
-#include <core_coord.hpp>
-#include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
-#include "hw/inc/debug/ring_buffer.h"
-#include "impl/dispatch/dispatch_core_manager.hpp"
 #include <rtoptions.hpp>
+#include "impl/context/metal_context.hpp"
+#include <algorithm>
+#include <cstddef>
+#include <functional>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-#include "watcher_device_reader.hpp"
+#include "core_descriptor.hpp"
 #include "debug_helpers.hpp"
-
+#include "dispatch_core_common.hpp"
+#include "hal_types.hpp"
+#include "hw/inc/debug/ring_buffer.h"
+#include "impl/context/metal_context.hpp"
+#include "llrt.hpp"
 #include "llrt/hal.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/xy_pair.h>
+#include "watcher_device_reader.hpp"
 
 using namespace tt::tt_metal;
 using std::string;
@@ -75,13 +79,13 @@ static uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) 
 
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
 static CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtual_coord) {
-    if (tt::Cluster::instance().is_worker_core(virtual_coord, device_id)) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
         return CoreType::WORKER;
-    } else if (tt::Cluster::instance().is_ethernet_core(virtual_coord, device_id)) {
+    } else if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
         return CoreType::ETH;
     }
 
-    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     CoreType core_type =
         soc_desc.translate_coord_to(virtual_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
     if (core_type == CoreType::TENSIX) {
@@ -92,7 +96,7 @@ static CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord
 
 // Helper function to convert noc coord -> virtual coord. TODO: Remove this once we fix code types.
 static CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord) {
-    auto grid_size = tt::Cluster::instance().get_soc_desc(device_id).grid_size;
+    auto grid_size = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).grid_size;
     if (coord.x >= grid_size.x || coord.y >= grid_size.y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
@@ -103,7 +107,8 @@ static CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, 
         CoreCoord physical_coord = {
             hal_ref.noc_coordinate(noc_index, grid_size.x, coord.x),
             hal_ref.noc_coordinate(noc_index, grid_size.y, coord.y)};
-        return tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(device_id, physical_coord);
+        return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_physical_coordinates(
+            device_id, physical_coord);
     }
 }
 
@@ -181,12 +186,14 @@ WatcherDeviceReader::WatcherDeviceReader(
     kernel_names(kernel_names),
     set_watcher_exception_message(set_watcher_exception_message) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
-    if (tt::Cluster::instance().arch() == ARCH::WORMHOLE_B0 &&
+    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 &&
         tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
-        for (const CoreCoord& eth_core : tt::Cluster::instance().get_active_ethernet_cores(device_id)) {
-            CoreCoord virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-                device_id, eth_core, CoreType::ETH);
+        for (const CoreCoord& eth_core :
+             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+            CoreCoord virtual_core =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                    device_id, eth_core, CoreType::ETH);
             read_data = tt::llrt::read_hex_vec_from_core(
                 device_id,
                 virtual_core,
@@ -199,12 +206,14 @@ WatcherDeviceReader::WatcherDeviceReader(
 
 WatcherDeviceReader::~WatcherDeviceReader() {
     // On close, read out eth link retraining register so that we can see if retraining has occurred.
-    if (tt::Cluster::instance().arch() == ARCH::WORMHOLE_B0 &&
+    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 &&
         tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
-        for (const CoreCoord& eth_core : tt::Cluster::instance().get_active_ethernet_cores(device_id)) {
-            CoreCoord virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-                device_id, eth_core, CoreType::ETH);
+        for (const CoreCoord& eth_core :
+             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
+            CoreCoord virtual_core =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                    device_id, eth_core, CoreType::ETH);
             read_data = tt::llrt::read_hex_vec_from_core(
                 device_id,
                 virtual_core,
@@ -247,15 +256,16 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
     // Ignore storage-only cores
     std::unordered_set<CoreCoord> storage_only_cores;
-    uint8_t num_hw_cqs = tt::tt_metal::dispatch_core_manager::instance().get_num_hw_cqs();
+    uint8_t num_hw_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
     DispatchCoreConfig dispatch_core_config =
-        tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_config();
+        tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     for (auto core_coord : tt::get_logical_storage_cores(device_id, num_hw_cqs, dispatch_core_config)) {
         storage_only_cores.insert(core_coord);
     }
 
     // Dump worker cores
-    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    CoreCoord grid_size =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreDescriptor logical_core = {{x, y}, CoreType::WORKER};
@@ -266,11 +276,13 @@ void WatcherDeviceReader::Dump(FILE* file) {
     }
 
     // Dump eth cores
-    for (const CoreCoord& eth_core : tt::Cluster::instance().get_active_ethernet_cores(device_id)) {
+    for (const CoreCoord& eth_core :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
         DumpCore(logical_core, true);
     }
-    for (const CoreCoord& eth_core : tt::Cluster::instance().get_inactive_ethernet_cores(device_id)) {
+    for (const CoreCoord& eth_core :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
         DumpCore(logical_core, false);
     }
@@ -360,8 +372,9 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     // Watcher only treats ethernet + worker cores.
     bool is_eth_core = (logical_core.type == CoreType::ETH);
     CoreDescriptor virtual_core;
-    virtual_core.coord = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-        device_id, logical_core.coord, logical_core.type);
+    virtual_core.coord =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            device_id, logical_core.coord, logical_core.type);
     virtual_core.type = logical_core.type;
 
     // Print device id, core coords (logical)
@@ -373,8 +386,9 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
         virtual_core.coord.x,
         virtual_core.coord.y);
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_phys_coords()) {
-        CoreCoord phys_core = tt::Cluster::instance().get_physical_coordinate_from_logical_coordinates(
-            device_id, logical_core.coord, logical_core.type, true);
+        CoreCoord phys_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_physical_coordinate_from_logical_coordinates(
+                device_id, logical_core.coord, logical_core.type, true);
         core_coord_str += fmt::format(" phys(x={:2},y={:2})", phys_core.x, phys_core.y);
     }
     string core_str = fmt::format("Device {} {} {}", device_id, core_type, core_coord_str);
@@ -452,7 +466,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
             f,
             "k_id:%d",
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]);
-        if (tt::Cluster::instance().arch() == ARCH::BLACKHOLE) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
             fprintf(f, "|%d", mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]);
         }
     } else {
@@ -790,7 +804,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
         } else {
             fprintf(f, "e");
         }
-        if (tt::Cluster::instance().arch() == ARCH::BLACKHOLE) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
             if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_ETH_DM1) {
                 fprintf(f, "E");
             } else {
@@ -808,7 +822,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
         DumpRunState(core, launch_msg, slave_sync->trisc1);
         DumpRunState(core, launch_msg, slave_sync->trisc2);
         fprintf(f, " ");
-    } else if (tt::Cluster::instance().arch() == ARCH::BLACKHOLE) {
+    } else if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
         fprintf(f, "smsg:");
         DumpRunState(core, launch_msg, slave_sync->dm1);
         fprintf(f, " ");

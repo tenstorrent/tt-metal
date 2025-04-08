@@ -5,6 +5,7 @@
 import torch
 import pytest
 import ttnn
+import random
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 from models.utility_functions import skip_for_blackhole
 
@@ -843,12 +844,16 @@ def test_unary_rsqrt_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_sigmoid_ttnn(input_shapes, device):
+@pytest.mark.parametrize(
+    "approx_mode",
+    (False, True),
+)
+def test_unary_sigmoid_ttnn(input_shapes, device, approx_mode):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    ttnn.sigmoid(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
+    ttnn.sigmoid(input_tensor, fast_and_approximate_mode=approx_mode, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.sigmoid(in_data)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
@@ -974,3 +979,36 @@ def test_unary_sqrt_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([64, 64])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_bitwise_not(input_shapes, device):
+    torch.manual_seed(213919)
+
+    # Generate a uniform range of values across the valid int32 range
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+    uniform_values = torch.linspace(-2147483648, 2147483647, num_elements, dtype=torch.int32)
+
+    corner_cases = torch.tensor([0, 1, -1, 2147483647, -2147483648], dtype=torch.int32)
+    in_data = torch.cat([uniform_values, corner_cases])
+
+    in_data = in_data[-num_elements:].reshape(input_shapes)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.bitwise_not(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.bitwise_not)
+    golden_tensor = golden_function(in_data)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+    assert pcc == 1

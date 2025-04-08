@@ -25,6 +25,7 @@
 #include "risc_attribs.h"
 #include "utils/utils.h"
 #include "debug/assert.h"
+#include "compile_time_args.h"
 #include "dev_msgs.h"
 #include "dataflow_api_common.h"
 #include "dataflow_api_addrgen.h"
@@ -149,20 +150,6 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
-
-// clang-format off
-/**
- * Returns the value of a constexpr argument from kernel_compile_time_args array provided during kernel creation using
- * CreateKernel calls.
- *
- * Return value: constexpr uint32_t
- *
- * | Argument              | Description                        | Type                  | Valid Range | Required |
- * |-----------------------|------------------------------------|-----------------------|-------------|----------|
- * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
- */
-// clang-format on
-#define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
 
 // clang-format off
 /**
@@ -358,12 +345,6 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
     // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
     // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
     uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
-#ifdef ARCH_GRAYSKULL
-    // The following test slows down by 5% when removing the barrier
-    // TODO(pgk) investigate GS arbiter WAR in compiler, is this fixing an issue there?
-    // models/experimental/stable_diffusion/tests/test_perf_unbatched_stable_diffusion.py::test_perf_bare_metal
-    volatile uint32_t local_mem_barrier = pages_acked;
-#endif
     uint16_t free_space_pages_wrap = get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
     return num_pages <= static_cast<int32_t>(free_space_pages_wrap);
 }
@@ -397,12 +378,6 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
         uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
-#ifdef ARCH_GRAYSKULL
-        // The following test slows down by 5% when removing the barrier
-        // TODO(pgk) investigate GS arbiter WAR in compiler, is this fixing an issue there?
-        // models/experimental/stable_diffusion/tests/test_perf_unbatched_stable_diffusion.py::test_perf_bare_metal
-        volatile uint32_t local_mem_barrier = pages_acked;
-#endif
         uint16_t free_space_pages_wrap =
             get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
         free_space_pages = (int32_t)free_space_pages_wrap;

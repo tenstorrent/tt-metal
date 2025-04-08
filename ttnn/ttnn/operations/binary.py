@@ -228,6 +228,9 @@ ttnn.attach_golden_function(ttnn.hypot, golden_function=_golden_function_hypot)
 def _golden_function_maximum(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if not torch.is_tensor(input_tensor_b):
+        input_tensor_b = torch.full(input_tensor_a.shape, input_tensor_b)
+
     return torch.maximum(input_tensor_a, input_tensor_b)
 
 
@@ -353,10 +356,25 @@ def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, device, **
 ttnn.attach_golden_function(ttnn.remainder, golden_function=_golden_function_remainder)
 
 
-def _golden_function_fmod(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function_fmod(input_tensor_a, input_tensor_b, *args, device, **kwargs):
     import torch
 
-    return torch.fmod(input_tensor_a, input_tensor_b)
+    if not torch.is_tensor(input_tensor_b):
+        input_dtype = input_tensor_a.dtype
+        if input_dtype == torch.bfloat16:
+            input_tensor_a = input_tensor_a.float()
+        result = torch.nan_to_num(
+            torch.fmod(input_tensor_a, input_tensor_b),
+            nan=device.sfpu_nan(),
+            posinf=device.sfpu_inf(),
+            neginf=-device.sfpu_inf(),
+        )
+        if input_dtype == torch.bfloat16:
+            result = result.bfloat16()
+    else:
+        result = torch.fmod(input_tensor_a, input_tensor_b)
+
+    return result
 
 
 ttnn.attach_golden_function(ttnn.fmod, golden_function=_golden_function_fmod)

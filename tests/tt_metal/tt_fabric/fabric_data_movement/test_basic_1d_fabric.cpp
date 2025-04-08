@@ -2,15 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include <array>
+#include <cstddef>
+#include <map>
+#include <optional>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_edm_packet_header.hpp>
 #include "fabric_fixture.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_graph.hpp>
+#include "span.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "impl/context/metal_context.hpp"
+#include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -19,13 +43,15 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto* control_plane = tt::Cluster::instance().get_control_plane();
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
+    chip_id_t not_used_1;
+    chip_id_t not_used_2;
     // Find a device with a neighbour in the East direction
-    bool connection_found =
-        find_device_with_neighbor_in_direction(src_mesh_chip_id, dst_mesh_chip_id, RoutingDirection::E);
+    bool connection_found = find_device_with_neighbor_in_direction(
+        src_mesh_chip_id, dst_mesh_chip_id, not_used_1, not_used_2, RoutingDirection::E);
     if (!connection_found) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
@@ -34,15 +60,15 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     chip_id_t dst_physical_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(dst_mesh_chip_id);
 
     // get a port to connect to
-    std::vector<chan_id_t> eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
+    std::set<chan_id_t> eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
         src_mesh_chip_id.first, src_mesh_chip_id.second, RoutingDirection::E);
     if (eth_chans.size() == 0) {
         GTEST_SKIP() << "No active eth chans to connect to";
     }
 
-    auto edm_port = eth_chans[0];
-    CoreCoord edm_eth_core =
-        tt::Cluster::instance().get_virtual_eth_core_from_channel(src_physical_device_id, edm_port);
+    auto edm_port = *(eth_chans.begin());
+    CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+        src_physical_device_id, edm_port);
 
     auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
     auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
@@ -89,10 +115,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
         num_hops};
 
     // append the EDM connection rt args
-    static constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
-    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const auto edm_config = get_1d_fabric_config();
 
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
@@ -174,13 +197,15 @@ TEST_F(Fabric1DFixture, TestUnicastConnAPI) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto* control_plane = tt::Cluster::instance().get_control_plane();
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
+    chip_id_t not_used_1;
+    chip_id_t not_used_2;
     // Find a device with a neighbour in the East direction
-    bool connection_found =
-        find_device_with_neighbor_in_direction(src_mesh_chip_id, dst_mesh_chip_id, RoutingDirection::E);
+    bool connection_found = find_device_with_neighbor_in_direction(
+        src_mesh_chip_id, dst_mesh_chip_id, not_used_1, not_used_2, RoutingDirection::E);
     if (!connection_found) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
@@ -293,7 +318,7 @@ TEST_F(Fabric1DFixture, TestMCastConnAPI) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // use control plane to find a mesh with 3 devices
     auto user_meshes = control_plane->get_user_physical_mesh_ids();

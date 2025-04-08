@@ -25,6 +25,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include <tracy/Tracy.hpp>
+
 using namespace tt::tt_metal;
 
 namespace py = pybind11;

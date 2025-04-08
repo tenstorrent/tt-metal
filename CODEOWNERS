@@ -60,8 +60,8 @@ tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
 # fabric
-tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT
-tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT
+tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
+tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
 
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
@@ -118,7 +118,7 @@ ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @jvegaTT @tt-aho
 ttnn/cpp/ttnn/operations/pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/conv/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/sliding_window/ @tenstorrent/metalium-developers-convolutions
-ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @jaykru-tt @yugi957 @jvegaTT @llongTT @nardoTT
+ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @yugi957 @jvegaTT @llongTT @nardoTT
 ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
@@ -171,8 +171,18 @@ tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
 /models/*/**
 models/conv_on_device_utils*.py @tenstorrent/metalium-developers-convolutions
 functional_*/ @uaydonat @esmalTT
+models/common @yieldthought @mtairum @uaydonat
+models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
 models/demos @uaydonat
+models/**/bert*/ @TT-BrianLiu @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
+models/*/convnet_mnist/ @sjameelTT @uaydonat
+models/**/distilbert/ @tt-aho @uaydonat
+models/*/mnist/ @esmalTT @uaydonat
+models/*/roberta/ @sraizada-tt @uaydonat
+models/*/squeezebert/ @cfjchu @uaydonat
+models/demos/ttnn_falcon7b @cfjchu @uaydonat
+models/*/vgg/ @bbradelTT @uaydonat
 models/demos/wormhole @uaydonat
 models/demos/t3000 @uaydonat
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
@@ -194,17 +204,20 @@ models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt 
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/whisper @skhorasganiTT @uaydonat
 models/demos/grayskull @uaydonat
-models/demos/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
-models/demos/wormhole/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
+models/demos/yolov4 @dvartaniansTT @mbahnasTT @rdraskicTT @mbezuljTT @tenstorrent/metalium-developers-convolutions
 models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
+models/experimental/ @sminakov-tt @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
+models/experimental/grok @yieldthought @uaydonat
 models/demos/wormhole/vit @mbahnasTT @dvartaniansTT @uaydonat
 models/demos/vit  @mbahnasTT @dvartaniansTT @uaydonat
+models/experimental/*yolo*/ @mbahnasTT @uaydonat
 models/demos/segformer @mbahnasTT @uaydonat @tenstorrent/metalium-developers-convolutions
-models/perf/ @uaydonat
+models/perf/ @yieldthought @uaydonat
 models/perf/perf_report.py @yieldthought @uaydonat
-models/perf/benchmarking_utils.py @skhorasganiTT
+models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat
+models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-developers-convolutions
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
@@ -220,6 +233,8 @@ dockerfile @tenstorrent/metalium-developers-infra
 
 ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
 
-
 # tt-train
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt
+
+# tt-metal public apis
+tt_metal/api/ @ayerofieiev-tt @omilyutin-tt @afuller-TT @blozano-tt

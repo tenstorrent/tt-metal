@@ -4,11 +4,30 @@
 
 #pragma once
 
-#include "mesh_buffer.hpp"
-#include "mesh_trace_id.hpp"
-#include "mesh_command_queue.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_event.hpp"
+#include <stdint.h>
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+
+namespace tt {
+namespace tt_metal {
+class Program;
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
