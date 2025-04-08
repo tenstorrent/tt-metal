@@ -174,7 +174,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             uint32_t param1 = (uint32_t)params[1];
             TT_FATAL(
                 (int32_t)param0 == (int32_t)VecMode::C || (int32_t)param0 == (int32_t)VecMode::RC,
-                "Sigmoid accepts only vector mode C and RC");
+                "Invalid Vector mode value. Expected vector mode C (2) or RC (4) for sigmoid");
             op_init_and_name = {
                 fmt::format("sigmoid_tile_init<{}u>();", param1),
                 fmt::format("sigmoid_tile<{1}, {2}u>({0});", idst, (int32_t)param0, param1)};
@@ -395,9 +395,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
     } else if (name == "sigmoid") {
-        return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(4), static_cast<float>(false)});
+        return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(false)});
     } else if (name == "sigmoid_approx") {
-        return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(4), static_cast<float>(true)});
+        return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(true)});
     } else if (name == "sqrt") {
         return UnaryWithParam(UnaryOpType::SQRT);
     } else if (name == "exp") {
