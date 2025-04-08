@@ -23,7 +23,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import T
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
 
-from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 
 
@@ -106,6 +106,8 @@ def run_llama3_demo(
     start_pos,
 ):
     # Creat batch output file
+    benchmark_data = BenchmarkData()
+    profiler_step_name = "tg-llama-demo-e2e"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_directory = "models/demos/llama3/demo/output"
     os.makedirs(output_directory, exist_ok=True)
@@ -125,6 +127,7 @@ def run_llama3_demo(
     logger.info(f"Start profiler")
     profiler = BenchmarkProfiler()
     profiler.start("run")
+    profiler.start(profiler_step_name)
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
@@ -381,6 +384,7 @@ def run_llama3_demo(
     users_decoding = True  # reset to handle next batch
     total_decoding_time = 0  # Track total decoding time
     total_tokens_generated = 0  # Track total tokens generated
+    tokens_per_second_per_user_token127 = 0  # Track tokens per second per user at token 128
 
     all_outputs = []
 
@@ -453,6 +457,10 @@ def run_llama3_demo(
         logger.info(
             f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
         )
+
+        if is_ci_env and iteration == 127:
+            tokens_per_second_per_user_token127 = tokens_per_second_per_user
+
         tsu_threshold = 128 if layers == 1 else 28
         if not stress_test:
             assert tokens_per_second_per_user > tsu_threshold, "Throughput is less than 28 tokens per second per user"
@@ -471,7 +479,17 @@ def run_llama3_demo(
     ttnn.release_trace(mesh_device, trace_id)
 
     # Finish profiling at the end of all batches inference
+    profiler.end(profiler_step_name)
     profiler.end("run")
+
+    if is_ci_env:
+        benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
+
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"tg-llama-demo-e2e",
+            ml_model_name="tg-llama",
+        )
 
 
 # List of supported Parameters for demo.py
