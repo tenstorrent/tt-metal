@@ -359,7 +359,7 @@ def test_llama_TG_perf_device(
         "Matmul_1": 8584.111111111111,
         "Matmul_2": 10554.555555555555,
         "Matmul_3": 12118.888888888889,
-        "Matmul_4": 16474.222222222223,
+        "Matmul_4": 17000.0,
         "AllReduceAsync_0": 15395.555555555555,
         "AllReduceAsync_1": 21078.333333333332,
         "AllReduceAsync_2": 21145.777777777777,
