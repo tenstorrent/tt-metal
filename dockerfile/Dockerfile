@@ -285,6 +285,8 @@ RUN apt-get remove -y gdb || true \
 
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
+# libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
+# switching to libgl1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
@@ -292,7 +294,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nano \
     openssh-server \
     vim \
-    libgl1-mesa-glx \
+    libgl1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 #############################################################
