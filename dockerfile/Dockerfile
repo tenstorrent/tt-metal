@@ -216,6 +216,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Needed for tt-train to build
+RUN python3 -m pip install numpy
+
 RUN git config --global --add safe.directory '*'
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
