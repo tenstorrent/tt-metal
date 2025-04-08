@@ -384,7 +384,7 @@ Result conv2d_L1(
             out_channels,
             output_height,
             output_width,
-            weight_tensor.get_logical_shape().rank() == 4 ? weight_tensor.get_logical_shape()[3] : 1,  // weights_width
+            kernel_size[1],
             input_height,
             input_width,
             compute_grid_size,
@@ -432,12 +432,6 @@ Result conv2d_L1(
     if (!weight_is_on_device || conv_config.always_preprocess_weights) {
         // prepare weights in desired layout and move to device
 
-        // Override weight shape if 1D conv with 3D weight tensor
-        std::optional<ttnn::Shape> weight_shape_override = std::nullopt;
-        if (is_1d_conv(kernel_size[1], input_width) && weight_tensor.get_logical_shape().rank() == 3) {
-            weight_shape_override = ttnn::Shape({out_channels, in_channels / groups, kernel_size[0], 1});
-        }
-
         // TODO: Implement heuristic to decide if weights should be preprocessed on device.
         if (conv_config.preprocess_weights_on_device == false) {
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
@@ -453,8 +447,7 @@ Result conv2d_L1(
                 groups,
                 opt_conv_op_block_config.act_block_h_ntiles,
                 input_width,
-                true,
-                weight_shape_override);
+                true);
         } else {
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
                 weight_tensor,
@@ -469,8 +462,7 @@ Result conv2d_L1(
                 groups,
                 opt_conv_op_block_config.act_block_h_ntiles,
                 input_width,
-                true,
-                weight_shape_override);
+                true);
         }
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
