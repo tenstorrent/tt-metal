@@ -145,6 +145,8 @@ def test_conv_dram(
     fp32_accum,
     packer_l1_acc,
 ):
+    if device.core_grid.y == 7:
+        pytest.skip("Tests have been configured for N150.")
     config = {
         "act_block_h": act_block_h_override,
     }
