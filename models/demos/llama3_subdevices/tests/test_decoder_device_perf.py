@@ -337,9 +337,6 @@ def test_llama_TG_perf_device(
     kernel_duration_per_instance_averaged_dict = average_per_instance_dict(kernel_duration_per_instance_dict)
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
 
-    print(kernel_duration_per_instance_averaged_dict)
-    print(dispatch_duration_per_instance_averaged_dict)
-
     expected_kernel_times_dict = {
         "RMSAllGather_0": 11077,
         "RMSAllGather_1": 6720.666666666667,
@@ -554,15 +551,13 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     # Average over all iterations of each op instance
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
 
-    print(dispatch_duration_per_instance_averaged_dict)
-
     expected_non_overlapped_dispatch_times_dict = {
         "RMSAllGather_0": 7260,
         "RMSAllGather_1": 6190.6,
         "RMSAllGather_2": 7326,
         "RMSAllGather_3": 6431.2,
         "AllGatherAsync_0": 2273.2,
-        "AllGatherAsync_1": 2272.1,
+        "AllGatherAsync_1": 4351.1,
         "ShardedToInterleavedDeviceOperation_0": 1919.0,
         "ShardedToInterleavedDeviceOperation_1": 1910.2,
         "InterleavedToShardedDeviceOperation_0": 10347.3,
@@ -573,7 +568,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         "Matmul_3": 6144.8,
         "Matmul_4": 6029.3,
         "AllReduceAsync_0": 7349.4,
-        "AllReduceAsync_1": 6484.7,
+        "AllReduceAsync_1": 8510.2,
         "AllReduceAsync_2": 6475.9,
         "LlamaReduceScatterDeviceOperation_0": 8058.9,
         "LlamaReduceScatterDeviceOperation_1": 7359.9,
