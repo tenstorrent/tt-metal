@@ -61,7 +61,7 @@
 #include "multi_producer_single_consumer_queue.hpp"
 #include "profiler_types.hpp"
 #include "program_device_map.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
 #include "strong_type.hpp"
 #include "system_memory_manager.hpp"

@@ -7,7 +7,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <iostream>

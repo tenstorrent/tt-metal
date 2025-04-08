@@ -30,7 +30,7 @@
 #include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "llrt/hal.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include "system_memory_manager.hpp"

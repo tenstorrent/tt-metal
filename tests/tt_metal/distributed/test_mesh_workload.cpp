@@ -42,7 +42,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/semaphore.hpp>
 #include "span.hpp"

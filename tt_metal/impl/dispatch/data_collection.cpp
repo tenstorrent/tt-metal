@@ -21,7 +21,7 @@
 
 #include "assert.hpp"
 #include "dev_msgs.h"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include "utils.hpp"
 

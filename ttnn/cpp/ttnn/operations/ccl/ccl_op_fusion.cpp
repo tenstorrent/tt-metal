@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 using namespace tt::tt_metal;

@@ -36,7 +36,7 @@
 #include "llrt.hpp"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include "test_common.hpp"

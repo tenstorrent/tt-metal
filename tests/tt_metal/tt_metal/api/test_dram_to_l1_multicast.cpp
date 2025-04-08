@@ -23,7 +23,7 @@
 #include "dispatch_fixture.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "umd/device/types/arch.h"

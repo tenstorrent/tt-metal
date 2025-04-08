@@ -10,7 +10,7 @@
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "program_with_kernel_created_from_string_fixture.hpp"
 

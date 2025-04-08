@@ -21,7 +21,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
 #include "rtoptions.hpp"
 #include "test_common.hpp"

@@ -22,7 +22,7 @@
 #include "device.hpp"
 #include "device_utils.hpp"
 #include "host_utils.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "vector_aligned.hpp"

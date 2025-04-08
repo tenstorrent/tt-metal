@@ -9,7 +9,7 @@
 
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>

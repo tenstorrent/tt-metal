@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 
 namespace ttnn {
 namespace experimental {
