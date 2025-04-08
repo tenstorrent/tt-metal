@@ -365,7 +365,7 @@ class TT_CCL:
         return ag_persistent_buffers
 
     def line_all_reduce(
-        self, input_tensor_mesh, cluster_axis, num_links, memory_config, lm_head=False, buffer_key=None
+        self, input_tensor_mesh, cluster_axis, num_links, memory_config, dtype=None, lm_head=False, buffer_key=None
     ):
         if self.mode == "decode":
             if lm_head:
@@ -383,6 +383,7 @@ class TT_CCL:
                 ],
                 num_links=num_links,
                 memory_config=memory_config,
+                dtype=dtype,
                 topology=ttnn.Topology.Linear,
                 subdevice_id=self.worker_sub_device_id,
             )

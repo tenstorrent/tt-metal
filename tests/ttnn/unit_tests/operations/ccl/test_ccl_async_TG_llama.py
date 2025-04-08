@@ -199,24 +199,18 @@ def test_all_gather_tg_llama(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
+    "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set, input_dtype, output_dtype",
     [
-        ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
-        ([1, 1, 32, 16 * 1024], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM head all reduce
+        ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS, ttnn.bfloat8_b, None),  # FF2/DO all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS, ttnn.bfloat8_b, ttnn.bfloat16),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS, ttnn.bfloat8_b, None),  # FF1 all reduce
+        ([1, 1, 32, 16 * 1024], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS, ttnn.bfloat8_b, None),  # LM head all reduce
     ],
     ids=[
         "ff2",
         "qkv",
         "ff1",
         "lm_head",
-    ],
-)
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
@@ -244,6 +238,7 @@ def test_all_reduce_tg_llama(
     output_shape,
     cluster_axis,
     input_dtype,
+    output_dtype,
     num_links,
     input_num_cores,
     input_core_range_set,
@@ -269,6 +264,7 @@ def test_all_reduce_tg_llama(
         input_core_range_set,
         output_num_cores,
         output_core_range_set,
+        output_dtype=output_dtype,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         enable_async=enable_async,
