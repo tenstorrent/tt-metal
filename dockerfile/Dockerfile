@@ -216,15 +216,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /tmp/iwyu \
-    && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
-    && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
-    && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
-    && cmake --build /tmp/iwyu/build --parallel \
-    && cmake --install /tmp/iwyu/build \
-    && rm -rf /tmp/iwyu
-
-
 RUN git config --global --add safe.directory '*'
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
@@ -267,6 +258,15 @@ RUN chmod -R 777 $VIRTUAL_ENV
 #############################################################
 
 FROM ci-test AS dev
+
+# IWYU could be useful to developers
+RUN mkdir -p /tmp/iwyu \
+    && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
+    && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
+    && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+    && cmake --build /tmp/iwyu/build --parallel \
+    && cmake --install /tmp/iwyu/build \
+    && rm -rf /tmp/iwyu
 
 # Need this to build GDB
 RUN apt-get -y update \
