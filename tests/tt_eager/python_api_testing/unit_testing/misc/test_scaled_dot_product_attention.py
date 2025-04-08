@@ -526,11 +526,6 @@ def test_sdpa_chunked(
             use_high_precision_compute,
         )
 
-    # Print number of program cache entries
-    assert device.num_program_cache_entries() == 1, "Program cache should only have 1 entry but has {}".format(
-        device.num_program_cache_entries()
-    )
-
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
@@ -583,11 +578,6 @@ def test_sdpa_chunked_iterate_batch(
             use_high_precision_compute,
             grid_size=(1, 1),
         )
-
-    # Print number of program cache entries
-    assert device.num_program_cache_entries() == 1, "Program cache should only have 1 entry but has {}".format(
-        device.num_program_cache_entries()
-    )
 
 
 def run_test_joint_sdpa(

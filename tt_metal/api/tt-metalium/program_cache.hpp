@@ -42,7 +42,7 @@ struct ProgramCache {
     CachedProgramFactory& get(uint64_t program_hash) { return this->cache_.at(program_hash); }
 
     void insert(uint64_t program_hash, CachedProgramFactory&& program) {
-        this->cache_.insert({program_hash, std::move(program)});
+        this->cache_.insert_or_assign(program_hash, std::move(program));
     }
 
     void enable() { is_enabled_ = true; }

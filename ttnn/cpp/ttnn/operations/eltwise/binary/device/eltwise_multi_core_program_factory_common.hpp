@@ -162,7 +162,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     std::vector<std::vector<uint32_t>> eltwise_binary_args;
     std::vector<std::vector<uint32_t>> unary_writer_args;
     if constexpr (initialize_args) {
-        binary_reader_args = {cores.size(), std::vector<uint32_t>(7)};
+        binary_reader_args = {cores.size(), std::vector<uint32_t>(8)};
         eltwise_binary_args = {cores.size(), std::vector<uint32_t>(2)};
         if (block_or_width_sharded and not out_sharded) {
             unary_writer_args = {cores.size(), std::vector<uint32_t>(7)};

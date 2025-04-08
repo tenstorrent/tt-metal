@@ -245,6 +245,17 @@ std::vector<uint32_t> &Kernel::runtime_args(const CoreCoord &logical_core) {
     return this->core_to_runtime_args_[logical_core.x][logical_core.y];
 }
 
+const std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) const {
+    // TODO (abhullar): Should this check only be enabled in debug mode?
+    TT_FATAL(
+        logical_core.x < this->core_to_runtime_args_.size() &&
+            logical_core.y < this->core_to_runtime_args_[logical_core.x].size(),
+        "Cannot get runtime args for kernel {} that is not placed on core {}",
+        this->name(),
+        logical_core.str());
+    return this->core_to_runtime_args_[logical_core.x][logical_core.y];
+}
+
 RuntimeArgsData &Kernel::runtime_args_data(const CoreCoord &logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL(
@@ -256,11 +267,19 @@ RuntimeArgsData &Kernel::runtime_args_data(const CoreCoord &logical_core) {
     return this->core_to_runtime_args_data_[logical_core.x][logical_core.y];
 }
 
+const std::vector<std::vector<std::vector<uint32_t>>>& Kernel::runtime_args() const {
+    return this->core_to_runtime_args_;
+}
+
 std::vector<std::vector<std::vector<uint32_t>>> &Kernel::runtime_args() { return this->core_to_runtime_args_; }
 
 std::vector<std::vector<RuntimeArgsData>> &Kernel::runtime_args_data() { return this->core_to_runtime_args_data_; }
 
+const std::vector<uint32_t>& Kernel::common_runtime_args() const { return this->common_runtime_args_; }
+
 std::vector<uint32_t> &Kernel::common_runtime_args() { return this->common_runtime_args_; }
+
+const RuntimeArgsData& Kernel::common_runtime_args_data() const { return this->common_runtime_args_data_; }
 
 RuntimeArgsData &Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 

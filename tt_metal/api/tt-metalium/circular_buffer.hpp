@@ -72,6 +72,10 @@ public:
 
     DeviceAddr config_address() const;
 
+    const experimental::GlobalCircularBuffer* get_shadow_global_circular_buffer() const {
+        return shadow_global_circular_buffer_;
+    }
+
 private:
     bool uses_buffer_index(uint32_t buffer_index) const;
 

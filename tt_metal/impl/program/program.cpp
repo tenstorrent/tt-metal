@@ -80,6 +80,7 @@
 #include <umd/device/types/xy_pair.h>
 #include "util.hpp"
 #include "utils.hpp"
+#include "tt_stl/overloaded.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -226,49 +227,52 @@ class Program_ {
     CommandQueue* get_last_used_command_queue() const;
     void populate_dispatch_data(IDevice* device);
 
-   private:
-       CommandQueue* last_used_command_queue_for_testing = nullptr;
+    size_t calculate_hash() const;
+    void copy_runtime_args_from(const Program_& other);
 
-       // Buffers temporarily owned by the program
-       std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
+private:
+    CommandQueue* last_used_command_queue_for_testing = nullptr;
 
-       // The buffer that holds the kernel/binaries/etc for this program
-       std::unordered_map<chip_id_t, std::shared_ptr<Buffer>> kernels_buffer_;
-       ProgramTransferInfo program_transfer_info;
+    // Buffers temporarily owned by the program
+    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
 
-       bool finalized_;
-       // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
-       // the same device
-       std::optional<uint64_t> cached_device_hash_;
+    // The buffer that holds the kernel/binaries/etc for this program
+    std::unordered_map<chip_id_t, std::shared_ptr<Buffer>> kernels_buffer_;
+    ProgramTransferInfo program_transfer_info;
 
-       // TODO: Should map based on the hash of the configured sub-devices
-       // This way we can cache it agnostic of the device
-       std::unordered_map<chip_id_t, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
+    bool finalized_;
+    // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
+    // the same device
+    std::optional<uint64_t> cached_device_hash_;
 
-       struct CircularBufferAllocator {
-           CircularBufferAllocator(const CoreRange& core_range_) : core_range(core_range_) {}
+    // TODO: Should map based on the hash of the configured sub-devices
+    // This way we can cache it agnostic of the device
+    std::unordered_map<chip_id_t, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
 
-           // Circular buffers are created and allocated at core range granularity
-           CoreRange core_range;
+    struct CircularBufferAllocator {
+        CircularBufferAllocator(const CoreRange& core_range_) : core_range(core_range_) {}
 
-           // Holds vector of addresses where circular buffers are allocated [start, end)
-           // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning
-           // multiple cores must share the same address To enable this, circular buffer address is the maximum address
-           // amongst all of its target cores This vector is sorted from lower to higher address spaces
-           std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
+        // Circular buffers are created and allocated at core range granularity
+        CoreRange core_range;
 
-           // Returns address for next circular buffer
-           // Circular buffers are placed sequentially on a core so the next available address gets appended to the last
-           // L1 region
-           uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
+        // Holds vector of addresses where circular buffers are allocated [start, end)
+        // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning
+        // multiple cores must share the same address To enable this, circular buffer address is the maximum address
+        // amongst all of its target cores This vector is sorted from lower to higher address spaces
+        std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
 
-           // If address is the end of the last L1 region, the last region is extended by size bytes,
-           //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
-           void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
+        // Returns address for next circular buffer
+        // Circular buffers are placed sequentially on a core so the next available address gets appended to the last
+        // L1 region
+        uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
 
-           // Reset when circular buffer allocation is invalidated
-           void reset_available_addresses() { this->l1_regions.clear(); }
-       };
+        // If address is the end of the last L1 region, the last region is extended by size bytes,
+        //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
+        void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
+
+        // Reset when circular buffer allocation is invalidated
+        void reset_available_addresses() { this->l1_regions.clear(); }
+    };
 
     uint64_t id; // Need to make non-const due to move constructor
     uint64_t runtime_id;
@@ -1698,6 +1702,199 @@ std::vector<uint32_t> &Program::get_program_config_sizes() const noexcept { retu
 
 std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_program_command_sequences() noexcept {
     return pimpl_->cached_program_command_sequences_;
+}
+
+size_t Program::calculate_hash() const { return pimpl_->calculate_hash(); }
+
+void Program::copy_runtime_args_from(const Program& other) { pimpl_->copy_runtime_args_from(*other.pimpl_); }
+
+size_t detail::Program_::calculate_hash() const {
+    auto hash_combine = [](size_t seed, size_t value) -> size_t {
+        return seed ^ (value + 0x9e3779b9 + (seed << 6) + (seed >> 2));
+    };
+
+    auto hash_kernel = [&](const std::shared_ptr<Kernel>& kernel) -> size_t {
+        size_t hash = std::hash<std::string>()(kernel->kernel_source().source_);
+        hash = hash_combine(hash, std::hash<CoreRangeSet>()(kernel->core_range_set()));
+        auto defines = kernel->defines();
+        hash = hash_combine(hash, defines.size());
+        for (const auto& [key, value] : defines) {
+            hash = hash_combine(hash, std::hash<std::string>()(key));
+            hash = hash_combine(hash, std::hash<std::string>()(value));
+        }
+        hash = hash_combine(hash, kernel->common_runtime_args().size());
+        auto cores = corerange_to_cores(kernel->core_range_set());
+        for (const auto& core : cores) {
+            hash = hash_combine(hash, kernel->runtime_args(core).size());
+        }
+        auto config = kernel->config();
+        auto config_hash = std::visit(
+            tt::stl::overloaded{
+                [&](const tt::tt_metal::DataMovementConfig& config) {
+                    size_t hash = 0;
+                    hash = hash_combine(hash, static_cast<size_t>(config.processor));
+                    hash = hash_combine(hash, static_cast<size_t>(config.noc));
+                    hash = hash_combine(hash, static_cast<size_t>(config.noc_mode));
+                    hash = hash_combine(hash, config.compile_args.size());
+                    for (auto arg : config.compile_args) {
+                        hash = hash_combine(hash, arg);
+                    }
+                    hash = hash_combine(hash, config.defines.size());
+                    for (const auto& [key, value] : config.defines) {
+                        hash = hash_combine(hash, std::hash<std::string>()(key));
+                        hash = hash_combine(hash, std::hash<std::string>()(value));
+                    }
+                    hash = hash_combine(hash, static_cast<size_t>(config.opt_level));
+                    return hash;
+                },
+                [&](const tt::tt_metal::ComputeConfig& config) {
+                    size_t hash = 0;
+                    hash = hash_combine(hash, static_cast<size_t>(config.math_fidelity));
+                    hash = hash_combine(hash, config.fp32_dest_acc_en);
+                    hash = hash_combine(hash, config.dst_full_sync_en);
+                    hash = hash_combine(hash, config.unpack_to_dest_mode.size());
+                    for (const auto& mode : config.unpack_to_dest_mode) {
+                        hash = hash_combine(hash, static_cast<size_t>(mode));
+                    }
+                    hash = hash_combine(hash, config.bfp8_pack_precise);
+                    hash = hash_combine(hash, config.math_approx_mode);
+                    hash = hash_combine(hash, config.compile_args.size());
+                    for (auto arg : config.compile_args) {
+                        hash = hash_combine(hash, arg);
+                    }
+                    hash = hash_combine(hash, config.defines.size());
+                    for (const auto& [key, value] : config.defines) {
+                        hash = hash_combine(hash, std::hash<std::string>()(key));
+                        hash = hash_combine(hash, std::hash<std::string>()(value));
+                    }
+                    hash = hash_combine(hash, static_cast<size_t>(config.opt_level));
+                    return hash;
+                },
+                [&](const tt::tt_metal::EthernetConfig& config) {
+                    size_t hash = 0;
+                    hash = hash_combine(hash, static_cast<size_t>(config.eth_mode));
+                    hash = hash_combine(hash, static_cast<size_t>(config.noc));
+                    hash = hash_combine(hash, static_cast<size_t>(config.processor));
+                    hash = hash_combine(hash, config.compile_args.size());
+                    for (auto arg : config.compile_args) {
+                        hash = hash_combine(hash, arg);
+                    }
+                    hash = hash_combine(hash, config.defines.size());
+                    for (const auto& [key, value] : config.defines) {
+                        hash = hash_combine(hash, std::hash<std::string>()(key));
+                        hash = hash_combine(hash, std::hash<std::string>()(value));
+                    }
+                    hash = hash_combine(hash, static_cast<size_t>(config.opt_level));
+                    return hash;
+                },
+            },
+            config);
+        hash = hash_combine(hash, config_hash);
+        return hash;
+    };
+
+    auto hash_circular_buffer = [&](const std::shared_ptr<CircularBuffer>& circular_buffer) -> size_t {
+        size_t hash = std::hash<CoreRangeSet>()(circular_buffer->core_ranges());
+        hash = hash_combine(hash, circular_buffer->globally_allocated());
+        auto& config = circular_buffer->config();
+        hash = hash_combine(hash, config.buffer_indices().size());
+        for (const auto& buffer_index : config.buffer_indices()) {
+            hash = hash_combine(hash, buffer_index);
+            hash =
+                hash_combine(hash, std::hash<std::optional<tt::DataFormat>>()(config.data_formats().at(buffer_index)));
+            hash = hash_combine(hash, std::hash<std::optional<uint32_t>>()(config.page_sizes().at(buffer_index)));
+            const auto& tile = config.tiles().at(buffer_index);
+            if (tile.has_value()) {
+                hash = hash_combine(hash, tile->get_width());
+                hash = hash_combine(hash, tile->get_height());
+                hash = hash_combine(hash, tile->get_transpose_of_faces());
+            } else {
+                hash = hash_combine(hash, 0);
+                hash = hash_combine(hash, 0);
+                hash = hash_combine(hash, 0);
+            }
+        }
+        hash = hash_combine(hash, config.local_buffer_indices().size());
+        for (const auto& buffer_index : config.local_buffer_indices()) {
+            hash = hash_combine(hash, buffer_index);
+        }
+        hash = hash_combine(hash, config.remote_buffer_indices().size());
+        for (const auto& buffer_index : config.remote_buffer_indices()) {
+            hash = hash_combine(hash, buffer_index);
+        }
+        hash = hash_combine(hash, config.dynamic_cb());
+        return hash;
+    };
+
+    auto hash_semaphore = [&](const Semaphore& semaphore) -> size_t {
+        size_t hash = semaphore.id();
+        hash = hash_combine(hash, static_cast<size_t>(semaphore.core_type()));
+        hash = hash_combine(hash, std::hash<CoreRangeSet>()(semaphore.core_range_set()));
+        hash = hash_combine(hash, semaphore.initial_value());
+        return hash;
+    };
+
+    size_t hash = kernels_.size();
+    for (const auto& kernels : kernels_) {
+        hash = hash_combine(hash, kernels.size());
+        for (const auto& [id, kernel] : kernels) {
+            hash = hash_combine(hash, id);
+            hash = hash_combine(hash, hash_kernel(kernel));
+        }
+    }
+    hash = hash_combine(hash, circular_buffers_.size());
+    for (const auto& circular_buffer : circular_buffers_) {
+        hash = hash_combine(hash, hash_circular_buffer(circular_buffer));
+    }
+    hash = hash_combine(hash, semaphores_.size());
+    for (const auto& semaphore : semaphores_) {
+        hash = hash_combine(hash, hash_semaphore(semaphore));
+    }
+    return hash;
+}
+
+void detail::Program_::copy_runtime_args_from(const Program_& other) {
+    auto copy_runtime_args = [](Kernel& kernel_to, const Kernel& kernel_from) {
+        auto cores = corerange_to_cores(kernel_from.core_range_set());
+        for (const auto& core : cores) {
+            kernel_to.set_runtime_args(core, kernel_from.runtime_args(core));
+        }
+        auto& common_runtime_args_data_to = kernel_to.common_runtime_args_data();
+        auto& common_runtime_args_data_from = kernel_from.common_runtime_args_data();
+        for (size_t i = 0; i < kernel_from.common_runtime_args().size(); ++i) {
+            common_runtime_args_data_to[i] = common_runtime_args_data_from[i];
+        }
+    };
+
+    for (size_t kernels_idx = 0; kernels_idx < kernels_.size(); ++kernels_idx) {
+        auto& kernels = kernels_[kernels_idx];
+        auto& other_kernels = other.kernels_.at(kernels_idx);
+        for (auto& [id, kernel] : kernels) {
+            auto& other_kernel = other_kernels.at(id);
+            copy_runtime_args(*kernel, *other_kernel);
+        }
+    }
+
+    bool should_invalidate_cb_allocation = false;
+    for (size_t circular_buffers_idx = 0; circular_buffers_idx < circular_buffers_.size(); ++circular_buffers_idx) {
+        auto& circular_buffer = circular_buffers_[circular_buffers_idx];
+        auto& other_circular_buffer = other.circular_buffers_.at(circular_buffers_idx);
+        if (!circular_buffer->globally_allocated()) {
+            should_invalidate_cb_allocation =
+                circular_buffer->config().total_size() != other_circular_buffer->config().total_size();
+        }
+        circular_buffer->config() = other_circular_buffer->config();
+        /*if (auto shadow_global_cb = other_circular_buffer->get_shadow_global_circular_buffer()) {
+            circular_buffer->set_global_circular_buffer(*shadow_global_cb);
+        }*/
+        if (other_circular_buffer->globally_allocated()) {
+            circular_buffer->assign_global_address();
+        }
+    }
+
+    if (should_invalidate_cb_allocation) {
+        invalidate_circular_buffer_allocation();
+    }
 }
 
 }  // namespace tt::tt_metal
