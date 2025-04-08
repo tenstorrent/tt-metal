@@ -125,7 +125,7 @@ jobs:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
     timeout-minutes: 30
-    runs-on: tt-beta-ubuntu-2204-xlarge
+    runs-on: tt-beta-ubuntu-2204-large
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
@@ -158,6 +158,9 @@ jobs:
 
     steps:
       - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
             echo "Redis password is missing. Did you forget 'secrets: inherit'?"
