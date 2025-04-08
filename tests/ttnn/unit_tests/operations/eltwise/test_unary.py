@@ -29,7 +29,7 @@ def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
-def run_unary_with_approx_mode_test(device, h, w, ttnn_function, vector_mode, approx_mode, pcc=0.9999):
+def run_unary_with_approx_mode_test(device, h, w, ttnn_function, approx_mode, pcc=0.9999):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -37,7 +37,7 @@ def run_unary_with_approx_mode_test(device, h, w, ttnn_function, vector_mode, ap
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor, vector_mode=vector_mode, fast_and_approximate_mode=approx_mode)
+    output_tensor = ttnn_function(input_tensor, fast_and_approximate_mode=approx_mode)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -255,11 +255,8 @@ def test_sinh(device, h, w):
 @pytest.mark.parametrize("h", [2048 * 128])
 @pytest.mark.parametrize("w", [32])
 @pytest.mark.parametrize("approx_mode", [True, False])
-@pytest.mark.parametrize("vector_mode", [4])
-def test_sigmoid(device, h, w, vector_mode, approx_mode):
-    run_unary_with_approx_mode_test(
-        device, h, w, ttnn.sigmoid, vector_mode=vector_mode, approx_mode=approx_mode, pcc=0.999
-    )
+def test_sigmoid(device, h, w, approx_mode):
+    run_unary_with_approx_mode_test(device, h, w, ttnn.sigmoid, approx_mode=approx_mode, pcc=0.999)
 
 
 @pytest.mark.parametrize("h", [64])
