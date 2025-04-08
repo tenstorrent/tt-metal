@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/slice_op.hpp"
+#include "device/padded_slice_op.hpp"
+#include "tt-metalium/logger.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/common/queue_id.hpp"
@@ -11,12 +12,12 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
-#include "slice.hpp"
+#include "padded_slice.hpp"
 
 namespace ttnn::operations::data_movement {
 
 template <typename T>
-ttnn::Tensor SliceOperation::invoke(
+ttnn::Tensor PaddedSliceOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const T> begins,
@@ -58,13 +59,13 @@ ttnn::Tensor SliceOperation::invoke(
     auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                             : memory_config_arg.value_or(input_tensor.memory_config());
 
-    auto ret_adjustment([&](const ttnn::Tensor& input_tensor) {
-        if (input_tensor.storage_type() == StorageType::DEVICE) {
-            auto tensor = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
+    auto ret_adjustment([&](const ttnn::Tensor& ret_input_tensor) {
+        if (ret_input_tensor.storage_type() == StorageType::DEVICE) {
+            auto tensor = ttnn::to_memory_config(ret_input_tensor, memory_config, std::nullopt);
             tensor = ttnn::to_layout(tensor, input_layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
             return tensor;
         }
-        return input_tensor;
+        return ret_input_tensor;
     });
 
     // No-op check
@@ -110,11 +111,13 @@ ttnn::Tensor SliceOperation::invoke(
          (!no_step || one_dimensional || input_tensor.is_sharded() || !handled_tile_alignment));
     if (rm_only) {
         if (!no_step) {
-            TT_FATAL(input.get_dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
+            TT_FATAL(
+                input.get_dtype() != DataType::BFLOAT8_B, "Strided padded_slice is not supported for BFLOAT8 tensors");
         }
         TT_FATAL(
             input.get_dtype() != DataType::UINT16,
-            "This slice requires an implicit Tile->RM conversion and that is not currently supported for uint16");
+            "This padded_slice requires an implicit Tile->RM conversion and that is not currently supported for "
+            "uint16");
         input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config, (IDevice*)nullptr);
         if (one_dimensional) {
             std::cout << "ONE D" << std::endl;
@@ -151,24 +154,37 @@ ttnn::Tensor SliceOperation::invoke(
 
     if (empty) {
         TT_FATAL(
-            input.storage_type() == StorageType::DEVICE, "Host tensor slice cannot return a scalar or empty tensor");
+            input.storage_type() == StorageType::DEVICE,
+            "Host tensor padded_slice cannot return a scalar or empty tensor");
         return ttnn::empty(
             actual_shape,
             input_tensor.dtype(),
             input_tensor.layout(),
-            input_tensor.mesh_device(),
+            input_tensor.device(),
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
 
     auto res =
         tt::tt_metal::operation::run(
-            SliceDeviceOperation{
+            PaddedSliceDeviceOperation{
                 ttnn::Shape(modified_begins), ttnn::Shape(padded_ends), ttnn::Shape(modified_step), memory_config},
             {input},
             {},
             {optional_output_tensor},
             queue_id)
             .at(0);
+
+    // If padded_slice should return a sharded tensor, then the op must created the sharded tensor in the requested
+    // memory config
+    if (res.is_sharded() && memory_config.is_sharded()) {
+        TT_ASSERT(
+            res.memory_config() == memory_config,
+            "Memory config must match. Got {}, expecteed {}",
+            res.memory_config(),
+            memory_config);
+        return res;
+    }
+
     res = ttnn::experimental::view(res, actual_shape, final_padded_shape);
 
     auto dim_needs_fill = [&input_shape, &actual_shape, &final_padded_shape](int i) {
@@ -178,12 +194,11 @@ ttnn::Tensor SliceOperation::invoke(
     if (pad_value.has_value() && (dim_needs_fill(-1) || dim_needs_fill(-2))) {
         res = ttnn::fill_implicit_tile_padding(res, pad_value.value());
     }
-
     return ret_adjustment(res);
 }
 
 template <typename T>
-ttnn::Tensor SliceOperation::invoke(
+ttnn::Tensor PaddedSliceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const T> begins,
     tt::stl::Span<const T> ends,
@@ -191,12 +206,12 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value) {
-    return SliceOperation::invoke<T>(
+    return PaddedSliceOperation::invoke<T>(
         ttnn::DefaultQueueId, input_tensor, begins, ends, step, memory_config_arg, optional_output_tensor, pad_value);
 }
 
 template <typename T, std::size_t N>
-ttnn::Tensor SliceOperation::invoke(
+ttnn::Tensor PaddedSliceOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::array<T, N>& output_tensor_start,
@@ -208,12 +223,12 @@ ttnn::Tensor SliceOperation::invoke(
     tt::stl::Span<const T> start(output_tensor_start.begin(), output_tensor_start.end());
     tt::stl::Span<const T> end(output_tensor_end.begin(), output_tensor_end.end());
     tt::stl::Span<const T> step_vec(step.begin(), step.end());
-    return SliceOperation::invoke<T>(
+    return PaddedSliceOperation::invoke<T>(
         queue_id, input_tensor, start, end, step_vec, memory_config_arg, optional_output_tensor, pad_value);
 }
 
 template <typename T, std::size_t N>
-ttnn::Tensor SliceOperation::invoke(
+ttnn::Tensor PaddedSliceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const std::array<T, N>& output_tensor_start,
     const std::array<T, N>& output_tensor_end,
@@ -221,7 +236,7 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value) {
-    return SliceOperation::invoke<T, N>(
+    return PaddedSliceOperation::invoke<T, N>(
         ttnn::DefaultQueueId,
         input_tensor,
         output_tensor_start,
@@ -232,7 +247,7 @@ ttnn::Tensor SliceOperation::invoke(
         pad_value);
 }
 
-template ttnn::Tensor SliceOperation::invoke<int>(
+template ttnn::Tensor PaddedSliceOperation::invoke<int>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int> begins,
@@ -242,7 +257,7 @@ template ttnn::Tensor SliceOperation::invoke<int>(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-template ttnn::Tensor SliceOperation::invoke<int>(
+template ttnn::Tensor PaddedSliceOperation::invoke<int>(
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int> begins,
     tt::stl::Span<const int> ends,
@@ -251,7 +266,7 @@ template ttnn::Tensor SliceOperation::invoke<int>(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-template ttnn::Tensor SliceOperation::invoke<uint32_t>(
+template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const uint32_t> begins,
@@ -261,7 +276,7 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-template ttnn::Tensor SliceOperation::invoke<uint32_t>(
+template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t>(
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const uint32_t> begins,
     tt::stl::Span<const uint32_t> ends,
@@ -270,7 +285,7 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
+template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 4>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::array<uint32_t, 4>& output_tensor_start,
@@ -280,7 +295,7 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
+template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 4>(
     const ttnn::Tensor& input_tensor,
     const std::array<uint32_t, 4>& output_tensor_start,
     const std::array<uint32_t, 4>& output_tensor_end,
@@ -289,7 +304,7 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 3>(
+template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 3>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::array<uint32_t, 3>& output_tensor_start,
@@ -299,7 +314,7 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t, 3>(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 3>(
+template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 3>(
     const ttnn::Tensor& input_tensor,
     const std::array<uint32_t, 3>& output_tensor_start,
     const std::array<uint32_t, 3>& output_tensor_end,
@@ -308,7 +323,7 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t, 3>(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 1>(
+template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 1>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::array<uint32_t, 1>& output_tensor_start,
@@ -318,7 +333,7 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t, 1>(
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 1>(
+template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t, 1>(
     const ttnn::Tensor& input_tensor,
     const std::array<uint32_t, 1>& output_tensor_start,
     const std::array<uint32_t, 1>& output_tensor_end,
