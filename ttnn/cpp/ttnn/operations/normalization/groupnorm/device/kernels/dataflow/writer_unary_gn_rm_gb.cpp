@@ -41,12 +41,12 @@ void kernel_main() {
     constexpr uint32_t block_w = get_compile_time_arg_val(22);
     constexpr uint32_t block_hw = get_compile_time_arg_val(23);
 
-#define stick_size_is_pow2 get_compile_time_arg_val(24) == 1
-#if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(25);
-#else
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(24) == 1;
+    DPRINT << get_compile_time_arg_val(24) << "-------------------" << ENDL();
+    if (stick_size_is_pow2) {
+        DPRINT << "---------------------" << ENDL();
+    }
     constexpr uint32_t page_size = get_compile_time_arg_val(25);
-#endif
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -139,13 +139,7 @@ void kernel_main() {
 
                 if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-#if (stick_size_is_pow2)
-                    const InterleavedPow2AddrGen<gamma_is_dram> gamma = {
-                        .bank_base_address = gamma_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-                    const InterleavedAddrGen<gamma_is_dram> gamma = {
-                        .bank_base_address = gamma_addr, .page_size = page_size};
-#endif
+                    auto gamma = get_interleaved_addr_gen<gamma_is_dram, page_size>(gamma_addr);
 
                     cb_reserve_back(cb_gamma, num_cols_tile_gamma_beta);
                     uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
@@ -163,13 +157,7 @@ void kernel_main() {
 
                 if constexpr (fuse_beta) {
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-#if (stick_size_is_pow2)
-                    const InterleavedPow2AddrGen<beta_is_dram> beta = {
-                        .bank_base_address = beta_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-                    const InterleavedAddrGen<beta_is_dram> beta = {
-                        .bank_base_address = beta_addr, .page_size = page_size};
-#endif
+                    auto beta = get_interleaved_addr_gen<beta_is_dram, page_size>(beta_addr);
 
                     uint32_t l1_write_addr_beta = get_write_ptr(cb_beta);
                     cb_reserve_back(cb_beta, num_cols_tile_gamma_beta);
