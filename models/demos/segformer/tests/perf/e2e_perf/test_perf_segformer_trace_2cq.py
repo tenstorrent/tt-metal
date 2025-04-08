@@ -57,3 +57,11 @@ def test_perf_segformer_trace_2cq(
         expected_inference_time=expected_inference_time,
         comments="trace_2cq",
     )
+
+    compile_time = segformer_t2cq.jit_time - segformer_t2cq.inference_time
+    assert (
+        compile_time < expected_compile_time
+    ), f"Segformer compile time {compile_time} is too slow, expected {expected_compile_time}"
+    assert (
+        segformer_t2cq.inference_time < expected_inference_time
+    ), f"Segformer inference time {segformer_t2cq.inference_time} is too slow, expected {expected_inference_time}"
