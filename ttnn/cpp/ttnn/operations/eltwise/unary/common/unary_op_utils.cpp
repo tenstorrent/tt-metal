@@ -258,6 +258,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "unary_max_tile_init();",
                 fmt::format("unary_max_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
+        case UnaryOpType::MINIMUM:
+            op_init_and_name = {
+                "unary_min_tile_init();",
+                fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            break;
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
     return op_init_and_name;

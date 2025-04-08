@@ -6,7 +6,7 @@
 
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
-#include "ckernel_sfpu_unary_max.h"
+#include "ckernel_sfpu_unary_max_min.h"
 
 namespace ckernel {
 
@@ -21,7 +21,19 @@ inline void llk_math_eltwise_unary_sfpu_unary_max_init() {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_max(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_unary_max<APPROXIMATE>, dst_index, vector_mode, param0);
+        ckernel::sfpu::calculate_unary_max_min<true, APPROXIMATE>, dst_index, vector_mode, param0);
+}
+
+// Unary minimum
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_min_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unary_min, APPROXIMATE>();
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_min(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_unary_max_min<false, APPROXIMATE>, dst_index, vector_mode, param0);
 }
 
 }  // namespace ckernel
