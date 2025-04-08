@@ -31,7 +31,7 @@
 #include "eth_l1_address_map.h"
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>

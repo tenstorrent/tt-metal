@@ -64,12 +64,13 @@ jobs:
     name: 🤖 Clang Tidy
     needs: [ build-docker-image, determine-scan-type ]
     if: ${{ needs.determine-scan-type.outputs.do-scan == 'true' }}
-    runs-on:
-      - build
-      - in-service
+    runs-on: tt-beta-ubuntu-2204-xlarge
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
       image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
       env:
+        CCACHE_REMOTE_STORAGE: "redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+        CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
         CARGO_HOME: /tmp/.cargo
         TT_FROM_PRECOMPILED_DIR: /work
@@ -87,16 +88,16 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Verify ccache availability
+      - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          if [ ! -d "/mnt/MLPerf/ccache" ]; then
-            echo "::error title=ccache-mlperf-not-mounted::NFS drive is not mounted; build machine not properly provisioned."
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          if [ ! -d "$HOME/.ccache" ]; then
-            echo "::error title=ccache-not-provisioned::Ccache is not properly provisioned."
-            exit 1
-          fi
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: Create ccache tmpdir
         run: |

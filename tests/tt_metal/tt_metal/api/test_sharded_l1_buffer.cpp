@@ -23,15 +23,17 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include <algorithm>
 #include "umd/device/types/xy_pair.h"
 
 using namespace tt::tt_metal;
 
 namespace basic_tests::l1::sharded {
 
+template <class T>
 struct L1Config {
-    uint32_t num_cores_height = 2;
     uint32_t num_cores_width = 1;
+    uint32_t num_cores_height = 2;
     uint32_t num_tiles_per_core_height = 2;
     uint32_t num_tiles_per_core_width = 2;
     uint32_t element_size = 2;
@@ -55,6 +57,19 @@ struct L1Config {
             {1 * num_cores_height * num_tiles_per_core_height * num_cores_height,
              num_tiles_per_core_width * num_cores_width});
     }
+
+    L1Config() = delete;
+    L1Config(T& testObj) {
+        // if the test is running on a simulator, we need to make sure that the core grid is not larger than the
+        // simulator's core grid. On HW this is unlikely to be so, but technically still a necessary bounds check
+        std::pair<unsigned, unsigned> min_dims = testObj.worker_grid_minimum_dims();
+        num_cores_width = std::min(min_dims.first, num_cores_width);
+        num_cores_height = std::min(min_dims.second, num_cores_height);
+
+        // if core grid changes, we must recalculate the values that depend on it
+        size_bytes = 1 * num_cores_height * num_tiles_per_core_height * tt::constants::TILE_HEIGHT * num_cores_width *
+                     num_tiles_per_core_width * tt::constants::TILE_WIDTH * element_size;
+    }
 };
 
 namespace local_test_functions {
@@ -63,8 +78,9 @@ namespace local_test_functions {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
+template <typename T>
 std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
-    IDevice* device, const L1Config& test_config) {
+    IDevice* device, const L1Config<T>& test_config) {
     auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
                                             .device = device,
                                             .size = test_config.size_bytes,
@@ -88,7 +104,8 @@ std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
     return std::move(std::pair(buffer, input));
 }
 
-bool l1_buffer_read(IDevice* device, const L1Config& test_config, const auto& write_info) {
+template <typename T>
+bool l1_buffer_read(IDevice* device, const L1Config<T>& test_config, const auto& write_info) {
     auto buffer = write_info.first;
     auto input = write_info.second;
     auto output = std::vector<uint32_t>(input.size());
@@ -114,7 +131,8 @@ bool l1_buffer_read(IDevice* device, const L1Config& test_config, const auto& wr
     return pass;
 }
 
-bool l1_buffer_read_write(IDevice* device, const L1Config& test_config) {
+template <typename T>
+bool l1_buffer_read_write(IDevice* device, const L1Config<T>& test_config) {
     auto write_info = l1_buffer_write_wait(device, test_config);
     return l1_buffer_read(device, test_config, write_info);
 }
@@ -123,7 +141,7 @@ bool l1_buffer_read_write(IDevice* device, const L1Config& test_config) {
 
 TEST_F(DeviceFixture, TestInterleavedReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        L1Config test_config;
+        L1Config test_config(*this);
         test_config.buffer_layout = TensorMemoryLayout::INTERLEAVED;
         test_config.sharded = false;
         EXPECT_TRUE(local_test_functions::l1_buffer_read_write(this->devices_.at(id), test_config));
@@ -132,14 +150,14 @@ TEST_F(DeviceFixture, TestInterleavedReadWrite) {
 
 TEST_F(DeviceFixture, TestHeightShardReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        L1Config test_config;
+        L1Config test_config(*this);
         EXPECT_TRUE(local_test_functions::l1_buffer_read_write(this->devices_.at(id), test_config));
     }
 }
 
 TEST_F(DeviceFixtureWithL1Small, TestHeightShardReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        L1Config test_config;
+        L1Config test_config(*this);
         test_config.buffer_type = BufferType::L1;
         auto l1_write_info = local_test_functions::l1_buffer_write_wait(this->devices_.at(id), test_config);
         test_config.buffer_type = BufferType::L1_SMALL;
@@ -152,7 +170,7 @@ TEST_F(DeviceFixtureWithL1Small, TestHeightShardReadWrite) {
 
 TEST_F(DeviceFixture, TestWidthShardReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        L1Config test_config;
+        L1Config test_config(*this);
         test_config.buffer_layout = TensorMemoryLayout::WIDTH_SHARDED;
         EXPECT_TRUE(local_test_functions::l1_buffer_read_write(this->devices_.at(id), test_config));
     }
@@ -160,7 +178,7 @@ TEST_F(DeviceFixture, TestWidthShardReadWrite) {
 
 TEST_F(DeviceFixtureWithL1Small, TestWidthShardReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        L1Config test_config;
+        L1Config test_config(*this);
         test_config.buffer_layout = TensorMemoryLayout::WIDTH_SHARDED;
         test_config.buffer_type = BufferType::L1;
         auto l1_write_info = local_test_functions::l1_buffer_write_wait(this->devices_.at(id), test_config);
@@ -173,6 +191,10 @@ TEST_F(DeviceFixtureWithL1Small, TestWidthShardReadWrite) {
 }
 
 TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_simulator_enabled()) {
+        GTEST_SKIP() << fmt::format("Skipping {} because it is not supported in simulator", __func__);
+    }
+
     std::vector<CoreCoord> cores = {CoreCoord(1, 0), CoreCoord(1, 3), CoreCoord(1, 4), CoreCoord(6, 6),
                                     CoreCoord(6, 5), CoreCoord(6, 4), CoreCoord(6, 3), CoreCoord(6, 2),
                                     CoreCoord(6, 1), CoreCoord(6, 0), CoreCoord(5, 0), CoreCoord(5, 1),

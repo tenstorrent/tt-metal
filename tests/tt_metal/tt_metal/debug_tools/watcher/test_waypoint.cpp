@@ -24,7 +24,7 @@
 #include "debug_tools_test_utils.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include "impl/context/metal_context.hpp"
 #include "umd/device/types/arch.h"
