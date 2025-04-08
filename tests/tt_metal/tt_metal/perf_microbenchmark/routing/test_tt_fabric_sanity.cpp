@@ -6,6 +6,7 @@
 #include <fmt/base.h>
 #include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
+#include <tt_stl/span.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -490,7 +491,7 @@ typedef struct test_board {
         return control_plane->get_fabric_route(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_chan_id);
     }
 
-    inline std::vector<chip_id_t> get_intra_chip_neighbors(
+    inline stl::Span<const chip_id_t> get_intra_chip_neighbors(
         mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) {
         return control_plane->get_intra_chip_neighbors(src_mesh_id, src_chip_id, routing_direction);
     }
@@ -806,7 +807,7 @@ typedef struct test_device {
         }
     }
 
-    inline std::vector<chip_id_t> get_intra_chip_neighbors(RoutingDirection routing_direction) {
+    inline stl::Span<const chip_id_t> get_intra_chip_neighbors(RoutingDirection routing_direction) {
         return board_handle->get_intra_chip_neighbors(mesh_id, logical_chip_id, routing_direction);
     }
 

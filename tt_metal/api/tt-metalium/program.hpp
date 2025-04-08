@@ -71,6 +71,7 @@ std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHand
 class Internal_;
 }  // namespace detail
 
+
 constexpr auto PROGRAM_DISPATCH_CLASS_MAX = 3;
 
 // Contains the program's worker memory map

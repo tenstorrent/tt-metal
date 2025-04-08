@@ -47,12 +47,12 @@ run-name: ${{ inputs.description }}
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.build-with-tracy }}
       build-wheel: true
       version: 22.04
-    secrets: inherit
   tg-quick:
     if: ${{ inputs.tg-quick }}
     needs: build-artifact
