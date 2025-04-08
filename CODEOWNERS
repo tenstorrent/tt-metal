@@ -237,4 +237,4 @@ ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt
 
 # tt-metal public apis
-tt_metal/api/ @ayerofieiev-tt @omilyutin-tt @afuller-TT @blozano-tt
+tt_metal/api/ @tenstorrent/metalium-api-owners
