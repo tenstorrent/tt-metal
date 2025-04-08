@@ -46,7 +46,9 @@ class Generator:
         if isinstance(self.model, List):
             self.model = self.model[0]
 
-    def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
+    def prefill_forward_text(
+        self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, enable_trace=False
+    ):
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
         kv_cache = kv_cache[0]
@@ -59,7 +61,7 @@ class Generator:
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
 
-        # only run 1 user prefill for now
+            # only run 1 user prefill for now
         for user_id in range(1):
             logger.info(f"Prefilling User {user_id + 1}")
             seq_len = prompt_lens[user_id]
@@ -71,20 +73,21 @@ class Generator:
             )
             if page_table is not None:
                 page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, seq_len)
-            try:
-                logits = self.prefill_forward_single_user_text(
-                    prefill_ids,
-                    page_table=page_table_user if page_table is not None else None,
-                    user_id=user_id,
-                    last_token_idx=last_token_idx,
-                    kv_cache=kv_cache,
-                )
-            except Exception as e:
-                logger.error(f"Error prefilling user {user_id}: {e}")
+            prefill_kwargs = {
+                "tokens": prefill_ids,
+                "page_table": page_table_user if page_table is not None else None,
+                "kv_cache": kv_cache,
+                "user_id": user_id,
+                "last_token_idx": last_token_idx,
+            }
+            if enable_trace:
+                tt_logits = self._easy_trace_prefill(**prefill_kwargs)
+            else:
+                tt_logits = self.prefill_forward_single_user_text(**prefill_kwargs)
 
         for user_id in range(batch):
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[user_id] = logits
+            output_logits[user_id] = tt_logits
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
@@ -157,14 +160,14 @@ class Generator:
                 else:
                     del tt_logits
         else:
-            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
+            prefill_input, page_table_tt, _ = self.model.prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
             )
 
             tt_logits = self.model.ttnn_prefill_forward(
                 prefill_input,
-                rot_mats=rot_mats_prefill,
+                rot_mats=None,
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
@@ -175,38 +178,35 @@ class Generator:
 
             return logits
 
-    def _easy_trace_prefill(
-        self,
-        tokens,
-        current_pos,
-        page_table=None,
-        kv_cache=None,
-        argmax_on_device=False,
-    ):
+    def _easy_trace_prefill(self, tokens, last_token_idx, page_table=None, kv_cache=None, user_id=0):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
         if not hasattr(self, "trace_id_prefill"):
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache
+                tokens, last_token_idx, page_table=page_table, kv_cache=kv_cache, user_id=user_id
             )
             self.trace_id_prefill = trace_id
             self.trace_inputs_prefill = device_inputs
             self.trace_output_prefill = tt_out_trace
 
-        trace_logits_rm = self._prefill_forward_trace_text(
+        logger.info("Executing prefill trace")
+        tt_out_trace = self._prefill_forward_trace_text(
             self.trace_id_prefill,
             self.trace_inputs_prefill,
             self.trace_output_prefill,
             tokens,
             page_table=page_table,
         )
+        logits = self.model.process_output_prefill(tt_out_trace, last_token_idx=(last_token_idx % 32))
 
-        return trace_logits_rm
+        return logits
 
     def _capture_trace_prefill(
         self,
         tokens,
+        last_token_idx,
+        user_id,
         page_table=None,
         kv_cache=None,
     ):
@@ -215,19 +215,35 @@ class Generator:
         """
 
         # Compile run
-        self._prefill_forward_no_trace_text(tokens, page_table=page_table, kv_cache=kv_cache)
-        logger.info("Done Compiling Model")
+        # self.prefill_forward_single_user_text(tokens, page_table, user_id, last_token_idx, kv_cache)
 
         # Get inputs ready for trace run
         host_inputs = self.model.prepare_prefill_inputs_host(tokens, page_table=page_table)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
+        tt_out_trace = self.model.ttnn_prefill_forward(
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=(last_token_idx // 32) * 32, user_id=user_id
+        )
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info("Done Compiling Model")
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
+        tt_out_trace = self.model.ttnn_prefill_forward(
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=(last_token_idx // 32) * 32, user_id=user_id
+        )
 
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
+
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
-        tt_out_trace = self.model.ttnn_prefill_forward(*transformed_inputs, kv_cache=kv_cache)
-
+        tt_out_trace = self.model.ttnn_prefill_forward(
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=(last_token_idx // 32) * 32, user_id=user_id
+        )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
         logger.info("Done Capturing Prefill Trace")
         return trace_id, tt_out_trace, *device_inputs
 
@@ -250,7 +266,6 @@ class Generator:
         )
 
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
-
         return tt_out_trace
 
     def decode_forward_text(
