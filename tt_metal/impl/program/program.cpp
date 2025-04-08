@@ -1723,6 +1723,10 @@ size_t detail::Program_::calculate_hash() const {
             hash = hash_combine(hash, std::hash<std::string>()(value));
         }
         hash = hash_combine(hash, kernel->common_runtime_args().size());
+        auto cores = corerange_to_cores(kernel->core_range_set());
+        for (const auto& core : cores) {
+            hash = hash_combine(hash, kernel->runtime_args(core).size());
+        }
         auto config = kernel->config();
         auto config_hash = std::visit(
             tt::stl::overloaded{
