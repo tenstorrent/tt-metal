@@ -28,7 +28,7 @@
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"

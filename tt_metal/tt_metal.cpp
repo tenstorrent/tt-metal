@@ -45,7 +45,7 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "logger.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "semaphore.hpp"
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"

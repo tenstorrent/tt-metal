@@ -26,7 +26,7 @@
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_workload.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "shape2d.hpp"
 #include "strong_type.hpp"
 #include "system_memory_manager.hpp"
