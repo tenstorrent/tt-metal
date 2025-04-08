@@ -269,7 +269,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         ttnn.deallocate(x)
@@ -277,7 +277,11 @@ class TtLlamaAttention(LightweightModule):
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
         xqkv_reduced = self.tt_ccl.line_all_reduce(
-            xqkv_fused_sharded, cluster_axis=1, num_links=3, memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"]
+            xqkv_fused_sharded,
+            cluster_axis=1,
+            num_links=3,
+            memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
+            dtype=ttnn.bfloat16,
         )
 
         ttnn.deallocate(xqkv_fused_sharded)
