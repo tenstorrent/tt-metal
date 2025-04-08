@@ -409,7 +409,6 @@ def gen_yolov4_boxes_confs(output):
 
 
 def get_region_boxes(boxes_and_confs):
-    print("Getting boxes from boxes and confs ...")
     boxes_list = []
     confs_list = []
 
