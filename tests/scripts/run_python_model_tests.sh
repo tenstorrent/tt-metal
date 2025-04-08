@@ -45,6 +45,9 @@ run_python_model_tests_wormhole_b0() {
     # Mamba
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py -k "pretrained_weight_false"
 
+    # Mobilenetv2git
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py
+
     #UFLD_V2
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/UFLD_v2/test_ttnn_UFLD_v2.py::test_UFD_V2_Model
 
