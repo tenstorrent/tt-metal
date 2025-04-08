@@ -2,10 +2,10 @@
 # not be available during environment installation. We recommend setuptools
 # and wheel before installing this requirements.txt file.
 
-loguru
+# Make it match pyproject.toml
+loguru==0.6.0
 
 git+https://github.com/tenstorrent/tt-smi.git@v3.0.12
-git+https://github.com/tenstorrent/tt-topology.git@v1.1.3
 
 # For github workflow unit test failure annotations
 pytest-github-actions-annotate-failures==0.3.0
