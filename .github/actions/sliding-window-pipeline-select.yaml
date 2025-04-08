@@ -7,53 +7,8 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      build-type: ${{ inputs.build-type }}
-      tracy: ${{ inputs.build-with-tracy }}
+      build-type: "Release"
+      tracy: false
       build-wheel: true
       version: "22.04"
     secrets: inherit
-  post-commit:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/all-post-commit.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.post-commit }}
-  bh-post-commit:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-post-commit.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.bh-post-commit }}
-  single-card-perf-models-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/perf-models-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.single-card-perf-models }}
-  single-card-perf-device-models-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/perf-device-models-impl.yaml
-    if: ${{ inputs.single-card-perf-device-models }}
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  single-card-frequent-models-nightly:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-    if: ${{ inputs.single-card-nightly }}
