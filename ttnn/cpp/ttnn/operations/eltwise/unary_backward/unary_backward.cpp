@@ -510,8 +510,7 @@ std::vector<Tensor> ExecuteUnaryBackwardTan::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardSigmoid::invoke(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    bool approximate_mode = false;
-    Tensor sig_result = ttnn::sigmoid(input, (int)unary::VecMode::RC, approximate_mode, output_mem_config);
+    Tensor sig_result = ttnn::sigmoid(input, false, output_mem_config);
     Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, output_mem_config);
     Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
     Tensor prod_term_2 = ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config);
@@ -954,8 +953,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(
     std::vector<std::optional<Tensor>> result = {std::nullopt};
 
     input_grad = input_grad.value_or(ttnn::empty_like(input));
-    bool approximate_mode = false;
-    Tensor sigmoid_res = ttnn::sigmoid(input, (int)unary::VecMode::RC, approximate_mode, output_mem_config);
+    Tensor sigmoid_res = ttnn::sigmoid(input, false, output_mem_config);
     Tensor grad_sigmoid = ttnn::multiply(queue_id, grad, sigmoid_res, std::nullopt, output_mem_config);
     Tensor add_sub = ttnn::add(
         queue_id,
