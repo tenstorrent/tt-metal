@@ -121,7 +121,6 @@ class TtTransformer(LightweightModule):
         )
         if mode == "decode":
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
-        self.tt_rot_mats_prefill = None
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
@@ -158,7 +157,7 @@ class TtTransformer(LightweightModule):
         else:
             self.tt_ccl = self.tt_ccl_decode
 
-    def prepare_prefill_inputs_host(self, tokens, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None):
+    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
@@ -169,29 +168,29 @@ class TtTransformer(LightweightModule):
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(
             tokens,
-            device=None,
+            device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        tokens_embd = self.embd(tokens)
+        tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
-        if tt_rot_mats_prefill is None and self.tt_rot_mats_prefill is None:
-            tt_rot_mats_prefill = get_prefill_rot_mat(
-                self.args.head_dim,
-                self.args.max_seq_len,
-                self.mesh_device,
-                seq_len=S,
-                scale_factor=self.args.rope_scaling_factor,
-            )
-            self.tt_rot_mats_prefill = tt_rot_mats_prefill
-        else:
-            tt_rot_mats_prefill = self.tt_rot_mats_prefill
+        tt_rot_mats_prefill = get_prefill_rot_mat(
+            self.args.head_dim,
+            self.args.max_seq_len,
+            self.mesh_device,
+            seq_len=S,
+            scale_factor=self.args.rope_scaling_factor,
+        )
+
+        # [self.rope_setup.cos_matrix[:, :, :S, :], self.rope_setup.sin_matrix[:, :, :S, :]]
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
-                device=None,
+                device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -202,7 +201,7 @@ class TtTransformer(LightweightModule):
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
-                device=None,
+                device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -210,29 +209,7 @@ class TtTransformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens, tt_page_table, tt_chunk_page_table
-
-    def transform_prefill_inputs_device(
-        self,
-        tokens,
-        page_table=None,
-        chunk_page_table=None,
-    ):
-        tt_tokens = self.embd(tokens)
-        tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, page_table, chunk_page_table
-
-    def prepare_inputs_prefill(self, tokens, page_table=None, chunk_page_table=None, tt_rot_mats_prefill=None):
-        """
-        Inputs are torch tensors or python types. This function returns ttnn
-        tensors on device.
-        Its implementation can take advantage of a few other functions which the
-        model must implement.
-        """
-        host_inputs = self.prepare_prefill_inputs_host(tokens, page_table, chunk_page_table, tt_rot_mats_prefill)
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
-        transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
-        return transformed_device_inputs
+        return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -355,13 +332,13 @@ class TtTransformer(LightweightModule):
     def ttnn_prefill_forward(
         self,
         x,
+        rot_mats,
+        user_id,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        rot_mats=None,
-        user_id=0,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -370,7 +347,7 @@ class TtTransformer(LightweightModule):
         return self.forward(
             x,
             current_pos=None,
-            rot_mats=rot_mats if rot_mats is not None else self.tt_rot_mats_prefill,
+            rot_mats=rot_mats,
             user_id=user_id,
             mode="prefill",
             page_table=page_table,
