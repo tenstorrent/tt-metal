@@ -127,12 +127,10 @@ jobs:
           # Due to host OOM issues in CI vm, we currently only run llama-1B in the model matrix.
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           run_args: |
-            export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-
             if [[ "${{ matrix.model }}" == *"llama3"* || "${{ matrix.model }}" == *"mistral-7B"* ]]; then
-              pytest -n auto tests/nightly/single_card/tt_transformers -k ${{ matrix.model }}
+              WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/nightly/single_card/tt_transformers -k ${{ matrix.model }}
             else
-              pytest tests/nightly/single_card/${{ matrix.model }}
+              WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/nightly/single_card/${{ matrix.model }}
             fi
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
