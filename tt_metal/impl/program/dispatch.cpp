@@ -986,17 +986,26 @@ BatchedTransfers assemble_runtime_args_commands(
     return transfers;
 }
 
-void assemble_device_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id) {
-    BatchedTransfers batched_transfers = assemble_runtime_args_commands(program_command_sequence, program, device);
-    DeviceCommandCalculator calculator;
-    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    auto dispatch_core_type = dispatch_core_config.get_core_type();
-    NOC noc_index = k_dispatch_downstream_noc;
-    const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
-    static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
-    const auto& program_transfer_info = program.get_program_transfer_info();
+struct UnicastSemaphoreData {
+    std::vector<CQDispatchWritePackedUnicastSubCmd> sub_cmds;
+    // 1 per sub_cmd.
+    std::vector<std::pair<const void*, uint32_t>> data;
+    // Regions of sub_cmds that each fit in a single command.
+    std::vector<std::pair<uint32_t, uint32_t>> payload;
+    uint32_t dst;
+    uint32_t size;
+};
 
+static void size_semaphore_commands(
+    Program& program,
+    IDevice* device,
+    DeviceCommandCalculator& calculator,
+    uint32_t max_prefetch_command_size,
+    uint32_t packed_write_max_unicast_sub_cmds,
+    std::vector<uint32_t>& semaphore_data,
+    std::vector<UnicastSemaphoreData>& unicast_semaphore_cmds,
+    BatchedTransfers& batched_transfers) {
+    NOC noc_index = k_dispatch_downstream_noc;
     auto extract_dst_noc_unicast_info =
         [&device](
             const auto& ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
@@ -1012,20 +1021,6 @@ void assemble_device_commands(
         }
         return dst_noc_unicast_info;
     };
-
-    std::vector<uint32_t> semaphore_data;
-    struct UnicastSemaphoreData {
-        std::vector<CQDispatchWritePackedUnicastSubCmd> sub_cmds;
-        // 1 per sub_cmds.
-        std::vector<std::pair<const void*, uint32_t>> data;
-        // Regions of sub_cmds that each fit in a single command.
-        std::vector<std::pair<uint32_t, uint32_t>> payload;
-        uint32_t dst;
-        uint32_t size;
-    };
-
-    std::vector<UnicastSemaphoreData> unicast_semaphore_cmds;
-
     // Prevent reallocation of semaphore_data to ensure pointers remain valid.
     semaphore_data.reserve(program.semaphores().size());
 
@@ -1068,6 +1063,61 @@ void assemble_device_commands(
                 unicast_cmds.payload);
         }
     }
+}
+
+static void assemble_unicast_semaphore_commands(
+    HostMemDeviceCommand& device_command_sequence,
+    Program& program,
+    const std::vector<UnicastSemaphoreData>& unicast_semaphore_cmds,
+    uint32_t packed_write_max_unicast_sub_cmds) {
+    // Unicast Semaphore Cmd
+    uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+    for (auto& cmds : unicast_semaphore_cmds) {
+        uint32_t curr_sub_cmd_idx = 0;
+        for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : cmds.payload) {
+            device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS,
+                num_sub_cmds_in_cmd,
+                cmds.dst + program.get_program_config(index).sem_offset,
+                cmds.size,
+                unicast_sem_payload_sizeB,
+                cmds.sub_cmds,
+                cmds.data,
+                packed_write_max_unicast_sub_cmds,
+                curr_sub_cmd_idx,
+                false,
+                DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+            curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+            for (auto& data_and_size : cmds.data) {
+                RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
+            }
+        }
+    }
+}
+
+void assemble_device_commands(
+    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id) {
+    BatchedTransfers batched_transfers = assemble_runtime_args_commands(program_command_sequence, program, device);
+    DeviceCommandCalculator calculator;
+    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+    auto dispatch_core_type = dispatch_core_config.get_core_type();
+    NOC noc_index = k_dispatch_downstream_noc;
+    const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
+    static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
+    const auto& program_transfer_info = program.get_program_transfer_info();
+
+    std::vector<uint32_t> semaphore_data;
+    std::vector<UnicastSemaphoreData> unicast_semaphore_cmds;
+
+    size_semaphore_commands(
+        program,
+        device,
+        calculator,
+        max_prefetch_command_size,
+        packed_write_max_unicast_sub_cmds,
+        semaphore_data,
+        unicast_semaphore_cmds,
+        batched_transfers);
 
     uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
@@ -1507,29 +1557,9 @@ void assemble_device_commands(
         }
     }
 
-    // Unicast Semaphore Cmd
-    index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-    for (auto& cmds : unicast_semaphore_cmds) {
-        uint32_t curr_sub_cmd_idx = 0;
-        for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : cmds.payload) {
-            device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-                CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS,
-                num_sub_cmds_in_cmd,
-                cmds.dst + program.get_program_config(index).sem_offset,
-                cmds.size,
-                unicast_sem_payload_sizeB,
-                cmds.sub_cmds,
-                cmds.data,
-                packed_write_max_unicast_sub_cmds,
-                curr_sub_cmd_idx,
-                false,
-                DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
-            curr_sub_cmd_idx += num_sub_cmds_in_cmd;
-            for (auto& data_and_size : cmds.data) {
-                RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
-            }
-        }
-    }
+    // Write semaphore unicast transfers.
+    assemble_unicast_semaphore_commands(
+        device_command_sequence, program, unicast_semaphore_cmds, packed_write_max_unicast_sub_cmds);
 
     // All Previous Cmds Up to This Point Go Into the Kernel Config Buffer
     program_command_sequence.program_config_buffer_data_size_bytes = device_command_sequence.write_offset_bytes();
