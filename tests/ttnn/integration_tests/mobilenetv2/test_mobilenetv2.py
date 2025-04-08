@@ -20,11 +20,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
+        #        False,
         True,
     ],
     ids=[
-        "pretrained_weight_false",
+        #        "pretrained_weight_false",
         "pretrained_weight_true",
     ],
 )

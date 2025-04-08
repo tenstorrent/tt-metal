@@ -15,7 +15,4 @@ Use the following command to run the model :
 
 Note : The model supports a batch size of 8 for a resolution of 224. If you prefer to use a different batch size, it is recommended to modify the batch_size accordingly in the test file.
 
-## Additional Information:
-Tests can be run with  randomly initialized weights and pre-trained real weights.  To use the pre-trained weights, specify pretrained_weight_true when running the tests.
-
 ### Owner: [Sabira](https://github.com/sabira-mcw)
