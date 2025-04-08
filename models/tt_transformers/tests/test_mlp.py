@@ -29,17 +29,19 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (
-        64 * 1024,
-        32 * 1024,
-        32,
-    ),
+    (64 * 1024, 32 * 1024, 512, 32),
 )
 @pytest.mark.parametrize(
     "batch_size",
     (1,),
 )
 def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+    mesh_device_env = os.getenv("MESH_DEVICE")
+    model_name_env = os.getenv("HF_MODEL")
+
+    if mesh_device_env == "N150" and seq_len >= 1024 and model_name_env and "mistral" in model_name_env.lower():
+        pytest.skip("N150 does not support seq_len >= 1024 for Mistral models")
+
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
