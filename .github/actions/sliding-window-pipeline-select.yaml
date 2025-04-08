@@ -1,8 +1,6 @@
 name: "Sliding window test suite"
 
-on:
-  push:
-    branches: esmal/conv-pipeline
+on: push
 
 run-name: ${{ inputs.description }}
 jobs:
