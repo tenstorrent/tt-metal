@@ -13,8 +13,8 @@ inputs:
   hostname:
     description: "Hostname of server"
     required: true
-  working-directory:
-    description: "Current working directory where data and batchfile are located"
+  path:
+    description: "Path where data and batchfile are located"
     required: false
 
 runs:
@@ -28,10 +28,10 @@ runs:
     - name: Upload files
       shell: bash
       run: |
-        # Change dir to working-directory if its set
+        # Change dir to path if its set
         # Example: when running in containers the batchfile and data files are located under /work
-        if [ -n "${{ inputs.working-directory }}" ]; then
-          echo "Changing dir to ${{ inputs.working-directory }}"
-          cd "${{ inputs.working-directory }}"
+        if [ -n "${{ inputs.path }}" ]; then
+          echo "Changing dir to ${{ inputs.path }}"
+          cd "${{ inputs.path }}"
         fi
         sftp  -oStrictHostKeyChecking=no -i id_key -b ${{ inputs.sftp-batchfile }} ${{ inputs.username }}@${{ inputs.hostname }}
