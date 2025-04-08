@@ -250,7 +250,7 @@ void SetRuntimeArgsImpl(
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
     const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
-    bool blocking) {
+    bool /*blocking*/) {
     std::vector<uint32_t> resolved_runtime_args = {};
     resolved_runtime_args.reserve(runtime_args_ptr->size());
 
@@ -384,7 +384,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t l1_small_size,
     const size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& l1_bank_remap) {
+    const std::vector<uint32_t>& /*l1_bank_remap*/) {
     ZoneScoped;
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
     tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config);
