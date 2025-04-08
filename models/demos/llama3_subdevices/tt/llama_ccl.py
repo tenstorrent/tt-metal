@@ -628,5 +628,6 @@ def tt_sharded_distributed_rmsnorm(
         stats=tt_stats,
         is_pre=False,
     )
+    ttnn.deallocate(tt_stats)
     tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     return tt_out, inp
