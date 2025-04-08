@@ -9,19 +9,15 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
-#include "cpp/ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations {
 namespace pool {
-
-enum class Pool2DType {
-    MAX_POOL2D,
-};
-
 // Generic pool uop -- called from the macro-ops
 struct Pool2D {
     struct operation_attributes_t {

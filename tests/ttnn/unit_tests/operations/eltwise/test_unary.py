@@ -451,7 +451,7 @@ def test_acos_fixed(device, h, w):
     run_unary_test_fixed(device, h, w, 90, ttnn.acos, pcc=0.999)
 
 
-def run_unary_test_bitwise_not(device, h, w, fill_value, ttnn_function, pcc=0.9999):
+def run_unary_test_bitwise_not(device, h, w, fill_value, ttnn_function):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.full(size=(h, w), fill_value=fill_value).to(torch.int32)
@@ -464,10 +464,9 @@ def run_unary_test_bitwise_not(device, h, w, fill_value, ttnn_function, pcc=0.99
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_equal(torch_output_tensor, output_tensor)
 
 
-@skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("fill_value", [-2147483647, 2147483648, 7534, 225, 97, 3])

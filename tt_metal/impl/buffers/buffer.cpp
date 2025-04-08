@@ -52,7 +52,7 @@ bool is_l1_impl(BufferType buffer_type) { return buffer_type == BufferType::L1 o
 void validate_buffer_size_and_page_size(
     DeviceAddr size,
     DeviceAddr page_size,
-    const BufferType& buffer_type,
+    const BufferType& /*buffer_type*/,
     const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters) {
     if (size == 0) {
@@ -81,7 +81,7 @@ void validate_buffer_size_and_page_size(
 }
 
 std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 2>>> core_to_host_pages(
-    const uint32_t total_pages,
+    const uint32_t /*total_pages*/,
     const uint32_t pages_per_shard,
     const uint32_t num_shards,
     const TensorMemoryLayout layout,

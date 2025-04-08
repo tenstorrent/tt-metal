@@ -93,6 +93,8 @@ enum class UnaryOpType {
     PRELU_SFPU,
     ZERO_POINT,
     MISH,
+    MAXIMUM,
+    MINIMUM,
 };
 
 struct UnaryWithParam {

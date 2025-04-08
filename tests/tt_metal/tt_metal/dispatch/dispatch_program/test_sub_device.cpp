@@ -37,7 +37,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include "span.hpp"
 #include "strong_type.hpp"

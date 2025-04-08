@@ -5,7 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 
-int main(int argc, char** argv) {
+int main() {
     using namespace tt;
     using namespace tt::tt_metal;
 
