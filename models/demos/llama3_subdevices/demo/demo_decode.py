@@ -126,6 +126,7 @@ def run_llama3_demo(
     # Start profiler
     logger.info(f"Start profiler")
     profiler = BenchmarkProfiler()
+    profiler.start("run")
     profiler.start(profiler_step_name)
 
     logger.info(f"Reading inputs...")
@@ -479,6 +480,7 @@ def run_llama3_demo(
 
     # Finish profiling at the end of all batches inference
     profiler.end(profiler_step_name)
+    profiler.end("run")
 
     if is_ci_env:
         benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
