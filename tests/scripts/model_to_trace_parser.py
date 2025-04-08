@@ -7,6 +7,7 @@ import json
 import pandas as pd
 import argparse
 from collections import defaultdict
+from tqdm import tqdm
 
 
 def load_op_categories(json_path):
@@ -59,13 +60,26 @@ def main(op_file, model_dir, category_map, op_col, output_root="parsed_traces"):
 
     for model_name in os.listdir(model_dir):
         model_path = os.path.join(model_dir, model_name)
-        trace_file = os.path.join(model_path, "torchview_ops.xlsx")
-        if not os.path.isfile(trace_file):
-            print(f"[!] Skipping {model_name}: no torchview_ops.xlsx found")
+        if not os.path.isdir(model_path):
+            continue  # Skip files/non-dirs
+        trace_file = None
+        for file in os.listdir(model_path):
+            if file.endswith(".xlsx") or file.endswith(".csv"):
+                trace_file = os.path.join(model_path, file)
+                break
+
+        if not trace_file:
+            print(f"[!] Skipping {model_name}: no trace (.xlsx or .csv) file found")
             continue
 
         try:
-            df = pd.read_excel(trace_file, sheet_name=1)
+            if trace_file.endswith(".xlsx"):
+                df = pd.read_excel(trace_file, sheet_name=1)
+            elif trace_file.endswith(".csv"):
+                df = pd.read_csv(trace_file)
+            else:
+                print(f"[!] Skipping {trace_file}: unsupported file type.")
+                continue
         except Exception as e:
             print(f"[!] Error reading {trace_file}: {e}")
             continue
@@ -76,14 +90,17 @@ def main(op_file, model_dir, category_map, op_col, output_root="parsed_traces"):
 
         trace_entries = parse_trace_df(df, op_col)
 
-        for entry in trace_entries:
+        # for entry in trace_entries:
+        pbar = tqdm(trace_entries, desc=f"Parsing ops from {model_name}")
+        for entry in pbar:
             op = entry["Name"]
+            pbar.set_description(f"{model_name}: {op}")
+
             base_op = op.lower()
 
             if base_op not in known_ops:
                 unknown_ops.add(base_op)
 
-            # Output path: parsed_traces/{base_op}/{model_name}.json
             category_path = op_categories.get(base_op, base_op)
             if category_path == "":
                 category_path = base_op
