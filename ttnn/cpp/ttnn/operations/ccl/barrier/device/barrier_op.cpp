@@ -46,21 +46,23 @@ tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
     const auto* target_device =
         input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(mesh_coord) : input_tensor.device();
     const bool is_linear = (topology == ttnn::ccl::Topology::Linear);
-    const uint32_t num_devices = devices.size();
+    const auto& devices_to_use = input_tensor.mesh_device() ? input_tensor.mesh_device()->get_devices() : this->devices;
+    const uint32_t num_devices = devices_to_use.size();
     uint32_t device_index = 0;
     std::optional<chip_id_t> receiver_device_id = std::nullopt;
     std::optional<chip_id_t> sender_device_id = std::nullopt;
     for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == target_device) {
+        if (devices_to_use.at(i) == target_device) {
             bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
             bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;
             device_index = i;
             receiver_device_id = is_last_chip_in_clockwise_direction
                                      ? std::nullopt
-                                     : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
-            sender_device_id = is_last_chip_in_counter_clockwise_direction
-                                   ? std::nullopt
-                                   : std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
+                                     : std::optional<chip_id_t>(devices_to_use.at((i + 1) % num_devices)->id());
+            sender_device_id =
+                is_last_chip_in_counter_clockwise_direction
+                    ? std::nullopt
+                    : std::optional<chip_id_t>(devices_to_use.at((i + num_devices - 1) % num_devices)->id());
             break;
         }
     }
@@ -81,17 +83,7 @@ namespace operations::ccl {
 
 Tensor barrier_function(const Tensor& input_tensor, const ttnn::Barrier& barrier_struct) {
     std::vector<Tensor> output_tensors = {Tensor(input_tensor.mesh_device())};
-    tt::tt_metal::operation::launch_op(
-        [barrier_struct](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const Tensor& input_tensor = input_tensors.at(0);
-            return tt::tt_metal::operation::run(barrier_struct, {input_tensor});
-        },
-        {input_tensor},
-        output_tensors);
-    return output_tensors.at(0);
+    return tt::tt_metal::operation::run(barrier_struct, {input_tensor}).at(0);
 }
 
 std::vector<Tensor> barrier_function(const std::vector<Tensor>& input_tensors, const ttnn::Barrier& barrier_struct) {
