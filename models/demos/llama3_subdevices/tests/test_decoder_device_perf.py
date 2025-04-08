@@ -20,14 +20,12 @@ from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 mapping_op_code_to_name = {
-    "LayerNorm_0": "PreAllGatherLN_0",
-    "LayerNorm_1": "PostAllGatherLN_0",
-    "LayerNorm_2": "PreAllGatherLN_1",
-    "LayerNorm_3": "PostAllGatherLN_1",
-    "AllGatherAsync_0": "AllGatherAsync_LN_0",
-    "AllGatherAsync_1": "AllGatherAsync_SDPA_0",
-    "AllGatherAsync_2": "AllGatherAsync_LN_1",
-    "AllGatherAsync_3": "AllGatherAsync_Binary_Mult",
+    "RMSAllGather_0": "PreRMS_0",
+    "RMSAllGather_1": "PostRMS_0",
+    "RMSAllGather_2": "PreRMS_1",
+    "RMSAllGather_3": "PostRMS_1",
+    "AllGatherAsync_0": "AllGatherAsync_SDPA_0",
+    "AllGatherAsync_1": "AllGatherAsync_Binary_Mult",
     "ShardedToInterleavedDeviceOperation_0": "ShardedToInterleavedDeviceOperation_LN_0",
     "ShardedToInterleavedDeviceOperation_1": "ShardedToInterleavedDeviceOperation_LN_1",
     "InterleavedToShardedDeviceOperation_0": "InterleavedToShardedDeviceOperation_LN_0",
@@ -339,18 +337,13 @@ def test_llama_TG_perf_device(
     kernel_duration_per_instance_averaged_dict = average_per_instance_dict(kernel_duration_per_instance_dict)
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
 
-    print(kernel_duration_per_instance_averaged_dict)
-    print(dispatch_duration_per_instance_averaged_dict)
-
     expected_kernel_times_dict = {
-        "LayerNorm_0": 6954.111111111111,
-        "LayerNorm_1": 6530.777777777777,
-        "LayerNorm_2": 6752.333333333333,
-        "LayerNorm_3": 6543.111111111111,
-        "AllGatherAsync_0": 4205.888888888889,
-        "AllGatherAsync_1": 9638.666666666666,
-        "AllGatherAsync_2": 4095.5555555555557,
-        "AllGatherAsync_3": 9642.0,
+        "RMSAllGather_0": 11077,
+        "RMSAllGather_1": 6720.666666666667,
+        "RMSAllGather_2": 10733.666666666666,
+        "RMSAllGather_3": 6670.222222222223,
+        "AllGatherAsync_0": 9638.666666666666,
+        "AllGatherAsync_1": 9642.0,
         "ShardedToInterleavedDeviceOperation_0": 3947.222222222222,
         "ShardedToInterleavedDeviceOperation_1": 3388.5555555555557,
         "InterleavedToShardedDeviceOperation_0": 2546.5555555555557,
@@ -368,23 +361,21 @@ def test_llama_TG_perf_device(
         "NLPCreateHeadsDecodeDeviceOperation_0": 8568.222222222223,
         "RotaryEmbeddingLlamaFusedQK_0": 5023.888888888889,
         "PagedUpdateCacheDeviceOperation_0": 5606.444444444444,
-        "ScaledDotProductAttentionDecode_0": 20472.11111111111,
+        "ScaledDotProductAttentionDecode_0": 23724.222222222223,
         "NLPConcatHeadsDecodeDeviceOperation_0": 6665.0,
         "ReshardDeviceOperation_0": 1752.7777777777778,
         "BinaryDeviceOperation_0": 2408.8888888888887,
         "BinaryDeviceOperation_1": 4572.777777777777,
-        "BinaryDeviceOperation_2": 2435.5555555555557,
+        "BinaryDeviceOperation_2": 4574.0,
     }
 
     expected_dispatch_times_dict = {
-        "LayerNorm_0": 657.6666666666666,
-        "LayerNorm_1": 634.3333333333334,
-        "LayerNorm_2": 661.4444444444445,
-        "LayerNorm_3": 641.0,
-        "AllGatherAsync_0": 2417.5555555555557,
-        "AllGatherAsync_1": 676.4444444444445,
-        "AllGatherAsync_2": 2403.4444444444443,
-        "AllGatherAsync_3": 1698.7777777777778,
+        "RMSAllGather_0": 657.6666666666666,
+        "RMSAllGather_1": 634.3333333333334,
+        "RMSAllGather_2": 661.4444444444445,
+        "RMSAllGather_3": 641.0,
+        "AllGatherAsync_0": 676.4444444444445,
+        "AllGatherAsync_1": 1698.7777777777778,
         "ShardedToInterleavedDeviceOperation_0": 2211.6666666666665,
         "ShardedToInterleavedDeviceOperation_1": 2212.222222222222,
         "InterleavedToShardedDeviceOperation_0": 631.8888888888889,
@@ -548,7 +539,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = merge_device_rows(df)
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
-    df_layers = df_model[4:-12]
+    df_layers = df_model[4:-11]
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
@@ -562,17 +553,13 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     # Average over all iterations of each op instance
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
 
-    print(dispatch_duration_per_instance_averaged_dict)
-
     expected_non_overlapped_dispatch_times_dict = {
-        "LayerNorm_0": 6493.1,
-        "LayerNorm_1": 6190.6,
-        "LayerNorm_2": 6376.6,
-        "LayerNorm_3": 6431.2,
+        "RMSAllGather_0": 7260,
+        "RMSAllGather_1": 6190.6,
+        "RMSAllGather_2": 7326,
+        "RMSAllGather_3": 6431.2,
         "AllGatherAsync_0": 2273.2,
-        "AllGatherAsync_1": 2983.2,
-        "AllGatherAsync_2": 2272.1,
-        "AllGatherAsync_3": 4342.0,
+        "AllGatherAsync_1": 4351.1,
         "ShardedToInterleavedDeviceOperation_0": 1919.0,
         "ShardedToInterleavedDeviceOperation_1": 1910.2,
         "InterleavedToShardedDeviceOperation_0": 10347.3,
@@ -583,7 +570,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         "Matmul_3": 6144.8,
         "Matmul_4": 6029.3,
         "AllReduceAsync_0": 7349.4,
-        "AllReduceAsync_1": 6484.7,
+        "AllReduceAsync_1": 8510.2,
         "AllReduceAsync_2": 6475.9,
         "LlamaReduceScatterDeviceOperation_0": 8058.9,
         "LlamaReduceScatterDeviceOperation_1": 7359.9,
