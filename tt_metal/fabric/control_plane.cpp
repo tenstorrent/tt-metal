@@ -309,6 +309,9 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
                 get_ethernet_cores_grouped_by_connected_chips(physical_chip_id_from_north);
             bool found_chip = false;
             for (const auto& [connected_chip_id, eth_ports] : eth_links_grouped_by_connected_chips) {
+                if (is_external_ubb_cable(physical_chip_id_from_north, eth_ports[0])) {
+                    continue;
+                }
                 if (visited_physical_chips.find(connected_chip_id) == visited_physical_chips.end() and
                     eth_ports.size() == num_ports_per_side) {
                     physical_chip_ids[i * mesh_ew_size + j] = connected_chip_id;
