@@ -5,7 +5,9 @@
 #include <stdint.h>
 #include <cstdint>
 
+#include "compile_time_args.h"
 #include "dataflow_api.h"
+// #include "ttnn/types.hpp"
 
 #define ENABLE_DEBUG 0
 
@@ -196,7 +198,10 @@ void kernel_main() {
     constexpr uint32_t remote_read = get_compile_time_arg_val(16);  // Unused parameter
     constexpr uint32_t num_cores = get_compile_time_arg_val(17);
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(18);
-    constexpr uint32_t max_out_nsticks_per_core = get_compile_time_arg_val(19);
+    constexpr uint32_t in_out_buffer_start_delta = get_compile_time_arg_val(19);
+    constexpr uint32_t untilize_temp_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t tile_cols = get_compile_time_arg_val(21);
+    constexpr uint32_t tile_rows = get_compile_time_arg_val(22);
 
     uint32_t arg_idx = 0;
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -206,13 +211,14 @@ void kernel_main() {
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
+    constexpr uint32_t TILE_SIZE_BYTES = 2048;
 
     const uint16_t my_noc_x = NOC_X(my_x[noc_index]);
     const uint16_t my_noc_y = NOC_Y(my_y[noc_index]);
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
+    const uint32_t untilize_temp_l1_addr = get_read_ptr(untilize_temp_cb_id);
 
-    // input shards
     if constexpr (local_config_cb_id) {
         cb_reserve_back(src_cb_id, in_nsticks);
         cb_push_back(src_cb_id, in_nsticks);
@@ -221,7 +227,23 @@ void kernel_main() {
     uint32_t semaphore_addr = 0;
     semaphore_addr = get_semaphore(semaphore_id);
 
-    cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available
+    // make sure untilized data is available
+    if (untilize_temp_cb_id && local_config_cb_id) {
+        for (uint32_t i = 0; i < tile_rows; ++i) {
+            cb_wait_front(untilize_temp_cb_id, tile_cols);
+            cb_reserve_back(in_cb_id, tile_cols);
+
+            const uint32_t in_l1_addr = get_write_ptr(in_cb_id);
+            const uint64_t in_l1_noc_addr = get_noc_addr(my_noc_x, my_noc_y, in_l1_addr);
+            noc_async_write(untilize_temp_l1_addr, in_l1_noc_addr, TILE_SIZE_BYTES * tile_cols);
+            noc_async_write_barrier();
+
+            cb_push_back(in_cb_id, tile_cols);
+            cb_pop_front(untilize_temp_cb_id, tile_cols);
+        }
+    }
+    cb_wait_front(in_cb_id, tile_rows * tile_cols);
+
     if constexpr (remote_config_cb_id && remote_temp_cb_id) {
         const uint32_t temp_base_l1_addr = get_write_ptr(remote_temp_cb_id);
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
@@ -234,7 +256,6 @@ void kernel_main() {
     noc_async_write_barrier();
 
     if constexpr (local_config_cb_id) {
-        const int32_t in_out_buffer_start_delta = max_out_nsticks_per_core - in_nsticks;
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
         copy_sticks_async<stick_nbytes, input_aligned_page_size>(

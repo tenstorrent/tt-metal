@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/untilize.h"
-// #include "debug/dprint.h"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
