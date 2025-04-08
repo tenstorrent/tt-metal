@@ -20,27 +20,26 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image, ExifTags
+from loguru import logger
+from PIL import ExifTags, Image
 from torch.utils.data import Dataset
 from tqdm import tqdm
-from loguru import logger
-
-# from pycocotools import mask as maskUtils
 
 from models.experimental.yolov7.reference.utils.general import (
     check_requirements,
-    xyxy2xywh,
-    xywh2xyxy,
-    xywhn2xyxy,
-    xyn2xy,
+    clean_str,
+    resample_segments,
     segment2box,
     segments2boxes,
-    resample_segments,
-    clean_str,
+    xyn2xy,
+    xywh2xyxy,
+    xywhn2xyxy,
+    xyxy2xywh,
 )
-from models.experimental.yolov7.reference.utils.torch_utils import (
-    torch_distributed_zero_first,
-)
+from models.experimental.yolov7.reference.utils.torch_utils import torch_distributed_zero_first
+
+# from pycocotools import mask as maskUtils
+
 
 # Parameters
 help_url = "https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data"

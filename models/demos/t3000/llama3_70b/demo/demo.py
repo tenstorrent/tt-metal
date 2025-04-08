@@ -5,12 +5,8 @@
 import pytest
 from loguru import logger
 
-
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
-)
-from models.demos.t3000.llama2_70b.demo.demo import main, construct_arg
+from models.demos.t3000.llama2_70b.demo.demo import construct_arg, main
+from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
 
 
 @pytest.mark.timeout(240000)

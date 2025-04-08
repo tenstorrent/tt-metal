@@ -2,20 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-
-from torchvision import models
+import torch
 from loguru import logger
+from torchvision import models
 
 from models.experimental.vgg.tt.vgg import *
 from models.utility_functions import (
-    profiler,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
     comp_pcc,
-    unpad_from_zero,
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    profiler,
     torch_to_tt_tensor,
+    unpad_from_zero,
 )
 
 

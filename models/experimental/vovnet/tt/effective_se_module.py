@@ -3,13 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
-import ttnn
 from tt_lib import fallback_ops
+
+import ttnn
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 class TtEffectiveSEModule(nn.Module):

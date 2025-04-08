@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-from models.generation_utils import pad_input_32, get_logits_processor
+
+from models.generation_utils import get_logits_processor, pad_input_32
 
 
 def run_generate(

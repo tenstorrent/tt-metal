@@ -3,13 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Optional
+
 import torch
 from torch import nn
 
 import ttnn
-from models.utility_functions import (
-    nearest_32,
-)
+from models.utility_functions import nearest_32
 
 
 class TtMistralAttention(nn.Module):

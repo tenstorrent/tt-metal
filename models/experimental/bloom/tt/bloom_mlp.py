@@ -4,9 +4,9 @@
 
 import torch
 
-import ttnn
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_gelu_forward as bloom_gelu_forward
+import ttnn
 from models.utility_functions import pad_by_zero
 
 

@@ -2,15 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-
-from torchvision import models
+import torch
 from loguru import logger
+from torchvision import models
 
 from models.experimental.vgg.reference.vgg import vgg16
 from models.utility_functions import comp_pcc
-
 
 _batch_size = 1
 

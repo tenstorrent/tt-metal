@@ -2,22 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import nn
-import ttnn
-
 from collections import OrderedDict
-from typing import (
-    Dict,
-)
-from models.experimental.ssd.tt.ssd_mobilenetv3_features import (
-    TtMobileNetV3Features,
-)
-from models.experimental.ssd.tt.ssd_mobilenetv3_extract import (
-    TtMobileNetV3extract,
-)
-from models.experimental.ssd.tt.ssd_mobilenetv3_inverted_residual import (
-    TtMobileNetV3InvertedResidual,
-)
+from typing import Dict
+
+from torch import nn
+
+import ttnn
+from models.experimental.ssd.tt.ssd_mobilenetv3_extract import TtMobileNetV3extract
+from models.experimental.ssd.tt.ssd_mobilenetv3_features import TtMobileNetV3Features
+from models.experimental.ssd.tt.ssd_mobilenetv3_inverted_residual import TtMobileNetV3InvertedResidual
 
 
 class TtSSDLiteFeatureExtractorMobileNet(nn.Module):

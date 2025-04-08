@@ -4,12 +4,9 @@
 
 import torch.nn as nn
 
-
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-)
-from models.experimental.swin.swin_helper_funcs import linear as TtLinear
 import ttnn
+from models.experimental.swin.swin_helper_funcs import linear as TtLinear
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtSwinOutput(nn.Module):

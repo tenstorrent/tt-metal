@@ -2,20 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import os
-import torch
 from typing import Optional
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    permute_conv_parameters,
-    weight_to_bfp8,
-)
+
+import torch
+from loguru import logger
+
+import ttnn
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     conv_cache,
     get_default_compute_config,
+    permute_conv_parameters,
+    weight_to_bfp8,
 )
-from loguru import logger
-
 
 config_override = {
     (320, 320, 64, 64): {"act_block_h": 64},

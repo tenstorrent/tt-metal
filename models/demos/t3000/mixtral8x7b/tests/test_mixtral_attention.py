@@ -5,15 +5,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from ttnn import ConcatMeshToTensor
-from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, get_single_rot_mat
 from models.demos.t3000.mixtral8x7b.reference.model import Attention, precompute_freqs_cis
+from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat, prepare_inputs_ttnn
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_allclose, comp_pcc
+from ttnn import ConcatMeshToTensor
 
 
 def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_seeds):

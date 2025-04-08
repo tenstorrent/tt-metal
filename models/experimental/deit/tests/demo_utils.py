@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from PIL import Image
-import os
 import glob
+import os
+
+from PIL import Image
+
 from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
 
 

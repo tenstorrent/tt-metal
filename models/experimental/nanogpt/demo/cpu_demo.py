@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-from loguru import logger
-
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
-import numpy as np
 import evaluate
+import numpy as np
+import pytest
+import torch
+from loguru import logger
 from tests.models.nanogpt.dataset_utils import get_data
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
 
 @pytest.mark.parametrize(

@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+from pathlib import Path
+
 import torch
-import ttnn
+from torchvision import models
 from tt_lib.utils import pad_weight
 
-from pathlib import Path
-from torchvision import models
+import ttnn
 
 
 def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):

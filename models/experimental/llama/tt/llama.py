@@ -3,12 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from models.experimental.llama.tt.llama_first_half import (
-    TtLlamaModelFirstHFModel,
-)
-from models.experimental.llama.tt.llama_second_half import (
-    TtLlamaModelSecondHFModel,
-)
+from models.experimental.llama.tt.llama_first_half import TtLlamaModelFirstHFModel
+from models.experimental.llama.tt.llama_second_half import TtLlamaModelSecondHFModel
 
 
 def _llama_first_half(

@@ -3,32 +3,30 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 from os import listdir
 from os.path import isfile, join
+
+import jiwer
 import pytest
 import torch
 from datasets import load_dataset
 from loguru import logger
 from scipy.io import wavfile
+from tqdm import tqdm
 from transformers import (
     AutoFeatureExtractor,
     AutoProcessor,
-    WhisperForConditionalGeneration,
     WhisperForAudioClassification,
+    WhisperForConditionalGeneration,
 )
-from tqdm import tqdm
-import time
-import jiwer
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.whisper.tt import ttnn_optimized_functional_whisper
-from models.demos.whisper.tt.ttnn_optimized_functional_whisper import (
-    init_kv_cache,
-    WHISPER_L1_SMALL_SIZE,
-)
-from models.generation_utils import get_logits_processor
 from models.demos.utils.llm_demo_utils import verify_perf
+from models.demos.whisper.tt import ttnn_optimized_functional_whisper
+from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
+from models.generation_utils import get_logits_processor
 from models.utility_functions import is_blackhole
 
 

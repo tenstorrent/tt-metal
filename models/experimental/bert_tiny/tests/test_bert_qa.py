@@ -4,14 +4,11 @@
 
 import pytest
 from loguru import logger
+from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
+
 import ttnn
 from models.experimental.bert_tiny.tt.bert_for_question_answering import TtBertforqa
-
-from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 @pytest.mark.parametrize(

@@ -4,20 +4,14 @@
 
 import pytest
 import torch
-
-from transformers import AutoTokenizer, RobertaForSequenceClassification
 from loguru import logger
+from transformers import AutoTokenizer, RobertaForSequenceClassification
 
 import ttnn
-
-from models.experimental.roberta.tt.roberta_for_sequence_classification import TtRobertaForSequenceClassification
-from models.utility_functions import (
-    Profiler,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-)
-from models.perf.perf_utils import prep_perf_report
 from models.experimental.roberta.roberta_common import torch2tt_tensor
+from models.experimental.roberta.tt.roberta_for_sequence_classification import TtRobertaForSequenceClassification
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import Profiler, disable_persistent_kernel_cache, enable_persistent_kernel_cache
 
 BATCH_SIZE = 1
 

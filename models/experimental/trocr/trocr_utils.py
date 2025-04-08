@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional
+
 import torch
-from typing import Optional
-from typing import Optional
 
 
 def _make_causal_mask(

@@ -4,24 +4,17 @@
 import pytest
 from loguru import logger
 
-
-from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
-
-
-from models.utility_functions import skip_for_grayskull
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    comp_pcc,
-)
-
 from models.demos.t3000.llama2_70b.demo.demo import (
-    load_prompts_file,
-    intialize_inputs,
-    prepare_next_input,
-    get_sampling_func,
     construct_arg,
+    get_sampling_func,
+    intialize_inputs,
+    load_prompts_file,
+    prepare_next_input,
 )
+from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
+from models.demos.t3000.llama2_70b.tt.llama_common import comp_pcc, setup_llama_env
+from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
+from models.utility_functions import skip_for_grayskull
 
 
 def run_test_generation(args):

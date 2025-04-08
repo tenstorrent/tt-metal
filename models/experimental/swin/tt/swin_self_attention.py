@@ -2,19 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import collections.abc
 from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
-import collections.abc
+from tt_lib.fallback_ops import fallback_ops
 
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
+import ttnn
 from models.experimental.swin.swin_helper_funcs import linear as TtLinear
 from models.experimental.swin.swin_utils import meshgrid
-import ttnn
-from tt_lib.fallback_ops import fallback_ops
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 class TtSwinSelfAttention(nn.Module):

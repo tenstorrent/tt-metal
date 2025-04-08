@@ -3,24 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from loguru import logger
 import torch
-import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from loguru import logger
 
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from models.demos.t3000.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
-from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
-    MAX_SEQ_LEN,
     BASE_URL,
-    UNIT_TEST_N_LAYER,
+    MAX_SEQ_LEN,
     UNIT_TEST_LAYER_NUM,
+    UNIT_TEST_N_LAYER,
+    check_mesh_device,
     comp_pcc,
+    setup_llama_env,
     should_skip_model_load,
 )
+from models.demos.t3000.llama2_70b.tt.llama_mlp_optimized import TtLlamaMLP_optimized
+from models.utility_functions import skip_for_grayskull
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 class PytorchLlamaMLPModel(torch.nn.Module):

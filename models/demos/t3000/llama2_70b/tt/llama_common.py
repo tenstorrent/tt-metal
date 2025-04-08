@@ -2,22 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import math
-from loguru import logger
+import os
 import re
+from pathlib import Path
 from typing import Tuple
+
 import numpy as np
 import torch
-import ttnn
-from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 from loguru import logger
-from pathlib import Path
+
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama.generation import (
     load_chunked_checkpoints,
     load_sharded_checkpoints,
 )
 from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 MAX_SEQ_LEN = 4096
 MAX_SEQ_LEN_LLAMA3 = 8192
@@ -27,10 +28,7 @@ UNIT_TEST_N_LAYER = 1
 UNIT_TEST_LAYER_NUM = 0
 UNIT_TEST_START_POS = 0
 UNIT_TEST_GENERATION_LENGTH = 20
-from ttnn import (
-    TensorToMesh,
-    MeshToTensor,
-)
+from ttnn import MeshToTensor, TensorToMesh
 
 
 class ShardTensor2dMesh(TensorToMesh):

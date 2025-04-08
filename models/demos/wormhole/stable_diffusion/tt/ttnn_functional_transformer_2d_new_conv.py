@@ -2,18 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
 import os
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import (
-    basic_transformer_block,
-)
+
+import torch
+
+import ttnn
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import basic_transformer_block
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pre_process_input,
-    permute_conv_parameters,
+    conv_cache,
     dealloc_input,
+    permute_conv_parameters,
+    pre_process_input,
 )
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import conv_cache
 
 
 class transformer_2d_model:

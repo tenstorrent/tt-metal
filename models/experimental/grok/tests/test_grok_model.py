@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
-import torch
-import pytest
+
 import numpy as np
+import pytest
+import torch
 from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
@@ -14,18 +15,18 @@ if os.getenv("CI") == "true":
     os.environ["GROK_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
 
-import ttnn
-from ttnn import ConcatMeshToTensor
-
-from models.experimental.grok.tt.grok_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
-from models.experimental.grok.tt.grok_model import TtTransformer
-from models.experimental.grok.tt.grok_decoder import TtTransformerBlock
-from models.experimental.grok.reference.model import Grok1ModelForCausalLM as Transformer
-from models.experimental.grok.reference.model import DecoderLayer
-from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import comp_pcc, comp_allclose
 from transformers import AutoTokenizer
+
+import ttnn
 from models.experimental.grok.reference.configuration_grok1 import Grok1Config
+from models.experimental.grok.reference.model import DecoderLayer
+from models.experimental.grok.reference.model import Grok1ModelForCausalLM as Transformer
+from models.experimental.grok.tt.grok_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
+from models.experimental.grok.tt.grok_decoder import TtTransformerBlock
+from models.experimental.grok.tt.grok_model import TtTransformer
+from models.experimental.grok.tt.model_config import TtModelArgs
+from models.utility_functions import comp_allclose, comp_pcc
+from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.parametrize(

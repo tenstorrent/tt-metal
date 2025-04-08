@@ -4,8 +4,8 @@
 
 import torch
 
-import ttnn
 import models.experimental.bloom_old.bloom_utils as bloom_utils
+import ttnn
 
 
 def bloom_gelu_forward(x: torch.Tensor) -> torch.Tensor:

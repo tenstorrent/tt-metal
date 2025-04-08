@@ -2,20 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+import timm
 import torch
 from loguru import logger
-import timm
-
-import pytest
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    Profiler,
-)
-from models.perf.perf_utils import prep_perf_report
 
 from models.experimental.hrnet.tt.hrnet_model import hrnet_w18_small
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import (
+    Profiler,
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    torch_to_tt_tensor_rm,
+)
 
 BATCH_SIZE = 1
 

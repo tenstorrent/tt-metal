@@ -2,25 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import torch
-import random
+import json
 import os
-import numpy as np
+import random
+import signal
+import time
+from datetime import datetime
 from functools import partial
 from operator import contains, eq, getitem
 from pathlib import Path
-import json
-import multiprocess
-import signal
-import time
-import psutil
-from datetime import datetime
 
+import multiprocess
+import numpy as np
+import psutil
+import pytest
+import torch
 from loguru import logger
 
-from tests.scripts.common import run_process_and_get_result
-from tests.scripts.common import get_updated_device_params
+from tests.scripts.common import get_updated_device_params, run_process_and_get_result
 
 
 @pytest.fixture(scope="function")

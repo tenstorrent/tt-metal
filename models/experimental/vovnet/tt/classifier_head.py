@@ -3,17 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-
 import tt_lib.fallback_ops
 
+from models.experimental.vovnet.tt.select_adaptive_pool2d import TtSelectAdaptivePool2d
 from models.helper_funcs import Linear
-from models.experimental.vovnet.tt.select_adaptive_pool2d import (
-    TtSelectAdaptivePool2d,
-)
-
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-)
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtClassifierHead(nn.Module):

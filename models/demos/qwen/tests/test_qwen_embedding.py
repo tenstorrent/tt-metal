@@ -1,20 +1,18 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.demos.qwen.tt.qwen_embedding import TtQwenEmbedding
-from models.demos.qwen.tt.model_config import TtModelArgs
 from models.demos.qwen.reference.tokenizer import Tokenizer
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.demos.qwen.tt.model_config import TtModelArgs
 from models.demos.qwen.tt.qwen_common import HostEmbedding
+from models.demos.qwen.tt.qwen_embedding import TtQwenEmbedding
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()

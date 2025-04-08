@@ -3,15 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import pytest
 import torch
 from loguru import logger
-import pytest
-
-from models.experimental.swin.reference.swin import PytorchSwinForImageClassification
-
-from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 from transformers import AutoFeatureExtractor
 from transformers import SwinForImageClassification as HF_SwinForImageClassification
+
+from models.experimental.swin.reference.swin import PytorchSwinForImageClassification
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 
 
 @pytest.mark.parametrize(

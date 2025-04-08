@@ -5,9 +5,7 @@
 
 import ttnn
 from models.demos.yolov4.common import get_model_result
-from models.demos.yolov4.runner.performant_runner_infra import (
-    YOLOv4PerformanceRunnerInfra,
-)
+from models.demos.yolov4.runner.performant_runner_infra import YOLOv4PerformanceRunnerInfra
 
 
 class YOLOv4PerformantRunner:

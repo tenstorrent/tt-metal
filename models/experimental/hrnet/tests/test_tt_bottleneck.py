@@ -2,22 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import timm
+import torch
 from loguru import logger
 
-
-import timm
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-    comp_allclose,
-    comp_pcc,
-)
-
-from models.experimental.hrnet.tt.bottleneck import (
-    TtBottleneck,
-)
+from models.experimental.hrnet.tt.bottleneck import TtBottleneck
+from models.utility_functions import comp_allclose, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(

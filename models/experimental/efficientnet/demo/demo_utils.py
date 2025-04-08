@@ -13,17 +13,15 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import ast
+
 import cv2
 import torch
-import ttnn
 import torchvision
-from loguru import logger
 from datasets import load_dataset
+from loguru import logger
 
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
+import ttnn
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 def preprocess():

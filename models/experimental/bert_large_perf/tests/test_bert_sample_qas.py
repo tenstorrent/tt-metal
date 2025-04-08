@@ -2,21 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-import torch
-from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
-
-
-import random
 import json
-import ttnn
-from models.experimental.bert_large_perf.tt.embeddings import PytorchEmbeddings
-from models.experimental.bert_large_perf.tt.bert_encoder import TtBertEncoder
-from models.experimental.bert_large_perf.fused_ops.linear import Linear
-from models.experimental.bert_large_perf.fused_ops.layernorm import (
-    create_var_scaler,
-)
+import random
+
+import torch
+from loguru import logger
+from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from tt_lib.utils import pad_activation, pad_weight
+
+import ttnn
+from models.experimental.bert_large_perf.fused_ops.layernorm import create_var_scaler
+from models.experimental.bert_large_perf.fused_ops.linear import Linear
+from models.experimental.bert_large_perf.tt.bert_encoder import TtBertEncoder
+from models.experimental.bert_large_perf.tt.embeddings import PytorchEmbeddings
 from models.utility_functions import profiler
 
 

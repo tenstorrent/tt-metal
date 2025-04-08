@@ -13,13 +13,12 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import torch
-
-from torchvision import transforms, datasets
 from loguru import logger
-import ttnn
+from torchvision import datasets, transforms
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+import ttnn
 from models.experimental.mnist.tt.mnist_model import mnist_model
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 def test_mnist_inference(model_location_generator):

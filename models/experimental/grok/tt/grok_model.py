@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.experimental.grok.tt.grok_common import LightweightModule
 from models.experimental.grok.tt.grok_decoder import TtTransformerBlock
 from models.experimental.grok.tt.grok_rms_norm import TtRMSNormSharded
-from models.experimental.grok.tt.grok_common import LightweightModule
 
 
 class TtTransformer(LightweightModule):

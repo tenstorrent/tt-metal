@@ -3,18 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
-
+from loguru import logger
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from transformers.generation.configuration_utils import GenerationConfig
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
-
-from loguru import logger
-import models.experimental.bloom.tt.bloom_causal_lm as bloom_causal_lm
-import models.experimental.bloom.bloom_utils as bloom_utils
-
 from transformers.generation.logits_process import (
     EncoderNoRepeatNGramLogitsProcessor,
     EncoderRepetitionPenaltyLogitsProcessor,
@@ -35,6 +26,11 @@ from transformers.generation.logits_process import (
     SuppressTokensAtBeginLogitsProcessor,
     SuppressTokensLogitsProcessor,
 )
+
+import models.experimental.bloom.bloom_utils as bloom_utils
+import models.experimental.bloom.tt.bloom_causal_lm as bloom_causal_lm
+import ttnn
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 def _merge_criteria_processor_list(

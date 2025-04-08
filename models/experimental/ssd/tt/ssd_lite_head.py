@@ -2,13 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
-from typing import (
-    Dict,
-    List,
-)
-import ttnn
+from typing import Dict, List
 
+import torch.nn as nn
+
+import ttnn
 from models.experimental.ssd.tt.ssd_classification_head import TtSSDclassificationhead
 from models.experimental.ssd.tt.ssd_regression_head import TtSSDregressionhead
 

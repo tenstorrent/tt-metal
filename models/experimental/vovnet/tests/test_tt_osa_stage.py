@@ -2,19 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 import timm
-
+import torch
 from loguru import logger
 
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
-    comp_allclose,
-    comp_pcc,
-)
 from models.experimental.vovnet.tt.osa_stage import TtOsaStage
+from models.utility_functions import comp_allclose, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(

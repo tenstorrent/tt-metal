@@ -2,19 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+import glob
+import os
+from typing import List, Optional, Tuple, Union
 
-from typing import List, Tuple, Union, Optional
+import torch
 from packaging import version
 from PIL import Image
-import os
-import glob
-from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
 
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
+from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 parsed_torch_version_base = version.parse(version.parse(torch.__version__).base_version)
 

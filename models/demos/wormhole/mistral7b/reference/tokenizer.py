@@ -22,10 +22,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from sentencepiece import SentencePieceProcessor
 from pathlib import Path
 from typing import List
+
 import torch
+from sentencepiece import SentencePieceProcessor
 from torch import nn
 
 from models.demos.wormhole.mistral7b.reference.model import Transformer

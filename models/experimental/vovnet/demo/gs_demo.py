@@ -4,15 +4,11 @@
 
 import pytest
 import timm
-
-from torchvision.utils import save_image
 from loguru import logger
+from torchvision.utils import save_image
 
 from models.experimental.vovnet.tt.vovnet import vovnet_for_image_classification
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
-)
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(

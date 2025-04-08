@@ -8,6 +8,7 @@ AutoAnchor utils
 """
 
 from loguru import logger
+
 from models.experimental.yolov5.reference.utils.general import colorstr
 
 PREFIX = colorstr("AutoAnchor: ")

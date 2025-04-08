@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
-import torch
+
 import pytest
+import torch
 
 # Set Grok flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
@@ -17,15 +18,13 @@ from ttnn import ConcatMeshToTensor
 if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
     from tracy import signpost
 
-from models.experimental.grok.tt.grok_common import (
-    prepare_inputs_ttnn,
-    prepare_rotation_mat_ttnn,
-)
+from transformers import AutoTokenizer
+
+from models.experimental.grok.tt.grok_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
 from models.experimental.grok.tt.grok_model import TtTransformer
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler
-from transformers import AutoTokenizer
 
 
 @pytest.mark.model_perf_t3000

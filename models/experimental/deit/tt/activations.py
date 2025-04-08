@@ -6,8 +6,9 @@ import math
 from collections import OrderedDict
 
 import torch
-import ttnn
 from torch import Tensor, nn
+
+import ttnn
 
 
 class GELUActivation(nn.Module):

@@ -5,11 +5,10 @@
 from torch import nn
 
 import ttnn
-
 from models.experimental.deit.tt.activations import ACT2FN
 from models.experimental.deit.tt.deit_config import DeiTConfig
-from models.utility_functions import torch_to_tt_tensor_rm
 from models.helper_funcs import Linear as TtLinear
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtDeiTIntermediate(nn.Module):

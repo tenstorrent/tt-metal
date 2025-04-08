@@ -3,28 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-import pytest
-from loguru import logger
-from typing import Tuple, Callable
+from typing import Callable, Tuple
 
 import numpy as np
+import pytest
 import torch
-from transformers import AutoTokenizer
+from loguru import logger
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 import ttnn
-
-from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
-from models.demos.wormhole.mamba.tt import model_config
-from models.demos.wormhole.mamba.tt.model_config import ModelMode
-from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
-
 from models.datasets.llm_dataset_utils import (
-    prepare_textgen_dataset,
-    prepare_textgen_dataloader,
     calculate_acc_metrics,
+    prepare_textgen_dataloader,
+    prepare_textgen_dataset,
     verify_acc_metrics,
 )
+from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
+from models.demos.wormhole.mamba.tt import model_config
+from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
+from models.demos.wormhole.mamba.tt.model_config import ModelMode
 from models.utility_functions import skip_for_grayskull
 
 

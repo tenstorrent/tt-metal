@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-
 from tt_lib import fallback_ops
-from models.experimental.vovnet.tt.osa_block import TtOsaBlock
+
 import ttnn
+from models.experimental.vovnet.tt.osa_block import TtOsaBlock
 
 
 class TtOsaStage(nn.Module):

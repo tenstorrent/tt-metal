@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
+from loguru import logger
 
 # import ttnn
 from models.demos.llama3_subdevices.tt.llama_common import HostEmbedding
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-
-from loguru import logger
 
 
 @torch.no_grad()

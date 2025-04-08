@@ -2,13 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from transformers import AutoTokenizer
-from transformers import (
-    RobertaForMaskedLM,
-    RobertaForQuestionAnswering,
-    RobertaForMultipleChoice,
-)
 import torch
+from transformers import AutoTokenizer, RobertaForMaskedLM, RobertaForMultipleChoice, RobertaForQuestionAnswering
 
 """
 These functions are used for demonstrating the use of Huggingface models,

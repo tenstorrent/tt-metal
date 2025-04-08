@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 # This file fixes ultralytics dependency for loading yolov8s-world model weights at ckpt = torch.load(w, map_location=map_location) as pip install ultralytics causes error in tt device.
 

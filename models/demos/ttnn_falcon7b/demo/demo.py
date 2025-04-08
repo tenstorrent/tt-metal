@@ -3,23 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import time
 from functools import partial
+
 import torch
 from loguru import logger
-import time
-from transformers import AutoTokenizer, FalconConfig, FalconForCausalLM
 from tqdm import tqdm
-import ttnn
+from transformers import AutoTokenizer, FalconConfig, FalconForCausalLM
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
 
+import ttnn
+from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.ttnn_falcon7b.tt.model_config import get_model_config, get_tt_cache_path, model_config_entries
 from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    profiler,
     nearest_32,
+    profiler,
 )
 
 END_OF_TEXT = 11

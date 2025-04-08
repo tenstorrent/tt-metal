@@ -2,10 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 import timm
-
+import torch
 from loguru import logger
 from torchvision.utils import save_image
 

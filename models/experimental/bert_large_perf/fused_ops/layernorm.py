@@ -4,17 +4,11 @@
 
 
 import torch
+from tt_lib.utils import pad_weight, print_diff_argmax, roundup32, tilize_to_list
+from tt_lib.utils import tt2torch as t2t
+from tt_lib.utils import untilize
 
 import ttnn
-from tt_lib.utils import (
-    pad_weight,
-    untilize,
-    tilize_to_list,
-    print_diff_argmax,
-    pad_weight,
-    tt2torch as t2t,
-    roundup32,
-)
 
 
 def create_var_scaler(H, W, layer_norm_eps, device):

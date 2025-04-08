@@ -2,13 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.utility_functions import tt2torch_tensor
+import os
+from pathlib import Path
+
 import torch
-import ttnn
 from transformers import GPT2LMHeadModel
 from tt_lib.utils import pad_weight
-from pathlib import Path
-import os
+
+import ttnn
+from models.utility_functions import tt2torch_tensor
 
 
 def unpad_from_zero(x, desired_shape):

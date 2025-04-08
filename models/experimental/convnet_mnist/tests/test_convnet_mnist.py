@@ -4,15 +4,11 @@
 
 import torch
 from loguru import logger
-import ttnn
 
-from models.utility_functions import (
-    comp_pcc,
-    tt2torch_tensor,
-    torch2tt_tensor,
-)
-from models.experimental.convnet_mnist.tt.convnet_mnist import convnet_mnist
+import ttnn
 from models.experimental.convnet_mnist.convnet_mnist_utils import get_test_data
+from models.experimental.convnet_mnist.tt.convnet_mnist import convnet_mnist
+from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor
 
 
 def test_mnist_inference(device):

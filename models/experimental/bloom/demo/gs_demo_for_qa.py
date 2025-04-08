@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-from loguru import logger
-from datasets import load_dataset
 import evaluate
-from models.experimental.bloom.bloom_utils import pad_input_32
+import pytest
+import torch
+from datasets import load_dataset
+from loguru import logger
+from transformers import BloomForQuestionAnswering, BloomTokenizerFast
 
-from transformers import BloomTokenizerFast, BloomForQuestionAnswering
+from models.experimental.bloom.bloom_utils import pad_input_32
 from models.experimental.bloom.tt.bloom_qa import TtBloomForQuestionAnswering
 
 

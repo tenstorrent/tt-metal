@@ -1,24 +1,17 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
 from loguru import logger
+
 import ttnn
-from models.demos.llama3_subdevices.tt.llama_common import (
-    sample_host,
-    HostEmbedding,
-    PagedAttentionConfig,
-)
-from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
+from models.demos.llama3_subdevices.tt.llama_common import HostEmbedding, PagedAttentionConfig, sample_host
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
+from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()

@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional
+
 import torch
 from torch import nn
 
-
-from models.experimental.deit.tt.deit_patch_embeddings import DeiTPatchEmbeddings
 from models.experimental.deit.tt.deit_config import DeiTConfig
+from models.experimental.deit.tt.deit_patch_embeddings import DeiTPatchEmbeddings
 
 
 class DeiTEmbeddings(nn.Module):

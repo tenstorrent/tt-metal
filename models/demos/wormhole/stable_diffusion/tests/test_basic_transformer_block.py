@@ -6,19 +6,17 @@
 import pytest
 import torch
 from diffusers import StableDiffusionPipeline
-import ttnn
-
-from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import basic_transformer_block
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
-    skip_for_grayskull,
-)
+
+import ttnn
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import basic_transformer_block
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     preprocess_and_push_input_to_device,
 )
-from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
+from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()

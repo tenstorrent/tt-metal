@@ -4,14 +4,11 @@
 
 
 import torch.nn as nn
+from tt_lib import fallback_ops
 
 import ttnn
-
-from tt_lib import fallback_ops
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-)
 from models.experimental.vovnet.vovnet_utils import create_batchnorm
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtSeparableConvNormAct(nn.Module):

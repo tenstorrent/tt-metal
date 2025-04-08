@@ -2,18 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
+
 import ttnn
+from models.demos.wormhole.mistral7b.reference.model import FeedForward
 from models.demos.wormhole.mistral7b.tt.mistral_mlp import TtMistralMLP
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
-from models.demos.wormhole.mistral7b.reference.model import FeedForward
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")

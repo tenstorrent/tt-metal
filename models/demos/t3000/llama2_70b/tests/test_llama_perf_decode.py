@@ -2,28 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import defaultdict
+
 import pytest
-from loguru import logger
 import torch
+from loguru import logger
+
 import ttnn
-
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-
-from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
     BASE_URL,
+    check_mesh_device,
     load_llama_state_dict,
+    setup_llama_env,
     should_skip_model_load,
 )
-from models.utility_functions import (
-    profiler,
-    skip_for_grayskull,
-)
+from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 from models.perf.perf_utils import prep_perf_report
-
-from collections import defaultdict
+from models.utility_functions import profiler, skip_for_grayskull
 
 
 def get_decode_time(profiler, start_token, end_token):

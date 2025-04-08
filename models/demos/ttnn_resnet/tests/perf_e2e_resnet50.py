@@ -2,21 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from loguru import logger
 from transformers import AutoImageProcessor
-import pytest
+
 import ttnn
-
-from models.utility_functions import (
-    profiler,
-)
-
-from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
-
+from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra, load_resnet50_model
 from models.perf.perf_utils import prep_perf_report
-
-from models.demos.ttnn_resnet.tests.resnet50_test_infra import load_resnet50_model
+from models.utility_functions import profiler
 
 try:
     from tracy import signpost

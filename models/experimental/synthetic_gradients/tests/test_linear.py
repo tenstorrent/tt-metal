@@ -6,7 +6,7 @@ import torch
 from torch import nn
 
 import ttnn
-from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, tilize_to_list, untilize
 
 
 def ttLinear(weight, bias):

@@ -8,25 +8,21 @@ from pathlib import Path
 
 import cv2
 import torch
-from numpy import random
 from loguru import logger
-
+from numpy import random
 
 from models.experimental.yolov7.reference.models.experimental import attempt_load
 from models.experimental.yolov7.reference.utils.datasets import LoadImages
 from models.experimental.yolov7.reference.utils.general import (
     check_img_size,
+    increment_path,
     non_max_suppression,
     scale_coords,
-    xyxy2xywh,
     set_logging,
-    increment_path,
+    xyxy2xywh,
 )
 from models.experimental.yolov7.reference.utils.plots import plot_one_box
-from models.experimental.yolov7.reference.utils.torch_utils import (
-    select_device,
-    time_synchronized,
-)
+from models.experimental.yolov7.reference.utils.torch_utils import select_device, time_synchronized
 
 
 def test_detect(model_location_generator):

@@ -2,16 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
+from dataclasses import dataclass
+from typing import Optional, Tuple, Union
+
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
-import copy
-from typing import Optional, Tuple, Union
-from dataclasses import dataclass
 
 import ttnn
-from models.utility_functions import torch_to_tt_tensor_rm
 from models.experimental.trocr.tt.trocr_decoder_wrapper import TtTrOCRDecoderWrapper
 from models.helper_funcs import Linear
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 @dataclass

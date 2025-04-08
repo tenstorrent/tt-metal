@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.utility_functions import skip_for_grayskull
+
 from models.demos.wormhole.stable_diffusion.demo.demo import test_demo as demo
 from models.demos.wormhole.stable_diffusion.demo.demo import test_demo_diffusiondb as demo_db
+from models.utility_functions import skip_for_grayskull
 
 
 @pytest.mark.timeout(600)

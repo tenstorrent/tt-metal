@@ -2,21 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
-import torch
+
 import pytest
-import os
+import torch
+
 import ttnn
+from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
+    freqs_to_rotation_matrix,
     precompute_freqs,
     prepare_inputs_ttnn,
-    freqs_to_rotation_matrix,
     sample,
 )
-from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
+from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
-from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
-
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler, skip_for_grayskull
 

@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import torch.nn.functional as F
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-import torch.nn.functional as F
 
 
 def pad_to_next_multiple(tensor):

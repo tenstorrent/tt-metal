@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_resnetblock2d import TtResnetBlock2D
+
 from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_downsample2d import TtDownsample2D
+from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_resnetblock2d import TtResnetBlock2D
 
 
 # TODO: change to match new impl of resnet and downsample

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
+
 import torch
 from loguru import logger
 
@@ -12,13 +13,10 @@ if os.getenv("CI") == "true":
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
 
 import ttnn
-from models.experimental.grok.tt.grok_embedding import TtGrokEmbedding
 from models.experimental.grok.reference.tokenizer import Tokenizer
+from models.experimental.grok.tt.grok_embedding import TtGrokEmbedding
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 class Emb(torch.nn.Module):

@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from datasets import load_dataset
-from transformers import T5ForConditionalGeneration, AutoTokenizer
 import evaluate
-from loguru import logger
 import pytest
+from datasets import load_dataset
+from loguru import logger
+from transformers import AutoTokenizer, T5ForConditionalGeneration
 
 
 def t5_cpu_demo(model_name, iterations):

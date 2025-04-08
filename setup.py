@@ -4,12 +4,12 @@
 
 import os
 import subprocess
+from collections import namedtuple
 from dataclasses import dataclass
 from functools import partial
-from collections import namedtuple
-
 from pathlib import Path
-from setuptools import setup, Extension, find_namespace_packages
+
+from setuptools import Extension, find_namespace_packages, setup
 from setuptools.command.build_ext import build_ext
 
 

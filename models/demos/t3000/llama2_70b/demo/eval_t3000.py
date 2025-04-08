@@ -2,28 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
-import os
 import json
-import torch
+import os
+from dataclasses import dataclass
+from datetime import datetime
 
 import datasets
 import pytest
+import torch
 from loguru import logger
 
-from models.demos.t3000.llama2_70b.demo.demo import (
-    build_generator,
-    construct_arg,
-)
-from datetime import datetime
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
-)
-from models.demos.t3000.llama2_70b.demo.eval import (
-    wikitext_detokenizer,
-    calculate_perplexity,
-)
+from models.demos.t3000.llama2_70b.demo.demo import build_generator, construct_arg
+from models.demos.t3000.llama2_70b.demo.eval import calculate_perplexity, wikitext_detokenizer
+from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, setup_llama_env
 
 
 @dataclass

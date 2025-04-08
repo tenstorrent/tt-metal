@@ -2,24 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import json
-from time import time
-from datetime import datetime
-from loguru import logger
 import os
-import ttnn
+from datetime import datetime
+from time import time
+
 import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
+    cache_attention,
+    freqs_to_rotation_matrix,
+    precompute_freqs,
     prepare_inputs_ttnn,
     sample,
-    precompute_freqs,
-    freqs_to_rotation_matrix,
-    cache_attention,
 )
-from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
-from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 
 
 class Emb(torch.nn.Module):

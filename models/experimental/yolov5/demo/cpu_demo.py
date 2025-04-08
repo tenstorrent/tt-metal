@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 import torch
-from loguru import logger
 from datasets import load_dataset
+from loguru import logger
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -17,12 +17,7 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from models.experimental.yolov5.reference.models.common import DetectMultiBackend
-from models.experimental.yolov5.reference.utils.dataloaders import (
-    IMG_FORMATS,
-    VID_FORMATS,
-    LoadImages,
-)
-
+from models.experimental.yolov5.reference.utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages
 from models.experimental.yolov5.reference.utils.general import (
     Profile,
     check_file,
@@ -33,11 +28,7 @@ from models.experimental.yolov5.reference.utils.general import (
     scale_boxes,
     xyxy2xywh,
 )
-
-from models.experimental.yolov5.reference.utils.plots import (
-    Annotator,
-    colors,
-)
+from models.experimental.yolov5.reference.utils.plots import Annotator, colors
 
 
 def download_images(path):

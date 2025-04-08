@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
+import types
+from typing import List, Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import types
-import functools
-
-from typing import Optional, Tuple, Union, List
-
 
 from models.experimental.vovnet.vovnet_utils import *
 

@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import logging
 
-import ttnn
+import torch.nn as nn
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import torch_to_tt_tensor_rm
+
+import ttnn
 from models.experimental.hrnet.hrnet_utils import create_batchnorm
+from models.utility_functions import torch_to_tt_tensor_rm
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,6 @@
 from loguru import logger
 
 import ttnn
-
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 

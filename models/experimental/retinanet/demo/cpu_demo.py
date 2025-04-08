@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torchvision.models.detection import retinanet_resnet50_fpn_v2
 from loguru import logger
+from torchvision.models.detection import retinanet_resnet50_fpn_v2
 
 
 def test_cpu_demo(imagenet_sample_input, reset_seeds):

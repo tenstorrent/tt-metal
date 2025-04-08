@@ -3,14 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from transformers import BloomForCausalLM, BloomTokenizerFast
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
-
 from loguru import logger
+from transformers import BloomForCausalLM, BloomTokenizerFast
+
 import models.experimental.bloom.tt.bloom_causal_lm as bloom_causal_lm
-from models.utility_functions import is_wormhole_b0, is_blackhole
+from models.utility_functions import is_blackhole, is_wormhole_b0
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")

@@ -2,18 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import json
-import pytest
-from loguru import logger
 
+import pytest
+import torch
+from loguru import logger
 from transformers import AutoTokenizer, T5Model
-from models.utility_functions import (
-    tt2torch_tensor,
-    comp_pcc,
-    is_wormhole_b0,
-)
+
 from models.experimental.t5.tt.t5_model import TtT5Model
+from models.utility_functions import comp_pcc, is_wormhole_b0, tt2torch_tensor
 
 pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Skip for Wormhole B0")
 

@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torch import nn
 import torch.nn.functional as F
+from torch import nn
 
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation

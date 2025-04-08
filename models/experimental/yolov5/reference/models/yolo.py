@@ -17,10 +17,10 @@ import platform
 import sys
 from copy import deepcopy
 from pathlib import Path
-from loguru import logger
 
 import torch
 import torch.nn as nn
+from loguru import logger
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLOv5 root directory
@@ -32,15 +32,8 @@ if platform.system() != "Windows":
 
 from models.experimental.yolov5.reference.models.common import Conv
 from models.experimental.yolov5.reference.models.experimental import MixConv2d
-from models.experimental.yolov5.reference.utils.autoanchor import (
-    check_anchor_order,
-)
-from models.experimental.yolov5.reference.utils.general import (
-    check_version,
-    check_yaml,
-    make_divisible,
-    print_args,
-)
+from models.experimental.yolov5.reference.utils.autoanchor import check_anchor_order
+from models.experimental.yolov5.reference.utils.general import check_version, check_yaml, make_divisible, print_args
 from models.experimental.yolov5.reference.utils.plots import feature_visualization
 from models.experimental.yolov5.reference.utils.torch_utils import (
     fuse_conv_and_bn,

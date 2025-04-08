@@ -2,30 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
 import evaluate
-
-import ttnn
-from loguru import logger
-from transformers import AutoFeatureExtractor
+import pytest
+import torch
 import torchvision.transforms as transforms
-from transformers import AutoImageProcessor
-
-from models.experimental.swin.tt.swin_for_image_classification import (
-    TtSwinForImageClassification,
-)
+from loguru import logger
+from transformers import AutoFeatureExtractor, AutoImageProcessor
 from transformers import SwinForImageClassification as HF_SwinForImageClassification
 
+import ttnn
+from models.experimental.swin.swin_utils import get_data
+from models.experimental.swin.tt.swin_for_image_classification import TtSwinForImageClassification
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
-    profiler,
-    enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    profiler,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
-from models.perf.perf_utils import prep_perf_report
-from models.experimental.swin.swin_utils import get_data
 
 
 def run_swin_perf(device, model_name, iterations, model_location_generator):

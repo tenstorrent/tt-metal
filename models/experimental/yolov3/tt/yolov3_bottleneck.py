@@ -4,9 +4,8 @@
 
 import torch.nn as nn
 
-from models.experimental.yolov3.tt.yolov3_conv import TtConv
-
 import ttnn
+from models.experimental.yolov3.tt.yolov3_conv import TtConv
 
 
 class TtBottleneck(nn.Module):

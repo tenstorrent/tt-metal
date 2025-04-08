@@ -2,12 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import nn
-from typing import Union, Optional, Tuple
+from typing import Optional, Tuple, Union
 
+from torch import nn
 
 import ttnn
-
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_self_attention import TtDeiTSelfAttention
 from models.experimental.deit.tt.deit_self_output import TtDeiTSelfOutput

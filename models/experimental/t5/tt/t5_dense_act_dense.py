@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from torch import nn
+
 import ttnn
 from models.utility_functions import torch2tt_tensor
 

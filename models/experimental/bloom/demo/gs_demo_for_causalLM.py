@@ -2,16 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from transformers import BloomForCausalLM, BloomTokenizerFast
+import evaluate
 import numpy as np
 import pytest
+from loguru import logger
+from transformers import BloomForCausalLM, BloomTokenizerFast
 
+import models.experimental.bloom.tt.bloom_causal_lm as bloom_causal_lm
 from models.experimental.bloom.bloom_utils import run_generate
 from models.experimental.bloom.dataset_utils import get_data
-import evaluate
-
-from loguru import logger
-import models.experimental.bloom.tt.bloom_causal_lm as bloom_causal_lm
 
 
 @pytest.mark.parametrize(

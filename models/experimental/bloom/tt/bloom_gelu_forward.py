@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
+
 import models.experimental.bloom.bloom_utils as bloom_utils
+import ttnn
 
 mem_config = ttnn.L1_MEMORY_CONFIG
 

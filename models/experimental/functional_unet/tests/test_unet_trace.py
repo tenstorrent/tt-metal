@@ -3,27 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
-import ttnn
-import pytest
 
+import pytest
 from loguru import logger
 
+import ttnn
+from models.experimental.functional_unet.tests.common import (
+    UNET_FULL_MODEL_PCC,
+    UNET_TRACE_REGION_SIZE,
+    UNetPerformanceStatistics,
+    is_n300_with_eth_dispatch_cores,
+    is_t3k_with_eth_dispatch_cores,
+    verify_with_pcc,
+)
+from models.experimental.functional_unet.tt import unet_shallow_torch, unet_shallow_ttnn
 from models.experimental.functional_unet.tt.model_preprocessing import (
     create_unet_input_tensors,
     create_unet_model_parameters,
 )
-from models.experimental.functional_unet.tt import unet_shallow_torch
-from models.experimental.functional_unet.tt import unet_shallow_ttnn
-from models.experimental.functional_unet.tests.common import (
-    verify_with_pcc,
-    is_n300_with_eth_dispatch_cores,
-    is_t3k_with_eth_dispatch_cores,
-    UNET_FULL_MODEL_PCC,
-    UNET_TRACE_REGION_SIZE,
-    UNetPerformanceStatistics,
-)
-
-from models.utility_functions import skip_for_grayskull, divup
+from models.utility_functions import divup, skip_for_grayskull
 
 
 @skip_for_grayskull("UNet not currently supported on GS")

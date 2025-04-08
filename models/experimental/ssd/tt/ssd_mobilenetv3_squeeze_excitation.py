@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
 import tt_lib.fallback_ops as fallback_ops
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-)
+
+import ttnn
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtSqueezeExcitation(torch.nn.Module):

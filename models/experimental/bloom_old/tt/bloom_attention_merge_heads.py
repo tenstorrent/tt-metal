@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
+
 import models.experimental.bloom_old.bloom_utils as bloom_utils
+import ttnn
 
 
 def merge_heads(x: torch.Tensor, num_heads, hidden_size, num_attention_heads) -> torch.Tensor:

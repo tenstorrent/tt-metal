@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Union
+
 import torch.nn as nn
+
 import ttnn
-from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import (
-    TtMobileNetV3ConvLayer,
-)
+from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import TtMobileNetV3ConvLayer
 
 
 class TtMobileNetV3InvertedResidual(nn.Module):

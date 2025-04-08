@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
 from transformers import AutoFeatureExtractor
 from transformers import SwinForImageClassification as HF_SwinForImageClassification

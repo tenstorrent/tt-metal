@@ -4,8 +4,8 @@
 
 import pytest
 
-from models.utility_functions import run_for_blackhole
 from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
+from models.utility_functions import run_for_blackhole
 
 # These perf figures were measured on one of the machines in ird -
 # as e2e perf depends on the performance of the host machine,

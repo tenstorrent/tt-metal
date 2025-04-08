@@ -2,24 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from queue import Queue
-from dataclasses import dataclass
 import json
-import torch
-import torch.nn.functional as F
+from dataclasses import dataclass
+from queue import Queue
 
 import pytest
+import torch
+import torch.nn.functional as F
 from loguru import logger
+from transformers.generation.utils import top_k_top_p_filtering
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-from transformers.generation.utils import top_k_top_p_filtering
-from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
-from models.demos.t3000.llama2_70b.tt.llama_common import load_llama_state_dict
 from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
-)
+from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device, load_llama_state_dict, setup_llama_env
+from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
 
 
 @dataclass

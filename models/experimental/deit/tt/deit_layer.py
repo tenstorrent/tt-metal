@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import nn
 from typing import Optional, Tuple, Union
 
-import ttnn
-
+from torch import nn
 from tt_lib.fallback_ops import fallback_ops
-from models.experimental.deit.tt.deit_config import DeiTConfig
+
+import ttnn
 from models.experimental.deit.tt.deit_attention import TtDeiTAttention
+from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_intermediate import TtDeiTIntermediate
 from models.experimental.deit.tt.deit_output import TtDeiTOutput
 

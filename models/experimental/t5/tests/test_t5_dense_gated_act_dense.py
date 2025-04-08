@@ -3,16 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
 import torch
 from loguru import logger
-
 from transformers import T5Model
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    comp_pcc,
-)
+
 from models.experimental.t5.tt.t5_dense_gated_act_dense import TtT5DenseGatedActDense
+from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor
 
 
 def run_test_T5DenseGatedActDense_inference(device):

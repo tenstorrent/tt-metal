@@ -17,11 +17,7 @@ from torch import nn
 
 import ttnn
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import (
-    LoadImages,
-    postprocess,
-    preprocess,
-)
+from models.experimental.yolo_evaluation.yolo_evaluation_utils import LoadImages, postprocess, preprocess
 from models.utility_functions import disable_persistent_kernel_cache
 
 

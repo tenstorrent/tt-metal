@@ -1,16 +1,16 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
 from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, preprocess_inputs, load_inputs
-from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import load_inputs, prepare_inputs_ttnn, preprocess_inputs
+from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 
 

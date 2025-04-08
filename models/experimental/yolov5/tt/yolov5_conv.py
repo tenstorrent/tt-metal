@@ -3,14 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
 from loguru import logger
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import (
-    torch2tt_tensor,
-    run_conv_on_device_wrapper,
-    is_conv_supported_on_device,
-)
+
+import ttnn
+from models.utility_functions import is_conv_supported_on_device, run_conv_on_device_wrapper, torch2tt_tensor
 
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation

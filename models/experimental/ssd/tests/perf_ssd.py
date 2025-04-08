@@ -2,22 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from loguru import logger
+from torchvision.models.detection import SSDLite320_MobileNet_V3_Large_Weights
+from torchvision.models.detection import ssdlite320_mobilenet_v3_large as pretrained
+
+from models.experimental.ssd.tt.ssd_lite import ssd_for_object_detection
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
-    torch_to_tt_tensor_rm,
+    Profiler,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-)
-from models.utility_functions import Profiler
-from models.perf.perf_utils import prep_perf_report
-from models.experimental.ssd.tt.ssd_lite import ssd_for_object_detection
-import pytest
-
-
-from torchvision.models.detection import (
-    SSDLite320_MobileNet_V3_Large_Weights,
-    ssdlite320_mobilenet_v3_large as pretrained,
+    torch_to_tt_tensor_rm,
 )
 
 BATCH_SIZE = 1

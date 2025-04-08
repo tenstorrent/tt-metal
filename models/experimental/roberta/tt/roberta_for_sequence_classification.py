@@ -2,16 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+from typing import Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
 
-from typing import Optional, Tuple, Union
-from dataclasses import dataclass
-
 import ttnn
-
-from models.experimental.roberta.tt.roberta_model import TtRobertaModel
 from models.experimental.roberta.tt.roberta_classification_head import TtRobertaClassificationHead
+from models.experimental.roberta.tt.roberta_model import TtRobertaModel
 
 
 @dataclass

@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from models.utility_functions import nearest_32
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.experimental.grok.tt.grok_common import LightweightModule
+from models.utility_functions import nearest_32
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 class TtGrokAttention(LightweightModule):

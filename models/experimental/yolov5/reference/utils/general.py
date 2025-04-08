@@ -10,7 +10,6 @@ General utils
 import contextlib
 import glob
 import inspect
-from loguru import logger
 import math
 import os
 import platform
@@ -37,6 +36,7 @@ import pkg_resources as pkg
 import torch
 import torchvision
 import yaml
+from loguru import logger
 
 from models.experimental.yolov5.reference.utils.downloads import curl_download
 from models.experimental.yolov5.reference.utils.metrics import box_iou

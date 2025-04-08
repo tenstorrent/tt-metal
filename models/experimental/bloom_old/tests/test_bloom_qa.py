@@ -3,20 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
-from transformers import (
-    BloomForQuestionAnswering,
-    BloomTokenizerFast,
-    pipeline,
-)
-from models.utility_functions import print_diff_argmax
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
-
 from loguru import logger
+from transformers import BloomForQuestionAnswering, BloomTokenizerFast, pipeline
+
 import models.experimental.bloom_old.tt.bloom_qa as bloom_qa
+from models.utility_functions import print_diff_argmax
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 def pad_input_32(tensor, value):

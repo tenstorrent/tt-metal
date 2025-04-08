@@ -2,16 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import math
+from typing import Tuple
+
+import torch
+from fused_ops.linear import Linear as TtLinear
 from torch.nn import functional as F
 
-import ttnn
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.baddbmm as baddbmm
-
-from fused_ops.linear import Linear as TtLinear
-from typing import Tuple
+import ttnn
 
 
 def split_heads(fused_qkv: torch.Tensor, num_heads, head_dim) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

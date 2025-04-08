@@ -2,17 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import math
-from torch.nn import functional as F
+from typing import Tuple
 
-import ttnn
-import models.experimental.bloom.bloom_utils as bloom_utils
-import models.experimental.bloom.tt.bloom_merge_heads as bloom_merge_heads
+import torch
+from torch.nn import functional as F
 from tt_lib.fused_ops.softmax import softmax as tt_softmax
 
+import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.baddbmm as baddbmm
-from typing import Tuple
+import models.experimental.bloom.tt.bloom_merge_heads as bloom_merge_heads
+import ttnn
 from models.utility_functions import pad_by_zero
 
 

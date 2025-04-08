@@ -2,29 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import json
 
-from transformers import T5Model
+import pytest
+import torch
 from loguru import logger
+from transformers import T5Model
+from tt_lib.fused_ops.softmax import softmax as tt_softmax
 
 import ttnn
-import pytest
-
-from models.experimental.t5.tt.t5_attention import (
-    TtT5Attention,
-    t5_unshape_pt,
-    t5_unshape_tt,
-    t5_shape_tt,
-    t5_shape_pt,
-)
-from tt_lib.fused_ops.softmax import softmax as tt_softmax
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    comp_pcc,
-    is_wormhole_b0,
-)
+from models.experimental.t5.tt.t5_attention import TtT5Attention, t5_shape_pt, t5_shape_tt, t5_unshape_pt, t5_unshape_tt
+from models.utility_functions import comp_pcc, is_wormhole_b0, torch2tt_tensor, tt2torch_tensor
 
 pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Skip for Wormhole B0")
 

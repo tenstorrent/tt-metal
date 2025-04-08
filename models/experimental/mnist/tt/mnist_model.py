@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
-
-from tt_lib.fused_ops.softmax import softmax
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import torch2tt_tensor
+from tt_lib.fused_ops.softmax import softmax
+
+import ttnn
 from models.experimental.mnist.reference.mnist import MnistModel
+from models.utility_functions import torch2tt_tensor
 
 
 class TtMnistModel(torch.nn.Module):

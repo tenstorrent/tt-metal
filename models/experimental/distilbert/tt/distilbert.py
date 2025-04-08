@@ -2,12 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.experimental.distilbert.tt.distilbert_for_question_answering import (
-    TtDistilBertForQuestionAnswering,
-)
-from transformers import (
-    DistilBertForQuestionAnswering as HF_DistilBertForQuestionAnswering,
-)
+from transformers import DistilBertForQuestionAnswering as HF_DistilBertForQuestionAnswering
+
+from models.experimental.distilbert.tt.distilbert_for_question_answering import TtDistilBertForQuestionAnswering
 
 
 def _distilbert(config, state_dict, base_address, device):

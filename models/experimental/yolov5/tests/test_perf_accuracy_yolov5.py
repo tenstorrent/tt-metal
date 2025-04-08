@@ -4,13 +4,14 @@
 
 import os
 import sys
-import torch
-import ttnn
-import pytest
-import numpy as np
-
-from loguru import logger
 from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
@@ -18,24 +19,23 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
-from models.perf.perf_utils import prep_perf_report
 from models.experimental.yolov5.reference.models.common import DetectMultiBackend
-from models.experimental.yolov5.tt.yolov5_detection_model import yolov5s_detection_model
-from models.utility_functions import (
-    torch2tt_tensor,
-    Profiler,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-)
-from models.experimental.yolov5.reference.utils.metrics import ap_per_class
-from models.experimental.yolov5.reference.utils.general import check_img_size
 from models.experimental.yolov5.reference.utils.dataloaders import LoadImages
 from models.experimental.yolov5.reference.utils.general import (
+    check_img_size,
     non_max_suppression,
     scale_boxes,
     xyxy2xywh,
 )
-
+from models.experimental.yolov5.reference.utils.metrics import ap_per_class
+from models.experimental.yolov5.tt.yolov5_detection_model import yolov5s_detection_model
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import (
+    Profiler,
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    torch2tt_tensor,
+)
 
 BATCH_SIZE = 1
 

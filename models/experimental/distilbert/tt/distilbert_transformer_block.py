@@ -3,17 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Tuple
+
 import torch.nn as nn
 
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-)
-
 import ttnn
-from models.experimental.distilbert.tt.distilbert_multihead_self_attention import (
-    TtMultiHeadSelfAttention,
-)
 from models.experimental.distilbert.tt.distilbert_ffn import TtFFN
+from models.experimental.distilbert.tt.distilbert_multihead_self_attention import TtMultiHeadSelfAttention
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtTransformerBlock(nn.Module):

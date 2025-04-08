@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import ttnn
-import torch
 
-from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, ParameterDict
+import torch
+from ttnn.model_preprocessing import ParameterDict, fold_batch_norm2d_into_conv2d
+
+import ttnn
 
 
 def nearest_16(x):

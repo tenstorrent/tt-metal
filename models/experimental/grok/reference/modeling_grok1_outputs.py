@@ -13,10 +13,7 @@ __all__ = [
 ]
 
 try:
-    from transformers.modeling_outputs import (
-        MoeCausalLMOutputWithPast,
-        MoeModelOutputWithPast,
-    )
+    from transformers.modeling_outputs import MoeCausalLMOutputWithPast, MoeModelOutputWithPast
 except:
 
     @dataclass

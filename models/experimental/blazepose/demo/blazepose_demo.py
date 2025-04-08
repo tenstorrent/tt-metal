@@ -2,16 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
-import torch
-import cv2
 from pathlib import Path
 
-from models.experimental.blazepose.demo.blazebase import resize_pad, denormalize_detections
+import cv2
+import numpy as np
+import torch
+
+from models.experimental.blazepose.demo.blazebase import denormalize_detections, resize_pad
 from models.experimental.blazepose.demo.blazepose import BlazePose
 from models.experimental.blazepose.demo.blazepose_landmark import BlazePoseLandmark
-
-from models.experimental.blazepose.demo.visualization import draw_detections, draw_landmarks, draw_roi, POSE_CONNECTIONS
+from models.experimental.blazepose.demo.visualization import POSE_CONNECTIONS, draw_detections, draw_landmarks, draw_roi
 
 """
 BlazePose is a two stage pipeline. (1, 896, 12) - is a regressor output for the first detector stage.

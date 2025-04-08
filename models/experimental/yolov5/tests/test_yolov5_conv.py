@@ -3,17 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import ttnn
 import torch
 from loguru import logger
+
 import ttnn
 from models.experimental.yolov5.reference.models.common import DetectMultiBackend
 from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv, TtYolov5Conv2D
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    comp_pcc,
-)
+from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor
 
 
 def test_Yolov5_Conv2D(device):

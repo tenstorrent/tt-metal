@@ -3,18 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import collections
+
+import llama_models.llama3.reference_impl.multimodal.encoder_utils as encoder_utils
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.multimodal.llama_conv2d_patch import TtLlamaConv2dPatch
-from models.tt_transformers.tt.multimodal.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
-from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
-from models.tt_transformers.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
-from models.tt_transformers.tt.multimodal.llama_positional_embedding import TtLlamaPositionalEmbedding
 from models.tt_transformers.tt.multimodal.llama_class_embedding import TtLlamaClassEmbedding
-
-import llama_models.llama3.reference_impl.multimodal.encoder_utils as encoder_utils
+from models.tt_transformers.tt.multimodal.llama_conv2d_patch import TtLlamaConv2dPatch
+from models.tt_transformers.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
+from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
+from models.tt_transformers.tt.multimodal.llama_positional_embedding import TtLlamaPositionalEmbedding
+from models.tt_transformers.tt.multimodal.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
 
 
 def to_2tuple(x):

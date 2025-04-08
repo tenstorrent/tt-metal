@@ -3,26 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import timm
 from loguru import logger
 
-
-import timm
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-    comp_allclose,
-    comp_pcc,
-)
 from models.experimental.hrnet.tt.hrnet_model import hrnet_w18_small
+from models.utility_functions import comp_allclose, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(
     "model_name, pcc",
     (("hrnet_w18_small", 0.99),),
 )
-def test_hrnet_model_inference(
-    device, model_name, pcc, imagenet_sample_input, reset_seeds
-):
+def test_hrnet_model_inference(device, model_name, pcc, imagenet_sample_input, reset_seeds):
     torch_model = timm.create_model(model_name, pretrained=True)
 
     tt_model = hrnet_w18_small(device, multi_scale_output=True)

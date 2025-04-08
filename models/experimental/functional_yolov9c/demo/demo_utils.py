@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import cv2
-import torch
-import requests
-import numpy as np
-import torch.nn as nn
 from pathlib import Path
+
+import cv2
+import numpy as np
+import requests
+import torch
+import torch.nn as nn
 from loguru import logger
 
 

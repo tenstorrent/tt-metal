@@ -2,16 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
-
 from functools import partial
 
-import ttnn
+import torch.nn as nn
 
+import ttnn
 from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import (
-    pad_by_zero,
-)
+from models.utility_functions import pad_by_zero
 
 
 class TtRobertaSelfOutput(nn.Module):

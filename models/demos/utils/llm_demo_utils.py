@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
 from loguru import logger
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
+
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
 def create_benchmark_data(profiler: BenchmarkProfiler, measurements: dict, N_warmup_iter: dict, targets: dict):

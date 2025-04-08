@@ -5,15 +5,11 @@
 
 import torch
 import torch.nn as nn
+from tt_lib.fallback_ops import fallback_ops
 
 import ttnn
-
-from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import (
-    tt2torch_tensor,
-)
 from models.experimental.roberta.roberta_common import torch2tt_tensor
-
+from models.utility_functions import tt2torch_tensor
 
 mem_config = ttnn.L1_MEMORY_CONFIG
 

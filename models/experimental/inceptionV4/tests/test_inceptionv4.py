@@ -2,16 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import timm
 import pytest
+import timm
+import torch
 from loguru import logger
 
-
 from models.experimental.inceptionV4.reference.inception import InceptionV4
-from models.utility_functions import (
-    comp_pcc,
-)
+from models.utility_functions import comp_pcc
 
 _batch_size = 1
 

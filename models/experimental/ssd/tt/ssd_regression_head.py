@@ -2,17 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import List
+
 import torch.nn as nn
-from typing import (
-    List,
-)
-import ttnn
 import tt_lib.fallback_ops as fallback_ops
 
-from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import (
-    TtMobileNetV3ConvLayer,
-)
-
+import ttnn
+from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import TtMobileNetV3ConvLayer
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 

@@ -2,20 +2,21 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
-import os
-import subprocess
-import shutil
 import curses
-import threading
-import shlex
-import re
-import time
-import signal
-import psutil
 import json
+import os
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+
 import matplotlib.pyplot as plt
 import numpy as np
+import psutil
 
 from models.tt_transformers.tt.model_config import parse_optimizations
 

@@ -3,15 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import ttnn
 
+import ttnn
 from models.experimental.vovnet.tt.conv_norm_act import TtConvNormAct
-from models.experimental.vovnet.tt.sequential_append_list import (
-    TtSequentialAppendList,
-)
-from models.experimental.vovnet.tt.effective_se_module import (
-    TtEffectiveSEModule,
-)
+from models.experimental.vovnet.tt.effective_se_module import TtEffectiveSEModule
+from models.experimental.vovnet.tt.sequential_append_list import TtSequentialAppendList
 
 
 class TtOsaBlock(nn.Module):

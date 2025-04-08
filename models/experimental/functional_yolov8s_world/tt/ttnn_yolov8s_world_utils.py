@@ -3,12 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from ttnn.model_preprocessing import preprocess_layernorm_parameter, preprocess_linear_bias, preprocess_linear_weight
+
 import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_linear_weight,
-    preprocess_linear_bias,
-    preprocess_layernorm_parameter,
-)
 from models.experimental.functional_yolov8s_world.reference.yolov8s_world_utils import *
 
 
