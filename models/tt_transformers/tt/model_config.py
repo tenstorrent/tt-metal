@@ -310,6 +310,7 @@ class ModelArgs:
         self.prefill_len_cutoff = 512 if self.arch_name == "blackhole" else 1024
         # TODO the following is parametrized for a vocab size of 128256 (used in LLama3). Should generalize for other models
         self.max_columns_per_device_lm_head = 128256 // 8 if self.arch_name == "blackhole" else 128256 // 4
+        self.dummy_weights = dummy_weights
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -432,7 +433,6 @@ class ModelArgs:
         else:
             self.optimizations = optimizations
 
-        self.dummy_weights = dummy_weights
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
         # Enable workarounds by default until di/dt issues are fixed
@@ -1344,7 +1344,15 @@ class ModelArgs:
         if self.from_hf_url:
             from transformers import AutoConfig
 
-            config = AutoConfig.from_pretrained(self.model_name).to_dict()
+            if self.dummy_weights:
+                norm_model_name = self.model_name.split("/")[-1]
+                logger.info(
+                    f"Loading state param for dummy {norm_model_name} from {self.LOCAL_HF_PARAMS[norm_model_name]}"
+                )
+                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[norm_model_name]).to_dict()
+            else:
+                config = AutoConfig.from_pretrained(self.model_name).to_dict()
+
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
