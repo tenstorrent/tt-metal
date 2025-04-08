@@ -1,0 +1,1 @@
+../../../ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py
