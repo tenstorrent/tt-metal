@@ -45,7 +45,7 @@ class Generator:
         self.formatter = formatter
 
     def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
-        batch, batch_seq_len = tokens.shape
+        batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
 
@@ -60,9 +60,20 @@ class Generator:
             last_token_idx = seq_len - 1
 
             prefill_seq_len = get_padded_prefill_len(seq_len)
-            prefill_ids = torch.cat(
-                [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
-            )
+            # it doesn't matter which value we pad with, we don't use these parts of the kv-cache or their outputs
+            # Handle both 2D (batch, seq) tokens and 3D (batch, seq, embedding_dim) embedding formats
+            if tokens.dim() == 2:
+                # For 2D tokens (token IDs)
+                prefill_ids = torch.cat(
+                    [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
+                )
+            else:
+                # For 3D tokens (embeddings)
+                embed_dim = tokens.shape[-1]
+                prefill_ids = torch.cat(
+                    [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len, embed_dim)],
+                    dim=1,
+                )
             if page_table is not None:
                 page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, seq_len)
 
@@ -82,7 +93,7 @@ class Generator:
         return output_logits
 
     def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None):
-        seq_len = tokens.shape[-1]
+        seq_len = tokens.shape[1]
         use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
         if use_chunked_prefill:
             """

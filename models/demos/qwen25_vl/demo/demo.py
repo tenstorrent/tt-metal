@@ -22,7 +22,7 @@ from models.tt_transformers.tt.common import (
 from models.demos.qwen25_vl.tt.common import preprocess_inputs_prefill
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data
-from models.demos.qwen25_vl.tt.common import merge_vision_tokens
+from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodel_rope_from_hf
 
 
 def create_tt_model(
@@ -105,7 +105,7 @@ def create_tt_model(
             "models/demos/qwen25_vl/demo/sample_prompts/demo.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            4096,  # max_seq_len, allow for image tokens
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
@@ -259,17 +259,8 @@ def test_demo(
         # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
         text_embeds = reference_model.model.embed_tokens(inputs.input_ids)
         input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_tokens, reference_model.config)
-        position_ids, rope_deltas = reference_model.get_rope_index(
-            inputs.input_ids,
-            inputs.image_grid_thw,
-            video_grid_thw=None,
-            second_per_grid_ts=None,
-            attention_mask=inputs.attention_mask,
-        )
-
         (
-            input_tokens_prefill_pt,
-            encoded_prompts,
+            input_prefill_pt,
             decoding_pos,
             prefill_lens,
         ) = preprocess_inputs_prefill(
@@ -277,11 +268,13 @@ def test_demo(
             model_args,
             max_generated_tokens,
         )
-
-        max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
-        assert (
-            max_generated_tokens + max_encoded_prompt_len <= max_seq_len
-        ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({max_seq_len})"
+        cos, sin, rope_deltas = multimodel_rope_from_hf(inputs, input_embeds, reference_model)
+        print(f"{rope_deltas=}")
+        # pad cos and sin to the same length as the input_prefill_pt, it doesn't matter what we pad with as we discard those parts
+        cos = torch.nn.functional.pad(cos, (0, 0, 0, input_prefill_pt.shape[1] - cos.shape[1]), value=1.0)
+        sin = torch.nn.functional.pad(sin, (0, 0, 0, input_prefill_pt.shape[1] - sin.shape[1]), value=0.0)
+        # replace our generated cos/sin with the reference model's versions
+        model.rope_setup.set_cos_sin(cos, sin)
 
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
@@ -292,12 +285,10 @@ def test_demo(
                 k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
-        input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
-
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
+            input_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
@@ -308,7 +299,7 @@ def test_demo(
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt,
+            input_prefill_pt,
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
@@ -318,7 +309,9 @@ def test_demo(
         logger.info(f"Prefill finished")
 
         # Keep track of generated outputs to print out every iteration
-        all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
+        all_outputs = [
+            [] for _ in range(batch_size)
+        ]  # we don't know how much of the prompt was prefilled because some will be image tokens
         for user in range(batch_size):
             user_tok = int(prefilled_token[user].item())
             all_outputs[user].append(user_tok)

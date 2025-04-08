@@ -106,17 +106,32 @@ class Transformer(LightweightModule):
         TODO: Debate whether this function is responsible for padding
         """
 
-        tokens = tokens.reshape(1, 1, 1, -1)
-        S = tokens.shape[-1]
-        tokens = ttnn.from_torch(
-            tokens,
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        tokens_embd = self.embd(tokens)
-        tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+        if tokens.dim() == 2:
+            tokens = tokens.reshape(1, 1, 1, -1)
+            S = tokens.shape[-1]
+            tokens = ttnn.from_torch(
+                tokens,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            tokens_embd = self.embd(tokens)
+            tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+        elif tokens.dim() == 3:
+            # tokens is actually embeddings
+            S = tokens.shape[2]
+            tokens_embd = ttnn.from_torch(
+                tokens,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            raise ValueError(
+                f"Invalid tokens shape: {tokens.shape}, expected 2D (batch, seq) or 3D (batch, seq, embedding_dim)"
+            )
 
         # Slice the rot mats to the prefill seqlen
         tt_rot_mats_prefill = [self.rope_setup.cos_matrix[:, :, :S, :], self.rope_setup.sin_matrix[:, :, :S, :]]
