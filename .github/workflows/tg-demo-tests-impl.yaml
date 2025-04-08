@@ -20,7 +20,7 @@ jobs:
       matrix:
         test-group: [
           # Deleting for now - LLM team will put in a new version soon
-          # { name: "TG Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 180, owner_id: U044T8U8DEF}, # Johanna Rock
+          { name: "TG Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 180, owner_id: U044T8U8DEF}, # Johanna Rock
           { name: "TG Falcon7b demo tests", arch: wormhole_b0, model: falcon7b, timeout: 120, owner_id: U05RWH3QUPM}, # Salar Hosseini
         ]
     runs-on:
@@ -66,12 +66,9 @@ jobs:
         if: ${{ (matrix.test-group.name == 'TG Falcon7b demo tests') && !cancelled() }}
         run: |
           python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
-          ls -la generated/benchmark_data
-          ls -la /work/generated/benchmark_data
-          cat /work/.github/actions/upload-data-via-sftp/action.yaml
       - name: Upload benchmark data
         if: ${{ (matrix.test-group.name == 'TG Falcon7b demo tests') && !cancelled() }}
-        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@6ff122dfc90962dabcb7e7048728a0647cfd01ae
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
