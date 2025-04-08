@@ -7,6 +7,7 @@
 #include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
@@ -16,19 +17,6 @@
 
 namespace ttnn {
 namespace operations::pool {
-
-namespace {
-
-// Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
-uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
-    float value;
-    switch (pool_type) {
-        case Pool2DType::MAX_POOL2D: value = -std::numeric_limits<float>::infinity(); break;
-    }
-    return bfloat16(value).to_packed();
-}
-
-}  // namespace
 
 template <Pool2DType pool_type>
 Tensor Pool2DOp<pool_type>::invoke(
@@ -160,6 +148,7 @@ Tensor Pool2DOp<pool_type>::invoke(
 }
 
 template class Pool2DOp<Pool2DType::MAX_POOL2D>;
+template class Pool2DOp<Pool2DType::AVG_POOL2D>;
 
 }  // namespace operations::pool
 }  // namespace ttnn
