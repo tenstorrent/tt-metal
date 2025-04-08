@@ -252,9 +252,7 @@ class UNetDownblock:
         device,
         mesh_mapper=None,
     ):
-        self.conv1 = UNetConv2D(
-            conv1, bn=bn1, device=device, reshard_if_not_optimal=True, mesh_mapper=mesh_mapper
-        )
+        self.conv1 = UNetConv2D(conv1, bn=bn1, device=device, reshard_if_not_optimal=True, mesh_mapper=mesh_mapper)
         self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, mesh_mapper=mesh_mapper)
         self.pool1 = UNetMaxPool2D(pool, conv2.out_channels, device=device)
 
