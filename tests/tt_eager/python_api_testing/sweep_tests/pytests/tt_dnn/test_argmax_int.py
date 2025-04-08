@@ -25,7 +25,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
         (torch.Size([1, 1, 2, 4])),
     ),
 )
-@pytest.mark.parametrize("dim", (-1,))
+@pytest.mark.parametrize("dim", (-1, None))
 @pytest.mark.parametrize("memconfig", (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG))
 class TestArgmax:
     def test_argmax(self, input_shapes, dim, memconfig, device):
@@ -42,19 +42,6 @@ class TestArgmax:
         tt_output_tensor_on_device = ttnn.argmax(input_tensor, dim=dim)
         tt_out_tensor = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         golden_tensor = torch.argmax(input_data, dim=dim)
-        if dim == 1 or dim == -3 or dim == 0 or dim == -4:
-            tt_out_tensor = tt_out_tensor[0, :, 0 : input_shapes[2], 0 : input_shapes[3]]
-        else:
-            if input_shapes[1] != 1 or input_shapes[0] != 1:
-                if dim == 2 or dim == -2:
-                    tt_out_tensor = tt_out_tensor[0, :, :, 0 : input_shapes[3]]
-                else:
-                    tt_out_tensor = tt_out_tensor[0, :, :, 0 : input_shapes[2]]
-            else:
-                if dim == 2 or dim == -2:
-                    tt_out_tensor = tt_out_tensor[0, 0, 0, 0 : input_shapes[3]]
-                else:
-                    tt_out_tensor = tt_out_tensor[0, 0, 0, 0 : input_shapes[2]]
 
         pt_out_tensor = golden_tensor
         tt_out_tensor = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
