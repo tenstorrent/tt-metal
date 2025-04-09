@@ -49,7 +49,6 @@ def test_upblock_512x512(
     unet.eval()
     state_dict = unet.state_dict()
     unet_upblock = pipe.unet.up_blocks[0]
-    reader_patterns_cache = {}
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
@@ -63,7 +62,7 @@ def test_upblock_512x512(
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    model = upblock_2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
+    model = upblock_2d(device, parameters, N, H, W, compute_kernel_config)
 
     # synthesize the input
     in_channels = hidden_states[1]

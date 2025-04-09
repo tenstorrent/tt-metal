@@ -196,10 +196,10 @@ add_compile_options(
     -Wreturn-type
     -Wswitch
     -Wuninitialized
-    -mavx2
     -fPIC
     -fvisibility-inlines-hidden
     -fno-lto # FIXME: This seems to be here for ttnn; it should go to TTNN, then.
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-mavx2>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wsometimes-uninitialized>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-error=local-type-template-args>"

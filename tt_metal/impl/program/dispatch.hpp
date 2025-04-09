@@ -7,7 +7,7 @@
 #include <circular_buffer.hpp>
 #include <device.hpp>
 #include <kernel.hpp>
-#include <program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <vector_aligned.hpp>
 #include <worker_config_buffer.hpp>
@@ -132,7 +132,8 @@ KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 void reset_config_buf_mgrs_and_expected_workers(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
-    uint32_t num_entries_to_reset);
+    uint32_t num_entries_to_reset,
+    uint32_t worker_l1_unreserved_start);
 
 void reset_worker_dispatch_state_on_device(
     IDevice* device,

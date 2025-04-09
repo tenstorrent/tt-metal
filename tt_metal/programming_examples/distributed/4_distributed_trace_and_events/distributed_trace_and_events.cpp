@@ -111,7 +111,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
     return program;
 }
 
-int main(int argc, char** argv) {
+int main() {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
     // Initialize constants used to define the workload

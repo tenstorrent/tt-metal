@@ -112,7 +112,6 @@ matmul_shapes_bfloat8_b = [
     (2048, 3072, 3072, True, True, 1, 1, 1),
     (3072, 3072, 3072, True, True, 2, 1, 1),
     (3072, 3072, 4096, True, True, 2, 1, 1),
-    (3072, 4096, 4096, True, True, 1, 2, 2),
     (4096, 4096, 4096, False, False, 1, 2, 2),
     (8192, 8192, 8192, False, False, 2, 4, 4),
     (16384, 16384, 16384, False, False, 4, 8, 8),
@@ -150,7 +149,7 @@ matmul_configs = [
 ]
 
 
-@pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
+@pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
@@ -171,6 +170,11 @@ def test_matmul_2d_host_perf(
     ARTIFACTS_DIR = TT_METAL_HOME / "generated"
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_report.csv"
 
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.y < grid_size[1] or compute_grid_size.x < grid_size[0]:
+        pytest.skip(
+            f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
+        )
     LoFi_cycle = 16
     HiFi2_cycle = LoFi_cycle * 2
     HiFi3_cycle = LoFi_cycle * 3
@@ -364,7 +368,6 @@ def test_matmul_2d_host_perf(
                 elif math_fidelity == ttnn.MathFidelity.HiFi4:
                     cycle_per_tile = HiFi4_cycle
                 num_cores_user_grid = grid_size[0] * grid_size[1]
-                compute_grid_size = device.compute_with_storage_grid_size()
                 num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
                 ideal_cycle_full_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_full_grid
                 ideal_cycle_user_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_user_grid
@@ -429,7 +432,7 @@ matmul_configs_oob = [
 ]
 
 
-@pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
+@pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
@@ -450,6 +453,11 @@ def test_matmul_2d_host_perf_out_of_box(
     ARTIFACTS_DIR = TT_METAL_HOME / "generated"
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_out_of_box_report.csv"
 
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.y < grid_size[1] or compute_grid_size.x < grid_size[0]:
+        pytest.skip(
+            f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
+        )
     LoFi_cycle = 16
     HiFi2_cycle = LoFi_cycle * 2
     HiFi3_cycle = LoFi_cycle * 3
@@ -549,7 +557,6 @@ def test_matmul_2d_host_perf_out_of_box(
                 elif math_fidelity == ttnn.MathFidelity.HiFi4:
                     cycle_per_tile = HiFi4_cycle
                 num_cores_user_grid = grid_size[0] * grid_size[1]
-                compute_grid_size = device.compute_with_storage_grid_size()
                 num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
                 ideal_cycle_full_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_full_grid
                 ideal_cycle_user_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_user_grid

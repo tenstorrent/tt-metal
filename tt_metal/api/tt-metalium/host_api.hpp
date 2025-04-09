@@ -9,7 +9,7 @@
 
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
@@ -89,7 +89,8 @@ IDevice* CreateDevice(
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-    const std::vector<uint32_t>& l1_bank_remap = {});
+    const std::vector<uint32_t>& l1_bank_remap = {},
+    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
 // clang-format off
 /**

@@ -47,12 +47,12 @@ jobs:
       skip-tt-train: false
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
       version: 22.04
-    secrets: inherit
 
   smoke-tests:
     needs: build-artifact
@@ -100,9 +100,10 @@ jobs:
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
-      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fabric Unit Tests
   fabric-unit-tests:
     needs: build-artifact
@@ -153,6 +154,8 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -231,6 +234,11 @@ jobs:
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Debug"
+            publish-artifact: false
+            skip-tt-train: false
+          - version: "24.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            build-type: "Release"
             publish-artifact: false
             skip-tt-train: false
           - version: "22.04"

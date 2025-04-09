@@ -40,9 +40,6 @@ permissions:
   packages: write
 
 jobs:
-  static-checks:
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
@@ -96,7 +93,8 @@ jobs:
       timeout: 20
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
-      os: "ubuntu-22.04"
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -117,6 +115,8 @@ jobs:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
       timeout: 20
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
 #   profiler-regression:
 #     needs: build-artifact-profiler

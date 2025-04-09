@@ -46,7 +46,7 @@
 #include "llrt/hal.hpp"
 #include "math.hpp"
 #include "program_device_map.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "runtime_args_data.hpp"
 #include "semaphore.hpp"
 #include "span.hpp"
@@ -70,6 +70,9 @@ enum NOC : uint8_t;
 }  // namespace tt_metal
 }  // namespace tt
 
+namespace tt::tt_metal {
+namespace program_dispatch {
+
 namespace {
 CoreCoord get_sub_device_worker_origin(
     const tt::tt_metal::IDevice* device,
@@ -81,10 +84,16 @@ CoreCoord get_sub_device_worker_origin(
     }
     return grid.bounding_box().start_coord;
 }
-};  // namespace
 
-namespace tt::tt_metal {
-namespace program_dispatch {
+size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
+    if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
+        return device->allocator()->get_config().l1_unreserved_base -
+               hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+    } else {
+        return hal_ref.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    }
+}
+};  // namespace
 
 enum DispatchWriteOffsets {
     DISPATCH_WRITE_OFFSET_ZERO = 0,
@@ -204,11 +213,6 @@ uint32_t finalize_rt_args(
         programmable_core_type_index, kernels, kernel_groups, crta_base_offset, crta_offsets, crta_sizes);
 
     uint32_t offset = max_unique_rta_size + total_crta_size;
-    // TODO: this is asserted here as the leveling above can break the limits enforced by the API
-    // Once we use a ring buffer, memory space will be dynamic and this assert won't matter
-    std::uint32_t l1_kernel_config_size = tt::tt_metal::hal_ref.get_dev_size(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
-    TT_FATAL(offset <= l1_kernel_config_size, "offset {} cannot exceed config size {}", offset, l1_kernel_config_size);
 
     rta_offset = base_offset;
     return offset;
@@ -234,7 +238,7 @@ uint32_t finalize_sems(
 }
 
 uint32_t finalize_cbs(
-    uint32_t programmable_core_type_index,
+    uint32_t /*programmable_core_type_index*/,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
     uint32_t& cb_offset,
@@ -435,7 +439,8 @@ void finalize_program_offsets(T& workload, IDevice* device) {
 
         TT_ASSERT(offset == tt::align(offset, hal_ref.get_alignment(HalMemType::L1)));
 
-        auto max_size = hal_ref.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+        size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+
         TT_FATAL(
             offset < max_size,
             "Program size ({}) too large for kernel config buffer ({}) on {}",
@@ -476,7 +481,8 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
     program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(0, 0, 0);
 }
 
-void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device) {
+void insert_stall_cmds(
+    ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* /*device*/) {
     // Initialize stall command sequences for this program.
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
@@ -537,7 +543,7 @@ void generate_runtime_args_cmds(
             return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
         };
     thread_local static auto get_runtime_args_data_offset =
-        [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast) {
+        [](uint32_t num_packed_cmds, uint32_t /*runtime_args_len*/, bool is_unicast) {
             uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
             uint32_t sub_cmd_sizeB =
                 is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
@@ -1649,14 +1655,21 @@ void assemble_device_commands(
     TT_ASSERT(device_command_sequence.size_bytes() == device_command_sequence.write_offset_bytes());
 }
 
-void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr) {
+void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
     for (uint32_t index = 0; index < tt::tt_metal::hal_ref.get_programmable_core_type_count(); index++) {
+        uint32_t ringbuffer_size;
+        if (tt::tt_metal::hal_ref.get_programmable_core_type(index) == tt::tt_metal::HalProgrammableCoreType::TENSIX) {
+            ringbuffer_size = worker_l1_unreserved_start - tt::tt_metal::hal_ref.get_dev_addr(
+                                                               tt::tt_metal::hal_ref.get_programmable_core_type(index),
+                                                               tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+        } else {
+            ringbuffer_size = tt::tt_metal::hal_ref.get_dev_size(
+                tt::tt_metal::hal_ref.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+        }
         config_buffer_mgr.init_add_buffer(
             tt::tt_metal::hal_ref.get_dev_addr(
                 tt::tt_metal::hal_ref.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
-            tt::tt_metal::hal_ref.get_dev_size(
-                tt::tt_metal::hal_ref.get_programmable_core_type(index),
-                tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG));
+            ringbuffer_size);
     }
     // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
     // previous launch message.
@@ -2044,10 +2057,11 @@ uint32_t program_base_addr_on_core(
 void reset_config_buf_mgrs_and_expected_workers(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
-    uint32_t num_entries_to_reset) {
+    uint32_t num_entries_to_reset,
+    uint32_t worker_l1_unreserved_start) {
     for (uint32_t i = 0; i < num_entries_to_reset; ++i) {
         config_buffer_mgrs[i] = WorkerConfigBufferMgr();
-        initialize_worker_config_buf_mgr(config_buffer_mgrs[i]);
+        initialize_worker_config_buf_mgr(config_buffer_mgrs[i], worker_l1_unreserved_start);
     }
     std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_entries_to_reset, 0);
 }
@@ -2147,7 +2161,7 @@ void reset_worker_dispatch_state_on_device(
 }
 
 void set_num_worker_sems_on_dispatch(
-    IDevice* device, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems) {
+    IDevice* /*device*/, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems) {
     // Not needed for regular dispatch kernel
     if (!MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         return;
@@ -2164,7 +2178,7 @@ void set_num_worker_sems_on_dispatch(
 }
 
 void set_go_signal_noc_data_on_dispatch(
-    IDevice* device,
+    IDevice* /*device*/,
     const vector_aligned<uint32_t>& go_signal_noc_data,
     SystemMemoryManager& manager,
     uint8_t cq_id) {

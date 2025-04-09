@@ -117,11 +117,18 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             num_links,
             topology);
     uint32_t page_size = 0;
+    uint32_t output_page_size = 0;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     if (a.get_layout() == Layout::TILE) {
         page_size = a.tensor_spec().tile().get_tile_size(in_data_format);
     } else {
         page_size = a.buffer()->page_size();
+    }
+    if (output.get_layout() == Layout::TILE) {
+        output_page_size = output.tensor_spec().tile().get_tile_size(out_data_format);
+    } else {
+        output_page_size = output.buffer()->page_size();
     }
 
     size_t num_targets_forward = 0;
@@ -157,7 +164,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
-    uint32_t l1_scratch_cb_page_size_bytes = page_size;
+    uint32_t l1_scratch_cb_page_size_bytes = output_page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
         input_tensor_num_pages / num_links +
@@ -191,8 +198,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
                 subblock_wt);
         }
     }
-
-    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     // tile sizes
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
@@ -468,15 +473,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     CBHandle cb_output = 0;
     cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    uint32_t src0_cb_index = tt::CBIndex::c_10;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, in_data_format}})
-            .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, all_cores, cb_src0_config);
-
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CBIndex::c_11;
+    const auto reserved_packet_header_CB_index = tt::CBIndex::c_10;
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
@@ -494,7 +492,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
 
         tt::tt_metal::CircularBufferConfig in1_cb_config =
-            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{in1_cb_index, in_data_format}})
+            tt::tt_metal::CircularBufferConfig(
+                in1_CB_size, {{in1_cb_index, tt::tt_metal::datatype_to_dataformat_converter(b.value().get_dtype())}})
                 .set_page_size(in1_cb_index, in_single_tile_size)
                 .set_globally_allocated_address(*b.value().buffer());
         cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
@@ -555,7 +554,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         // all gather parameters
         reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
         num_pages_per_packet,             // packet_size_in_pages
-        page_size,                        // tensor0_page_size
+        output_page_size,                 // tensor0_page_size
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
         num_links};

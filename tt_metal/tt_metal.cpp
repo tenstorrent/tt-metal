@@ -45,7 +45,7 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "logger.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "semaphore.hpp"
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
@@ -250,7 +250,7 @@ void SetRuntimeArgsImpl(
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
     const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
-    bool blocking) {
+    bool /*blocking*/) {
     std::vector<uint32_t> resolved_runtime_args = {};
     resolved_runtime_args.reserve(runtime_args_ptr->size());
 
@@ -384,10 +384,12 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t l1_small_size,
     const size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& l1_bank_remap) {
+    const std::vector<uint32_t>& /*l1_bank_remap*/,
+    const size_t worker_l1_size) {
     ZoneScoped;
     bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config);
+    tt::DevicePool::initialize(
+        device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, {}, worker_l1_size);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, IDevice*> ret_devices;
     // Only include the mmio device in the active devices set returned to the caller if we are not running
@@ -939,11 +941,12 @@ IDevice* CreateDevice(
     const size_t l1_small_size,
     const size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& l1_bank_remap) {
+    const std::vector<uint32_t>& l1_bank_remap,
+    const size_t worker_l1_size) {
     ZoneScoped;
 
     tt::DevicePool::initialize(
-        {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap);
+        {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
     auto dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }

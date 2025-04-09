@@ -42,7 +42,7 @@
 #include "llrt/hal.hpp"
 #include <tt-metalium/logger.hpp>
 #include "multi_command_queue_fixture.hpp"
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "random_program_fixture.hpp"
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/semaphore.hpp>
@@ -959,8 +959,9 @@ void test_my_coordinates(IDevice* device, tt::RISCV processor_class, size_t cq_i
         cr = CoreRangeSet{std::set<CoreRange>{eth_cores.begin(), eth_cores.end()}};
     }
 
-    uint32_t cb_addr = processor_class == tt::RISCV::ERISC ? hal::get_erisc_l1_unreserved_base()
-                                                           : hal::get_tensix_l1_unreserved_base();
+    uint32_t cb_addr = processor_class == tt::RISCV::ERISC
+                           ? hal::get_erisc_l1_unreserved_base()
+                           : device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     std::vector<uint32_t> compile_args{
         cb_addr,
     };
