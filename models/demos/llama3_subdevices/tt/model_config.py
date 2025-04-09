@@ -487,7 +487,6 @@ class TtModelArgs:
                 fused_activation=None,
                 fuse_batch=seq_len <= 2048,
             )
-            print(self.mesh_device.compute_with_storage_grid_size())
             self.model_config[
                 "PREFILL_MLP_W2_PRG_CONFIG"
             ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(

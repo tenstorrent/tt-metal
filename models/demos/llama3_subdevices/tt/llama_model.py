@@ -320,10 +320,7 @@ class TtTransformer(LightweightModule):
         """
         x, _ = self.norm(tt_out, res=None, mode="prefill")
 
-        # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
-        x = x[
-            :, :, last_token_idx : last_token_idx + 1, :
-        ]  # ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+        x = x[:, :, last_token_idx : last_token_idx + 1, :]
 
         tt_logits = self.lm_head(x, None, mode="prefill")
 
@@ -537,7 +534,6 @@ class TtTransformer(LightweightModule):
         # Output norm
         x, res = self.norm(x, res=None, mode=mode)
 
-        # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
             x = x[:, :, get_last_token:, :]
 
