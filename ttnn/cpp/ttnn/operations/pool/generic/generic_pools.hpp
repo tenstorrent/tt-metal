@@ -15,8 +15,7 @@
 namespace ttnn {
 namespace operations::pool {
 
-template <Pool2DType pool_type>
-struct Pool2DOp {
+struct MaxPool2DOp {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
@@ -28,17 +27,35 @@ struct Pool2DOp {
         std::array<uint32_t, 2> stride,
         std::array<uint32_t, 2> padding,
         std::array<uint32_t, 2> dilation,
+        bool ceil_mode = false,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+        bool in_place_halo = false);
+};
+struct AvgPool2DOp {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        uint32_t batch_size,
+        uint32_t input_h,
+        uint32_t input_w,
+        uint32_t channels,
+        std::array<uint32_t, 2> kernel_size,
+        std::array<uint32_t, 2> stride,
+        std::array<uint32_t, 2> padding,
         bool ceil_mode = false,
+        bool count_include_pad = true,
+        std::optional<int32_t> divisor_override = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         bool in_place_halo = false);
 };
 
 }  // namespace operations::pool
 
-constexpr auto max_pool2d = ttnn::
-    register_operation<"ttnn::max_pool2d", operations::pool::Pool2DOp<operations::pool::Pool2DType::MAX_POOL2D>>();
-constexpr auto avg_pool2d = ttnn::
-    register_operation<"ttnn::avg_pool2d", operations::pool::Pool2DOp<operations::pool::Pool2DType::AVG_POOL2D>>();
+constexpr auto max_pool2d =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::max_pool2d", operations::pool::MaxPool2DOp>();
+constexpr auto avg_pool2d =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::avg_pool2d", operations::pool::AvgPool2DOp>();
 
 }  // namespace ttnn
