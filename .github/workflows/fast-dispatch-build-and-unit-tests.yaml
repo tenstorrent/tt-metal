@@ -76,7 +76,6 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: generated/test_reports/
           prefix: "test_reports_"
       - name: Generate system logs on failure
         uses: ./.github/actions/generate-system-logs
