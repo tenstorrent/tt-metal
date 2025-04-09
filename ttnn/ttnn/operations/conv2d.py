@@ -16,7 +16,6 @@ Conv2dSliceWidth = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.Sl
 
 OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv.OptimizedConvParallelizationConfig
 OptimizedConvBlockConfig = ttnn._ttnn.operations.conv.OptimizedConvBlockConfig
-SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfig
 
 
 def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
