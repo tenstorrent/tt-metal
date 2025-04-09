@@ -22,6 +22,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   cpp-unit-tests:
