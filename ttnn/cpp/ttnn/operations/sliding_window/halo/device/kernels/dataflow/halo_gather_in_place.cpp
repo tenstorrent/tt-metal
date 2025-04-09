@@ -9,7 +9,7 @@
 #include "dataflow_api.h"
 // #include "ttnn/types.hpp"
 
-#define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint_pages.h"
@@ -243,12 +243,6 @@ void kernel_main() {
         }
     }
     cb_wait_front(in_cb_id, in_npages);
-
-    DPRINT << "tile_rows=" << tile_rows << " tile_cols=" << tile_cols << ENDL();
-    DPRINT << "in_npages=" << in_npages << ENDL();
-    if constexpr (local_config_cb_id) {
-        tt::data_movement::common::print_bf16_pages(in_base_l1_addr, 32, in_npages * 32);
-    }
 
     if constexpr (remote_config_cb_id && remote_temp_cb_id) {
         const uint32_t temp_base_l1_addr = get_write_ptr(remote_temp_cb_id);

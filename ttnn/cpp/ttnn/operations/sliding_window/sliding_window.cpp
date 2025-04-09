@@ -913,7 +913,11 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         max_len += 6;  // account for the key tuple and null plug
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        int32_t in_out_shard_size_delta = max_out_nsticks_per_core - in_nsticks_per_core;
+        int32_t in_out_shard_size_delta =
+            (in_place && is_in_tiled)
+                ? 0
+                : max_out_nsticks_per_core - in_nsticks_per_core;  // for in place with tilized data we untilize
+                                                                   // directly into the output buffer so delta is zero
         for (const auto& [key, data] : config) {
             auto [nocx, nocy, len] = key;
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
@@ -939,23 +943,19 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
                     }
                 }
             } else {
-                int32_t rev_i_end = 0;
-                if (!is_in_tiled) {  // for tiled inputs we untilize into the dst buffer so entire input / output shards
-                                     // overlap and all local copies must be reversed
-                    rev_i_end = data.size();
-                    for (uint32_t i = 0; i < data.size();
-                         ++i) {  // normal forward direction local config in region where input / output shards don't
-                                 // overlap (for in place operation)
-                        auto [src_start, dst_start, length] = data[i];
-                        if (dst_start > src_start + in_out_shard_size_delta) {
-                            rev_i_end = i;
-                            break;
-                        }
-                        flat_data[0][idx1++] = src_start;
-                        flat_data[0][idx1++] = dst_start;
-                        flat_data[0][idx1++] = length;
-                        flat_data[0][2] += 3;
+                int32_t rev_i_end = data.size();
+                for (uint32_t i = 0; i < data.size();
+                     ++i) {  // normal forward direction local config in region where input / output shards don't
+                             // overlap (for in place operation)
+                    auto [src_start, dst_start, length] = data[i];
+                    if (dst_start > src_start + in_out_shard_size_delta) {
+                        rev_i_end = i;
+                        break;
                     }
+                    flat_data[0][idx1++] = src_start;
+                    flat_data[0][idx1++] = dst_start;
+                    flat_data[0][idx1++] = length;
+                    flat_data[0][2] += 3;
                 }
                 for (int32_t i = data.size() - 1; i >= rev_i_end;
                      --i) {  // reverse direction local config in region where input / output shards overlap (for in
