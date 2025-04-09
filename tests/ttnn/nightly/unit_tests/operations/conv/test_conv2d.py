@@ -2082,6 +2082,7 @@ def test_conv_core_nondivis(
         [(3, 3), (2, 1), (3, 3)],
     ],
 )
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_conv_dilation(
     device,
     torch_tensor_map,
@@ -2101,6 +2102,7 @@ def test_conv_dilation(
     pad_hw,
     output_layout,
     dilation_hw,
+    auto_shard,
 ):
     config_override = {"act_block_w_div": act_block_w_div}
     run_conv(
@@ -2125,6 +2127,7 @@ def test_conv_dilation(
         dilation_h=dilation_hw[0],
         dilation_w=dilation_hw[1],
         has_bias=False,
+        auto_shard=auto_shard,
     )
 
 
@@ -2171,8 +2174,7 @@ def test_conv_dilation(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
-# ToDo: Renable this when auto shard heuristic is imporved, currently we run out of L1 in for some test cases
-# @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_conv_groups(
     device,
     torch_tensor_map,
@@ -2196,6 +2198,7 @@ def test_conv_groups(
     use_shallow_conv_variant,
     groups,
     output_layout,
+    auto_shard,
 ):
     run_conv(
         device,
@@ -2218,6 +2221,7 @@ def test_conv_groups(
         use_shallow_conv_variant=use_shallow_conv_variant,
         groups=groups,
         output_layout=output_layout,
+        auto_shard=auto_shard,
     )
 
 
