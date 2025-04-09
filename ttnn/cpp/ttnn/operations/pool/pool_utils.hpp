@@ -6,6 +6,7 @@
 #include <string>
 #include <map>
 #include <optional>
+#include <vector>
 
 namespace ttnn::operations::pool {
 

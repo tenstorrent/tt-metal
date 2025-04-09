@@ -7,7 +7,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/pack_untilize.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -89,6 +89,10 @@ void MAIN {
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
 
+    uint32_t num_od_ele = get_arg_val<uint32_t>(0);
+    uint32_t scalar_cnt = get_arg_val<uint32_t>(1);
+    uint32_t diff_index = 0;
+    uint32_t time_for_change = get_arg_val<uint32_t>(2 + diff_index);
     // In case we have <=16 sticks we will use only upper two faces of the tile.
     // In this case we can configure reduce to only process as many rows as needed.
     // In case #sticks > 16 we need bottom two faces as well, and we need to configure reduce to
