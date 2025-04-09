@@ -19,11 +19,7 @@ Semaphore::Semaphore(const CoreRangeSet& core_range_set, uint32_t id, uint32_t i
 Semaphore::Semaphore(const CoreRangeSet& core_range_set, uint32_t id, uint32_t initial_value, CoreType core_type) :
     core_range_set_(core_range_set), id_(id), initial_value_(initial_value), core_type_(core_type) {}
 
-Semaphore::Semaphore(const Semaphore& other) :
-    core_range_set_(other.core_range_set_),
-    id_(other.id_),
-    initial_value_(other.initial_value_),
-    core_type_(other.core_type_) {}
+Semaphore::Semaphore(const Semaphore& other) = default;
 
 Semaphore& Semaphore::operator=(const Semaphore& other) {
     if (this != &other) {
