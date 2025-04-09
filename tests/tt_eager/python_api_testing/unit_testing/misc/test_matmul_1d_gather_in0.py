@@ -144,6 +144,7 @@ def run_multi_core_matmul_1d(
     grid,
     use_arbitrary_cores,
     num_iters,
+    output_dtype=None,
     max_dst_tiles=8,
     pcc_threshold=0.98,
     use_physical_to_logical_mapping=True,
@@ -153,6 +154,9 @@ def run_multi_core_matmul_1d(
     assert not has_bias, "Bias not supported for gather_in0 mode."
     if not isinstance(grid, tuple) and not use_arbitrary_cores:
         pytest.skip("Grid is not a tuple and not using arbitrary cores")
+
+    if output_dtype is None:
+        output_dtype = in0_dtype
 
     in0_shape = [1, B, M, K]
     in1_shape = [1, 1, K, N]
@@ -325,6 +329,7 @@ def run_multi_core_matmul_1d(
             program_config=program_config,
             memory_config=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
+            dtype=output_dtype,
         )
     signpost("stop")
 
@@ -753,13 +758,14 @@ def test_multi_core_matmul_1d_gs(
 
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
-    "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved",
+    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved",
     [
         (
             1,
             32,
             2048,
             1280,
+            ttnn.bfloat16,
             ttnn.bfloat8_b,
             ttnn.bfloat8_b,
             ttnn.MathFidelity.HiFi2,
@@ -773,6 +779,7 @@ def test_multi_core_matmul_1d_gs(
             32,
             1280,
             2048,
+            ttnn.bfloat16,
             ttnn.bfloat8_b,
             ttnn.bfloat8_b,
             ttnn.MathFidelity.HiFi2,
@@ -786,11 +793,12 @@ def test_multi_core_matmul_1d_gs(
             32,
             2048,
             3584,
-            ttnn.bfloat8_b,
+            ttnn.bfloat16,
             ttnn.bfloat4_b,
+            ttnn.bfloat8_b,
             ttnn.MathFidelity.LoFi,
             True,
-            True,
+            False,
             PREFETCHER_NOC1_GRID,
             False,
         ),
@@ -799,6 +807,7 @@ def test_multi_core_matmul_1d_gs(
             32,
             3584,
             2048,
+            ttnn.bfloat8_b,
             ttnn.bfloat8_b,
             ttnn.bfloat8_b,
             ttnn.MathFidelity.HiFi2,
@@ -812,6 +821,7 @@ def test_multi_core_matmul_1d_gs(
             32,
             2048,
             16 * 1024,
+            ttnn.bfloat8_b,
             ttnn.bfloat8_b,
             ttnn.bfloat8_b,
             ttnn.MathFidelity.HiFi2,
@@ -843,6 +853,7 @@ def test_matmul_1d_ring_llama_perf(
     mesh_device,
     in0_dtype,
     in1_dtype,
+    output_dtype,
     fidelity,
     has_bias,
     fp32_acc_mode,
@@ -886,6 +897,7 @@ def test_matmul_1d_ring_llama_perf(
         grid,
         True,
         num_iters,
+        output_dtype=output_dtype,
         use_physical_to_logical_mapping=False,
         hop_grid=hop_grid,
         in1_is_dram_interleaved=in1_is_dram_interleaved,

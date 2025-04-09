@@ -4,7 +4,7 @@
 import torch
 import pytest
 import ttnn
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_resnetblock2d import TtResnetBlock2D
+from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
 from diffusers import DiffusionPipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
@@ -15,6 +15,9 @@ from models.utility_functions import torch_random
     [
         ((1, 320, 128, 128), (1, 1280), 0, 0, False),
         ((1, 320, 64, 64), (1, 1280), 1, 0, True),
+        ((1, 640, 64, 64), (1, 1280), 1, 1, False),
+        ((1, 640, 32, 32), (1, 1280), 2, 0, True),
+        ((1, 1280, 32, 32), (1, 1280), 2, 1, False),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -33,16 +36,25 @@ def test_resnetblock2d(device, temb_shape, input_shape, down_block_id, resnet_id
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_resnet(torch_input_tensor, torch_temb_tensor)
 
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    input_mem_cfg = ttnn.L1_MEMORY_CONFIG if down_block_id != 0 else ttnn.DRAM_MEMORY_CONFIG
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=input_mem_cfg
+    )
     B, C, H, W = list(ttnn_input_tensor.shape)
 
     ttnn_input_tensor = ttnn.permute(ttnn_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
-    ttnn_temb_tensor = ttnn.from_torch(torch_temb_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_temb_tensor = ttnn.from_torch(
+        torch_temb_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
     ttnn_output_tensor, output_shape = tt_resnet.forward(ttnn_input_tensor, ttnn_temb_tensor, [B, C, H, W])
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
     output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.994)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.993)

@@ -277,7 +277,11 @@ class TtLlamaAttention(LightweightModule):
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
         xqkv_reduced = self.tt_ccl.line_all_reduce(
-            xqkv_fused_sharded, cluster_axis=1, num_links=3, memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"]
+            xqkv_fused_sharded,
+            cluster_axis=1,
+            num_links=3,
+            memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
+            dtype=ttnn.bfloat16,
         )
 
         ttnn.deallocate(xqkv_fused_sharded)

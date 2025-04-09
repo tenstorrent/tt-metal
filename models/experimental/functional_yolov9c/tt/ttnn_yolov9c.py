@@ -28,7 +28,6 @@ class TtYOLOv9cConv2D:
         conv_pth,
         bn=None,
         device=None,
-        cache={},
         activation="",
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
@@ -50,7 +49,6 @@ class TtYOLOv9cConv2D:
         self.groups = conv.groups
         self.use_1d_systolic_array = use_1d_systolic_array
         self.deallocate_activation = False
-        self.cache = cache
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -111,7 +109,6 @@ class TtYOLOv9cConv2D:
             stride=self.stride,
             padding=self.padding,
             conv_config=self.conv_config,
-            conv_op_cache=self.cache,
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,

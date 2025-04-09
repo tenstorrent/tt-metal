@@ -99,7 +99,7 @@ class resnet50Bottleneck:
         self.model_config = model_config
         return
 
-    def __call__(self, x, device, batch_size, input_height, input_width, conv_op_cache):
+    def __call__(self, x, device, batch_size, input_height, input_width):
         # logger.info("This module input shape - ", self.module_input_shape)
         # conv1 is 1x1 conv
         # print("Running conv1")
@@ -123,7 +123,6 @@ class resnet50Bottleneck:
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
-            conv_op_cache=conv_op_cache,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
@@ -150,7 +149,6 @@ class resnet50Bottleneck:
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
-            conv_op_cache=conv_op_cache,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
@@ -177,7 +175,6 @@ class resnet50Bottleneck:
                     device.arch(),
                     math_fidelity=self.model_config["MATH_FIDELITY"],
                 ),
-                conv_op_cache=conv_op_cache,
                 return_output_dim=False,
                 return_weights_and_bias=True,
             )
@@ -208,7 +205,6 @@ class resnet50Bottleneck:
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
-            conv_op_cache=conv_op_cache,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
@@ -236,7 +232,6 @@ class resnet50Bottleneck:
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
-            conv_op_cache=conv_op_cache,
             return_output_dim=False,
             return_weights_and_bias=True,
         )
@@ -348,14 +343,11 @@ def build_run_and_validate_ttnn_model_new(
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Run 2 iterations. First iteration is warm-up i.e. W/B preprocessing and conv object caching
-    conv_op_cache = {}
+    # Run 2 iterations. First iteration is warm-up i.e. W/B preprocessing
     for i in range(2):
         start_time = time.time()
         # Run ttnn model (1 resnet50 block)
-        ttnn_out_tensor = ttnn_model(
-            ttnn_input_tensor, device, batch_size, input_height, input_width, conv_op_cache=conv_op_cache
-        )
+        ttnn_out_tensor = ttnn_model(ttnn_input_tensor, device, batch_size, input_height, input_width)
         print("--- Execution time for this iteration - %s seconds ---" % (time.time() - start_time))
         # output post-processing
         ttnn_out_tensor = ttnn.to_memory_config(ttnn_out_tensor, ttnn.L1_MEMORY_CONFIG)
@@ -380,7 +372,6 @@ def build_run_and_validate_ttnn_model_new(
 )
 def test_small_resnet50_block(
     device,
-    use_program_cache,
     batch_size,
     input_height,
     input_width,

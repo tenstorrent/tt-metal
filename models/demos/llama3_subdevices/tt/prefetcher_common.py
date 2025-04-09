@@ -125,6 +125,14 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         self.tensor_addrs = []  # List of buffer addresses
         self.save_tensor_addresses = save_tensor_addresses
 
+    def create_global_cb(self):
+        if not hasattr(self, "global_circular_buffer") or self.global_circular_buffer is None:
+            self.global_circular_buffer = ttnn.create_global_circular_buffer(
+                self.mesh_device,
+                self.sender_receiver_mapping,
+                self.global_cb_size,
+            )
+
     def buffer_address(self, tensor):
         addr = []
         for i, ten in enumerate(ttnn.get_device_tensors(tensor)):
