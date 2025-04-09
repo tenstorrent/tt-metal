@@ -325,8 +325,6 @@ std::vector<T> convert_layout(
 }
 }  // namespace reference
 
-using Type = bfloat16;
-
 template <typename T>
 std::vector<T>& get_test_data() {
     constexpr size_t MAX_BATCH = 10;
@@ -367,7 +365,6 @@ using TilizeUntilizeParams = std::tuple<
 class TilizeUntilizeTestsFixture : public ::testing::TestWithParam<TilizeUntilizeParams> {};
 
 TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
-    const auto& data = get_test_data<Type>();
     auto params = GetParam();
     int n_batches = std::get<0>(params);
     PhysicalSize shape = std::get<1>(params);
@@ -386,20 +383,29 @@ TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
     uint32_t n_cols = shape[1];
     size_t n_elements = n_batches * n_rows * n_cols;
 
-    tt::stl::Span<const Type> input(data.data(), n_elements);
+    auto run_for_type = [&](auto type) {
+        using Type = decltype(type);
+        const auto& data = get_test_data<Type>();
+        tt::stl::Span<const Type> input(data.data(), n_elements);
 
-    auto output = convert_layout(
-        input, shape, from_layout, to_layout, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+        auto output = convert_layout(
+            input, shape, from_layout, to_layout, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
 
-    auto output_ref = reference::convert_layout(
-        input, shape, from_layout, to_layout, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+        auto output_ref = reference::convert_layout(
+            input, shape, from_layout, to_layout, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
 
-    ASSERT_EQ(output.size(), output_ref.size());
-    ASSERT_EQ(output, output_ref);
+        ASSERT_EQ(output.size(), output_ref.size());
+        ASSERT_EQ(output, output_ref);
+    };
+
+    // Test all interesting types
+    run_for_type(bfloat16{});
+    run_for_type(float{});
+    run_for_type(int32_t{});
+    run_for_type(uint32_t{});
 }
 
 TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
-    const auto& data = get_test_data<Type>();
     auto params = GetParam();
     int n_batches = std::get<0>(params);
     PhysicalSize shape = std::get<1>(params);
@@ -418,25 +424,34 @@ TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
     uint32_t n_cols = shape[1];
     size_t n_elements = n_batches * n_rows * n_cols;
 
-    tt::stl::Span<const Type> input(data.data(), n_elements);
+    auto run_for_type = [&](auto type) {
+        using Type = decltype(type);
+        const auto& data = get_test_data<Type>();
+        tt::stl::Span<const Type> input(data.data(), n_elements);
 
-    auto converted = reference::convert_layout(
-        input, shape, from_layout, to_layout, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+        auto converted = reference::convert_layout(
+            input, shape, from_layout, to_layout, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
 
-    auto converted_back = reference::convert_layout(
-        tt::stl::MakeConstSpan(converted),
-        shape,
-        to_layout,
-        from_layout,
-        tile_shape,
-        face_shape,
-        transpose_within_face,
-        transpose_of_faces);
+        auto converted_back = reference::convert_layout(
+            tt::stl::MakeConstSpan(converted),
+            shape,
+            to_layout,
+            from_layout,
+            tile_shape,
+            face_shape,
+            transpose_within_face,
+            transpose_of_faces);
 
-    auto converted_back_span = tt::stl::MakeConstSpan(converted_back);
-    ASSERT_EQ(input.size(), converted_back.size());
-    // ASSERT_EQ(input, converted_back_span);
-    ASSERT_TRUE(std::equal(input.begin(), input.end(), converted_back_span.begin()));
+        auto converted_back_span = tt::stl::MakeConstSpan(converted_back);
+        ASSERT_EQ(input.size(), converted_back.size());
+        ASSERT_TRUE(std::equal(input.begin(), input.end(), converted_back_span.begin()));
+    };
+
+    // Test all interesting types
+    run_for_type(bfloat16{});
+    run_for_type(float{});
+    run_for_type(int32_t{});
+    run_for_type(uint32_t{});
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -475,9 +490,19 @@ TEST_P(ThrowableTilizeUntilizeFixture, TilizeUntilize) {
     uint32_t n_rows = shape[0];
     uint32_t n_cols = shape[1];
     size_t n_elements = n_rows * n_cols;
-    std::vector<Type> input(input_size);
 
-    EXPECT_ANY_THROW(convert_layout(tt::stl::MakeConstSpan(input), shape, from_layout, to_layout));
+    auto run_for_type = [&](auto type) {
+        using Type = decltype(type);
+        std::vector<Type> input(input_size);
+
+        EXPECT_ANY_THROW(convert_layout(tt::stl::MakeConstSpan(input), shape, from_layout, to_layout));
+    };
+
+    // Test all interesting types
+    run_for_type(bfloat16{});
+    run_for_type(float{});
+    run_for_type(int32_t{});
+    run_for_type(uint32_t{});
 }
 
 INSTANTIATE_TEST_SUITE_P(
