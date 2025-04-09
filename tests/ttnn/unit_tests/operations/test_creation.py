@@ -423,3 +423,4 @@ def test_zeros_bfp8(device, input_shape, dtype):
 def test_zeros_bfp8(device, input_shape, dtype):
     tensor = ttnn.zeros(input_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     assert tensor.dtype == ttnn.bfloat8_b, f"Expected dtype {dtype}, but got {tensor.dtype}"
+    assert tensor.storage_type() == ttnn.StorageType.DEVICE
