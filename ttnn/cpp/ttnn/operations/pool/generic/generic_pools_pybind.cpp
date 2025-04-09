@@ -32,11 +32,11 @@ void bind_max_pool2d_operation(py::module& module) {
             stride (List of [int]): the (h, w) stride of the kernel window.
             padding (List of [int]): the (h, w) padding of the input tensor.
             dilation (List of [int]): the (h, w) dilation of the kernel window.
+            ceil_mode (bool): whether to use ceil mode for the output shape. Defaults to `False`.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`, which should be used with pre-sharded input tensors.
-            ceil_mode (bool, optional): whether to use ceil mode for the output shape. Defaults to `False`.
             in_place (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
@@ -69,9 +69,9 @@ void bind_max_pool2d_operation(py::module& module) {
                                 stride=[stride_h, stride_w],
                                 padding=[pad_h, pad_w],
                                 dilation=[dilation_h, dilation_w],
+                                ceil_mode=False,
                                 memory_config=None,
                                 applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                                ceil_mode=False,
                                 in_place_halo=False,
                             )
 
@@ -87,9 +87,9 @@ void bind_max_pool2d_operation(py::module& module) {
                std::array<uint32_t, 2> stride,
                std::array<uint32_t, 2> padding,
                std::array<uint32_t, 2> dilation,
+               bool ceil_mode,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
-               bool ceil_mode,
                bool in_place_halo,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -103,9 +103,9 @@ void bind_max_pool2d_operation(py::module& module) {
                     stride,
                     padding,
                     dilation,
+                    ceil_mode,
                     memory_config,
                     applied_shard_scheme,
-                    ceil_mode,
                     in_place_halo);
             },
             py::arg("input_tensor"),
@@ -117,10 +117,10 @@ void bind_max_pool2d_operation(py::module& module) {
             py::arg("stride"),
             py::arg("padding"),
             py::arg("dilation"),
+            py::arg("ceil_mode") = false,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
-            py::arg("ceil_mode") = false,
             py::arg("in_place_halo") = false,
             py::arg("queue_id") = DefaultQueueId});
 }
@@ -143,13 +143,13 @@ void bind_avg_pool2d_operation(py::module& module) {
             kernel_size (List of [int]): the (h, w) size of the kernel window.
             stride (List of [int]): the (h, w) stride of the kernel window.
             padding (List of [int]): the (h, w) padding of the input tensor.
+            ceil_mode (bool): When True, uses 'ceiling' function instead of 'floor' function in the formula to compute output shape. Default: False.
             count_include_pad (bool): When True, includes zero-padding in the avg calculation. Default: True.
-            divisor_override (int): If specified, it will be used as a divisor, otherwise size of the pooling region will be used. Default: None. Not currently supported in ttnn.
+            divisor_override (int, optional): If specified, it will be used as a divisor, otherwise size of the pooling region will be used. Default: None. Not currently supported in ttnn.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`, which should be used with pre-sharded input tensors.
-            ceil_mode (bool): When True, uses 'ceiling' function instead of 'floor' function in the formula to compute output shape. Default: False.
             in_place (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
@@ -180,10 +180,11 @@ void bind_avg_pool2d_operation(py::module& module) {
                             stride=[stride_h, stride_w],
                             padding=[pad_h, pad_w],
                             dilation=[dilation_h, dilation_w],
-                            # count_include_pad=True,
+                            ceil_mode=False,
+                            count_include_pad=True,
+                            divisor_override=None,
                             memory_config=None,
                             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                            ceil_mode=False,
                             in_place_halo=False,
                         )
         )doc",
@@ -197,10 +198,11 @@ void bind_avg_pool2d_operation(py::module& module) {
                std::array<uint32_t, 2> kernel_size,
                std::array<uint32_t, 2> stride,
                std::array<uint32_t, 2> padding,
-               std::array<uint32_t, 2> dilation,
+               bool ceil_mode,
+               bool count_include_pad,
+               std::optional<int32_t> divisor_override,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
-               bool ceil_mode,
                bool in_place_halo,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -213,10 +215,11 @@ void bind_avg_pool2d_operation(py::module& module) {
                     kernel_size,
                     stride,
                     padding,
-                    dilation,
+                    ceil_mode,
+                    count_include_pad,
+                    divisor_override,
                     memory_config,
                     applied_shard_scheme,
-                    ceil_mode,
                     in_place_halo);
             },
             py::arg("input_tensor"),
@@ -227,11 +230,12 @@ void bind_avg_pool2d_operation(py::module& module) {
             py::arg("kernel_size"),
             py::arg("stride"),
             py::arg("padding"),
-            py::arg("dilation"),
+            py::arg("ceil_mode") = false,
+            py::arg("count_include_pad") = true,
+            py::arg("divisor_override") = std::nullopt,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
-            py::arg("ceil_mode") = false,
             py::arg("in_place_halo") = false,
             py::arg("queue_id") = 0});
 }

@@ -8,7 +8,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/pack_untilize.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -29,6 +29,7 @@ inline void reduce_h_fused(
     cb_reserve_back(out_cb_id, num_output_tiles);
     const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
     cb_wait_front(curr_in_cb_id, 1);
+
     tile_regs_acquire();
     unpack_tilizeA_B_block(
         curr_in_cb_id,
@@ -69,6 +70,15 @@ void MAIN {
     constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(11);
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(12);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
+    constexpr uint32_t kernel_h = get_compile_time_arg_val(16);
+    constexpr uint32_t kernel_w = get_compile_time_arg_val(17);
+    constexpr uint32_t in_h = get_compile_time_arg_val(18);
+    constexpr uint32_t in_w = get_compile_time_arg_val(19);
+    constexpr uint32_t pad_h = get_compile_time_arg_val(20);
+    constexpr uint32_t pad_w = get_compile_time_arg_val(21);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(22);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(23);
+    constexpr uint32_t ceil_w = get_compile_time_arg_val(24);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -86,13 +96,27 @@ void MAIN {
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
 
+    uint32_t num_od_ele = get_arg_val<uint32_t>(0);
+    uint32_t scalar_cnt = get_arg_val<uint32_t>(1);
+    uint32_t diff_index = 0;
+    uint32_t time_for_change = get_arg_val<uint32_t>(2 + diff_index);
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
     pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
-
-    cb_wait_front(in_scalar_cb_id, 1);
-    for (uint32_t i = 0; i < nsticks_per_core; ++i) {
-        // perform the reduction over the first N - 1 whole chunks
+    DPRINT << "scalar cnt " << scalar_cnt << ENDL();
+    for (uint32_t i = 0; i < num_od_ele; i++) {
+        DPRINT << "i " << i << ENDL();
+        if (i == time_for_change) {
+            cb_wait_front(in_scalar_cb_id, 1);
+            DPRINT << "change " << ENDL();
+            if (diff_index < scalar_cnt - 1) {
+                diff_index++;
+                time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+                DPRINT << "next change coming on " << time_for_change << ENDL();
+            }
+        }
+        // DPRINT << "i " << i << ENDL();
+        //  perform the reduction over the first N - 1 whole chunks
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
             reduce_h_fused<max_tiles_per_iter, is_partial_tile, split_reader, window_size_hw>(
                 in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
@@ -100,8 +124,12 @@ void MAIN {
         // perform the reduction over the either whole or partial chunk N
         reduce_h_fused<partial_iter_output_tiles, is_partial_tile, split_reader, window_size_hw>(
             in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
+
+        if (i + 1 == time_for_change || i == num_od_ele - 1) {
+            DPRINT << "popped the old num " << ENDL();
+            cb_pop_front(in_scalar_cb_id, 1);
+        }
     }
-    cb_pop_front(in_scalar_cb_id, 1);
 }
 
 }  // namespace NAMESPACE
