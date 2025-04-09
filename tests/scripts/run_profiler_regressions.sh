@@ -6,8 +6,7 @@ source scripts/tools_setup_common.sh
 
 set -eo pipefail
 
-
-run_async_mode_T3000_test(){
+run_async_test() {
     #Some tests here do not skip grayskull
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
         remove_default_log_locations
@@ -27,7 +26,7 @@ run_async_mode_T3000_test(){
     fi
 }
 
-run_tracing_async_mode_T3000_test(){
+run_async_tracing_T3000_test() {
     #Some tests here do not skip grayskull
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
         remove_default_log_locations
@@ -45,21 +44,21 @@ run_tracing_async_mode_T3000_test(){
             LINE_COUNT=4100 # Smoke test to see at least 4100 ops are reported
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
-        fi
 
-        #Testing device only report on the same artifacts
-        rm -rf $PROFILER_OUTPUT_DIR/
-        ./tt_metal/tools/profiler/process_ops_logs.py --device-only --date
-        echo "Verifying device-only results"
-        runDate=$(ls $PROFILER_OUTPUT_DIR/)
-        echo $runDate
-        LINE_COUNT=3600 # Smoke test to see at least 4100 ops are reported
-        res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
-        echo $res
+            # Testing device only report on the same artifacts
+            rm -rf $PROFILER_OUTPUT_DIR/
+            ./tt_metal/tools/profiler/process_ops_logs.py --device-only --date
+            echo "Verifying device-only results"
+            runDate=$(ls $PROFILER_OUTPUT_DIR/)
+            echo $runDate
+            LINE_COUNT=3600 # Smoke test to see at least 3600 ops are reported
+            res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
+            echo $res
+        fi
     fi
 }
 
-run_additional_T3000_test(){
+run_ccl_T3000_test() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
@@ -74,31 +73,10 @@ run_additional_T3000_test(){
         LINE_COUNT=8 #8 devices
         res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGather")
         echo $res
-
-        run_tracing_async_mode_T3000_test
     fi
 }
 
-run_profiling_test(){
-    if [[ -z "$ARCH_NAME" ]]; then
-      echo "Must provide ARCH_NAME in environment" 1>&2
-      exit 1
-    fi
-
-    echo "Make sure this test runs in a build with cmake option ENABLE_TRACY=ON"
-
-    if [[ -z "$DONT_USE_VIRTUAL_ENVIRONMENT" ]]; then
-      source python_env/bin/activate
-    fi
-
-    export PYTHONPATH=$TT_METAL_HOME
-
-    run_additional_T3000_test
-
-    run_async_mode_T3000_test
-
-    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py
-
+run_single_op_test() {
     remove_default_log_locations
 
     $PROFILER_SCRIPTS_ROOT/profile_this.py -c "pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_matmul.py::test_run_matmul_test[BFLOAT16-input_shapes0]"
@@ -108,35 +86,41 @@ run_profiling_test(){
     CORE_COUNT=7
     res=$(verify_perf_column "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$CORE_COUNT" "1" "1")
     echo $res
+}
+
+run_profiling_test() {
+    run_single_op_test
+
+    run_async_test
+
+    run_ccl_T3000_test
+
+    run_async_tracing_T3000_test
+
+    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py
 
     remove_default_log_locations
 }
 
-run_profiling_no_reset_test(){
+main() {
+    cd $TT_METAL_HOME
+
+    TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false}'
+
     if [[ -z "$ARCH_NAME" ]]; then
-      echo "Must provide ARCH_NAME in environment" 1>&2
-      exit 1
+        echo "Must provide ARCH_NAME in environment" 1>&2
+        exit 1
     fi
 
     echo "Make sure this test runs in a build with cmake option ENABLE_TRACY=ON"
 
-    source python_env/bin/activate
+    if [[ -z "$DONT_USE_VIRTUAL_ENVIRONMENT" ]]; then
+        source python_env/bin/activate
+    fi
+
     export PYTHONPATH=$TT_METAL_HOME
 
-    TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler_gs_no_reset.py
-
-    remove_default_log_locations
+    run_profiling_test
 }
 
-cd $TT_METAL_HOME
-
-#
-TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false}'
-
-if [[ $1 == "PROFILER" ]]; then
-    run_profiling_test
-elif [[ $1 == "PROFILER_NO_RESET" ]]; then
-    run_profiling_no_reset_test
-else
-    run_profiling_test
-fi
+main "$@"
