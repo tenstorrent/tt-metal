@@ -36,6 +36,7 @@ constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS = {
 
 // ETH TXQ SELECTION
 constexpr uint32_t DEFAULT_ETH_TXQ = 0;
+constexpr uint32_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = 32;
 
 // STREAM REGISTER ASSIGNMENT
 // senders update this stream
