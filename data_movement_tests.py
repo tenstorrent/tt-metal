@@ -22,7 +22,7 @@ def run_dm_tests(profile, gtest_filter):
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
     if profile or not os.path.exists(log_file_path) or gtest_filter:
         logger.info(f"Profiling Kernels...")
-        cmd = f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_dm"
+        cmd = f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_data_movement"
 
         if gtest_filter:
             cmd += f' --gtest_filter="*{gtest_filter}*"'
@@ -113,12 +113,6 @@ def run_dm_tests(profile, gtest_filter):
             logger.info(f"  {attr}: {val}")
         logger.info(f"\n")
 
-    # Analysis average stats per core (Not very meaningful)
-    # for core in dm_stats["reader"]["analysis"]["stats"].keys():
-    #     logger.info(f"Averages for core: {core}")
-    #     logger.info(f"Reader stats: {dm_stats['reader']['analysis']['stats'][core]['Average']}")
-    #     logger.info(f"Writer stats: {dm_stats['writer']['analysis']['stats'][core]['Average']}\n")
-
     # # # # # # Performance check method # # # # # #
     reader_cycles = dm_stats["reader"]["analysis"]["series"][0]["duration_cycles"]
     reader_cycles_lower_bound = 700
@@ -170,6 +164,8 @@ def plot_dm_stats(dm_stats):
 
     # Create subfigures for each Test id
     subfigs = fig.subfigures(len(test_ids), 1)
+    if len(test_ids) == 1:
+        subfigs = [subfigs]
 
     for idx, (subfig, test_id) in enumerate(zip(subfigs, test_ids)):
         # Add a title for the current Test id

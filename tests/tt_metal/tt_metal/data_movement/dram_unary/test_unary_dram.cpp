@@ -105,7 +105,7 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
     // Kernels
     auto reader_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/dm/reader_unary.cpp",
+        "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/reader_unary.cpp",
         test_config.cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -114,7 +114,7 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
 
     auto writer_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/dm/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/writer_unary.cpp",
         test_config.cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
