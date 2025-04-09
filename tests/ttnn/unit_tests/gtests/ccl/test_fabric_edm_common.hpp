@@ -2323,7 +2323,8 @@ void Run1DFabricPacketSendTest(
             params.fabric_mode == FabricTestMode::RingAsLinear,
         "This test can only be run with disable_end_workers_in_backward_direction set to true or fabric_mode set to "
         "Linear");
-    bool use_tg = num_devices == 32;
+    bool use_galaxy = num_devices == 32;
+    bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
         return;
@@ -2371,9 +2372,9 @@ void Run1DFabricPacketSendTest(
 
     // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
     std::vector<IDevice*> devices_;
-    if (use_tg) {
+    if (use_galaxy) {
         if (line_size <= 4) {
-            if (topology == ttnn::ccl::Topology::Ring) {
+            if (topology == ttnn::ccl::Topology::Ring && use_tg) {
                 devices_ = {
                     view.get_device(MeshCoordinate(0, 0)),
                     view.get_device(MeshCoordinate(1, 0)),
@@ -2382,12 +2383,12 @@ void Run1DFabricPacketSendTest(
             } else {
                 devices_ = {
                     view.get_device(MeshCoordinate(0, 0)),
-                    view.get_device(MeshCoordinate(1, 0)),
-                    view.get_device(MeshCoordinate(2, 0)),
-                    view.get_device(MeshCoordinate(3, 0))};
+                    view.get_device(MeshCoordinate(0, 1)),
+                    view.get_device(MeshCoordinate(0, 2)),
+                    view.get_device(MeshCoordinate(0, 3))};
             }
         } else {
-            if (topology == ttnn::ccl::Topology::Ring) {
+            if (topology == ttnn::ccl::Topology::Ring && use_tg) {
                 devices_ = {
                     view.get_device(MeshCoordinate(0, 0)),
                     view.get_device(MeshCoordinate(1, 0)),
