@@ -181,11 +181,14 @@ inline ttnn::Tensor full_impl(
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
 
         case DataType::BFLOAT8_B: {
-            using bfloat8 = std::vector<uint32_t>;
-            TensorSpec tensor_spec(
-                shape_value, TensorLayout(DataType::BFLOAT8_B, PageConfig(layout_value), MemoryConfig{}));
+             TensorSpec tensor_spec(
+                shape_value, TensorLayout(DataType::BFLOAT8_B, PageConfig(layout_value), mem_cfg));
             std::vector<float> fill_value_vec(shape_value.volume(), static_cast<float>(fill_value));
-            return tt::tt_metal::Tensor::from_span(tt::stl::Span<const float>(fill_value_vec), tensor_spec);
+            auto output = tt::tt_metal::Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
+            if (!workers_to_use.empty()) {
+                output = output.to_device(workers_to_use, mem_cfg);
+            }
+            return output;
         }
         default: TT_THROW("Unsupported DataType!");
     }
