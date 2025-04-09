@@ -52,18 +52,6 @@ def run_max_pool(
     stride_h, stride_w = stride
     dilation_h, dilation_w = dilation
 
-    if not (
-        (pad_h == 0 and kernel_h == 2)
-        or (pad_h == 1 and kernel_h == 3)
-        or (pad_h == 2 and kernel_h == 5)
-        or (pad_h == 4 and kernel_h == 9)
-        or (pad_h == 6 and kernel_h == 13)
-    ):
-        pytest.skip("FAST SKIP")
-
-    if ceil_mode and stride_h == 1:
-        pytest.skip("FAST SKIP")
-
     if shard_scheme != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
         if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
             pytest.skip("Invalid case")
@@ -168,7 +156,7 @@ def run_max_pool(
     #     for c in range(act_shape[1]):
     #         for h in range(act_shape[2]):
     #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = w
+    #                 act[n, c, h, w] = h * in_w + w
     # torch.save(act, "act.pt")
     # act = torch.load("act.pt")
 
@@ -187,7 +175,7 @@ def run_max_pool(
             pytest.skip("For BFP8_B datatype, input channels / cores_x should be multiple of 32")
         ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
     else:
-        ttact = ttnn.from_torch(act_reshaped)
+        ttact = ttnn.from_torch(act_reshaped, dtype)
 
     pre_shard = shard_scheme == None
 
@@ -212,7 +200,6 @@ def run_max_pool(
             tile_size=32 if dtype == ttnn.bfloat8_b else 1,
         )
         ttact_device = ttnn.to_memory_config(ttact_device, sharded_memory_config)
-
     output = ttnn.max_pool2d(
         input_tensor=ttact_device,
         batch_size=in_n,
@@ -226,41 +213,7 @@ def run_max_pool(
         memory_config=memory_config,
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
-        in_place_halo=True,
     )
-
-    # for core_id in range(0, 64):
-    #     output_shard = torch.Tensor(ttnn.to_torch(output.extract_shard(core_id).pad_to_tile(0.0).cpu()))
-    #     output_shards[core_id].append(output_shard)
-    # if len(output_shards[0]) == 2:
-    #     for core_id in range(0, 64):
-    #         print(f"Core ID: {core_id}")
-    #         # coord = ttnn.CoreCoord(x, y)
-    #         gold_shard = output_shards[core_id][0]
-    #         opt_shard = output_shards[core_id][1]
-    #         diff = gold_shard[0][0] - opt_shard[0][0]
-
-    #         print(gold_shard[0, 0, :, :1].T)
-    #         print(opt_shard[0, 0, :, :1].T)
-    #         print("--")
-
-    #         diff = diff.to(torch.float32)
-    #         # Replace -inf with zeros only where both gold_shard[0][0] and opt_shard[0][0] are -inf
-    #         mask = (gold_shard[0][0] == -float("inf")) & (opt_shard[0][0] == -float("inf"))
-    #         diff = torch.where(mask, torch.tensor(0.0, dtype=diff.dtype), diff)
-
-    #         # Plot the difference
-    #         print("shape: ", diff.shape)
-    #         plt.imshow(diff[:, :], cmap="viridis")
-    #         plt.colorbar()
-    #         plt.title("Difference between output shards")
-
-    #         # Save the plot
-    #         filename = "output_shard_pics/output_shard_difference_core_" + str(core_id) + ".png"
-    #         plt.savefig(filename)
-
-    #         # Clear the plot to avoid overlap in subsequent runs
-    #         plt.clf()
 
     output_host = output.cpu()
     output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
@@ -285,9 +238,6 @@ def run_max_pool(
     pcc_thresh = 1.0
     if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.9994
-
-    # print(output_pytorch[0][0])
-    # print(golden_pytorch[0][0])
 
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
 
@@ -397,7 +347,7 @@ def run_max_pool(
 @pytest.mark.parametrize(
     "dtype",
     [
-        # ttnn.bfloat16,
+        ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
 )
@@ -446,7 +396,6 @@ def test_run_max_pool(
             [1, 640 * 64, 8, 8],
             [1, 576 * 64, 8, 8],
             [1, 384 * 64, 8, 8],
-            [1, 256 * 64, 8, 8],
         )
     ),
 )
@@ -481,7 +430,7 @@ def test_run_max_pool(
 @pytest.mark.parametrize(
     "dtype",
     [
-        # ttnn.bfloat16,
+        ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
 )
@@ -593,7 +542,7 @@ def test_run_max_pool_width_shard(
 @pytest.mark.parametrize(
     "dtype",
     [
-        # ttnn.bfloat16,
+        ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
 )
@@ -630,7 +579,7 @@ def test_run_max_pool_block_shard(
     )
 
 
-""" @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
@@ -987,4 +936,4 @@ def test_run_max_pool_squeeze_net_model(
         torch_tensor_map,
         dtype,
         ceil_mode=ceil_mode,
-    ) """
+    )
