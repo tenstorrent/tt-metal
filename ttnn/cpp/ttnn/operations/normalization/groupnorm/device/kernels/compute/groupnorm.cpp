@@ -98,7 +98,7 @@ void MAIN {
     constexpr uint32_t batch = get_compile_time_arg_val(4);
     constexpr uint32_t group = get_compile_time_arg_val(5);
 
-    volatile uint32_t block_h = get_compile_time_arg_val(6);
+    constexpr uint32_t block_h = get_compile_time_arg_val(6);
     constexpr uint32_t block_w = get_compile_time_arg_val(7);
     constexpr uint32_t block_hw = get_compile_time_arg_val(8);
 
@@ -187,6 +187,7 @@ void MAIN {
     uint32_t index_block_w = 0;
     uint32_t output_tile_index = 0;
     bool apply_gamma_beta[block_w];
+    constexpr uint32_t data_per_core_N_per_group = (per_core_N * TILE_WIDTH / group);
 
 #ifdef UNTILIZE_OUT
     constexpr int cb_outgamma = cb_in;
@@ -231,16 +232,16 @@ void MAIN {
 #endif
 
     index_b_offset = 0;
-    uint32_t out_block_h_normal = block_h / num_out_blocks;
+    constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
-    if (block_h % num_out_blocks != 0) {
+    if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
-        out_block_h_last = block_h % num_out_blocks;
+        out_block_h_last = (block_h % num_out_blocks);
         out_block_hw_last = out_block_h_last * block_w;
     }
     uint32_t cb_ex_external_tiles_required =
@@ -695,7 +696,7 @@ void MAIN {
                     }
 
                     bool is_past_end_of_group =
-                        (((w + index_g_offset) + 1) * TILE_WIDTH) > ((g + 1) * (per_core_N * TILE_WIDTH / group));
+                        (((w + index_g_offset) + 1) * TILE_WIDTH) > ((g + 1) * data_per_core_N_per_group);
                     apply_gamma_beta[w] = !is_past_end_of_group;
                 }
                 cb_pop_front(cb_xmm, out_block_hw_normal);

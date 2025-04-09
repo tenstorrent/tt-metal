@@ -37,15 +37,11 @@ void kernel_main() {
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(19);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(20);
 
-    volatile uint32_t block_h = get_compile_time_arg_val(21);
+    constexpr uint32_t block_h = get_compile_time_arg_val(21);
     constexpr uint32_t block_w = get_compile_time_arg_val(22);
     constexpr uint32_t block_hw = get_compile_time_arg_val(23);
 
     constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(24) == 1;
-    DPRINT << get_compile_time_arg_val(24) << "-------------------" << ENDL();
-    if (stick_size_is_pow2) {
-        DPRINT << "---------------------" << ENDL();
-    }
     constexpr uint32_t page_size = get_compile_time_arg_val(25);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
@@ -93,13 +89,13 @@ void kernel_main() {
         .page_size = input_mask_single_tile_size_bytes,
         .data_format = input_mask_data_format};
 
-    uint32_t out_block_h_normal = block_h / num_out_blocks;
+    constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
-    if (block_h % num_out_blocks != 0) {
+    if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
         out_block_h_last = block_h % num_out_blocks;
