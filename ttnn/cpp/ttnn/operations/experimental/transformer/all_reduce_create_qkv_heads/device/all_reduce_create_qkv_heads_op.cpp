@@ -192,7 +192,7 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
         "Output tensor must be height sharded");
 
     // Support maximum 32 heads for now
-    TT_FATAL(this->num_heads <= 32, "There are {} q heads only 32 are supported", this->num_heads);
+    TT_FATAL(this->num_heads <= MAX_HEAD, "There are {} q heads only {} are supported", this->num_heads, MAX_HEAD);
     TT_FATAL(
         this->num_heads >= this->num_kv_heads,
         "num_q_heads={} must be greater than or equal to num_kv_heads={}",
@@ -228,12 +228,6 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     auto output_tensor_layout =
         input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->all_reduce_mem_config);
     auto all_reduce_tensor_spec{TensorSpec(input_shape, output_tensor_layout)};
-    // return {all_reduce_tensor_spec, all_reduce_tensor_spec, all_reduce_tensor_spec, all_reduce_tensor_spec};
-    // copied from qkv create heads compute_output_specs
-    using namespace tt::constants;
-    // const auto& input_tensor = input_tensors.at(0);
-    // const auto& input_shape = input_tensor.get_logical_shape();
-
     auto batch = input_shape[2];
     if (this->slice_size.has_value()) {
         batch = this->slice_size.value();
@@ -248,9 +242,6 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     auto num_q_heads_padded = ((this->num_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto num_kv_heads_padded = ((this->num_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
 
-    MemoryConfig q_mem_config = this->final_mem_config;
-    MemoryConfig k_mem_config = this->final_mem_config;
-    MemoryConfig v_mem_config = this->final_mem_config;
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
     // auto input_core_grid = input_tensor.shard_spec().value().grid;
     auto sub_core_grid = tt::tt_metal::CoreRangeSet(
@@ -275,6 +266,9 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     }
     v_shard_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(next_core_coord, batch, sub_core_grid, true);
 
+    MemoryConfig q_mem_config = this->final_mem_config;
+    MemoryConfig k_mem_config = this->final_mem_config;
+    MemoryConfig v_mem_config = this->final_mem_config;
     tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
     q_mem_config.shard_spec = q_shard_spec;
     tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {num_kv_heads_padded, this->head_dim}};

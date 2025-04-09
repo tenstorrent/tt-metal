@@ -68,7 +68,9 @@ void kernel_main() {
     arg_idx += num_mcast_ranges;
 
     size_t arg_for_fab = arg_idx;
-    auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
+    auto fabric_connection =
+        FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
+            arg_idx);
 
     // packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
@@ -92,7 +94,7 @@ void kernel_main() {
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
 
     if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open();
+        fabric_connection.open_finish();
     }
 
     // 1. mcast via fabric to remote tensor addresses

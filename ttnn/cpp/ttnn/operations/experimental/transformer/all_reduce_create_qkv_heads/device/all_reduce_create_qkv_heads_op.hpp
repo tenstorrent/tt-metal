@@ -21,6 +21,8 @@
 #include <optional>
 #include <vector>
 
+constexpr int MAX_HEAD = 32;
+
 namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;

@@ -380,9 +380,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         // qkv heads reader compile time args
         (std::uint32_t)element_size,
         (std::uint32_t)sub_tile_line_bytes,
-        // q_output_cb_index,
-        // k_output_cb_index,
-        // v_output_cb_index,
         head_size,
         num_q_heads,
         num_kv_heads,
@@ -390,8 +387,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         1,  // read the first phase
         in_num_cores,
         q_num_cores,
-        // process_qv,  qv vs k core will be passed in as rt args// read and write q and v heads
-        // process_k,   // read and write k heads
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader,
         out_cb_index,
@@ -402,9 +397,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         reduction_CB_tiles,  // total_num_reduction_tiles
         (std::uint32_t)element_size,
         (std::uint32_t)sub_tile_line_bytes,
-        // q_output_cb_index,
-        // k_output_cb_index,
-        // v_output_cb_index,
         head_size,
         num_q_heads,
         num_kv_heads,
@@ -412,8 +404,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         2,  // read the second phase
         in_num_cores,
         q_num_cores,
-        // process_qv,  // read and write q and v heads
-        // process_k,   // read and write k heads
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader,
         out_cb_index,
