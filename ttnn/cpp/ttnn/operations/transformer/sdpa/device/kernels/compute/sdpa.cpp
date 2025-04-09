@@ -188,15 +188,15 @@ void MAIN {
                      * DEBUG: Use matml_reduce instead of reduce_sum for 6µs speedup. Still experimental, not robust.
                      * matmul_reduce has a hardcoded matmul config for the performance test case shapes.
                      */
-                    // matmul_reduce(cb_qk_im, cb_col_identity, alias_cur_sum);
+                    matmul_reduce<cb_qk_im, cb_col_identity, Sq_chunk_t, Sk_chunk_t>(alias_cur_sum);
 
-                    reduce_c<
-                        PoolType::SUM,
-                        ReduceDim::REDUCE_ROW,
-                        cb_qk_im,
-                        cb_identity_scale_in,
-                        Sq_chunk_t,
-                        Sk_chunk_t>(alias_cur_sum);
+                    // reduce_c<
+                    //     PoolType::SUM,
+                    //     ReduceDim::REDUCE_ROW,
+                    //     cb_qk_im,
+                    //     cb_identity_scale_in,
+                    //     Sq_chunk_t,
+                    //     Sk_chunk_t>(alias_cur_sum);
 
                     /* OUT_IM = QK @ V_CHUNK */
                     matmul_blocks(

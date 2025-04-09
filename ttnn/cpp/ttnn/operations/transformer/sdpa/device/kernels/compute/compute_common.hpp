@@ -342,57 +342,53 @@ void matmul_blocks(
     cb_pop_front(in1_cb, K * N);
 }
 
-void matmul_reduce(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_t& out_cb) {
+template <uint32_t in0_cb, uint32_t in1_cb, uint32_t M, uint32_t K>
+void matmul_reduce(const uint32_t& out_cb) {
     DeviceZoneScopedN("MATMUL_REDUCE");
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
 
-    // DEBUG: These numbers are hardcoded for the SDPA performance test case!
-    uint32_t M = 8;
-    uint32_t K = 16;
-    uint32_t N = 1;
-    uint32_t subblock_h = M;
-    uint32_t subblock_w = N;
-    uint32_t in0_block_w = K;
+    constexpr uint32_t N = 1;  // Result of reduce is 1 column
+    constexpr uint32_t in0_block_w = K;
+    constexpr uint32_t subblock_w = N;
+    // Reuse the Sq_chunk_t granularity chosen for sub_exp_block
+    constexpr uint32_t subblock_h = STATS_GRANULARITY;
+    constexpr uint32_t in0_num_subblocks = M >> LOG2_STATS_GRANULARITY;
+
     mm_block_init_short(
         in0_cb, in1_cb, 0 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
-    uint32_t output_num_tiles = M * N;
-    uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+    constexpr uint32_t output_num_tiles = M * N;
+    constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+
     uint32_t in0_index_offset = 0;
 
     reconfig_data_format(in1_cb, in0_cb);
     cb_wait_front(in1_cb, N);
     cb_wait_front(in0_cb, M * K);
 
-    for (uint32_t in0_subblock = 0; in0_subblock < 1; ++in0_subblock) {
-        uint32_t in1_index_offset = 0;
-        for (uint32_t in1_subblock = 0; in1_subblock < 1; ++in1_subblock) {
-            tile_regs_acquire();
+    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+        tile_regs_acquire();
 
-            uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
+        uint32_t dst_index = 0;
+        uint32_t in0_index = in0_index_offset;
+        uint32_t in1_index = 0;
 
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, 0, subblock_w, subblock_h, in0_block_w);
-                in0_index++;
-                // in1_index += N; // Broadcasted
-            }
-            tile_regs_commit();
-
-            cb_reserve_back(out_cb, out_subblock_num_tiles);
-            tile_regs_wait();
-            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                pack_tile(i, out_cb);
-            }
-            tile_regs_release();
-            cb_push_back(out_cb, out_subblock_num_tiles);
-            in1_index_offset += subblock_w;
+        for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+            matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, 0, subblock_w, subblock_h, in0_block_w);
+            in0_index++;
         }
+        tile_regs_commit();
+
+        cb_reserve_back(out_cb, out_subblock_num_tiles);
+        tile_regs_wait();
+        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+            pack_tile(i, out_cb);
+        }
+        tile_regs_release();
+        cb_push_back(out_cb, out_subblock_num_tiles);
         in0_index_offset += subblock_h * in0_block_w;
     }
-    // cb_pop_front(in1_cb, K * N);
 }
