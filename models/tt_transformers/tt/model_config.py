@@ -576,25 +576,6 @@ class ModelArgs:
                 packer_l1_acc=True,
             )
             # end mixtral
-            precision_setting_lookup = {
-                PrecisionSetting.BFP4: ttnn.bfloat4_b,
-                PrecisionSetting.BFP8: ttnn.bfloat8_b,
-                PrecisionSetting.BF16: ttnn.bfloat16,
-                None: None,  # this signals that original dtype should be used
-            }
-            for tensor_group, precision in self.optimizations.tensor_dtype_settings.items():
-                dtype = precision_setting_lookup[precision]
-                self.model_config[f"{tensor_group.value.upper()}_DTYPE"] = dtype
-            math_fidelity_setting_lookup = {
-                MathFidelitySetting.LOFI: self.compute_kernel_config_lofi,
-                MathFidelitySetting.HIFI2: self.compute_kernel_config_hifi2,
-                MathFidelitySetting.HIFI2_NA: self.compute_kernel_config_hifi2_na,
-                MathFidelitySetting.HIFI2_FP16: self.compute_kernel_config_hifi2_fp16,
-                MathFidelitySetting.HIFI4: self.compute_kernel_config_hifi4,
-            }
-            for op_group, math_fidelity in self.optimizations.op_fidelity_settings.items():
-                math_cfg = math_fidelity_setting_lookup[math_fidelity]
-                self.model_config[f"{op_group.value.upper()}_COMPUTE_KERNEL_CFG"] = math_cfg
 
             if self.optimizations is None:
                 self.optimizations = DecodersPrecision(num_decoders=self.n_layers)
