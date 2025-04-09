@@ -71,7 +71,7 @@ def test_ag_tg_llama_perf(
     "ar_type, warmup_iters, perf_target_us",
     [
         ("ff2", 15, 18.6),
-        ("qkv", 15, 15.5),
+        ("qkv", 15, 11.9),
         ("ff1", 15, 19.2),
         ("lm_head", 15, 61.8),
     ],
