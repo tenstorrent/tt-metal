@@ -327,6 +327,32 @@ std::vector<T> convert_layout(
 
 using Type = bfloat16;
 
+template <typename T>
+std::vector<T>& get_test_data() {
+    constexpr size_t MAX_BATCH = 10;
+    constexpr size_t MAX_ROWS = 512;
+    constexpr size_t MAX_COLS = 512;
+
+    static std::vector<T> data;
+    if (!data.empty()) {
+        return data;
+    }
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+
+    size_t n_elements = MAX_BATCH * MAX_ROWS * MAX_COLS;
+    data.resize(n_elements);
+
+    for (size_t i = 0; i < n_elements; i++) {
+        float val = dist(gen);
+        data[i] = static_cast<T>(val);
+    }
+
+    return data;
+}
+
 // Note: tuple is used for ::testing::Combine
 using TilizeUntilizeParams = std::tuple<
     int,
@@ -338,30 +364,10 @@ using TilizeUntilizeParams = std::tuple<
     bool,
     bool>;
 
-class TilizeUntilizeTestsFixture : public ::testing::TestWithParam<TilizeUntilizeParams> {
-    constexpr static size_t MAX_BATCH = 10;
-    constexpr static size_t MAX_ROWS = 512;
-    constexpr static size_t MAX_COLS = 512;
-
-protected:
-    static std::vector<Type> data;
-    static void SetUpTestSuite() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
-
-        size_t n_elements = MAX_BATCH * MAX_ROWS * MAX_COLS;
-        data.resize(n_elements);
-        for (size_t i = 0; i < n_elements; i++) {
-            auto val = dist(gen);
-            data[i] = Type(val);
-        }
-    }
-};
-
-std::vector<Type> TilizeUntilizeTestsFixture::data;
+class TilizeUntilizeTestsFixture : public ::testing::TestWithParam<TilizeUntilizeParams> {};
 
 TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
+    const auto& data = get_test_data<Type>();
     auto params = GetParam();
     int n_batches = std::get<0>(params);
     PhysicalSize shape = std::get<1>(params);
@@ -393,6 +399,7 @@ TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
 }
 
 TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
+    const auto& data = get_test_data<Type>();
     auto params = GetParam();
     int n_batches = std::get<0>(params);
     PhysicalSize shape = std::get<1>(params);
