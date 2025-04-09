@@ -5,7 +5,6 @@
 import pytest
 
 import torch
-import torch.nn as nn
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
