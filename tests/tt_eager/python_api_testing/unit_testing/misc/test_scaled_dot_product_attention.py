@@ -181,7 +181,7 @@ def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
     ttnn.device.DisablePersistentKernelCache()
-    run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False)
+    run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False, grid=grid, mse=1e-3)
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
@@ -254,7 +254,9 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
     assert device.num_program_cache_entries() == 1
 
 
-def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=None, use_mask=True):
+def run_sdpa_noncausal(
+    device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=None, use_mask=True, grid=None, mse=None
+):
     torch.manual_seed(1234)
     if sk is None:
         sk = sq
@@ -325,8 +327,11 @@ def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dt
 
     out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
     logger.debug(f"python vs pytorch: {out_pcc}")
-    logger.debug(f"mse: {((gt - tt_back) ** 2).mean()}")
+    got_mse = ((gt - tt_back) ** 2).mean()
+    logger.debug(f"mse: {got_mse}")
     assert out_pass
+    if mse is not None:
+        assert got_mse < mse
 
 
 # @pytest.mark.skip(reason="ND PCC issues")
