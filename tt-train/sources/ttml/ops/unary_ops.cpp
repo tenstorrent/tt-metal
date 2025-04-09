@@ -154,4 +154,57 @@ autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t 
     return out;
 }
 
+autograd::TensorPtr dytanh(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& scale,
+    const autograd::TensorPtr& gain,
+    const autograd::TensorPtr& bias) {
+    if (scale->get_value().get_logical_shape().to_array_4D() != std::array<uint32_t, 4>{1, 1, 1, 1}) {
+        throw std::invalid_argument(
+            fmt::format("Scale must be a 4D tensor with one element, got {}", scale->get_value().get_logical_shape()));
+    }
+    auto x = tensor->get_value();
+    auto scale_tensor = scale->get_value();
+    auto gain_tensor = gain->get_value();
+    auto bias_tensor = bias->get_value();
+
+    auto scaled = ttnn::experimental::mul(x, scale_tensor);
+    auto tanh_scaled = ttnn::tanh(scaled);
+    auto gained = ttnn::experimental::mul(tanh_scaled, gain_tensor);
+    auto biased = ttnn::experimental::add(gained, bias_tensor);
+    auto out = autograd::create_tensor(biased);
+
+    autograd::GradFunction grad = [tensor, out, scale, gain, bias, tanh_scaled]() {
+        auto dL_dout = out->get_grad();
+
+        // dL/dscale = dL/dout * gain * 1 - tanh^2(scaled) * x
+        auto dL_dscale = ttnn::experimental::mul(dL_dout, gain->get_value());
+        dL_dscale = ttnn::experimental::mul(tensor->get_value(), dL_dscale);
+        auto one_minus_tanh = ttnn::experimental::sub(ttnn::ones_like(tanh_scaled), ttnn::square(tanh_scaled));
+        dL_dscale = ttnn::experimental::mul(one_minus_tanh, dL_dscale);
+        // α is a scalar broadcast over the entire batch, so we perform a sum
+        // over all dims.
+        dL_dscale = ttnn_fixed::sum_moreh(dL_dscale, {0, 1, 2, 3}, /*keep_dim=*/true);
+        scale->add_grad(dL_dscale);
+
+        // dL/dx = dL/dout * gain * 1 - tanh^2(scaled) * scale
+        auto dL_dx = ttnn::experimental::mul(dL_dout, gain->get_value());
+        dL_dx = ttnn::experimental::mul(dL_dx, one_minus_tanh);
+        dL_dx = ttnn::experimental::mul(dL_dx, scale->get_value());
+        tensor->add_grad(dL_dx);
+
+        // dL/dgain = dL/dout * tanh(scaled)
+        auto dL_dgain = ttnn::experimental::mul(dL_dout, tanh_scaled);
+        dL_dgain = ttnn_fixed::sum_moreh(dL_dgain, {0, 1, 2}, /*keep_dim=*/true);
+        gain->add_grad(dL_dgain);
+
+        // dL/dbias = dL/dout
+        auto dL_dbias = ttnn_fixed::sum_moreh(dL_dout, {0, 1, 2}, /*keep_dim=*/true);
+        bias->add_grad(dL_dbias);
+    };
+    auto links = autograd::get_links(tensor, scale, gain, bias);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
+
 }  // namespace ttml::ops
