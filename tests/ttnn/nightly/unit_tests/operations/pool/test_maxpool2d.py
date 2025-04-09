@@ -184,7 +184,7 @@ def run_max_pool(
             pytest.skip("For BFP8_B datatype, input channels / cores_x should be multiple of 32")
         ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
     else:
-        ttact = ttnn.from_torch(act_reshaped, dtype)
+        ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
 
     pre_shard = shard_scheme == None
 
@@ -249,8 +249,8 @@ def run_max_pool(
     if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.9994
 
-    print(output_pytorch[0][0])
-    print(golden_pytorch[0][0])
+    # print(output_pytorch[0][0])
+    # print(golden_pytorch[0][0])
 
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
 
