@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 5
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 340, "max": 355}, 80: {"min": 38, "max": 42}}
+TSU_THRESHOLDS = {1: {"min": 340, "max": 355}, 80: {"min": 39, "max": 41}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
