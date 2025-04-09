@@ -33,7 +33,6 @@ void bind_max_pool2d_operation(py::module& module) {
             padding (List of [int]): the (h, w) padding of the input tensor.
             dilation (List of [int]): the (h, w) dilation of the kernel window.
             ceil_mode (bool): whether to use ceil mode for the output shape. Defaults to `False`.
-            ceil_mode (bool): whether to use ceil mode for the output shape. Defaults to `False`.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
