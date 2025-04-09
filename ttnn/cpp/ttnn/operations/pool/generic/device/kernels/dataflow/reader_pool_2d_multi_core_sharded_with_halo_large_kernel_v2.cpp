@@ -39,10 +39,10 @@ void kernel_main() {
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(10);
     constexpr uint32_t bf16_init_value = get_compile_time_arg_val(11);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
-    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(13);
-    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(14);
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(11);
+    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(12);
+    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(13);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(14);
 
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
