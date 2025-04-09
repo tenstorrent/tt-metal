@@ -707,7 +707,7 @@ void MAIN {
                 if constexpr (do_gamma) {
                     index_h_offset = 0;
                     cb_reserve_back(cb_outgamma, out_block_hw_normal);
-                    cb_wait_front(cb_gamma, per_core_N);  // TODO FIX THIS, ONLY LOAD ONCE ADD POP
+                    cb_wait_front(cb_gamma, per_core_N);
                     cb_wait_front(cb_reread_write_out, out_block_hw_normal);
                     for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
@@ -741,7 +741,7 @@ void MAIN {
                 if constexpr (do_beta) {
                     index_h_offset = 0;
                     cb_reserve_back(cb_outbeta, out_block_hw_normal);
-                    cb_wait_front(cb_beta, per_core_N);  // TODO FIX THIS, ONLY LOAD ONCE ADD POP
+                    cb_wait_front(cb_beta, per_core_N);
                     for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
                             if (apply_gamma_beta[j]) {

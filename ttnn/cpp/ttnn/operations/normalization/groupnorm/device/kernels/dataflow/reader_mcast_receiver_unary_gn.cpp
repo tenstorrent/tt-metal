@@ -6,8 +6,6 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
-// #include "debug/dprint.h"
-
 void kernel_main() {
     // clang-format off
     // Definitions
@@ -151,6 +149,7 @@ void kernel_main() {
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
+    const uin32_t num_read_of_input = 3;
     if constexpr(block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
@@ -167,7 +166,12 @@ void kernel_main() {
 
         // Start Group Loop:
         for (uint32_t i = 0; i < num_groups; ++i) {
-            for (uint32_t n = 0; n < 3; ++n) {
+            //The following loop is for the 3 passes of input tensor required for GroupNorm
+            //First Pass: Calculates average value
+            //Second Pass: Calculates the Variance value
+            //Third Pass: Calculates final value
+            //Definition: num_read_of_input = 3
+            for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
                 uint32_t out_block_start_id_offset = 0;
                 for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                     uint32_t out_block_h_actual, out_block_hw_actual;
@@ -200,23 +204,25 @@ void kernel_main() {
                     cb_push_back(cb_in0, out_block_hw_normal);
 
 #endif
-                    if (n == 0 || n == 1) {
-                        // wait for local data ready
+                    if (cur_read_iteration == 0 || cur_read_iteration == 1) {
+                        //Section for wating for local reduce to be pushed to a cb_ex_partial
                         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-                        if (n == 0) {
+                        if (cur_read_iteration == 0) {
+                            //Wait for local avg calculation
                             cb_wait_front(cb_ex_partial, 1);
                         } else {
+                            //Wait for local variance calculation
                             cb_wait_front(cb_ex2_partial, 1);
                         }
                         noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
 
                         noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-                        if (n == 0) {
+                        if (cur_read_iteration == 0) {
                             cb_pop_front(cb_ex_partial, 1);
                         } else {
                             cb_pop_front(cb_ex2_partial, 1);
                         }
-                    } else if (n == 2) {
+                    } else if (cur_read_iteration == 2) {
                         const InterleavedAddrGenFast<out_is_dram> dst_a = {
                             .bank_base_address = out_addr,
                             .page_size = single_tile_size_bytes,
