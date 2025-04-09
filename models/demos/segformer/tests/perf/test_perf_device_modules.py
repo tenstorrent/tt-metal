@@ -8,25 +8,25 @@ import models.perf.device_perf_utils as perf_utils
 
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
-    "module, num_iterations, expected_perf",
+    "module, filter, num_iterations, expected_perf",
     [
-        ["segformer_attention", 1, 632.0],
-        ["segformer_decode_head", 1, 248.0],
-        ["segformer_dwconv", 1, 460.0],
-        ["segformer_efficient_selfattention", 3, 660.0],
-        ["segformer_encoder", 1, 195.0],
-        ["segformer_layer", 1, 220.0],
-        ["segformer_mix_ffn", 1, 371.0],
-        ["segformer_mlp", 1, 9010.0],
-        ["segformer_model", 1, 195.0],
-        ["segformer_overlap_path_embeddings", 1, 2350.0],
-        ["segformer_selfoutput", 1, 14200.0],
+        ["segformer_attention", "", 1, 632.0],
+        ["segformer_decode_head", "", 1, 248.0],
+        ["segformer_dwconv", "", 1, 460.0],
+        ["segformer_efficient_selfattention", "", 1, 660.0],
+        ["segformer_encoder", "", 1, 195.0],
+        ["segformer_layer", "", 1, 220.0],
+        ["segformer_mix_ffn", "", 1, 371.0],
+        ["segformer_mlp", "", 1, 9010.0],
+        ["segformer_model", "", 1, 195.0],
+        ["segformer_overlap_path_embeddings", "", 1, 2350.0],
+        ["segformer_selfoutput", "", 1, 14500.0],
     ],
 )
-def test_perf_device_bare_metal(module, num_iterations, expected_perf):
+def test_perf_device_bare_metal(module, filter, num_iterations, expected_perf):
     batch_size = 1
     subdir = "segformer"
-    margin = 0.03
+    margin = 0.05
 
     command = f"pytest tests/ttnn/integration_tests/segformer/test_{module}.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

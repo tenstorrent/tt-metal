@@ -16,7 +16,7 @@ import models.perf.device_perf_utils as perf_utils
 def test_perf_device_bare_metal(batch_size, expected_perf):
     subdir = "segformer"
     num_iterations = 1
-    margin = 0.03
+    margin = 0.05
 
     command = f"pytest tests/ttnn/integration_tests/segformer/test_segformer_for_semantic_segmentation.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

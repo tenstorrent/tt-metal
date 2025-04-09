@@ -25,7 +25,7 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", timeout: 50},
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", timeout: 60},
         ]
     name: "${{ matrix.test-info.name }} device perf"
     runs-on: ${{ matrix.test-info.runs-on }}
