@@ -3195,7 +3195,6 @@ def test_conv2d_vae_sdxl(
             packer_l1_acc=packer_l1_acc,
             output_layout=ttnn.TILE_LAYOUT,
             deallocate_activation=deallocate_activation,
-            debug=False,
             groups=groups,
             has_bias=True,
             shard_layout=None,

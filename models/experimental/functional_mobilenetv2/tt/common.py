@@ -25,7 +25,6 @@ class MobileNetV2Conv2D:
         enable_split_reader=False,
         reshard_if_not_optimal=False,
         use_shallow_covariant=False,
-        cache={},
         activation_dtype=ttnn.bfloat8_b,
     ):
         self.device = device
@@ -43,7 +42,6 @@ class MobileNetV2Conv2D:
         self.enable_act_double_buffer = enable_act_double_buffer
         self.enable_split_reader = enable_split_reader
         self.reshard_if_not_optimal = reshard_if_not_optimal
-        self.cache = cache
         self.batch_size = batch_size
         self.use_shallow_covariant = use_shallow_covariant
         self.conv_config = self._initialize_conv_config()
@@ -108,8 +106,6 @@ class MobileNetV2Conv2D:
             input_width=input_width,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
-            conv_op_cache=self.cache,
-            debug=False,
             groups=self.groups,
             return_weights_and_bias=True,
             return_output_dim=True,
