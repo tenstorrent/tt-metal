@@ -5,12 +5,15 @@
 #pragma once
 
 #include <cstdint>
-#include <emmintrin.h>
 #include "assert.hpp"
 #include <tt_stl/aligned_allocator.hpp>
 #include <umd/device/device_api_metal.h>
 
 #include <tt-metalium/vector_aligned.hpp>
+
+#if defined(__x86_64__) || defined(__i386__)
+#include <emmintrin.h>
+#endif
 
 namespace tt::tt_metal {
 
@@ -18,6 +21,7 @@ namespace tt::tt_metal {
 // Benchmarked to be approximately 1.4x - 1.8x faster than std::memcpy
 // TODO: Revisit this w/ regard to possibly eliminating min sizes and orphan writes at the end
 // TODO: ditto alignment isues
+#if defined(__x86_64__) || defined(__i386__)
 template <bool debug_sync = false>
 static inline void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n) {
     TT_ASSERT((uintptr_t)dst % MEMCPY_ALIGNMENT == 0);
@@ -96,5 +100,15 @@ static inline void memcpy_to_device(void* __restrict dst, const void* __restrict
         tt_driver_atomics::sfence();
     }
 }
+#else
+template <bool debug_sync = false>
+__attribute((nonnull(1, 2))) static inline void memcpy_to_device(
+    void* __restrict dst, const void* __restrict src, size_t n) {
+    memcpy(dst, src, n);
+    if constexpr (debug_sync) {
+        tt_driver_atomics::sfence();
+    }
+}
+#endif
 
 }  // namespace tt::tt_metal
