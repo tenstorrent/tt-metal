@@ -40,6 +40,7 @@
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze_pybind.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize_pybind.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding_pybind.hpp"
+#include "ttnn/operations/data_movement/roll/roll_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -78,6 +79,7 @@ void py_module(py::module& module) {
     py_bind_reshape_view(module);
     py_bind_view(module);
     py_bind_reshard(module);
+    py_bind_roll(module);
     py_bind_sharded_to_interleaved(module);
     py_bind_sharded_to_interleaved_partial(module);
     py_bind_squeeze(module);
