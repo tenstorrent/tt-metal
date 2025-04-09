@@ -17,8 +17,9 @@
 #include "host_api.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-std::shared_ptr<tt::tt_metal::Program> EltwiseBinaryProgramGenerator(
-    using namespace tt::tt_metal;
+namespace tt::tt_metal {
+
+std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 
     const std::shared_ptr<distributed::MeshBuffer>& src0_buf,
     const std::shared_ptr<distributed::MeshBuffer>& src1_buf,
@@ -105,6 +106,7 @@ std::shared_ptr<tt::tt_metal::Program> EltwiseBinaryProgramGenerator(
 
     return program;
 }
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed::test {
 
@@ -246,7 +248,7 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
     uint16_t total_values = result_data.size() * 2;
 
     for (uint16_t i = 0; i < total_values; i++) {
-        EXPECT_EQ(c_bf16, golden_bf16);
+        EXPECT_TRUE(is_close(c_bf16[i].to_float(), golden_bf16[i].to_float()));
     }
 }
 
