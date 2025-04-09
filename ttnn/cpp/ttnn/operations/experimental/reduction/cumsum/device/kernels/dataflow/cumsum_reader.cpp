@@ -7,12 +7,14 @@
 
 #include "debug/dprint.h"
 
-void kernel_main() {
-    // Simplest program possible
-    // 1) Only 1 tile
-    // 2) float32 elements
-    // 3) Along x-axis
+static inline unsigned get_tile_id(
+    uint32_t i0, uint32_t i1, uint32_t j, uint32_t tiles_per_row, uint32_t PLo, uint32_t PHi, uint32_t HtWt) {
+    uint32_t base_tileid = i0 * (tiles_per_row * PHi * HtWt) + i1;
+    uint32_t tileid = base_tileid + j * PHi * HtWt;
+    return tileid;
+}
 
+void kernel_main() {
     DPRINT << "[Cumsum Reader] start" << ENDL();
 
     uint32_t input_dram_base_addr = get_arg_val<uint32_t>(0);   // input base addr (DRAM)
@@ -37,9 +39,6 @@ void kernel_main() {
     uint32_t tile_card = ublock_size_bytes / sizeof(float);
 
     float sum = 0.f;
-
-    // TODO: add `dim`/`how` argument + tensor dimension
-    // 2 parameters: tile_offset, and <TODO>
 
     // If tile-based increment => keep previous tile in memory
     // data[i] += previous[i]
@@ -70,11 +69,8 @@ void kernel_main() {
                 accumulator[i] = 0.f;
             }
 
-            uint32_t base_tileid = i0 * (tiles_per_row * PHi * HtWt) + i1;
-            DPRINT << "[Cumsum Reader] base tileid = " << base_tileid << ENDL();
-
             for (unsigned j = 0; j < tiles_per_row; j++) {
-                uint32_t tileid = base_tileid + j * PHi * HtWt;
+                uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, PLo, PHi, HtWt);
                 DPRINT << "[Cumsum Reader] tile = " << tileid << ENDL();
 
                 // Read tile

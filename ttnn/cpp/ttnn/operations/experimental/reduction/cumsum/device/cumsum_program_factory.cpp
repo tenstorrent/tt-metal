@@ -48,6 +48,10 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         dim += tensor_rank;
     }
 
+    // 1) If 2D or 1D => convert to 3D. Then finally convert back after processing
+    // 2) If dim is x or y axis => permute dim with axis=0 and then do operation on dim=0
+    // Then permute back matching axes
+
     TT_FATAL(input_tensor.get_dtype() == output_tensor.get_dtype(), "Type conversion not supported yet");
 
     TT_FATAL(output_tensor.get_dtype() == DataType::FLOAT32, "Only float32 data type supported for now");
