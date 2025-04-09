@@ -393,7 +393,7 @@ int main() {
 
         /* Input vector tilizing */
         src0_vec = tilize_nfaces(src0_vec, M, K);
-        src0_vec = tilize_nfaces(src1_vec, K, N);
+        src1_vec = tilize_nfaces(src1_vec, K, N);
 
         /* Calling the MatMul host program. Read in result into a host vector */
         std::vector<bfloat16> result_vec(dram_buffer_C_size / sizeof(bfloat16));
