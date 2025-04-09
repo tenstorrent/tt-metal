@@ -146,7 +146,7 @@ def test_pc_with_different_shapes_in_sequence(device, use_program_cache):
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     ttnn.repeat(y_tt, [4, 1, 1, 1])
-    z_tt = ttnn.experimental.add(x_tt, y_tt)
+    z_tt = ttnn.add(x_tt, y_tt, use_legacy=False)
     # z_tt = x_tt + y_tt
 
     for i in range(num_iters):
@@ -163,7 +163,7 @@ def test_pc_with_different_shapes_in_sequence(device, use_program_cache):
         x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
         ttnn.repeat(y_tt, [4, 1, 1, 1])
-        z_tt = ttnn.experimental.add(x_tt, y_tt)
+        z_tt = ttnn.add(x_tt, y_tt, use_legacy=False)
         # z_tt = x_tt + y_tt
 
         for i in range(num_iters):
