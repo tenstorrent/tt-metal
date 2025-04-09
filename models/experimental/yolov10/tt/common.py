@@ -20,7 +20,7 @@ def interleaved_to_sharded(x):
     return ttnn.reshard(x, shardspec) if x.is_sharded() else ttnn.interleaved_to_sharded(x, shardspec)
 
 
-class TtYolov10_Conv2D:
+class TtYolov10Conv2D:
     def __init__(
         self,
         conv,
@@ -152,7 +152,7 @@ class Conv:
         self.enable_act = enable_act
         if not self.enable_identity:
             activation = "silu"
-        self.conv = TtYolov10_Conv2D(
+        self.conv = TtYolov10Conv2D(
             parameter.conv,
             conv_pt.conv,
             device=device,
@@ -173,8 +173,6 @@ class Conv:
         if self.enable_act:
             if x.is_sharded():
                 x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-            if self.enable_identity:
-                x = ttnn.identity(x, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return x
 

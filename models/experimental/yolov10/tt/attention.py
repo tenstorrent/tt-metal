@@ -45,23 +45,17 @@ class TtnnAttention:
         qkv = ttnn.reshape(qkv, (1, qkv.shape[1], int(math.sqrt(qkv.shape[-1])), int(math.sqrt(qkv.shape[-1]))))
         qkv = ttnn.reshape(qkv, (B, self.num_heads, self.key_dim * 2 + self.head_dim, N))
 
-        qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT)
-
         q, k, v = qkv[:, :, :32, :], qkv[:, :, 32:64, :], qkv[:, :, 64:, :]
 
         q = ttnn.permute(q, (0, 1, 3, 2))
 
-        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
-        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT)
-
-        attn = ttnn.matmul(q, k)
-        attn = attn * self.scale
+        attn = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.multiply(attn, self.scale)
 
         attn = ttnn.softmax(attn, dim=-1)
 
-        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
         attn = ttnn.permute(attn, (0, 1, 3, 2))
-        attn = ttnn.matmul(v, attn)
+        attn = ttnn.matmul(v, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn = ttnn.reshape(attn, (B, C, H, W))
 
         v = ttnn.reshape(v, (B, C, H, W))
@@ -72,10 +66,13 @@ class TtnnAttention:
         v = self.pe(v)
 
         attn = ttnn.permute(attn, (0, 2, 3, 1))
-        attn = ttnn.reshape(attn, (1, 1, attn.shape[0] * attn.shape[1] * attn.shape[2], attn.shape[3]))
+        attn = ttnn.reshape(
+            attn,
+            (1, 1, attn.shape[0] * attn.shape[1] * attn.shape[2], attn.shape[3]),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
-        x = attn + v
+        x = ttnn.add(attn, v, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = self.proj(x)
-
         return output

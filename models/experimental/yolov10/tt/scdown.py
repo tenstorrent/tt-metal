@@ -15,7 +15,6 @@ class TtnnSCDown:
             device,
             parameters.cv1,
             self.conv_pt.cv1,
-            auto_shard=True,
         )
 
         self.cv2 = Conv(
