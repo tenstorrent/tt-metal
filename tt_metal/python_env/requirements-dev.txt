@@ -2,7 +2,10 @@
 # not be available during environment installation. We recommend setuptools
 # and wheel before installing this requirements.txt file.
 
-loguru
+# Make it match pyproject.toml
+loguru==0.6.0
+
+git+https://github.com/tenstorrent/tt-smi.git@v3.0.12
 
 # For github workflow unit test failure annotations
 pytest-github-actions-annotate-failures==0.3.0
@@ -11,7 +14,7 @@ pytest-github-actions-annotate-failures==0.3.0
 # a breaking dependency for virtualenv installed by pre-commit. virtualenv
 # requires <4.0.0 platformdirs, so we're pinning platformdirs here
 platformdirs<4.0.0
-pre-commit==3.0.4
+pre-commit==3.5.0
 black==24.3.0
 clang-format==19.1.4
 build==0.10.0
