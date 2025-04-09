@@ -42,17 +42,17 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles =
         get_arg_val<uint32_t>(3);  // same arg index as in reader_unary and in reader_unary_transpose_wh_8bank
-    uint32_t pow_2 = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    uint32_t log_2_tile_bytes = (tile_bytes == 2048 ? 11 : 10);
 
     constexpr bool read_from_dram = get_read_from_dram();
 
-    const InterleavedPow2AddrGen<read_from_dram> src_a = {src_addr, pow_2};
+    const InterleavedPow2AddrGen<read_from_dram> src_a = {src_addr, log_2_tile_bytes};
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
@@ -79,7 +79,7 @@ void kernel_main() {
         for (uint32_t r = 0; r < rem; r++) {
             uint64_t src_noc_addr =
                 get_noc_addr(i + r + tile_offset, src_a);  // not contiguous for sequential r, can be banked
-            auto addr = l1_write_addr + (r << 11);
+            auto addr = l1_write_addr + (r << log_2_tile_bytes);
             noc_async_read(src_noc_addr, addr, tile_bytes);  // TODO(AP): data type size
         }
         noc_async_read_barrier();

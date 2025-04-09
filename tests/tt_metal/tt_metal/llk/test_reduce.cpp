@@ -215,7 +215,6 @@ void add_reader_writer_kernels(
                     Wt,
                     Ht * Wt,
                     *reinterpret_cast<uint32_t*>(&scaler),
-                    (tile_H * tile_W == 1024) ? 11 : 10,
                 });
 
             uint32_t num_tiles =
@@ -265,7 +264,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
     uint32_t HW = H * W;
     uint32_t N = test_config.shape[0] * test_config.shape[1];
-    TT_FATAL((tile_H == 16 && tile_W == 32) || (tile_H == 32 && tile_W == 32), "Error");  // validate tile shape
+    TT_FATAL((tile_H == 16 && tile_W == 32) || (tile_H == 32 && tile_W == 32), "Error");
     TT_FATAL(W % tile_W == 0 && H % tile_H == 0, "Error");
     TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
     uint32_t Wt = W / tile_W;
@@ -339,10 +338,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     tt_metal::CircularBufferConfig cb_temp_reduce_tile_config =
-        tt_metal::CircularBufferConfig(
-            2 * (2 * TILE_WIDTH * TILE_HEIGHT),
-            {{CBIndex::c_2,
-              tt::DataFormat::Float16_b}})  // full tile size because reader kernel is hard-coded to full tile
+        tt_metal::CircularBufferConfig(2 * (2 * TILE_WIDTH * TILE_HEIGHT), {{CBIndex::c_2, tt::DataFormat::Float16_b}})
             .set_page_size(CBIndex::c_2, single_tile_bytes)
             .set_tile_dims(CBIndex::c_2, tt_metal::Tile({32, 32}));
     auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(program, core, cb_temp_reduce_tile_config);
@@ -354,7 +350,6 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         uint(Wt),
         uint(NC),
         test_config.at_start,
-        uint((tile_H / 16) * (tile_W / 16)),
     };
 
     std::map<string, string> reduce_defines = {{"REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim)}};
@@ -851,48 +846,6 @@ TEST_F(DeviceFixture, TensixComputeReduceWTinyTiles) {
                             .rtol = 0.08f,
                             .golden_function = ::unit_tests::compute::gold_reduce_w,
                             .result_shape = result_shape,
-                            .fp32_dest_acc_en = fp32_dest_acc_en,
-                            .dst_full_sync_en = dst_full_sync_en,
-                            .at_start = at_start,
-                            .math_fidelity = MathFidelity(math_fid),
-                        };
-                        run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    }
-                }
-            }
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TensixComputeReduceWTinyTilesMathOnly) {
-    tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT / 2, TILE_WIDTH});
-    std::vector<uint32_t> shape = {1, 1, 1 * tile_shape.get_tile_shape()[0], 13 * tile_shape.get_tile_shape()[1]};
-    std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], tile_shape.get_tile_shape()[1]};
-    for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
-        // MathFidelity : {0, 2, 3, 4}; so skip value 1
-        if (math_fid == 1) {
-            continue;
-        }
-        for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
-            for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                    continue;
-                }
-                for (bool dst_full_sync_en : {true, false}) {
-                    for (bool at_start : {true, false}) {
-                        ReduceConfig test_config = {
-                            .tile_shape = tile_shape,
-                            .shape = shape,
-                            .reduce_dim = ReduceDim::W,
-                            .reduce_type = ReduceType(reduce_type),
-                            .data_gen_rand_max = 0.0f,
-                            .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-                            .data_gen_offset = 1.0f,
-                            .atol = 1e-2f,
-                            .rtol = 0.08f,
-                            .golden_function = ::unit_tests::compute::gold_reduce_w,
-                            .result_shape = result_shape,
-                            .math_only_reduce = true,
                             .fp32_dest_acc_en = fp32_dest_acc_en,
                             .dst_full_sync_en = dst_full_sync_en,
                             .at_start = at_start,

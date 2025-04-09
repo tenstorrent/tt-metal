@@ -91,9 +91,8 @@ ALWI void reduce_revert_delta(uint32_t ocb) {
  */
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_tile(
-    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t num_faces = 4) {
-    MATH((llk_math_reduce<reduce_type, reduce_dim, MATH_FIDELITY, DST_ACCUM_MODE>(idst, num_faces)));
+ALWI void reduce_tile(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+    MATH((llk_math_reduce<reduce_type, reduce_dim, MATH_FIDELITY, DST_ACCUM_MODE>(icb0, icb1, idst)));
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
 }
 
