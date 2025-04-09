@@ -65,7 +65,7 @@ class Generator:
         for user_id in range(1):
             logger.info(f"Prefilling User {user_id + 1}")
             seq_len = prompt_lens[user_id]
-            last_token_idx = seq_len  # - 1
+            last_token_idx = seq_len - 1
 
             prefill_seq_len = get_padded_prefill_len(seq_len)
             prefill_ids = torch.cat(
