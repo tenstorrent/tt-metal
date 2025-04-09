@@ -53,7 +53,8 @@ void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
 
     // It is important to not use inline addition here
     // m_grad might share memory with other tensors
-    m_grad = ttnn::experimental::add(m_grad, grad);
+    constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+    m_grad = ttnn::add(m_grad, grad, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
 }
 
 void Tensor::backward(bool retain_graph) {
