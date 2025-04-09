@@ -147,9 +147,8 @@ constexpr auto fill_array_with_next_n_args() -> std::array<T, NUM_ELEMS_TO_TAKE>
  */
 // clang-format on
 template <bool GET_THE_ARG, size_t ARG_IDX>
-constexpr auto conditional_get_compile_time_arg() ->
-    typename std::enable_if<GET_THE_ARG && (ARG_IDX < kernel_compile_time_args.size()), uint32_t>::type {
-    return kernel_compile_time_args[ARG_IDX];
+constexpr auto conditional_get_compile_time_arg() -> typename std::enable_if<GET_THE_ARG, uint32_t>::type {
+    return get_compile_time_arg_val(ARG_IDX);
 }
 
 // clang-format off

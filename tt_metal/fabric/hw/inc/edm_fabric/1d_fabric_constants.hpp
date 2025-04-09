@@ -112,7 +112,8 @@ constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(MAIN
 
 // TODO: CONVERT TO SEMAPHORE
 constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 23);
-constexpr uint32_t edm_local_sync_ptr_addr = wait_for_host_signal ? get_compile_time_arg_val(24) : 0;
+constexpr uint32_t edm_local_sync_ptr_addr =
+    wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 24) : 0;
 constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 25);
 
 constexpr bool persistent_mode = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 26) != 0;
