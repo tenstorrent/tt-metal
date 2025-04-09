@@ -184,20 +184,14 @@ int main(int argc, char** argv) {
         };
 
         // recover a linear view of input vector for consumption by gold_ function
-        vector<uint16_t> src_linear = convert_layout<uint16_t>(
-            src_4f_16,
-            shape,
-            tests::utils::TensorLayoutType::TILED_NFACES,
-            tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+        vector<uint16_t> src_linear =
+            convert_layout<uint16_t>(src_4f_16, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
         vector<uint16_t> gold_reduced = gold_transpose_hc(src_linear, shape);  // result is uint16_t untilized
 
         // Tilize from row major and convert to pairs (uint32_t)
         vector<uint32_t> shapeR{shape[0], shape[2], shape[1], shape[3]};
         auto gold_16_4f = convert_layout<uint16_t>(
-            gold_reduced,
-            shapeR,
-            tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-            tests::utils::TensorLayoutType::TILED_NFACES);
+            gold_reduced, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
         auto gold_4f_u32 = u32_from_u16_vector(gold_16_4f);
         auto u16_result = u16_from_u32_vector(result_vec);
 

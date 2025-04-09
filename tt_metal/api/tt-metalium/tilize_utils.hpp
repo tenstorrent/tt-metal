@@ -15,7 +15,6 @@
 #include <vector>
 #include <iosfwd>
 
-namespace tests::utils {
 enum class TensorLayoutType {
     LIN_ROW_MAJOR = 0,   // standard element-wise row-major
     TILED_SWIZZLED = 1,  // row-major of tiles, each tile is row-major-swizzled
@@ -23,7 +22,6 @@ enum class TensorLayoutType {
                          // row-major, faces are swizzled
 };
 std::ostream& operator<<(std::ostream& os, TensorLayoutType layout);
-}  // namespace tests::utils
 
 using PhysicalSize = std::array<uint32_t, 2>;
 
@@ -61,8 +59,8 @@ template <typename T>
 std::vector<T> convert_layout(
     tt::stl::Span<const T> data,
     const PhysicalSize& shape,
-    tests::utils::TensorLayoutType inL,
-    tests::utils::TensorLayoutType outL,
+    TensorLayoutType inL,
+    TensorLayoutType outL,
     std::optional<PhysicalSize> tile_shape = std::nullopt,
     std::optional<PhysicalSize> face_shape = std::nullopt,
     bool transpose_within_face = false,
@@ -72,8 +70,8 @@ template <typename T>
 std::vector<T> convert_layout(
     tt::stl::Span<const T> data,
     tt::stl::Span<const uint32_t> shape,
-    tests::utils::TensorLayoutType inL,
-    tests::utils::TensorLayoutType outL,
+    TensorLayoutType inL,
+    TensorLayoutType outL,
     std::optional<PhysicalSize> tile_shape = std::nullopt,
     std::optional<PhysicalSize> face_shape = std::nullopt,
     bool transpose_within_face = false,

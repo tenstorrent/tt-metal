@@ -255,8 +255,8 @@ template <typename T>
 std::vector<T> convert_layout(
     tt::stl::Span<const T> inp,
     const PhysicalSize& shape,
-    tests::utils::TensorLayoutType inL,
-    tests::utils::TensorLayoutType outL,
+    TensorLayoutType inL,
+    TensorLayoutType outL,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_within_face,
@@ -266,20 +266,20 @@ std::vector<T> convert_layout(
     }
 
     switch (inL) {
-        case tests::utils::TensorLayoutType::TILED_SWIZZLED:
-            if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
+        case TensorLayoutType::TILED_SWIZZLED:
+            if (outL == TensorLayoutType::TILED_NFACES) {
                 return reference::convert_layout_tile_swizzled_to_tile_nfaces<T>(
                     inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
-            } else if (outL == tests::utils::TensorLayoutType::LIN_ROW_MAJOR) {
+            } else if (outL == TensorLayoutType::LIN_ROW_MAJOR) {
                 return reference::convert_layout_row_major_to_tile_swizzled<T>(inp, shape, tile_shape);
             } else {
                 TT_ASSERT(false && "Unsupported conversion.");
             }
             break;
-        case tests::utils::TensorLayoutType::LIN_ROW_MAJOR:
-            if (outL == tests::utils::TensorLayoutType::TILED_SWIZZLED) {
+        case TensorLayoutType::LIN_ROW_MAJOR:
+            if (outL == TensorLayoutType::TILED_SWIZZLED) {
                 return reference::convert_layout_tile_swizzled_to_row_major<T>(inp, shape, tile_shape);
-            } else if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
+            } else if (outL == TensorLayoutType::TILED_NFACES) {
                 auto swiz32 = convert_layout_tile_swizzled_to_row_major<T>(inp, shape, tile_shape);
                 return reference::convert_layout_tile_swizzled_to_tile_nfaces<T>(
                     swiz32, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
@@ -287,11 +287,11 @@ std::vector<T> convert_layout(
                 TT_ASSERT(false && "Unsupported conversion.");
             }
             break;
-        case tests::utils::TensorLayoutType::TILED_NFACES:
-            if (outL == tests::utils::TensorLayoutType::TILED_SWIZZLED) {
+        case TensorLayoutType::TILED_NFACES:
+            if (outL == TensorLayoutType::TILED_SWIZZLED) {
                 return reference::convert_layout_tile_nfaces_to_tile_swizzled<T>(
                     inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
-            } else if (outL == tests::utils::TensorLayoutType::LIN_ROW_MAJOR) {
+            } else if (outL == TensorLayoutType::LIN_ROW_MAJOR) {
                 auto swiz32 = reference::convert_layout_tile_nfaces_to_tile_swizzled<T>(
                     inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
                 return reference::convert_layout_row_major_to_tile_swizzled<T>(swiz32, shape, tile_shape);
@@ -308,8 +308,8 @@ template <typename T>
 std::vector<T> convert_layout(
     tt::stl::Span<const T> inp,
     tt::stl::Span<const uint32_t> shape,
-    tests::utils::TensorLayoutType inL,
-    tests::utils::TensorLayoutType outL,
+    TensorLayoutType inL,
+    TensorLayoutType outL,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_within_face,
@@ -331,8 +331,8 @@ using Type = bfloat16;
 using TilizeUntilizeParams = std::tuple<
     int,
     PhysicalSize,
-    tests::utils::TensorLayoutType,
-    tests::utils::TensorLayoutType,
+    TensorLayoutType,
+    TensorLayoutType,
     std::optional<PhysicalSize>,
     std::optional<PhysicalSize>,
     bool,
@@ -439,13 +439,9 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(1),  // n_batches not supported in reference, so only 1 batch
         ::testing::Values(PhysicalSize{0, 0}, PhysicalSize{32, 32}, PhysicalSize{1024, 1024}),  // shape
         ::testing::Values(
-            tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-            tests::utils::TensorLayoutType::TILED_SWIZZLED,
-            tests::utils::TensorLayoutType::TILED_NFACES),
+            TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
         ::testing::Values(
-            tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-            tests::utils::TensorLayoutType::TILED_SWIZZLED,
-            tests::utils::TensorLayoutType::TILED_NFACES),
+            TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
         ::testing::Values(std::nullopt),  // tile_shape
         ::testing::Values(std::nullopt),  // face_shape
         ::testing::Values(false),         // transpose_within_face  true doesn't work even in reference
@@ -455,8 +451,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Test that tilize and then untilize give the same result as the original data
 
 // Note: tuple is used for ::testing::Combine
-using ThrowableTilizeUntilizeParams =
-    std::tuple<PhysicalSize, tests::utils::TensorLayoutType, tests::utils::TensorLayoutType, size_t>;
+using ThrowableTilizeUntilizeParams = std::tuple<PhysicalSize, TensorLayoutType, TensorLayoutType, size_t>;
 
 class ThrowableTilizeUntilizeFixture : public ::testing::TestWithParam<ThrowableTilizeUntilizeParams> {};
 TEST_P(ThrowableTilizeUntilizeFixture, TilizeUntilize) {
@@ -485,16 +480,16 @@ INSTANTIATE_TEST_SUITE_P(
         // shape
         std::make_tuple(
             PhysicalSize{32, 32},
-            tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-            tests::utils::TensorLayoutType::TILED_NFACES,
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_NFACES,
             12),  // Input too small
         std::make_tuple(
             PhysicalSize{33, 32},  // Bad H
-            tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-            tests::utils::TensorLayoutType::TILED_NFACES,
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_NFACES,
             1024),
         std::make_tuple(
             PhysicalSize{32, 31},  // Bad W
-            tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-            tests::utils::TensorLayoutType::TILED_NFACES,
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_NFACES,
             1024)));
