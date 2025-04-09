@@ -12,7 +12,7 @@ from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
