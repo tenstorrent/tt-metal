@@ -324,11 +324,22 @@ class AsymmetricAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        rope_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         # Apply normalization and rotary embeddings to visual features
         q_x_BHND = self.q_norm_x(q_x_BHND, mode="prefill")
-        q_x_BHND = ttnn.experimental.rotary_embedding_llama(q_x_BHND, rope_cos, rope_sin, trans_mat)
+        q_x_BHND = ttnn.experimental.rotary_embedding_llama(
+            q_x_BHND, rope_cos, rope_sin, trans_mat, compute_kernel_config=rope_compute_kernel_config
+        )
         k_x_BHND = self.k_norm_x(k_x_BHND, mode="prefill")
-        k_x_BHND = ttnn.experimental.rotary_embedding_llama(k_x_BHND, rope_cos, rope_sin, trans_mat)
+        k_x_BHND = ttnn.experimental.rotary_embedding_llama(
+            k_x_BHND, rope_cos, rope_sin, trans_mat, compute_kernel_config=rope_compute_kernel_config
+        )
 
         # Process text features if present
         if B == 1:
