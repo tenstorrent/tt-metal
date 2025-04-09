@@ -46,6 +46,10 @@ constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = 0;
 constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
 constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_NOC_CONFIG_START_IDX);
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
+constexpr size_t wait_for_host_signal_IDX = NUM_RECEIVER_CHANNELS_CT_ARG_IDX + 1;
+constexpr bool wait_for_host_signal = get_compile_time_arg_val(wait_for_host_signal_IDX);
+constexpr size_t MAIN_CT_ARGS_START_IDX = wait_for_host_signal_IDX + 1;
+
 static_assert(
     NUM_RECEIVER_CHANNELS <= NUM_SENDER_CHANNELS,
     "NUM_RECEIVER_CHANNELS must be less than or equal to NUM_SENDER_CHANNELS");
@@ -55,16 +59,12 @@ static_assert(
 static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
-
-constexpr size_t wait_for_host_signal_IDX = NUM_RECEIVER_CHANNELS_CT_ARG_IDX + 1;
 static_assert(wait_for_host_signal_IDX == 2, "wait_for_host_signal_IDX must be 3");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
-constexpr bool wait_for_host_signal = get_compile_time_arg_val(wait_for_host_signal_IDX);
-
-constexpr size_t MAIN_CT_ARGS_START_IDX = wait_for_host_signal_IDX + 1;
 static_assert(MAIN_CT_ARGS_START_IDX == 3, "MAIN_CT_ARGS_START_IDX must be 3");
+
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
     get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 0);
@@ -72,14 +72,14 @@ constexpr uint32_t SWITCH_INTERVAL =
     0;
 #endif
 constexpr bool enable_first_level_ack = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 1);
-static_assert(enable_first_level_ack == 0, "enable_first_level_ack must be 0");
 constexpr bool fuse_receiver_flush_and_completion_ptr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 2);
-static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
 constexpr bool enable_ring_support = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 3);
 constexpr bool dateline_connection = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 4);
 constexpr bool is_handshake_sender = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 5) != 0;
 constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 6);
 
+static_assert(enable_first_level_ack == 0, "enable_first_level_ack must be 0");
+static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
 static_assert(!enable_ring_support || NUM_RECEIVER_CHANNELS > 1, "Ring support requires at least 2 receiver channels");
 // TODO: Pipe from host
 constexpr size_t NUM_USED_RECEIVER_CHANNELS = NUM_RECEIVER_CHANNELS;
@@ -205,18 +205,20 @@ constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
     initialize_receiver_channel_trid_starts<MAX_NUM_RECEIVER_CHANNELS, NUM_TRANSACTION_IDS>();
 
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
-    take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, 2, uint32_t>(
-        std::array<uint32_t, 2>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
+    take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
+        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
 
 // not in symbol table - because not used
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
-    take_first_n_elements<MAX_NUM_SENDER_CHANNELS, 3, uint32_t>(
-        std::array<uint32_t, 3>{to_sender_0_pkts_acked_id, to_sender_1_pkts_acked_id, to_sender_2_pkts_acked_id});
+    take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
+        std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
+            to_sender_0_pkts_acked_id, to_sender_1_pkts_acked_id, to_sender_2_pkts_acked_id});
 
 // data section
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_completed_streams =
-    take_first_n_elements<MAX_NUM_SENDER_CHANNELS, 3, uint32_t>(std::array<uint32_t, 3>{
-        to_sender_0_pkts_completed_id, to_sender_1_pkts_completed_id, to_sender_2_pkts_completed_id});
+    take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
+        std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
+            to_sender_0_pkts_completed_id, to_sender_1_pkts_completed_id, to_sender_2_pkts_completed_id});
 
 // Miscellaneous configuration
 constexpr uint32_t DEFAULT_ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS = 32;
