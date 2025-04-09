@@ -23,6 +23,7 @@ DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig
 Arch = ttnn._ttnn.device.Arch
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
+get_max_worker_l1_unreserved_size = ttnn._ttnn.device.get_max_worker_l1_unreserved_size
 
 open_device = ttnn._ttnn.device.open_device
 init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config
@@ -66,9 +67,16 @@ def CreateDevice(
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     dispatch_core_config: DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig(),
+    *,
+    worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
     return ttnn._ttnn.device.CreateDevice(
-        device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config
+        device_id,
+        num_command_queues,
+        l1_small_size,
+        trace_region_size,
+        dispatch_core_config,
+        worker_l1_size=worker_l1_size,
     )
 
 
@@ -78,9 +86,16 @@ def CreateDevices(
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     dispatch_core_config: DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig(),
+    *,
+    worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
     return ttnn._ttnn.device.CreateDevices(
-        device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config
+        device_ids,
+        num_command_queues,
+        l1_small_size,
+        trace_region_size,
+        dispatch_core_config,
+        worker_l1_size=worker_l1_size,
     )
 
 

@@ -217,7 +217,8 @@ void DevicePool::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::MetalContext::instance().initialize(
@@ -229,6 +230,7 @@ void DevicePool::initialize(
     }
     _inst->l1_small_size = l1_small_size;
     _inst->trace_region_size = trace_region_size;
+    _inst->worker_l1_size = worker_l1_size;
     _inst->num_hw_cqs = num_hw_cqs;
     _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
     // Track the thread where the Device Pool was created. Certain functions
@@ -371,7 +373,8 @@ void DevicePool::activate_device(chip_id_t id) {
             this->l1_bank_remap,
             false,
             worker_core_thread_core,
-            completion_queue_reader_core);
+            completion_queue_reader_core,
+            this->worker_l1_size);
         if (!this->firmware_built_keys.contains(
                 BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
             BuildEnvManager::get_instance().build_firmware(device->build_id());
@@ -382,7 +385,8 @@ void DevicePool::activate_device(chip_id_t id) {
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
-            device->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
+            device->initialize(
+                num_hw_cqs, this->l1_small_size, this->trace_region_size, this->worker_l1_size, this->l1_bank_remap);
             if (!this->firmware_built_keys.contains(
                     BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
                 BuildEnvManager::get_instance().build_firmware(device->build_id());

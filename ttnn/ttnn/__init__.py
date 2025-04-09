@@ -212,6 +212,7 @@ from ttnn.device import (
     synchronize_mesh_device,
     dump_device_memory_state,
     get_memory_view,
+    get_max_worker_l1_unreserved_size,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
