@@ -7,7 +7,6 @@
 #include "risc_attribs.h"
 #include <tt-metalium/constants.hpp>
 #include "tools/profiler/kernel_profiler.hpp"
-#include "debug/dprint.h"
 
 using namespace tt::constants;
 

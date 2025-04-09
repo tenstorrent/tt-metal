@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
-#include "debug/dprint.h"
+
 namespace NAMESPACE {
 void MAIN {
     DPRINT << "reduction kernel" << ENDL();
