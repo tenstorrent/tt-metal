@@ -7,6 +7,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import pad_to_size
 from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.model_config import TensorGroup, OpGroup
 
 
 class MLP(LightweightModule):
@@ -20,6 +21,7 @@ class MLP(LightweightModule):
         self.args = args
         self.dim = args.dim
         self.model_config = model_config
+        self.layer_num = layer_num
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
@@ -53,11 +55,18 @@ class MLP(LightweightModule):
         w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
         w2_dims = (-2, -1) if args.is_galaxy else (-1, -2)
 
+        ff1_3_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.FF1_FF3
+        )
+        ff2_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=layer_num, tensor=TensorGroup.FF2
+        )
+
         self.w1 = as_sharded_tensor(
-            "w1_sharded", self.model_config["FF1_3_DTYPE"], dims=w1_dims
+            "w1_sharded", ff1_3_dtype, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", self.model_config["FF2_DTYPE"], dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", self.model_config["FF1_3_DTYPE"], dims=w1_dims)
+        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
+        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
@@ -68,6 +77,12 @@ class MLP(LightweightModule):
         """
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
+        activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
+        )
+        li_ff1_3_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=self.layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
+        )
 
         if mode == "decode":  # Sharded config
             if TG:  # TODO: Fix this when TG supports DRAM sharded matmuls
@@ -91,9 +106,9 @@ class MLP(LightweightModule):
         w1_out = ttnn.linear(
             x,
             self.w1,
-            dtype=ttnn.bfloat8_b if TG else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
-            compute_kernel_config=self.model_config["LI_FF1_3_COMPUTE_KERNEL_CFG"],
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_1,
             memory_config=x.memory_config(),
         )
@@ -101,9 +116,9 @@ class MLP(LightweightModule):
         w3_out = ttnn.linear(
             x,
             self.w3,
-            dtype=ttnn.bfloat8_b if TG else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-            compute_kernel_config=self.model_config["LI_FF1_3_COMPUTE_KERNEL_CFG"],
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_3,
             memory_config=x.memory_config(),
         )
@@ -159,7 +174,7 @@ class MLP(LightweightModule):
             w1_out,
             w3_out,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
-            dtype=self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat8_b,
+            dtype=activation_dtype or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
 
@@ -183,11 +198,14 @@ class MLP(LightweightModule):
             if mode == "decode":
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
+        li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
+            decoder_id=self.layer_num, op=OpGroup.LI_FF2, configuration=self.args
+        )
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
-            compute_kernel_config=self.model_config["LI_FF2_COMPUTE_KERNEL_CFG"],
-            dtype=self.args.ccl_dtype if TG else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
+            compute_kernel_config=li_ff2_compute_kernel_cfg,
+            dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
             program_config=pc_2,
             memory_config=(
                 (ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)

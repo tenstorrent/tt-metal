@@ -64,17 +64,20 @@ class TT_CCL:
 
             self.gather_idx = [0, 0]
             self.buffer_idx = [0, 0]
+            self.reduce_scatter_buffer_idx = [0, 0]
 
             if mode == "decode":
                 self.persistent_buffers = self.get_persistent_buffers()
                 self.all_gather_buffers = self.get_all_gather_buffers()
+                self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
             if mode == "prefill":
-                self.persistent_buffers = self.get_reduce_scatter_buffers()
+                self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
                 self.all_gather_buffers = self.get_prefill_all_gather_buffers()
 
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
         self.buffer_idx = [0, 0]
+        self.reduce_scatter_buffer_idx = [0, 0]
 
     def get_all_gather_buffers(self):
         """
@@ -84,6 +87,7 @@ class TT_CCL:
         - SDPA: (1, 32, 32, 128)
         - LAYERNORM: (1, 1, 32, 128)
         - SAMPLING: (1, 1, 32, 128 * 1024)
+        - BINARY_MUL: (1, 1, 32, 3840)
 
         """
 
@@ -136,6 +140,18 @@ class TT_CCL:
         )
         check_mesh_tensor_alloc(tt_buffer)
         persistent_buffers["SAMPLING"] = tt_buffer
+
+        # Binary Mult + Silu
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 1, 32, 3584)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        check_mesh_tensor_alloc(tt_buffer)
+        persistent_buffers["BINARY_MUL"] = tt_buffer
 
         return persistent_buffers
 
@@ -223,7 +239,35 @@ class TT_CCL:
 
         return persistent_buffers
 
-    def get_reduce_scatter_buffers(self):
+    def get_decode_reduce_scatter_buffers(self):
+        """
+        Currently, this is hardcoded with llama specific shapes.
+
+        Creates double buffered persistent CCL buffers for each cluster axis.
+
+        """
+
+        persistent_buffers = [[], []]
+
+        cluster_shape = (8, 4)
+
+        # Create persistent buffers for cluster axis 1
+        cluster_axis = 1
+        buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
+        for _ in range(self.num_cbs):
+            tt_buffer = ttnn.from_torch(
+                torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=buffer_mem_cfg,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            )
+            persistent_buffers[cluster_axis].append(tt_buffer)
+
+        return persistent_buffers
+
+    def get_prefill_reduce_scatter_buffers(self):
         """
         Currently, this is hardcoded with llama specific shapes.
 
@@ -321,7 +365,7 @@ class TT_CCL:
         return ag_persistent_buffers
 
     def line_all_reduce(
-        self, input_tensor_mesh, cluster_axis, num_links, memory_config, lm_head=False, buffer_key=None
+        self, input_tensor_mesh, cluster_axis, num_links, memory_config, dtype=None, lm_head=False, buffer_key=None
     ):
         if self.mode == "decode":
             if lm_head:
@@ -339,6 +383,7 @@ class TT_CCL:
                 ],
                 num_links=num_links,
                 memory_config=memory_config,
+                dtype=dtype,
                 topology=ttnn.Topology.Linear,
                 subdevice_id=self.worker_sub_device_id,
             )
@@ -413,34 +458,53 @@ class TT_CCL:
         self,
         input_tensor_mesh,
         memory_config,
-        dim,
         cluster_axis,
+        dim=3,
         num_links=1,
         math_op=ttnn.ReduceType.Sum,
         buffer_key=None,
     ):
-        persistent_buffers = self.persistent_buffers.get(buffer_key, None)
+        if self.mode == "prefill":
+            persistent_buffers = self.persistent_buffers.get(buffer_key, None)
 
-        ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
-            input_tensor_mesh,
-            dim,
-            cluster_axis=cluster_axis,
-            mesh_device=self.mesh_device,
-            from_remote_multi_device_global_semaphore=self.from_semaphore_handles[cluster_axis][
-                self.gather_idx[cluster_axis]
-            ],
-            to_remote_multi_device_global_semaphore=self.to_semaphore_handles[cluster_axis][
-                self.gather_idx[cluster_axis]
-            ],
-            math_op=math_op,
-            memory_config=memory_config,
-            topology=ttnn.Topology.Linear,
-            num_links=num_links,
-            subdevice_id=self.worker_sub_device_id,
-            persistent_output_tensors=persistent_buffers,
-        )
-        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
-
+            ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
+                input_tensor_mesh,
+                dim,
+                cluster_axis=cluster_axis,
+                mesh_device=self.mesh_device,
+                from_remote_multi_device_global_semaphore=self.from_semaphore_handles[cluster_axis][
+                    self.gather_idx[cluster_axis]
+                ],
+                to_remote_multi_device_global_semaphore=self.to_semaphore_handles[cluster_axis][
+                    self.gather_idx[cluster_axis]
+                ],
+                math_op=math_op,
+                memory_config=memory_config,
+                topology=ttnn.Topology.Linear,
+                num_links=num_links,
+                subdevice_id=self.worker_sub_device_id,
+                persistent_output_tensors=persistent_buffers,
+            )
+            self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        else:
+            persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
+                self.reduce_scatter_buffer_idx[cluster_axis]
+            ]
+            ttnn_tensor_out = ttnn.experimental.llama_reduce_scatter(
+                input_tensor_mesh,
+                persistent_interim_buffer,
+                dim,
+                self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+                self.worker_sub_device_id,
+                cluster_axis=1,
+                mesh_device=self.mesh_device,
+                num_links=num_links,
+                memory_config=memory_config,
+            )
+            self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+            self.reduce_scatter_buffer_idx[cluster_axis] = (
+                self.reduce_scatter_buffer_idx[cluster_axis] + 1
+            ) % self.num_cbs
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out
 
@@ -595,48 +659,39 @@ def tt_sharded_distributed_rmsnorm(
     # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
     # Run distributed rmsnorm part 1
-    tt_stats = ttnn.rms_norm_pre_all_gather(inp, residual_input_tensor=res, program_config=ln_sharded_progcfg)
-    # print("tt_stats")
-    # All gather stats
-    # tt_stats = ttnn.all_gather(
-    #     tt_stats,
-    #     3,
-    #     num_links=1,
-    #     cluster_axis=1,
-    #     mesh_device=mesh_device,
-    #     memory_config=ln_sharded_stats_memcfg,
-    #     topology=ttnn.Topology.Linear,
-    # )
-    # tt_stats_dram = ttnn.to_memory_config(tt_stats, ttnn.DRAM_MEMORY_CONFIG)
+    cluster_axis = 1
+    semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
     grid_offset = ttnn.CoreCoord(1, 0)
+    persistent_buffer = tt_ccl.all_gather_buffers.get("LAYERNORM", None)
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
         shape=(32, 128),
         core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
-
-    # print("mem cfg")
-
-    # Note: Persistent output buffer used, do not deallocate output!
-    tt_global_stats_sharded = tt_ccl.line_all_gather(
-        tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=tt_stats_sharded_config, buffer_key="LAYERNORM"
-    )
-    # ttnn.synchronize_device(tt_ccl.mesh_device, sub_device_ids=[tt_ccl.worker_sub_device_id])
-    # ttnn.deallocate(tt_stats_dram)
-    # print("all gather stats", tt_global_stats.shape)
-
-    # tt_global_stats_sharded = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
-    ttnn.deallocate(tt_stats)
-    # print("sharded stats")
-
-    # Run distributed rmsnorm part 2
-    tt_out = ttnn.rms_norm_post_all_gather(
+    tt_stats = ttnn.fused_rms_1_1_32_8192(
         inp,
+        ln_sharded_progcfg,
+        cluster_axis,
+        tt_ccl.mesh_device,
+        semaphore,
+        residual_input_tensor=res,
+        num_links=1,
+        memory_config=tt_stats_sharded_config,
+        persistent_output_tensor=persistent_buffer,
+        is_pre=True,
+    )
+    tt_out = ttnn.fused_rms_1_1_32_8192(
+        inp,
+        ln_sharded_progcfg,
+        cluster_axis,
+        tt_ccl.mesh_device,
+        semaphore,
         epsilon=epsilon,
         weight=gamma,
-        program_config=ln_sharded_progcfg,
-        stats=tt_global_stats_sharded,
+        stats=tt_stats,
+        is_pre=False,
     )
-    # print("rmsnorm post all gather", tt_out.shape)
+    ttnn.deallocate(tt_stats)
+    tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     return tt_out, inp

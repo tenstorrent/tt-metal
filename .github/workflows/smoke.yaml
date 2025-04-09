@@ -76,8 +76,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         with:
-          path: |
-            /work/test-reports/
+          path: /work/test-reports/
           prefix: "test_reports_"
 
       # Arbitrary limit that's higher than we would like, but the JIT build seems inconsistent.

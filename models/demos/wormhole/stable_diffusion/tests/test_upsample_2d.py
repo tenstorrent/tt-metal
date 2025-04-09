@@ -45,7 +45,7 @@ def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_upsample2d_512x512(device, input_shape, shard_layout, shard_end_core, shard_shape, index, use_program_cache):
+def test_upsample2d_512x512(device, input_shape, shard_layout, shard_end_core, shard_shape, index):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
 
@@ -53,7 +53,6 @@ def test_upsample2d_512x512(device, input_shape, shard_layout, shard_end_core, s
     unet.eval()
     unet_upblock = pipe.unet.up_blocks[index]
     resnet_upsampler = unet_upblock.upsamplers[0]
-    reader_patterns_cache = {}
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
@@ -68,9 +67,7 @@ def test_upsample2d_512x512(device, input_shape, shard_layout, shard_end_core, s
     )
 
     batch_size, in_channels, input_height, input_width = input_shape
-    model = upsample2d(
-        device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-    )
+    model = upsample2d(device, parameters, batch_size, input_height, input_width, compute_kernel_config)
 
     out_channels = in_channels
     input = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)

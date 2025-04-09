@@ -189,7 +189,7 @@ std::pair<uint32_t, uint32_t> DispatchMemMap::get_device_l1_info(const CoreType&
     uint32_t l1_size;
     if (core_type == CoreType::WORKER) {
         l1_base = hal_ref.get_dev_addr(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
         l1_size =
             hal_ref.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE);
     } else if (core_type == CoreType::ETH) {

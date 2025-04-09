@@ -22,7 +22,7 @@ from models.experimental.functional_unet.tests.common import (
 
 
 @pytest.mark.parametrize("batch", [1])
-@pytest.mark.parametrize("groups", [2])
+@pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, reset_seeds):
     if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):

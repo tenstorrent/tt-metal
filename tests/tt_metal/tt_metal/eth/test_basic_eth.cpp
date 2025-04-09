@@ -32,7 +32,7 @@
 #include "llrt.hpp"
 #include <tt-metalium/logger.hpp>
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/types/arch.h"
