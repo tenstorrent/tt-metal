@@ -11,15 +11,26 @@
 void kernel_main() {
     // clang-format off
     // Definitions
-    //   out_block_...: This is the length of our Circular Buffer, sometimes our tensors are larger than L1 space, so we
+    //   block_h: This the length of the row we wish to processes in terms of tiles
+    //
+    //   out_block_...: This is the length of our Circular Buffer, sometimes the length of out tensors(block_h) are larger than L1 space, so we
     //   have to process chunks of this data at a time
+    //   this chunk is called an out_block
+    //
+    //   num_out_blocks: This is the number of chunks specified by the use, such that a CBs (length defined by out_block) fit in L1
+    //   (Users should minimize the number of num_out_blocks for better perf)
+    //
+    //   ...normal:  If num_out_blocks evenly divides block_h, then all chunks are the size normal
+    //
+    //   ...last: If num_out_blocks does not divides block_h, the leftovers are put into a chunk of length last
     //
     //   sender: This refers to a core that does aggregation calculations
     //   for the group of cores
     //
     //   receiver: This the cores that receive the aggregated results from sender, they only do
     //   local computations that they send to the sender for final aggregation
-    // GROUPNORM COMPUTE DESCIPTION
+    //
+    // GROUPNORM RECIEVER DESCIPTION
     // This is a high level desciption of the stages of this kernel, tags will be added to show where in the code each
     // stage starts and ends
     //
