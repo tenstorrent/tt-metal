@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_resnetblock2d import TtResnetBlock2D
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_downsample2d import TtDownsample2D
+from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
+from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDownsample2D
 
 
-# TODO: change to match new impl of resnet and downsample
 class TtDownBlock2D(nn.Module):
     def __init__(self, device, state_dict, module_path):
         super().__init__()
@@ -24,8 +23,12 @@ class TtDownBlock2D(nn.Module):
 
     def forward(self, hidden_states, temb, input_shape):
         B, C, H, W = input_shape
+        output_states = ()
+
         for resnet in self.resnets:
             hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
+            output_states = output_states + (hidden_states,)
 
         hidden_states, [C, H, W] = self.downsamplers.forward(hidden_states, [B, C, H, W])
-        return hidden_states, [C, H, W]
+        output_states = output_states + (hidden_states,)
+        return hidden_states, [C, H, W], output_states
