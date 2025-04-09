@@ -34,7 +34,7 @@ ttnn::SmallVector<uint32_t> ArgMax::get_output_shape(const Tensor& input_tensor)
 
         if (is_reduction_dim) {
             TT_FATAL(input_shape[dim] != 0, "Expected reduction dim {} to have non-zero size", dim);
-            if (keepdim) {
+            if (this->keepdim) {
                 output_shape.push_back(1);
             }
         } else {
@@ -79,13 +79,6 @@ void ArgMax::validate_with_output_tensors(
         // TODO: Add support for normalized_dim = 0, 1, 2
         TT_FATAL(normalized_dim == (input_rank - 1), "Only argmax on last dim is supported!");
     }
-
-    auto input_shape = input_tensor_a.get_padded_shape();
-    auto rank = input_shape.rank();
-
-    // This is a limitation in the present implementation
-    TT_FATAL((rank < 2) || (input_shape[0] == 1), "dim 0 must be 1 if rank>=2");
-    TT_FATAL((rank < 2) || (input_shape[1] == 1), "dim 1 must be 1 if rank>=2");
 }
 
 std::vector<TensorSpec> ArgMax::compute_output_specs(
@@ -114,11 +107,12 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
-    const auto normalized_dim = dim.has_value() ? *dim + input_tensor.get_padded_shape().rank() * (*dim < 0) : dim;
-    if (use_multicore) {
-        return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim, sub_core_grids);
+    const auto normalized_dim =
+        this->dim.has_value() ? *this->dim + input_tensor.get_padded_shape().rank() * (*this->dim < 0) : this->dim;
+    if (this->use_multicore) {
+        return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim, this->sub_core_grids);
     }
-    return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim);
+    return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim, this->keepdim);
 }
 
 }  // namespace ttnn::operations::reduction

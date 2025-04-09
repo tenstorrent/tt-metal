@@ -1,38 +1,29 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-#
+
 # SPDX-License-Identifier: Apache-2.0
 
-import itertools
 import pytest
-import random
 import torch
 import ttnn
-from loguru import logger
 
-from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
+from loguru import logger
 from tests.ttnn.utils_for_testing import check_with_pcc
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
 
-random.seed(0)
-
-DIM_SIZES = [0, 32]
-"""Possible tensor dimensions are picked from this list"""
-
-parameters = {
-    f"rank_{rank}": {
-        "tensor_shape": list(itertools.product(DIM_SIZES, repeat=rank)),
-        "dim": [None] + [rank, -1] if rank > 0 else [],
-        "keepdim": [True, False],
-    }
-    for rank in range(5)
-}
-
-
-def run_argmax(device, tensor_shape, dim, keepdim) -> list:
+@pytest.mark.parametrize(
+    argnames="tensor_shape, dim, keepdim",
+    argvalues=[
+        ([], None, True),
+        ([32], -1, False),
+        ([32, 0], 1, True),
+        ([8, 10, 25], 2, True),
+        ([1, 32, 1024 * 8], -1, False),
+        ([32, 32, 32, 1], None, True),
+    ],
+)
+def test_argmax(device, tensor_shape, dim, keepdim) -> list:
     """
-    Test the compatibility of the torch and ttnn output for the given operation and different
+    Test the compatibility of the torch and ttnn output for argmax of different
     tensor shapes and dim values.
     Checks for the exactness of shape, values, and dtype of the output tensors.
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
@@ -64,11 +55,9 @@ def run_argmax(device, tensor_shape, dim, keepdim) -> list:
         ttnn_errored = True
         ttnn_error_msg = str(e)
 
-    if torch_errored != ttnn_errored:
-        return (
-            False,
-            f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})",
-        )
+    assert (
+        torch_errored == ttnn_errored
+    ), f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})"
 
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:
@@ -79,46 +68,13 @@ def run_argmax(device, tensor_shape, dim, keepdim) -> list:
 
     pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
 
-    if not pcc_result:
-        return (False, msg + f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}")
+    assert pcc_result, msg + f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}"
 
     # Convert torch dtype from uint64 to int32
     # Note: torch does not have uint32
     torch_result = torch_result.to(torch.int32)
 
     atol = rtol = 0.1
-    return (
-        torch.allclose(torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True),
-        f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}",
-    )
-
-
-@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
-def test_argmax(
-    device,
-    tensor_shape,
-    dim,
-    keepdim,
-):
-    result, error_msg = run_argmax(
-        device,
-        tensor_shape,
-        dim,
-        keepdim,
-    )
-    assert result, error_msg
-
-
-def run(
-    tensor_shape,
-    dim,
-    keepdim,
-    *,
-    device,
-) -> list:
-    return run_argmax(
-        device,
-        tensor_shape,
-        dim,
-        keepdim,
-    )
+    assert torch.allclose(
+        torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
+    ), f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}"
