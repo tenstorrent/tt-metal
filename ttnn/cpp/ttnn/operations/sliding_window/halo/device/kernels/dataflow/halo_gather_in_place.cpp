@@ -7,7 +7,6 @@
 
 #include "compile_time_args.h"
 #include "dataflow_api.h"
-// #include "ttnn/types.hpp"
 
 #define ENABLE_DEBUG 0
 
