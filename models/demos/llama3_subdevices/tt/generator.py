@@ -53,7 +53,7 @@ class Generator:
             self.model.switch_mode("prefill")
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
-        output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
+        output_logits = torch.zeros(batch, 1, 1)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
 
         if page_table is not None:
@@ -65,7 +65,7 @@ class Generator:
         for user_id in range(1):
             logger.info(f"Prefilling User {user_id + 1}")
             seq_len = prompt_lens[user_id]
-            last_token_idx = seq_len - 1
+            last_token_idx = seq_len  # - 1
 
             prefill_seq_len = get_padded_prefill_len(seq_len)
             prefill_ids = torch.cat(
@@ -170,11 +170,11 @@ class Generator:
                 rot_mats=None,
                 user_id=user_id,
                 page_table=page_table_tt,
-                get_last_token=(last_token_idx // 32) * 32,
+                get_last_token=last_token_idx,  # (last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
             )
 
-            logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
+            logits = self.model.process_output_prefill(tt_logits, last_token_idx=last_token_idx)
 
             return logits
 
@@ -198,8 +198,7 @@ class Generator:
             tokens,
             page_table=page_table,
         )
-        logits = self.model.process_output_prefill(tt_out_trace, last_token_idx=(last_token_idx % 32))
-
+        logits = self.model.process_output_prefill(tt_out_trace, last_token_idx=last_token_idx)
         return logits
 
     def _capture_trace_prefill(
@@ -222,7 +221,7 @@ class Generator:
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=(last_token_idx // 32) * 32, user_id=user_id
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, user_id=user_id
         )
         ttnn.synchronize_device(self.mesh_device)
         logger.info("Done Compiling Model")
@@ -230,7 +229,7 @@ class Generator:
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=(last_token_idx // 32) * 32, user_id=user_id
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, user_id=user_id
         )
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
@@ -240,7 +239,7 @@ class Generator:
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=(last_token_idx // 32) * 32, user_id=user_id
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, user_id=user_id
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
@@ -266,6 +265,7 @@ class Generator:
         )
 
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+
         return tt_out_trace
 
     def decode_forward_text(
