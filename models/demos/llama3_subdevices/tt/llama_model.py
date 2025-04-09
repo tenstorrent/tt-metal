@@ -425,11 +425,7 @@ class TtTransformer(LightweightModule):
                 self.lm_head.tt_ccl = self.tt_ccl
                 self.tt_tensors = self.prefetcher_setup.get_input_tensors()
                 # Re-create global CB for decode (if it was not already created)
-                self.prefetcher_setup.global_circular_buffer = ttnn.create_global_circular_buffer(
-                    self.mesh_device,
-                    self.prefetcher_setup.sender_receiver_mapping,
-                    self.prefetcher_setup.global_cb_size,
-                )
+                self.prefetcher_setup.create_global_cb()
 
         else:
             if self.is_decode_setup:
@@ -461,12 +457,7 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
     ):
         if mode == "decode":
-            if self.prefetcher_setup.global_circular_buffer is None:
-                self.prefetcher_setup.global_circular_buffer = ttnn.create_global_circular_buffer(
-                    self.mesh_device,
-                    self.prefetcher_setup.sender_receiver_mapping,
-                    self.prefetcher_setup.global_cb_size,
-                )
+            self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
                 num_layers=self.n_layers,
