@@ -81,6 +81,7 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
         pad_w,
         ceil_mode,
         count_include_pad,
+        divisor_override,
     ) = input_spec
 
     # Check if input_spec is in failing_parameters
