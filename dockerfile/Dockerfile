@@ -293,7 +293,7 @@ RUN [ "$UBUNTU_VERSION" != "24.04" ] \
     && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
     && wget -O /tmp/gdb-build/gdb.tar.gz https://ftp.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
     && tar -xvf /tmp/gdb-build/gdb.tar.gz -C /tmp/gdb-build --strip-components=1 \
-    && /tmp/gdb-build/configure --prefix=/usr/local --disable-werror \
+    && /tmp/gdb-build/configure --prefix=/usr/local \
     && make -j$(nproc) \
     && make install \
     && rm -rf /tmp/gdb-build
