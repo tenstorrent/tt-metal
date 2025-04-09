@@ -1,6 +1,6 @@
 name: "PR - All post-commit tests"
 
-on: 
+on:
   pull_request:
     branches: ["*"]
 
