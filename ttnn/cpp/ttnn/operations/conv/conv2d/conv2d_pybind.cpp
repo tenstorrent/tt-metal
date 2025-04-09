@@ -371,8 +371,7 @@ void py_bind_conv2d(py::module& module) {
     )doc");
     py_conv_config.def_readwrite("input_channels_alignment", &Conv2dConfig::input_channels_alignment, R"doc(
         The channels dimension of the input tensor is aligned to this value.
-        Must be either 16 or 32.
-        For input tensors with small channels ( < 16 ), use 16. Else use 32.
+        Must be either 8, 16, 24 or 32.
     )doc");
     py_conv_config.def_readwrite("deallocate_activation", &Conv2dConfig::deallocate_activation, R"doc(
         Boolean that indicates whether the activation tensor should be deallocated after the conv op is done.
