@@ -62,6 +62,7 @@ jobs:
       build-type: Release
       build-wheel: true
       version: 22.04
+      skip-tt-train: false
 
   build-docs:
     if: ${{ needs.find-changes.outputs.any-code-changed == 'true' ||

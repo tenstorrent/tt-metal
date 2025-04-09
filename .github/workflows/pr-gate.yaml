@@ -54,6 +54,7 @@ jobs:
       toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
       build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
+      skip-tt-train: true
 
   find-changed-files:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
