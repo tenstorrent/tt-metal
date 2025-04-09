@@ -9,7 +9,7 @@ on:
 jobs:
   gh-slack-bridge:
     runs-on: ubuntu-latest
-    permissions:      
+    permissions:
       issues: write
       pull-requests: write
     steps:
@@ -46,22 +46,9 @@ jobs:
             echo "Detected community member"
             echo "is_member=false" >> $GITHUB_OUTPUT
           fi
-      - name: Add community label
-        if: ${{ steps.is_organization_member.outputs.is_member == 'false' && env.GH_COMMAND && env.NUMBER }}
-        run: |
-          gh ${{env.GH_COMMAND}} edit ${{ env.NUMBER }} --add-label ${{ env.LABELS }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          LABELS: community
-      - name: Send Notification
+      - name: Trigger secondary workflow for community members
         if: ${{ steps.is_organization_member.outputs.is_member == 'false' }}
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          payload: |
-            {
-              "text": "A new ${{ env.EVENT_TYPE }} has been created by a non-org member `${{ env.USERNAME }}`: ${{ env.EVENT_URL }}",
-              "channel": "C07AZJ5DLL8"
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_CHANNEL_WEBHOOK_URL }}
+        run: |
+          curl -X POST -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -d '{"event_type": "community-label-and-notification", "client_payload": {"username": "${{ env.USERNAME }}", "event_url": "${{ env.EVENT_URL }}", "event_type": "${{ env.EVENT_TYPE }}", "number": "${{ env.NUMBER }}", "gh_command": "${{ env.GH_COMMAND }}"}}' \
+          https://api.github.com/repos/${{ github.repository }}/dispatches
