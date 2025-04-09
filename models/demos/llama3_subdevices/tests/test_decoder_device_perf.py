@@ -460,7 +460,6 @@ def test_llama_TG_perf_device(
     profiler.end("run")
 
     filename = get_latest_ops_log_filename(subdir)
-    # filename = "/proj_sw/user_dev/jrock/tt-metal/generated/profiler/tg-llama-demo-device-perf-default/reports/2025_04_09_10_34_03/ops_perf_results_2025_04_09_10_34_03.csv"
 
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
@@ -628,7 +627,6 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     profiler.end("run")
 
     filename = get_latest_ops_log_filename(subdir)
-    # filename = "/proj_sw/user_dev/jrock/tt-metal/generated/profiler/tg-llama-demo-device-perf-default/reports/2025_04_09_10_34_03/ops_perf_results_2025_04_09_10_34_03.csv"
 
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
