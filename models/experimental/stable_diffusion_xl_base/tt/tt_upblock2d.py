@@ -4,7 +4,7 @@
 
 import torch.nn as nn
 import ttnn
-from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_resnetblock2d import TtResnetBlock2D
+from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
 
 
 class TtpBlock2D(nn.Module):
