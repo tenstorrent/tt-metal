@@ -114,6 +114,7 @@ Result conv2d(
 // The function is called in a loop for each slice of the output tensor.
 // The Conv2dSliceConfig is used to determine the slicing configuration. The dimension along which it is sliced, and the
 // number of such slices.
+// Conv2dConfig does not control the final output, but rather the conv2d_L1 function that is called internally.
 template <typename T>
 Result conv2d_DRAM(
     QueueId queue_id,
