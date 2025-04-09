@@ -112,6 +112,7 @@ namespace tt::tt_metal::distributed::test {
 
 using MeshEndToEndT3kTests = T3000MeshDeviceFixture;
 using ::testing::Each;
+using ::testing::Eq;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 
@@ -213,9 +214,9 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
         .shard_shape = shard_shape,
         .shard_orientation = ShardOrientation::ROW_MAJOR};
 
-    auto a = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
-    auto b = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
-    auto c = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+    auto a_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+    auto b_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+    auto out_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
 
     constexpr float kValToAdd = 0.7f;
     std::vector<uint32_t> a_data =
@@ -224,10 +225,10 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
 
     auto& cq = mesh_device_->mesh_command_queue();
 
-    EnqueueWriteMeshBuffer(cq, a, a_data, false /* blocking */);
-    EnqueueWriteMeshBuffer(cq, b, b_data, true /* blocking */);
+    EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
+    EnqueueWriteMeshBuffer(cq, a_buffer, b_data, true /* blocking */);
 
-    auto program = EltwiseBinaryProgramGenerator(a, b, c, num_tiles, tile_size_bytes, kAddOpId);
+    auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
 
     auto mesh_workload = CreateMeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
@@ -236,20 +237,13 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
-    EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
+    EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
     auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(a.to_float() + kValToAdd); };
-    std::vector<uint32_t> golden_data =
-        pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden));
+    std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
+    std::vector<bfloat16> golden_bf16 = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
-    bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(result_data.data());
-    bfloat16* golden_bf16 = reinterpret_cast<bfloat16*>(golden_data.data());
-
-    uint16_t total_values = result_data.size() * 2;
-
-    for (uint16_t i = 0; i < total_values; i++) {
-        EXPECT_TRUE(is_close(c_bf16[i].to_float(), golden_bf16[i].to_float()));
-    }
+    EXPECT_THAT(result_vec, Pointwise(Eq(), golden_bf16));
 }
 
 class MeshEndToEndT3kTraceTests : public MeshDeviceFixtureBase {
@@ -283,16 +277,16 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
         .shard_shape = shard_shape,
         .shard_orientation = ShardOrientation::ROW_MAJOR};
 
-    auto a = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
-    auto b = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
-    auto c = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+    auto a_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+    auto b_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+    auto out_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
 
     constexpr float kValToAdd = 0.7f;
     std::vector<uint32_t> a_data =
         create_random_vector_of_bfloat16(distributed_buffer_size_bytes, 1 /* rand_max_float */, 0 /* seed */);
     std::vector<uint32_t> b_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, kValToAdd);
 
-    auto program = EltwiseBinaryProgramGenerator(a, b, c, num_tiles, tile_size_bytes, kAddOpId);
+    auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
 
     auto mesh_workload = CreateMeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
@@ -307,29 +301,23 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
     EndTraceCapture(mesh_device_.get(), cq.id(), trace_id);
 
-    EnqueueWriteMeshBuffer(cq, a, a_data, false /* blocking */);
+    EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
     // Block to prevent wriitng during trace, which is illegal
-    EnqueueWriteMeshBuffer(cq, b, b_data, true /* blocking */);
+    EnqueueWriteMeshBuffer(cq, b_buffer, b_data, true /* blocking */);
 
     ReplayTrace(mesh_device_.get(), cq.id(), trace_id, false);
 
     ReleaseTrace(mesh_device_.get(), trace_id);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
-    EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
+    EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
     auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(a.to_float() + kValToAdd); };
-    std::vector<uint32_t> golden_data =
-        pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden));
 
-    bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(result_data.data());
-    bfloat16* golden_bf16 = reinterpret_cast<bfloat16*>(golden_data.data());
+    std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
+    std::vector<bfloat16> golden_bf16 = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
-    uint16_t total_values = result_data.size() * 2;
-
-    for (uint16_t i = 0; i < total_values; i++) {
-        EXPECT_TRUE(is_close(c_bf16[i].to_float(), golden_bf16[i].to_float()));
-    }
+    EXPECT_THAT(result_vec, Pointwise(Eq(), golden_bf16));
 }
 
 TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
@@ -353,16 +341,16 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
         .shard_shape = shard_shape,
         .shard_orientation = ShardOrientation::ROW_MAJOR};
 
-    auto a = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
-    auto b = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
-    auto c = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+    auto a_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+    auto b_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+    auto out_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
 
     constexpr float kValToMul = 0.2f;
     std::vector<uint32_t> a_data =
         create_random_vector_of_bfloat16(distributed_buffer_size_bytes, 1 /* rand_max_float */, 0 /* seed */);
     std::vector<uint32_t> b_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, kValToMul);
 
-    auto program = EltwiseBinaryProgramGenerator(a, b, c, num_tiles, tile_size_bytes, kMulOpId);
+    auto program = EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kMulOpId);
 
     auto mesh_workload = CreateMeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
@@ -377,29 +365,22 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
     EndTraceCapture(mesh_device_.get(), cq.id(), trace_id);
 
-    EnqueueWriteMeshBuffer(cq, a, a_data, false /* blocking */);
+    EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
     // Block to prevent wriitng during trace, which is illegal
-    EnqueueWriteMeshBuffer(cq, b, b_data, true /* blocking */);
+    EnqueueWriteMeshBuffer(cq, b_buffer, b_data, true /* blocking */);
 
     ReplayTrace(mesh_device_.get(), cq.id(), trace_id, false);
 
     ReleaseTrace(mesh_device_.get(), trace_id);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
-    EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
+    EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
     auto transform_to_golden = [kValToMul](const bfloat16 a) { return bfloat16(a.to_float() * kValToMul); };
-    std::vector<uint32_t> golden_data =
-        pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden));
+    std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
+    std::vector<bfloat16> golden_bf16 = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
-    bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(result_data.data());
-    bfloat16* golden_bf16 = reinterpret_cast<bfloat16*>(golden_data.data());
-
-    uint16_t total_values = result_data.size() * 2;
-
-    for (uint16_t i = 0; i < total_values; i++) {
-        EXPECT_TRUE(is_close(c_bf16[i].to_float(), golden_bf16[i].to_float()));
-    }
+    EXPECT_THAT(result_vec, Pointwise(Eq(), golden_bf16));
 }
 
 MATCHER_P(Bfloat16Eq, calculated, "") { return arg.to_float() == calculated; }
