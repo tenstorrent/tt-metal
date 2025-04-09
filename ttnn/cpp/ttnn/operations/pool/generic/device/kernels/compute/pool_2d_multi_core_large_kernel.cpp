@@ -35,6 +35,7 @@ inline void reduce_h_fused_interm(
 
     const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
     cb_wait_front(curr_in_cb_id, 1);
+
     tile_regs_acquire();
     unpack_tilizeA_B_block(
         curr_in_cb_id,
@@ -110,6 +111,15 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(13);
     constexpr uint32_t interm_cb_id = get_compile_time_arg_val(14);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(15);
+    constexpr uint32_t kernel_h = get_compile_time_arg_val(16);
+    constexpr uint32_t kernel_w = get_compile_time_arg_val(17);
+    constexpr uint32_t in_h = get_compile_time_arg_val(18);
+    constexpr uint32_t in_w = get_compile_time_arg_val(19);
+    constexpr uint32_t pad_h = get_compile_time_arg_val(20);
+    constexpr uint32_t pad_w = get_compile_time_arg_val(21);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(22);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(23);
+    constexpr uint32_t ceil_w = get_compile_time_arg_val(24);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -133,8 +143,23 @@ void MAIN {
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
-    cb_wait_front(in_scalar_cb_id, 1);
-    for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
+    uint32_t num_od_ele = get_arg_val<uint32_t>(0);
+    uint32_t scalar_cnt = get_arg_val<uint32_t>(1);
+    DPRINT << "scalar cnt " << scalar_cnt << ENDL();
+    DPRINT << "num_od_ele " << num_od_ele << ENDL();
+    uint32_t diff_index = 0;
+    uint32_t time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+    for (uint32_t i = 0; i < num_od_ele; ++i) {
+        DPRINT << "i " << i << ENDL();
+        if (i == time_for_change) {
+            DPRINT << "change " << ENDL();
+            cb_wait_front(in_scalar_cb_id, 1);
+            if (diff_index < scalar_cnt - 1) {
+                diff_index++;
+                time_for_change = get_arg_val<uint32_t>(2 + diff_index);
+                DPRINT << "next change coming on " << time_for_change << ENDL();
+            }
+        }
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; b_i++) {
             // perform the intermediate reductions over the first N - 1 whole chunks
             pack_untilize_uninit(interm_cb_id);
@@ -180,8 +205,13 @@ void MAIN {
         pack_untilize_dst_init_short<partial_iter_output_tiles>(out_cb_id, num_out_rows, num_faces_in_output_tile);
         reduce_h_fused<partial_iter_output_tiles, is_partial_tile, max_rows_for_reduction>(
             interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id : in_one_cb_id, out_cb_id);
+        // prepare for the next iteration if not last element
+        if (((i + 1) == time_for_change) || (i == (num_od_ele - 1))) {
+            DPRINT << "popped the old num " << ENDL();
+            cb_pop_front(in_scalar_cb_id, 1);
+        }
     }
-    cb_pop_front(in_scalar_cb_id, 1);
+    DPRINT << "compute ends" << ENDL();
 }
 
 }  // namespace NAMESPACE

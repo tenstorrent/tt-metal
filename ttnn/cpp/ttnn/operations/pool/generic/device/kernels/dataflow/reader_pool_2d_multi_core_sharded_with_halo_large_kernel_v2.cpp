@@ -5,7 +5,6 @@
 #include <sys/types.h>
 
 #include <cstdint>
-
 #include "dataflow_api.h"
 
 #define ENABLE_DEBUG_PRINT 0
@@ -48,40 +47,38 @@ void kernel_main() {
 
     constexpr uint32_t split_reader = get_compile_time_arg_val(7);
     constexpr uint32_t reader_id = get_compile_time_arg_val(8);
+    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(9);
+    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(10);
 
-    // compile time args
-    // BF16 value packed in UINT32. For maxpool, value is 1.
-    constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
-    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(10);
-    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(11);
-
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
-    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(13);
-    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(14);
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(11);
+    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(12);
+    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(13);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(14);
 
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
-    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
+    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(21);
+    uint32_t scalar_index = 0;
+    uint32_t num_of_ele = get_arg_val<uint32_t>(0);
+    uint32_t scalars_cnt = get_arg_val<uint32_t>(1);
+    DPRINT << "num_of_ele" << num_of_ele << ENDL();
+    DPRINT << "scalars_cnt" << scalars_cnt << ENDL();
 
     if (reader_id == 0) {
-        cb_reserve_back(in_scalar_cb_id, 1);
-
         constexpr uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
         // fill interm buffer with init_value
         fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, bf16_init_value);
-        fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, bf16_scalar >> 16);
-        if (bf16_scalar != bf16_one_u32) {
+
+        if (scalars_cnt > 0 || get_arg_val<uint32_t>(1) != bf16_one_u32) {
             // Pool operation is not maxpool
             fill_with_val(get_write_ptr(in_one_cb_id), TILE_WIDTH, bf16_one_u16);
         }
-        cb_push_back(in_scalar_cb_id, 1);
     }
 
     const uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
@@ -97,40 +94,51 @@ void kernel_main() {
     constexpr bool wide_reduction = in_nblocks_c > 1;
     constexpr uint32_t read_bytes =
         wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
-    while (counter < reader_nindices) {
-        for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-            const uint16_t top_left_local_index = reader_indices_ptr[counter];
-            uint32_t processed_rows = 0;
-            cb_reserve_back(in_cb_id, 1);
-            uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
-            for (uint32_t h = 0; h < window_h; ++h) {
-                for (uint32_t w = 0; w < window_w; w++) {
-                    const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
-                    const uint32_t read_offset =
-                        in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
-                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
-                    out_l1_write_addr += read_bytes;
-                    processed_rows++;
-                    if ((processed_rows % max_rows_for_reduction) == 0) {
-                        noc_async_read_barrier();
-                        cb_push_back(in_cb_id, 1);
-                        cb_reserve_back(in_cb_id, 1);
-                        out_l1_write_addr = get_write_ptr(in_cb_id);
-                        // If next is last chunk, fill whole buffer with the init_value.
-                        if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
-                            fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
+
+    while (counter < num_of_ele || (reader_id == 0 && scalar_index < scalars_cnt)) {
+        if (reader_id == 0 && scalar_index < scalars_cnt) {
+            uint32_t scalar_val = get_arg_val<uint32_t>(scalar_index + 2);
+            cb_reserve_back(in_scalar_cb_id, 1);
+            fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_WIDTH, scalar_val >> 16);
+            scalar_index++;
+            cb_push_back(in_scalar_cb_id, 1);
+        }
+        if (counter < num_of_ele) {
+            for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
+                const uint16_t top_left_local_index = reader_indices_ptr[counter];
+                uint32_t processed_rows = 0;
+                cb_reserve_back(in_cb_id, 1);
+                uint32_t out_l1_write_addr = get_write_ptr(in_cb_id);
+                for (uint32_t h = 0; h < window_h; ++h) {
+                    for (uint32_t w = 0; w < window_w; w++) {
+                        const uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
+                        const uint32_t read_offset =
+                            in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
+                        noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
+                        out_l1_write_addr += read_bytes;
+                        processed_rows++;
+                        if ((processed_rows % max_rows_for_reduction) == 0) {
+                            noc_async_read_barrier();
+                            cb_push_back(in_cb_id, 1);
+                            cb_reserve_back(in_cb_id, 1);
+                            out_l1_write_addr = get_write_ptr(in_cb_id);
+                            // If next is last chunk, fill whole buffer with the init_value.
+                            if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
+                                fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
+                            }
                         }
                     }
                 }
+                if (remaining_elems) {
+                    noc_async_read_barrier();
+                    cb_push_back(in_cb_id, 1);
+                }
             }
-            if (remaining_elems) {
-                noc_async_read_barrier();
-                cb_push_back(in_cb_id, 1);
+            counter++;
+            if (split_reader) {
+                counter++;  // interleave the indices
             }
-        }
-        counter++;
-        if (split_reader) {
-            counter++;  // interleave the indices
         }
     }
+    DPRINT << "reader ends" << ENDL();
 }  // kernel_main()
