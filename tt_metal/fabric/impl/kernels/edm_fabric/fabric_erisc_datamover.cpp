@@ -1363,16 +1363,6 @@ void kernel_main() {
         receiver_channel_0_trid_tracker,
         receiver_channel_1_trid_tracker);
 
-#ifdef WAIT_FOR_HOST_SIGNAL
-    if constexpr (is_local_handshake_master) {
-        notify_slave_routers(
-            edm_channels_mask,
-            local_handshake_master_eth_chan,
-            (uint32_t)termination_signal_ptr,
-            *termination_signal_ptr);
-    }
-#endif
-
     if constexpr (persistent_mode) {
         // we force these values to a non-zero value so that if we run the fabric back to back,
         // and we can reliably probe from host that this kernel has initialized properly.
@@ -1387,6 +1377,17 @@ void kernel_main() {
 
     // re-init the noc counters as the noc api used is not incrementing them
     ncrisc_noc_counters_init();
+
+#ifdef WAIT_FOR_HOST_SIGNAL
+    if constexpr (is_local_handshake_master) {
+        notify_slave_routers(
+            edm_channels_mask,
+            local_handshake_master_eth_chan,
+            (uint32_t)termination_signal_ptr,
+            *termination_signal_ptr);
+        noc_async_write_barrier();
+    }
+#endif
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
 
