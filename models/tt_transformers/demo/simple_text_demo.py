@@ -501,19 +501,19 @@ def test_demo_text(
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
-    model_dir = os.getenv("LLAMA_DIR")
-    if model_dir:
+    llama_dir = os.getenv("LLAMA_DIR")
+    if llama_dir:
         if (
             is_ci_env
             and num_devices == 32
-            and (data_parallel > 4 or (data_parallel == 4 and "3.1-70B" not in model_dir))
+            and (data_parallel > 4 or (data_parallel == 4 and "3.1-70B" not in llama_dir))
         ):
             pytest.skip("CI runs only Llama3 70b DP = 4, TP = 8 on TG")
         if (
             is_ci_env
             and num_devices == 8
             and data_parallel > 1
-            and not ("3.2-1B" in model_dir or "3.1-8B" in model_dir)
+            and not ("3.2-1B" in llama_dir or "3.1-8B" in llama_dir)
         ):
             pytest.skip("CI runs only hybrid Llama3 1b and 8b on T3K")
         if is_ci_env and data_parallel > 1 and batch_size > 1:
@@ -562,7 +562,7 @@ def test_demo_text(
         paged_attention=paged_attention,
     )
 
-    if (model_args[0].checkpoint_type == CheckpointType.HuggingFace) and max_seq_len > model_args[0].max_context_len:
+    if (model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (max_seq_len > model_args[0].max_context_len):
         logger.info(f"Override max_seq_len to {model_args[0].max_context_len} for HuggingFace checkpoint")
         max_seq_len = model_args[0].max_context_len
 
