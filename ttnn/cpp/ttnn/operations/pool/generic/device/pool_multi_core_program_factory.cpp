@@ -31,11 +31,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t pad_h,
     uint32_t pad_w,
     uint32_t ceil_pad_w,
+    bool ceil_mode,
     uint32_t dilation_h,
     uint32_t dilation_w,
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
-    uint32_t nblocks) {
+    uint32_t nblocks,
+    bool count_include_pad,
+    std::optional<int32_t> divisor_override) {
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
@@ -85,8 +88,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto grid_size = device->compute_with_storage_grid_size();
     auto all_cores = input.shard_spec().value().grid;
     uint32_t ncores = all_cores.num_cores();
-    auto core_range = all_cores;
-    auto core_range_cliff = CoreRangeSet();
     uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
     uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
 
@@ -276,7 +277,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     /**
      * Reader Kernel: input rows -> input cb
      */
-    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_hw) << 16;
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
     uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
@@ -291,7 +291,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         input_shape[3] / num_shards_c,
         split_reader,  // enable split reader
         0,             // split reader id
-        bf16_scalar,
         bf16_one_u32,
         bf16_init_value,
         in_nblocks_c,
@@ -370,7 +369,79 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core.cpp";
     }
 
-    auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
+    auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t num_of_ele = out_nhw_per_core;
+    std::vector<uint32_t> total_elems_per_c_shards;
+    for (int i = 0; i < num_shards_c; i++) {
+        total_elems_per_c_shards.push_back(out_h * out_w);
+    }
+    uint32_t channel = 0;
+    uint32_t index = 0;
+    for (uint32_t i = 0; i < all_cores.ranges().size(); ++i) {
+        for (auto iterator = all_cores.ranges()[i].begin(); iterator != all_cores.ranges()[i].end(); ++iterator) {
+            if (total_elems_per_c_shards[channel] > out_nhw_per_core) {
+                total_elems_per_c_shards[channel] -= out_nhw_per_core;
+                num_of_ele = out_nhw_per_core;
+            } else {
+                num_of_ele = total_elems_per_c_shards[channel];
+                num_of_ele = out_nhw_per_core;
+            }
+            std::vector<uint32_t> sync_indices;
+            std::vector<uint32_t> scalar_values = get_bf16_pool_scalar(
+                pool_type,
+                in_h,
+                in_w,
+                kernel_size_h,
+                kernel_size_w,
+                ceil_mode,
+                out_h,
+                out_w,
+                stride_h,
+                stride_w,
+                ceil_pad_w,
+                pad_h / 2,
+                pad_w / 2,
+                x,
+                y,
+                count_include_pad,
+                sync_indices,
+                num_of_ele,
+                divisor_override);
+
+            uint32_t scalar_cnt = scalar_values.size();
+            std::vector<uint32_t> runtime_args_reader = {num_of_ele, scalar_cnt};
+            for (int j = 0; j < scalar_cnt; j++) {
+                runtime_args_reader.push_back(scalar_values[j] << 16);
+            }
+
+            uint32_t sync_steps = sync_indices.size();
+            std::vector<uint32_t> runtime_args_compute = {num_of_ele / nblocks, scalar_cnt};
+            for (int j = 0; j < sync_steps; j++) {
+                runtime_args_compute.push_back(sync_indices[j]);
+            }
+            tt::tt_metal::SetRuntimeArgs(program, compute_kernel, *iterator, runtime_args_compute);
+            tt::tt_metal::SetRuntimeArgs(program, reader0_kernel, *iterator, runtime_args_reader);
+            tt::tt_metal::SetRuntimeArgs(program, reader1_kernel, *iterator, runtime_args_reader);
+            channel++;
+            if (channel % num_shards_c == 0) {
+                channel = 0;
+                uint32_t delta_x = x + out_nhw_per_core;
+                x = delta_x % out_h;
+                if (delta_x / out_h != 0) {
+                    uint32_t delta_y = y + delta_x / out_h;
+                    y = delta_y % out_w;
+                    if (delta_y / out_w != 0) {
+                        channel += 1;
+                        x = 0;
+                        y = 0;
+                    }
+                }
+            }
+            index++;
+        }
+    }
 
     // Capture reader_indices_storage to cache this with the program
     return {
@@ -390,6 +461,8 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
     const auto& out_mem_config = op_attr.memory_config_;
+    bool count_include_pad = op_attr.count_include_pad_;
+    std::optional<int32_t> divisor_override = op_attr.divisor_override_;
 
     tt::tt_metal::Program program{};
 
@@ -426,6 +499,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto pad_h = sliding_window_config.get_pad_h();
     auto pad_w = sliding_window_config.get_pad_w();
     auto ceil_pad_w = sliding_window_config.get_ceil_pad_w();
+    auto ceil_mode = sliding_window_config.ceil_mode;
     auto dilation_h = sliding_window_config.dilation_hw.first;
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
@@ -448,11 +522,14 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         pad_h,
         pad_w,
         ceil_pad_w,
+        ceil_mode,
         dilation_h,
         dilation_w,
         num_shards_c,
         out_mem_config,
-        1);
+        1,
+        count_include_pad,
+        divisor_override);
 }
 
 void Pool2D::MultiCore::override_runtime_arguments(

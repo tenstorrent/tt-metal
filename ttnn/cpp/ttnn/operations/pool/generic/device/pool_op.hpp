@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <variant>
 
@@ -25,6 +26,8 @@ struct Pool2D {
         Pool2DType pool_type_;
         DataType output_dtype_;
         MemoryConfig memory_config_;
+        bool count_include_pad_;
+        std::optional<int32_t> divisor_override_;
     };
 
     struct tensor_args_t {
@@ -74,7 +77,9 @@ struct Pool2D {
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         Pool2DType pool_type,
         DataType output_dtype,
-        MemoryConfig memory_config);
+        MemoryConfig memory_config,
+        bool count_include_pad,
+        std::optional<int32_t> divisor_override);
 };
 
 }  // namespace pool

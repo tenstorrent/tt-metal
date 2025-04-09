@@ -77,8 +77,16 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
 
     uint32_t output_h;
     uint32_t output_w;
-    float eff_size_h = (float)(input_hw.first + get_pad_h() - dilation_hw.first * (window_hw.first - 1) - 1);
-    float eff_size_w = (float)(input_hw.second + get_pad_w() - dilation_hw.second * (window_hw.second - 1) - 1);
+
+    // Calculation of the output shapes differ for avg and max pool operations,
+    // the difference is in the substarction of value 1 in these two places,
+    // therefore conditional substraction using is_avg_pool variable
+    float eff_size_h = (float)(input_hw.first + get_pad_h() -
+                               (is_avg_pool ? 1 : dilation_hw.first) * (window_hw.first - (is_avg_pool ? 0 : 1)) -
+                               (is_avg_pool ? 0 : 1));
+    float eff_size_w = (float)(input_hw.second + get_pad_w() -
+                               (is_avg_pool ? 1 : dilation_hw.second) * (window_hw.second - (is_avg_pool ? 0 : 1)) -
+                               (is_avg_pool ? 0 : 1));
     if (ceil_mode) {
         output_h = std::ceil(eff_size_h / stride_hw.first) + 1;
         output_w = std::ceil(eff_size_w / stride_hw.second) + 1;
