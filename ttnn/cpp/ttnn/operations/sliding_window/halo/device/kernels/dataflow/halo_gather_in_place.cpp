@@ -242,7 +242,7 @@ void kernel_main() {
             cb_pop_front(untilize_temp_cb_id, tile_cols);
         }
     }
-    cb_wait_front(in_cb_id, tile_rows * tile_cols);
+    cb_wait_front(in_cb_id, in_nsticks);
 
     DPRINT << "tile_rows=" << tile_rows << " tile_cols=" << tile_cols << ENDL();
     DPRINT << "in_nsticks=" << in_nsticks << ENDL();
