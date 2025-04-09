@@ -580,8 +580,10 @@ def test_unary_eqz_edge_case(input_shapes, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([])),
+        (torch.Size([128])),
         (torch.Size([64, 64])),
+        (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
     ),
@@ -591,7 +593,7 @@ def test_unary_ne(input_shapes, scalar, device):
     torch.manual_seed(213919)
 
     # Generate a uniform range of values across the valid int32 range
-    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+    num_elements = int(torch.prod(torch.tensor(input_shapes)).item())
     uniform_values = torch.linspace(-2147483647, 2147483647, num_elements, dtype=torch.int32)
 
     corner_cases = torch.tensor([0, 1, -1, 2147483647, -2147483647], dtype=torch.int32)
