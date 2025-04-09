@@ -36,7 +36,7 @@ void MetalContext::initialize(
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
-    tt_metal::DispatchSettings::initialize(cluster_);
+    tt_metal::DispatchSettings::initialize(*cluster_);
 
     // TODO: Move FW, fabric, dispatch init here
 }
@@ -46,9 +46,14 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
-MetalContext::MetalContext() = default;
+MetalContext::MetalContext() { cluster_ = std::make_unique<Cluster>(rtoptions_); }
 
-Cluster& MetalContext::get_cluster() { return cluster_; }
+llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
+
+Cluster& MetalContext::get_cluster() {
+    TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
+    return *cluster_;
+}
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before intializing it.");

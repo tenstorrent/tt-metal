@@ -11,6 +11,7 @@
 #include <tt-metalium/dev_msgs.h>
 #include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <llrt/rtoptions.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 
@@ -33,6 +34,7 @@ public:
     static MetalContext& instance();
 
     Cluster& get_cluster();
+    llrt::RunTimeOptions& rtoptions();
     dispatch_core_manager& get_dispatch_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
 
@@ -50,7 +52,8 @@ private:
     BankMapping l1_bank_remap_;
     DispatchCoreConfig dispatch_core_config_;
 
-    Cluster cluster_;
+    llrt::RunTimeOptions rtoptions_;
+    std::unique_ptr<Cluster> cluster_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
 };
