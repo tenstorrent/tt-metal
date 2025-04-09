@@ -66,7 +66,9 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Auto
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
 
-    out->set_value(ttnn::experimental::add(a->get_value(), b->get_value()));
+    constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+    out->set_value(
+        ttnn::add(a->get_value(), b->get_value(), std::nullopt, std::nullopt, std::nullopt, none, none, none, false));
     autograd::GradFunction grad = [a, b, out]() {
         if (was_broadcasted(a, out->get_grad())) {
             a->add_grad(ttnn::moreh_sum(
