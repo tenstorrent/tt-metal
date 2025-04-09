@@ -17,18 +17,18 @@ static inline unsigned get_tile_id(
 void kernel_main() {
     DPRINT << "[Cumsum Writer] start" << ENDL();
 
-    uint32_t output_dram_base_addr = get_arg_val<uint32_t>(1);  // output base addr (DRAM)
-    uint32_t num_rows = get_arg_val<uint32_t>(3);
-    uint32_t tiles_per_row = get_arg_val<uint32_t>(4);  // number of tiles in a row / along axis
-    uint32_t PHi = get_arg_val<uint32_t>(5);
-    uint32_t PLo = get_arg_val<uint32_t>(6);
-    uint32_t HtWt = get_arg_val<uint32_t>(7);
+    uint32_t output_dram_base_addr = get_arg_val<uint32_t>(0);  // output base addr (DRAM)
+    uint32_t num_rows = get_arg_val<uint32_t>(1);
+    uint32_t tiles_per_row = get_arg_val<uint32_t>(2);  // number of tiles in a row / along axis
+    uint32_t PHi = get_arg_val<uint32_t>(3);
+    uint32_t PLo = get_arg_val<uint32_t>(4);
+    uint32_t HtWt = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
 
     // single tile ublock
     uint32_t ublock_size_bytes = get_tile_size(cb_in);
-    uint32_t input_sram_addr = get_write_ptr(cb_in);
+    uint32_t input_sram_addr = get_read_ptr(cb_in);
 
     uint32_t tile_card = ublock_size_bytes / sizeof(float);
 

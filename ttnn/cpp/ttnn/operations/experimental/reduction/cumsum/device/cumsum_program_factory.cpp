@@ -9,6 +9,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "tt-metalium/bfloat16.hpp"
 #include "tt-metalium/buffer.hpp"
+#include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_types.hpp"
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/data_types.hpp"
@@ -101,18 +102,28 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
 
     constexpr uint32_t cb_in_index = CBIndex::c_0;
     constexpr uint32_t cb_out_index = CBIndex::c_1;
+    constexpr uint32_t cb_intermed_index = CBIndex::c_24;
 
     DataFormat in_df = DataFormat::Float32;
     DataFormat out_df = DataFormat::Float32;
 
     CircularBufferConfig cb_in_config =
         CircularBufferConfig(single_tile_size, {{cb_in_index, in_df}}).set_page_size(cb_in_index, single_tile_size);
+    CircularBufferConfig cb_intermed_config = CircularBufferConfig(single_tile_size, {{cb_intermed_index, in_df}})
+                                                  .set_page_size(cb_intermed_index, single_tile_size);
 
     CBHandle cb_in = CreateCircularBuffer(program, core, cb_in_config);
+    CBHandle cb_intermed = CreateCircularBuffer(program, core, cb_intermed_config);
 
     KernelHandle cumsum_reader_handle_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/dataflow/cumsum_reader.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    KernelHandle cumsum_writer_handle_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/dataflow/cumsum_writer.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -131,14 +142,14 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     const uint32_t num_rows = num_tiles / num_tiles_per_row;  // total number of rows in tensor
     const uint32_t HtWt = xy_volume / TILE_SIZE;              // padded shape => xy_volume is multiple of tile_size
 
-    uint32_t high_dims = 1;
-    uint32_t low_dims = 1;
+    uint32_t PHi = 1;
+    uint32_t PLo = 1;
 
     for (int i = dim + 1; i + 2 < tensor_rank; i++) {
-        high_dims *= tensor_shape[i];
+        PHi *= tensor_shape[i];
     }
     for (int i = 0; i < dim; i++) {
-        low_dims *= tensor_shape[i];
+        PLo *= tensor_shape[i];
     }
 
     SetRuntimeArgs(
@@ -147,12 +158,24 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         core,
         {
             input_tensor.buffer()->address(),
-            output_tensor.buffer()->address(),
             tmp_sram_buffer->address(),
             num_rows,
             num_tiles_per_row,
-            high_dims,
-            low_dims,
+            PHi,
+            PLo,
+            HtWt,
+        });
+
+    SetRuntimeArgs(
+        program,
+        cumsum_writer_handle_id,
+        core,
+        {
+            output_tensor.buffer()->address(),
+            num_rows,
+            num_tiles_per_row,
+            PHi,
+            PLo,
             HtWt,
         });
 
