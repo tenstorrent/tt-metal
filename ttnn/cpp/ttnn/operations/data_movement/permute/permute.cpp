@@ -176,13 +176,6 @@ ttnn::Tensor ExecutePermute::invoke(
     const ttnn::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<float>& pad_value) {
-    printf("PERMUTE INVOKED\n");
-    input_tensor.print();
-    printf("input sharded: %d\n", input_tensor.is_sharded());
-    printf("dims: %ld %ld %ld %ld\n", dims[0], dims[1], dims[2], dims[3]);
-    printf("mem_config has value: %d\n", memory_config.has_value());
-    printf("pad_value: %f\n", pad_value.value());
-
     const auto input_rank = input_tensor.get_logical_shape().rank();
     TT_FATAL(
         input_rank == dims.size(),

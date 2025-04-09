@@ -285,11 +285,9 @@ def run_conv2d_short_sweep(
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
         conv_config = ttnn.Conv2dConfig(
             preprocess_weights_on_device=True,
-            in_place=True,
         )
 
     start_time = start_measuring_time()
-    print("STARTING CONV")
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
@@ -309,11 +307,8 @@ def run_conv2d_short_sweep(
         return_output_dim=True,
         return_weights_and_bias=True,
     )
-    print("FINISHED CONV")
 
-    print("STARTING FROM DEVICE")
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    print("FINISHED FROM DEVICE")
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
