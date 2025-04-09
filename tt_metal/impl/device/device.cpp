@@ -104,13 +104,14 @@ Device::Device(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal,
     uint32_t worker_thread_core,
-    uint32_t completion_queue_reader_core) :
+    uint32_t completion_queue_reader_core,
+    size_t worker_l1_size) :
     id_(device_id),
     worker_thread_core_(worker_thread_core),
     completion_queue_reader_core_(completion_queue_reader_core),
     work_executor_(std::make_unique<WorkExecutor>(worker_thread_core, device_id)) {
     ZoneScoped;
-    this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
+    this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
 
 std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
@@ -330,7 +331,11 @@ void Device::initialize_cluster() {
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
 }
 
-void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+void Device::initialize_default_sub_device_state(
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t worker_l1_unreserved_start,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     // Create the default sub-device manager representing the entire chip
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     const auto& active_eth_cores = this->get_active_ethernet_cores(true);
@@ -345,10 +350,16 @@ void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t tr
         CoreRangeSet(std::move(active_eth_core_ranges))})};
 
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        this, this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap), sub_devices);
+        this,
+        this->initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap),
+        sub_devices);
 }
 
-std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+std::unique_ptr<Allocator> Device::initialize_allocator(
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t worker_l1_unreserved_start,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id_);
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
@@ -367,9 +378,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .dram_unreserved_base = hal_ref.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) +
                                  hal_ref.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
          .dram_alignment = hal_ref.get_alignment(HalMemType::DRAM),
-         .l1_unreserved_base = align(
-             hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
-             hal_ref.get_alignment(HalMemType::DRAM)),
+         .l1_unreserved_base = align(worker_l1_unreserved_start, hal_ref.get_alignment(HalMemType::DRAM)),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
          .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
@@ -729,6 +738,7 @@ void Device::initialize_and_launch_firmware() {
     core_info->noc_pcie_addr_end = pcie_chan_end_addr;
     core_info->noc_dram_addr_base = 0;
     core_info->noc_dram_addr_end = soc_d.dram_core_size;
+    core_info->l1_unreserved_start = this->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
     const std::vector<tt::umd::CoreCoord>& dram_cores = soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system());
@@ -1105,7 +1115,13 @@ void Device::init_fabric() {
     }
 }
 
-bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
+bool Device::initialize(
+    const uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t worker_l1_size,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    bool minimal) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache_.is_enabled() ? "": "NOT ");
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
@@ -1114,9 +1130,30 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     // Trying to preserve logic that was in device_pool.cpp
     // However, I honestly don't understand it
     this->num_hw_cqs_ = num_hw_cqs;
+    if (worker_l1_size == 0) {
+        worker_l1_size = hal_ref.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    }
+
+    size_t max_worker_l1_size = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+                                hal_ref.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) -
+                                hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+
+    TT_FATAL(
+        worker_l1_size <= max_worker_l1_size,
+        "Worker L1 size {} is larger than max size {}",
+        worker_l1_size,
+        max_worker_l1_size);
+    log_debug(tt::LogMetal, "Worker L1 size: {} Max: {}", worker_l1_size, max_worker_l1_size);
+    std::uint32_t max_alignment =
+        std::max(hal_ref.get_alignment(HalMemType::DRAM), hal_ref.get_alignment(HalMemType::L1));
+    uint32_t worker_l1_unreserved_start = tt::align(
+        hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+            hal_ref.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size,
+        max_alignment);
     BuildEnvManager::get_instance().add_build_env(this->id(), this->num_hw_cqs());
     this->initialize_cluster();
-    this->initialize_default_sub_device_state(l1_small_size, trace_region_size, l1_bank_remap);
+    this->initialize_default_sub_device_state(
+        l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
     this->generate_device_bank_to_noc_tables();
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.

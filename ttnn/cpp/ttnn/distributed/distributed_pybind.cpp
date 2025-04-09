@@ -144,13 +144,16 @@ void py_module(py::module& module) {
                         size_t num_command_queues,
                         const DispatchCoreConfig& dispatch_core_config,
                         const std::optional<MeshCoordinate>& offset,
-                        const std::vector<chip_id_t>& physical_device_ids) {
+                        const std::vector<chip_id_t>& physical_device_ids,
+                        size_t worker_l1_size) {
                 return MeshDevice::create(
                     MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
                     l1_small_size,
                     trace_region_size,
                     num_command_queues,
-                    dispatch_core_config);
+                    dispatch_core_config,
+                    {},
+                    worker_l1_size);
             }),
             py::kw_only(),
             py::arg("mesh_shape"),
@@ -159,7 +162,8 @@ void py_module(py::module& module) {
             py::arg("num_command_queues"),
             py::arg("dispatch_core_config"),
             py::arg("offset"),
-            py::arg("physical_device_ids"))
+            py::arg("physical_device_ids"),
+            py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE)
         .def("get_num_devices", &MeshDevice::num_devices)
         .def("id", &MeshDevice::id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
@@ -395,7 +399,8 @@ void py_module(py::module& module) {
         py::arg("num_command_queues"),
         py::arg("offset"),
         py::arg("physical_device_ids"),
-        py::arg("dispatch_core_config"));
+        py::arg("dispatch_core_config"),
+        py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
     module.def(
         "get_device_tensor",
