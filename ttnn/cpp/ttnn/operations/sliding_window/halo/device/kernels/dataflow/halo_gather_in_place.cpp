@@ -189,7 +189,7 @@ void kernel_main() {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(6);      // output shard with padding and halo goes here
     constexpr uint32_t pad_cb_id = get_compile_time_arg_val(7);      // cb for const pad val buffer
     constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(8);    // pad value to fill pad buffer with
-    constexpr uint32_t in_nsticks = get_compile_time_arg_val(9);     // number of sticks
+    constexpr uint32_t in_npages = get_compile_time_arg_val(9);      // number of sticks
     constexpr uint32_t stick_nbytes = get_compile_time_arg_val(10);  // stick size in bytes (post untilize)
     constexpr uint32_t is_block_sharded = get_compile_time_arg_val(11);
     constexpr bool is_col_major = get_compile_time_arg_val(13) == 1;
@@ -220,8 +220,8 @@ void kernel_main() {
     const uint32_t untilize_temp_l1_addr = get_read_ptr(untilize_temp_cb_id);
 
     if constexpr (local_config_cb_id) {
-        cb_reserve_back(src_cb_id, in_nsticks);
-        cb_push_back(src_cb_id, in_nsticks);
+        cb_reserve_back(src_cb_id, in_npages);
+        cb_push_back(src_cb_id, in_npages);
     }
 
     uint32_t semaphore_addr = 0;
@@ -242,12 +242,12 @@ void kernel_main() {
             cb_pop_front(untilize_temp_cb_id, tile_cols);
         }
     }
-    cb_wait_front(in_cb_id, in_nsticks);
+    cb_wait_front(in_cb_id, in_npages);
 
     DPRINT << "tile_rows=" << tile_rows << " tile_cols=" << tile_cols << ENDL();
-    DPRINT << "in_nsticks=" << in_nsticks << ENDL();
+    DPRINT << "in_npages=" << in_npages << ENDL();
     if constexpr (local_config_cb_id) {
-        tt::data_movement::common::print_bf16_pages(in_base_l1_addr, 32, in_nsticks);
+        tt::data_movement::common::print_bf16_pages(in_base_l1_addr, 32, in_npages * 32);
     }
 
     if constexpr (remote_config_cb_id && remote_temp_cb_id) {
