@@ -44,7 +44,6 @@ def test_downsample_512x512(
     torch_downsample = pipe.unet.down_blocks[block_index].downsamplers[0]
 
     # Initialize ttnn component
-    reader_patterns_cache = {}
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
@@ -52,7 +51,7 @@ def test_downsample_512x512(
     N, _, H, W = hidden_states
     compute_kernel_config = get_default_compute_config(device)
 
-    ttnn_downsample = downsample_2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
+    ttnn_downsample = downsample_2d(device, parameters, N, H, W, compute_kernel_config)
 
     # Prepare inputs
     in_channels = hidden_states[1]

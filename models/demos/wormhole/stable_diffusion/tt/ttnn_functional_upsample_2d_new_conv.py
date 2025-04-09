@@ -8,9 +8,6 @@ import ttnn
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    conv_cache,
-)
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     get_default_compute_config,
     permute_conv_parameters,
 )
@@ -32,9 +29,7 @@ config_override = {
 
 
 class upsample2d:
-    def __init__(
-        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-    ):
+    def __init__(self, device, parameters, batch_size, input_height, input_width, compute_kernel_config):
         self.input_height = input_height
         self.input_width = input_width
         self.device = device
@@ -136,6 +131,5 @@ class upsample2d:
             bias_tensor=self.conv_bias_tensor,
             **conv_kwargs,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
         )
         return tt_out

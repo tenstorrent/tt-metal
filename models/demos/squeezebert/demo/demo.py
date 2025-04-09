@@ -122,7 +122,6 @@ def run_squeezebert_question_and_answering_inference(
         base_addr=f"transformer.",
         parameters=parameters,
         device=device,
-        reader_patterns_cache=None,
     )
     profiler.end(f"inference_time")
 
@@ -219,7 +218,6 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
                     base_addr=f"transformer.",
                     parameters=parameters,
                     device=device,
-                    reader_patterns_cache=None,
                 )
                 tt_output = (
                     ttnn.to_torch(ttnn.from_device(tt_output))

@@ -125,7 +125,6 @@ class UNetConv2D:
         conv,
         bn=None,
         device=None,
-        cache=None,
         activation="relu",
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
@@ -148,7 +147,6 @@ class UNetConv2D:
         self.groups = conv.groups
         self.use_1d_systolic_array = conv.use_1d_systolic_array
         self.deallocate_activation = True
-        self.cache = {} if cache is None else cache
         self.mesh_mapper = mesh_mapper
 
         shard_layout = (
@@ -215,7 +213,6 @@ class UNetConv2D:
             weight_tensor=self.weight,
             bias_tensor=self.bias,
             compute_config=self.compute_config,
-            conv_op_cache=self.cache,
             return_output_dim=False,
             return_weights_and_bias=True,
             **self.get_conv2d_kwargs(),
@@ -253,15 +250,10 @@ class UNetDownblock:
         bn2,
         pool,
         device,
-        conv_cache=None,
         mesh_mapper=None,
     ):
-        if conv_cache is None:
-            conv_cache = {}
-        self.conv1 = UNetConv2D(
-            conv1, bn=bn1, device=device, cache=conv_cache, reshard_if_not_optimal=True, mesh_mapper=mesh_mapper
-        )
-        self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, cache=conv_cache, mesh_mapper=mesh_mapper)
+        self.conv1 = UNetConv2D(conv1, bn=bn1, device=device, reshard_if_not_optimal=True, mesh_mapper=mesh_mapper)
+        self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, mesh_mapper=mesh_mapper)
         self.pool1 = UNetMaxPool2D(pool, conv2.out_channels, device=device)
 
     def __call__(self, x):
@@ -289,13 +281,10 @@ class UNetUpblock:
         conv3,
         bn3,
         device,
-        conv_cache=None,
         mesh_mapper=None,
         reshard=True,
         final_block=False,
     ):
-        if conv_cache is None:
-            conv_cache = {}
         self.final_block = final_block
         self.device = device
 
@@ -303,13 +292,12 @@ class UNetUpblock:
             conv1,
             bn1,
             device,
-            conv_cache,
             reshard_if_not_optimal=reshard,
             mesh_mapper=mesh_mapper,
             reallocate_halo_output=reshard,
         )
-        self.conv2 = UNetConv2D(conv2, bn2, device, conv_cache, mesh_mapper=mesh_mapper)
-        self.conv3 = UNetConv2D(conv3, bn3, device, conv_cache, mesh_mapper=mesh_mapper)
+        self.conv2 = UNetConv2D(conv2, bn2, device, mesh_mapper=mesh_mapper)
+        self.conv3 = UNetConv2D(conv3, bn3, device, mesh_mapper=mesh_mapper)
 
         self.batch_size = conv1.batch_size
         self.input_height = conv1.input_height
@@ -381,8 +369,6 @@ class UNet:
         assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
 
         self.device = device
-        self.conv_cache = {}
-
         self.downblock1 = UNetDownblock(
             parameters.c1,
             parameters.b1,
@@ -390,7 +376,6 @@ class UNet:
             parameters.b1_2,
             parameters.p1,
             device,
-            conv_cache=self.conv_cache,
             mesh_mapper=mesh_mapper,
         )
         self.downblock2 = UNetDownblock(
@@ -400,7 +385,6 @@ class UNet:
             parameters.b2_2,
             parameters.p2,
             device,
-            conv_cache=self.conv_cache,
             mesh_mapper=mesh_mapper,
         )
         self.downblock3 = UNetDownblock(
@@ -410,7 +394,6 @@ class UNet:
             parameters.b3_2,
             parameters.p3,
             device,
-            conv_cache=self.conv_cache,
             mesh_mapper=mesh_mapper,
         )
         self.downblock4 = UNetDownblock(
@@ -420,7 +403,6 @@ class UNet:
             parameters.b4_2,
             parameters.p4,
             device,
-            conv_cache=self.conv_cache,
             mesh_mapper=mesh_mapper,
         )
 
@@ -428,7 +410,6 @@ class UNet:
             parameters.bnc,
             parameters.bnb,
             device,
-            cache=self.conv_cache,
             reshard_if_not_optimal=True,
             mesh_mapper=mesh_mapper,
         )
@@ -436,7 +417,6 @@ class UNet:
             parameters.bnc_2,
             parameters.bnb_2,
             device,
-            cache=self.conv_cache,
             mesh_mapper=mesh_mapper,
         )
 
@@ -448,7 +428,6 @@ class UNet:
             parameters.c5_3,
             parameters.b5_3,
             device,
-            conv_cache=self.conv_cache,
             mesh_mapper=mesh_mapper,
             final_block=False,
         )
@@ -460,7 +439,6 @@ class UNet:
             parameters.c6_3,
             parameters.b6_3,
             device,
-            conv_cache=self.conv_cache,
             mesh_mapper=mesh_mapper,
             final_block=False,
         )
@@ -472,7 +450,6 @@ class UNet:
             parameters.c7_3,
             parameters.b7_3,
             device,
-            conv_cache=self.conv_cache,
             mesh_mapper=mesh_mapper,
             final_block=False,
         )
@@ -484,7 +461,6 @@ class UNet:
             parameters.c8_3,
             parameters.b8_3,
             device,
-            conv_cache=self.conv_cache,
             mesh_mapper=mesh_mapper,
             reshard=False,
             final_block=True,  # Special case due to high memory pressure in final upblock
@@ -493,7 +469,6 @@ class UNet:
         self.output_layer = UNetConv2D(
             parameters.output_layer,
             device=device,
-            cache=self.conv_cache,
             activation="",
             mesh_mapper=mesh_mapper,
             activation_dtype=ttnn.bfloat16,

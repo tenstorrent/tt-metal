@@ -113,7 +113,6 @@ def test_cross_attn_up_block_2d_512x512(
     cross_attention_kwargs = None
     upsample_size = None
     attention_mask = None
-    reader_patterns_cache = {}
 
     # execute pytorch
     torch_output = unet_upblock(
@@ -133,7 +132,7 @@ def test_cross_attn_up_block_2d_512x512(
         packer_l1_acc=False,
     )
     N, _, H, W = input_shape
-    model = cross_attention_upblock2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
+    model = cross_attention_upblock2d(device, parameters, N, H, W, compute_kernel_config)
 
     timestep = (None,)
     class_labels = (None,)

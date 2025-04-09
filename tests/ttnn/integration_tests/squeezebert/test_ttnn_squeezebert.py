@@ -54,7 +54,6 @@ def test_squeezebert_attention(device, model_name, batch_size, sequence_size, to
         base_addr=f"",
         parameters=parameters,
         device=device,
-        reader_patterns_cache={},
     )
 
     output = ttnn.to_torch(output)
@@ -198,7 +197,6 @@ def test_squeezebert_layer(device, model_name, batch_size, sequence_size, torch_
         base_addr=f"",
         parameters=parameters,
         device=device,
-        reader_patterns_cache={},
     )
 
     output = ttnn.to_torch(output)
@@ -243,7 +241,6 @@ def test_squeezebert_encoder(device, model_name, batch_size, sequence_size, torc
         base_addr=f"",
         parameters=parameters,
         device=device,
-        reader_patterns_cache={},
     )
 
     output = ttnn.to_torch(output)
@@ -297,7 +294,6 @@ def test_squeezebert_model(device, model_name, batch_size, sequence_size, reset_
         base_addr=f"",
         parameters=parameters,
         device=device,
-        reader_patterns_cache={},
     )
     output = ttnn.to_torch(output)
 
@@ -349,7 +345,6 @@ def test_squeezebert_for_question_answering(device, model_name, batch_size, sequ
         base_addr=f"transformer.",
         parameters=parameters,
         device=device,
-        reader_patterns_cache={},
     )
 
     tt_output = ttnn.to_torch(tt_output)

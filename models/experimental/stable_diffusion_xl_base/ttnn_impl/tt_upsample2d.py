@@ -78,8 +78,6 @@ class TtUpsample2D(nn.Module):
             input_width=W,
             conv_config=conv_config,
             compute_config=compute_config,
-            conv_op_cache={},
-            debug=False,
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
