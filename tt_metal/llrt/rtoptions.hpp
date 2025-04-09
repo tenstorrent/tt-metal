@@ -145,14 +145,8 @@ class RunTimeOptions {
 
     bool skip_eth_cores_with_retrain = false;
 
-    RunTimeOptions();
-
 public:
-    static RunTimeOptions& get_instance() {
-        static RunTimeOptions instance;
-        return instance;
-    }
-
+    RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
     RunTimeOptions& operator=(const RunTimeOptions&) = delete;
 

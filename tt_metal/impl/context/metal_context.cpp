@@ -19,7 +19,7 @@ namespace tt::tt_metal {
 void MetalContext::initialize(
     const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, const BankMapping& l1_bank_remap) {
     if (initialized_) {
-        if (this->dispatch_core_config_ != dispatch_core_config or num_hw_cqs != this->num_hw_cqs_ or
+        if (*dispatch_core_config_ != dispatch_core_config or num_hw_cqs != this->num_hw_cqs_ or
             l1_bank_remap != this->l1_bank_remap_) {
             log_warning("Closing and re-initializing MetalContext with new parameters.");
         } else {
@@ -29,14 +29,14 @@ void MetalContext::initialize(
     }
 
     initialized_ = true;
-    dispatch_core_config_ = dispatch_core_config;
     num_hw_cqs_ = num_hw_cqs;
     l1_bank_remap_ = l1_bank_remap;
 
     // Initialize dispatch state
+    dispatch_core_config_ = std::make_unique<DispatchCoreConfig>(dispatch_core_config);
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
-    tt_metal::DispatchSettings::initialize(cluster_);
+    tt_metal::DispatchSettings::initialize(*cluster_);
 
     // TODO: Move FW, fabric, dispatch init here
 }
@@ -46,9 +46,14 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
-MetalContext::MetalContext() {}
+MetalContext::MetalContext() { cluster_ = std::make_unique<Cluster>(rtoptions_); }
 
-Cluster& MetalContext::get_cluster() { return cluster_; }
+llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
+
+Cluster& MetalContext::get_cluster() {
+    TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
+    return *cluster_;
+}
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before intializing it.");
