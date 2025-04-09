@@ -462,6 +462,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         if (link == 0) {
             // drain sync core is the first worker core
             drain_sync_core = device->worker_core_from_logical_core(core);
+            TT_ASSERT(drain_sync_core.x == 19 && drain_sync_core.y == 18, "This op should run on a TG machine");
         }
         std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
             !forward_device.has_value()
@@ -513,9 +514,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
             0,
-            temp_tensor.buffer()->address(),  // tensor_address0
-            semaphore.address(),              // out_ready_sem_bank_addr (absolute address)
-            // output_interm_tensor_shard_num_pages,  // num_tiles_per_core
+            temp_tensor.buffer()->address(),      // tensor_address0
+            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
             output_tensor_cores_x.size(),         // num_cores
@@ -584,10 +584,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         const auto& core = cores[i];
         std::vector<uint32_t> input_cores_x;
         std::vector<uint32_t> input_cores_y;
+        std::array<uint32_t, 8> kernel_core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
+        std::array<uint32_t, 8> kernel_core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
         for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
             auto this_core = device->worker_core_from_logical_core(input_cores_vec[k]);
             input_cores_x.push_back(this_core.x);
             input_cores_y.push_back(this_core.y);
+            TT_ASSERT(
+                this_core.x == kernel_core_noc_x[k] && this_core.y == kernel_core_noc_y[k],
+                "This op should run on a TG machine");
         }
         bool is_worker_core = core.x == 1 && core.y == 0;
         is_worker_core = is_worker_core || (core.x == 2 && core.y == 0);

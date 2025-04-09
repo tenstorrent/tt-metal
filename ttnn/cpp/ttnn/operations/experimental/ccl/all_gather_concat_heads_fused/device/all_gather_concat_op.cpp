@@ -90,6 +90,8 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
             input_core_ranges[1].start_coord.x == 1 && input_core_ranges[1].end_coord.x == 2 &&
             input_core_ranges[1].start_coord.y == 2 && input_core_ranges[1].end_coord.y == 2,
         "Unsupported input core ranges!");
+    CoreCoord grid_size = input_tensors[0].device()->compute_with_storage_grid_size();
+    TT_FATAL(grid_size.x >= 3 && grid_size.y >= 3, "Input core grid out of bound!");
     TT_FATAL(
         padded_input_shape[0] == 1 && padded_input_shape[1] == 8 && padded_input_shape[2] == 32 &&
             padded_input_shape[3] == 128,
