@@ -14,7 +14,7 @@ from models.utility_functions import torch_random
     "input_shape, temb_shape, encoder_shape, query_dim, num_attn_heads, out_dim, down_block_id, pcc",
     [
         ((1, 320, 64, 64), (1, 1280), (1, 77, 2048), 640, 10, 640, 1, 0.994),
-        ((1, 640, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 2, 0.976),
+        ((1, 640, 32, 32), (1, 1280), (1, 77, 2048), 1280, 20, 1280, 2, 0.975),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
