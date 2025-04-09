@@ -262,6 +262,7 @@ void kernel_main() {
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
+    const uint32_t num_reads_of_input = 3;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
@@ -279,7 +280,12 @@ void kernel_main() {
             row_offset = num_cols_per_group;
 
             for (uint32_t m = 0; m < num_groups; ++m) {
-                for (uint32_t n = 0; n < 3; ++n) {
+            //The following loop is for the 3 passes of input tensor required for GroupNorm
+            //First Pass: Calculates average value
+            //Second Pass: Calculates the Variance value
+            //Third Pass: Calculates final value
+            //Definition: num_read_of_input = 3
+                for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
                     uint32_t out_block_start_id_offset = 0;
                     uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
                     uint32_t cb_ex_external_bytes_written = 0;
@@ -317,9 +323,9 @@ void kernel_main() {
                         }
                         cb_push_back(cb_in0, out_block_hw_normal);
 #endif
-                        if (n == 0 || n == 1) {
+                        if (cur_read_iteration== 0 || cur_read_iteration== 1) {
                             // wait for local data ready
-                            if (n == 0) {
+                            if (cur_read_iteration== 0) {
                                 cb_wait_front(cb_ex_partial, 1);
                             } else {
                                 cb_wait_front(cb_ex2_partial, 1);
@@ -328,7 +334,7 @@ void kernel_main() {
                             // read self Ex partial - on the first iteration, read a full tile for overwriting
                             // garbage in L1, on subsequent just treat it as another core
                             uint32_t l1_read_addr_ex_par =
-                                n == 0 ? get_read_ptr(cb_ex_partial) : get_read_ptr(cb_ex2_partial);
+                                cur_read_iteration== 0 ? get_read_ptr(cb_ex_partial) : get_read_ptr(cb_ex2_partial);
                             uint64_t noc_addr_ex_par =
                                 get_noc_addr(noc_coord_x[0], noc_coord_y[0], l1_read_addr_ex_par);
                             uint32_t read_size = (cb_ex_external_bytes_written % single_tile_size_bytes > 0)
@@ -354,7 +360,7 @@ void kernel_main() {
                                     noc_async_read_barrier();
                                 }
                             }
-                            if (n == 0) {
+                            if (cur_read_iteration== 0) {
                                 cb_pop_front(cb_ex_partial, 1);
                             } else {
                                 cb_pop_front(cb_ex2_partial, 1);
@@ -381,7 +387,7 @@ void kernel_main() {
                                         false);
                                 }
                             }
-                        } else if (n == 2) {
+                        } else if (cur_read_iteration == 2) {
                             const InterleavedAddrGenFast<out_is_dram> dst_a = {
                                 .bank_base_address = out_addr,
                                 .page_size = single_tile_size_bytes,
@@ -411,14 +417,14 @@ void kernel_main() {
                         }
                         out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                     }
-                    if (n == 0 || n == 1) {
+                    if (cur_read_iteration== 0 || cur_read_iteration == 1) {
                         cb_push_back(cb_ex_external, cb_ex_external_tiles_required);
 
                         if constexpr (num_mcast_cores > 1) {
                             uint32_t cb_mcast;
-                            if (n == 0) {
+                            if (cur_read_iteration== 0) {
                                 cb_mcast = cb_ex;
-                            } else if (n == 1) {
+                            } else if (cur_read_iteration== 1) {
                                 cb_mcast = cb_ex2;
                             }
 
