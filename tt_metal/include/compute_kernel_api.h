@@ -593,14 +593,9 @@ ALWI void unary_ne_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_ne_init
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void unary_ne_int_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_unary_ne_int<APPROX>(idst, param0)));
+ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_unary_ne_int32<APPROX>(idst, param0)));
 }
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void unary_ne_int_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_ne_int_init<APPROX>())); }
 
 // expm1 : (exp(x) - 1)
 // clang-format off
