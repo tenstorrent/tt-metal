@@ -39,7 +39,6 @@
 #include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/tt_core_coordinates.h"

@@ -36,7 +36,6 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include "fmt/base.h"
 #include "get_platform_architecture.hpp"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>

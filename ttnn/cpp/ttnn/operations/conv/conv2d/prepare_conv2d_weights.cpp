@@ -12,7 +12,6 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn {
 namespace operations::conv {

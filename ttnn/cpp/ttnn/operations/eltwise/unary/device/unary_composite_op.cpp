@@ -21,7 +21,6 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {

@@ -13,7 +13,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_constants.hpp>
 #include <tt-metalium/device.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"

@@ -20,7 +20,6 @@
 #include "dispatch_mem_map.hpp"
 #include "eth_tunneler.hpp"
 #include "hal.hpp"
-#include "impl/context/metal_context.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
 

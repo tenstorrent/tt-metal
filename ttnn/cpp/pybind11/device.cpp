@@ -18,7 +18,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/trace.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include <tt-metalium/hal.hpp>
 #include "tools/profiler/op_profiler.hpp"
 
 using namespace tt::tt_metal;

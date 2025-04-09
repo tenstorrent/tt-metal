@@ -23,7 +23,6 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_constants.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/logger.hpp>
 #include "test_common.hpp"
 
