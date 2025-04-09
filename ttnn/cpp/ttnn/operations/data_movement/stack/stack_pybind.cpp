@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,6 +41,10 @@ void py_bind_stack(pybind11::module& module) {
         Args:
             * :attr:`input_tensors`: List of tensors to stack.
             * :attr:`dim`: Dimension along which to stack.
+        
+        Example:
+           >>> input_tensor = ttnn.from_torch(torch.randn((2, 2), dtype=torch.bfloat16), device=device)
+           >>> output = ttnn.stack((input_tensor,input_tensor), 1)
 
         )doc");
 }
