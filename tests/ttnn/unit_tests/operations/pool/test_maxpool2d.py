@@ -116,6 +116,36 @@ parameters = {
             # [1, 6144, 6, 6, 5, 5, 1, 1, 2, 2, 1, 1, False],
             # [1, 6144, 6, 6, 9, 9, 1, 1, 2, 2, 1, 1, False],
             # [1, 6144, 6, 6, 9, 9, 1, 1, 4, 4, 1, 1, False],
+            [
+                8,
+                64,
+                112,
+                112,
+                3,
+                3,
+                2,
+                2,
+                1,
+                1,
+                1,
+                1,
+                True,
+            ],  # requires reversed local reads on some cores, and forward reads on others
+            [
+                32,
+                32,
+                264,
+                40,
+                5,
+                5,
+                2,
+                2,
+                2,
+                2,
+                1,
+                1,
+                True,
+            ],  # requires reversed local reads on some cores, and forward reads on others, large kernel
             [1, 512, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
             [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
             [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
@@ -132,6 +162,36 @@ parameters = {
             # [1, 3, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False],  # vgg
             [1, 4096, 16, 16, 2, 2, 1, 1, 0, 0, 1, 1, False],  # wide in place untilize
             [1, 2048, 16, 16, 2, 2, 1, 1, 0, 0, 1, 1, False],  # normal in place untilize
+            [
+                1,
+                4096,
+                16,
+                16,
+                5,
+                5,
+                2,
+                2,
+                2,
+                2,
+                1,
+                1,
+                True,
+            ],  # requires reversed local reads on some cores, and forward reads on others, wide in place untilize, large kernel
+            [
+                1,
+                2048,
+                16,
+                16,
+                5,
+                5,
+                2,
+                2,
+                2,
+                2,
+                1,
+                1,
+                True,
+            ],  # requires reversed local reads on some cores, and forward reads on others, normal in place untilize, large kernel
             [1, 512, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
             [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
             [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
