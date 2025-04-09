@@ -8,6 +8,8 @@
 
 #include <tt-metalium/tt_metal.hpp>
 
+#include "ttnn/cluster.hpp"
+
 using namespace tt::tt_metal;
 
 namespace py = pybind11;

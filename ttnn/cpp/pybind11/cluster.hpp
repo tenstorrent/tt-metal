@@ -5,7 +5,6 @@
 #pragma once
 
 #include "pybind11/pybind_fwd.hpp"
-#include "ttnn/cluster.hpp"
 
 namespace py = pybind11;
 
