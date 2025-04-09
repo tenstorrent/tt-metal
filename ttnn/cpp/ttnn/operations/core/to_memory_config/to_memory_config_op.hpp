@@ -34,7 +34,7 @@ struct ToMemoryConfig {
         if (original_memory_config.has_value() && original_memory_config.value() == memory_config) {
             return tensor;
         }
-        tt::log_info("Converting tensor from {} to {}", original_memory_config.value(), memory_config);
+
         if (memory_config.is_sharded()) {
             // to_sharded path
             if (tensor.is_sharded()) {
