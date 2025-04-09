@@ -24,13 +24,14 @@
 
 from sentencepiece import SentencePieceProcessor
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 class Tokenizer:
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str, pad_id: Optional[int] = None):
         assert Path(model_path).exists(), model_path
         self._model = SentencePieceProcessor(model_file=model_path)
+        self._pad_id = self._model.pad_id() if pad_id is None else pad_id
         assert self._model.vocab_size() == self._model.get_piece_size()
 
     @property
@@ -47,7 +48,7 @@ class Tokenizer:
 
     @property
     def pad_id(self) -> int:
-        return self._model.pad_id()
+        return self._pad_id
 
     def encode(self, s: str, bos: bool = True) -> List[int]:
         assert isinstance(s, str)
