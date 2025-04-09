@@ -216,25 +216,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /tmp/iwyu \
-    && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
-    && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
-    && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
-    && cmake --build /tmp/iwyu/build --parallel \
-    && cmake --install /tmp/iwyu/build \
-    && rm -rf /tmp/iwyu
-
-
-RUN git config --global --add safe.directory '*'
-
-ENV CCACHE_TEMPDIR=/tmp/ccache
-
-#############################################################
-
-FROM ci-build AS ci-test
-
-ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
-
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
 RUN python3 -m venv $PYTHON_ENV_DIR
@@ -245,6 +226,19 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is activated on shell startup
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
+# Numpy needed for tt-train to build
+RUN python3 -m pip install --no-cache-dir build numpy setuptools
+
+RUN git config --global --add safe.directory '*'
+
+ENV CCACHE_TEMPDIR=/tmp/ccache
+
+#############################################################
+
+FROM ci-build AS ci-test
+
+ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
 # Create directories for infra
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
@@ -257,9 +251,8 @@ COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-met
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 
 RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
-    python3 -m pip install setuptools wheel==0.45.1 && \
-    python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-    python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
+    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
 
 # Adjust permissions to allow any user to use and modify the venv
 RUN chmod -R 777 $VIRTUAL_ENV
@@ -267,6 +260,15 @@ RUN chmod -R 777 $VIRTUAL_ENV
 #############################################################
 
 FROM ci-test AS dev
+
+# IWYU could be useful to developers
+RUN mkdir -p /tmp/iwyu \
+    && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
+    && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
+    && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+    && cmake --build /tmp/iwyu/build --parallel \
+    && cmake --install /tmp/iwyu/build \
+    && rm -rf /tmp/iwyu
 
 # Need this to build GDB
 RUN apt-get -y update \
