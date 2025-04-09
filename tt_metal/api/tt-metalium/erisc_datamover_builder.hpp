@@ -199,6 +199,7 @@ public:
             tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
     void set_firmware_context_switch_interval(size_t interval);
+    void set_wait_for_host_signal(bool wait_for_host_signal);
 
     //    protected:
     friend class EdmLineFabricOpInterface;
@@ -250,6 +251,7 @@ public:
     bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
     bool dateline_connection = false;
+    bool wait_for_host_signal = false;
 };
 
 }  // namespace tt::tt_fabric
