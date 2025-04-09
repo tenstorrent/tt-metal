@@ -619,7 +619,6 @@ def from_torch(
                         **model.ttnn_module_args,
                         weight=model.weight,
                         bias=model.bias if "bias" in model else None,
-                        reader_patterns_cache=reader_patterns_cache,
                         using_parameters_cache=True,
                         device=device,
                     )

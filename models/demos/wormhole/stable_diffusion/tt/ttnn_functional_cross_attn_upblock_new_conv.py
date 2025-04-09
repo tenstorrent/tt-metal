@@ -17,15 +17,11 @@ from loguru import logger
 
 
 class cross_attention_upblock2d:
-    def __init__(
-        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-    ):
+    def __init__(self, device, parameters, batch_size, input_height, input_width, compute_kernel_config):
         self.device = device
         self.parameters = parameters
         self.resnets = [
-            resnetBlock2D(
-                device, resnet, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-            )
+            resnetBlock2D(device, resnet, batch_size, input_height, input_width, compute_kernel_config)
             for resnet in parameters.resnets
         ]
         self.attentions = [
@@ -40,7 +36,6 @@ class cross_attention_upblock2d:
             self.upsample_2d = upsample2d(
                 device,
                 parameters.upsamplers[0],
-                reader_patterns_cache,
                 batch_size,
                 input_height,
                 input_width,

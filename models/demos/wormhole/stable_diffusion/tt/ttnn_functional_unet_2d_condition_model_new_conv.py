@@ -31,7 +31,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_co
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     pre_process_input,
-    conv_cache,
     get_default_compute_config,
 )
 
@@ -70,7 +69,6 @@ class UNet2DConditionModel:
         batch_size,
         input_height,
         input_width,
-        reader_patterns_cache,
         down_block_types: Tuple[str] = (
             "CrossAttnDownBlock2D",
             "CrossAttnDownBlock2D",
@@ -114,7 +112,6 @@ class UNet2DConditionModel:
                 down_block = cross_attention_down_block_2d(
                     device,
                     parameters.down_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -124,7 +121,6 @@ class UNet2DConditionModel:
                 down_block = downblock2d(
                     device,
                     parameters.down_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -142,7 +138,6 @@ class UNet2DConditionModel:
         self.mid_block = unet_mid_block_2d_cross_attn(
             device,
             parameters.mid_block,
-            reader_patterns_cache,
             batch_size,
             input_height,
             input_width,
@@ -159,7 +154,6 @@ class UNet2DConditionModel:
                 up_block = cross_attention_upblock2d(
                     device,
                     parameters.up_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -169,7 +163,6 @@ class UNet2DConditionModel:
                 up_block = upblock_2d(
                     device,
                     parameters.up_blocks[i],
-                    reader_patterns_cache,
                     batch_size,
                     input_height,
                     input_width,
@@ -284,7 +277,6 @@ class UNet2DConditionModel:
         upcast_attention: bool = False,
         resnet_time_scale_shift: str = "default",
         return_dict: bool = True,
-        reader_patterns_cache: Optional[Dict] = None,
         dtype: Optional[ttnn.DataType] = None,
     ):
         num_upsamplers = len(block_out_channels) - 1
@@ -412,7 +404,6 @@ class UNet2DConditionModel:
             bias_tensor=self.conv_in_bias,
             **conv_kwargs,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
@@ -698,7 +689,6 @@ class UNet2DConditionModel:
             weight_tensor=self.conv_out_weights,
             bias_tensor=self.conv_out_bias,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
         )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)

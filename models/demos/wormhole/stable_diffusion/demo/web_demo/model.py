@@ -100,8 +100,7 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
     )
     input_height = 64
     input_width = 64
-    reader_patterns_cache = {} if height == 512 and width == 512 else None
-    model = UNet2D(device, parameters, 2, input_height, input_width, reader_patterns_cache)
+    model = UNet2D(device, parameters, 2, input_height, input_width)
 
     guidance_scale = 7.5  # Scale for classifier-free guidance
     random_seed = random.randrange(200) + 2

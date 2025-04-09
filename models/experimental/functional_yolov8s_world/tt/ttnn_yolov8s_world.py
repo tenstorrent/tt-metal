@@ -110,7 +110,6 @@ class ttnn_Conv:
         enable_act_double_buffer=True,
         enable_split_reader=False,
         reshard_if_not_optimal=True,
-        cache={},
         batch_size=1,
     ):
         self.device = device
@@ -132,7 +131,6 @@ class ttnn_Conv:
         self.enable_act_double_buffer = enable_act_double_buffer
         self.enable_split_reader = enable_split_reader
         self.reshard_if_not_optimal = reshard_if_not_optimal
-        self.cache = cache
         self.batch_size = batch_size
         self.reshape_tensor = reshape_tensor
 
@@ -217,8 +215,6 @@ class ttnn_Conv:
             input_width=input_width,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
-            conv_op_cache=self.cache,
-            debug=False,
             groups=self.groups,
             memory_config=ttnn.L1_MEMORY_CONFIG if self.change_shard == True else None,
             return_weights_and_bias=True,
