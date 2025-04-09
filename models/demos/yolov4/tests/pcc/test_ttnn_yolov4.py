@@ -8,7 +8,14 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.yolov4.common import image_to_tensor, load_image, load_torch_model
+from models.demos.yolov4.common import (
+    YOLOV4_BOXES_PCC,
+    YOLOV4_BOXES_PCC_BLACKHOLE,
+    YOLOV4_CONFS_PCC,
+    image_to_tensor,
+    load_image,
+    load_torch_model,
+)
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs, get_region_boxes
 from models.demos.yolov4.reference.yolov4 import Yolov4
 from models.demos.yolov4.runner.runner import YOLOv4Runner
@@ -49,10 +56,10 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
     result_boxes, result_confs = ttnn_model_runner.run(ttnn_input)
 
     if is_blackhole():
-        assert_with_pcc(ref_boxes, result_boxes, 0.96)
+        assert_with_pcc(ref_boxes, result_boxes, YOLOV4_BOXES_PCC_BLACKHOLE)
     else:
-        assert_with_pcc(ref_boxes, result_boxes, 0.99)
-        assert_with_pcc(ref_confs, result_confs, 0.71)
+        assert_with_pcc(ref_boxes, result_boxes, YOLOV4_BOXES_PCC)
+        assert_with_pcc(ref_confs, result_confs, YOLOV4_CONFS_PCC)
 
 
 @pytest.mark.parametrize(

@@ -33,7 +33,6 @@ def run_conv(
     packer_l1_acc=False,
     output_layout=ttnn.TILE_LAYOUT,
     deallocate_activation=True,
-    debug=False,
     groups=1,
     auto_shard=False,
     shard_layout=None,
@@ -56,8 +55,6 @@ def run_conv(
         padding=padding,
         groups=groups,
     )
-
-    reader_patterns_cache = {}
 
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
@@ -113,8 +110,6 @@ def run_conv(
         input_length=input_length,
         conv_config=conv_config,
         compute_config=compute_config,
-        conv_op_cache=reader_patterns_cache,
-        debug=debug,
         groups=groups,
         return_output_dim=True,
         return_weights_and_bias=True,
@@ -128,7 +123,6 @@ def run_conv(
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_length, output_channels)
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 2, 1))
-    reader_patterns_cache.clear()
 
     if not fp32_accum:
         pcc = 0.995
@@ -171,7 +165,6 @@ def run_conv(
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 def test_conv1d_mamba(
     device,
-    use_program_cache,
     math_fidelity,
     activations_dtype,
     weights_dtype,
@@ -246,7 +239,6 @@ def test_conv1d_mamba(
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 def test_conv1d(
     device,
-    use_program_cache,
     math_fidelity,
     activations_dtype,
     weights_dtype,
@@ -321,7 +313,6 @@ def test_conv1d(
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 def test_squeezebert_conv1d(
     device,
-    use_program_cache,
     math_fidelity,
     activations_dtype,
     weights_dtype,

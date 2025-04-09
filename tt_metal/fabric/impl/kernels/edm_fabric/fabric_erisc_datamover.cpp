@@ -9,6 +9,7 @@
 #include "tt_metal/api/tt-metalium/edm_fabric_counters.hpp"
 #include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 
+#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
@@ -519,7 +520,6 @@ FORCE_INLINE void check_worker_connections(
             // if constexpr (enable_fabric_counters) {
             //     sender_channel_counters->add_connection();
             // }
-            did_something = true;
             channel_connection_established = true;
             local_sender_channel_worker_interface.cache_producer_noc_addr();
             if constexpr (enable_first_level_ack) {
@@ -531,7 +531,6 @@ FORCE_INLINE void check_worker_connections(
             }
         }
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
-        did_something = true;
         channel_connection_established = false;
         local_sender_channel_worker_interface.template teardown_connection<true>(
             local_sender_channel_worker_interface.local_rdptr.get_ptr());
@@ -619,9 +618,6 @@ void run_sender_channel_step(
             increment_local_update_ptr_val(
                 to_sender_packets_acked_streams[sender_channel_index], -acks_since_last_check);
         }
-        did_something = did_something || (completions_since_last_check + acks_since_last_check) > 0;
-    } else {
-        did_something = did_something || (completions_since_last_check > 0);
     }
 
     auto check_connection_status =
@@ -677,6 +673,7 @@ void run_receiver_channel_step(
             can_forward_packet_completely(cached_routing_fields, downstream_edm_interface);
         bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         if (can_send_to_all_local_chip_receivers && trid_flushed) {
+            did_something = true;
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
             receiver_forward_packet(
@@ -1001,6 +998,7 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
 }
 
 void kernel_main() {
+    eth_txq_reg_write(DEFAULT_ETH_TXQ, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
@@ -1365,16 +1363,6 @@ void kernel_main() {
         receiver_channel_0_trid_tracker,
         receiver_channel_1_trid_tracker);
 
-#ifdef WAIT_FOR_HOST_SIGNAL
-    if constexpr (is_local_handshake_master) {
-        notify_slave_routers(
-            edm_channels_mask,
-            local_handshake_master_eth_chan,
-            (uint32_t)termination_signal_ptr,
-            *termination_signal_ptr);
-    }
-#endif
-
     if constexpr (persistent_mode) {
         // we force these values to a non-zero value so that if we run the fabric back to back,
         // and we can reliably probe from host that this kernel has initialized properly.
@@ -1389,6 +1377,17 @@ void kernel_main() {
 
     // re-init the noc counters as the noc api used is not incrementing them
     ncrisc_noc_counters_init();
+
+#ifdef WAIT_FOR_HOST_SIGNAL
+    if constexpr (is_local_handshake_master) {
+        notify_slave_routers(
+            edm_channels_mask,
+            local_handshake_master_eth_chan,
+            (uint32_t)termination_signal_ptr,
+            *termination_signal_ptr);
+        noc_async_write_barrier();
+    }
+#endif
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
 

@@ -32,58 +32,12 @@ jobs:
       version: 22.04
   test:
     needs: build-artifact
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group:
-          - name: ttnn nightly conv tests
-            cmd: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
-            owner: U052J2QDDKQ # Pavle Josipovic
-          - name: ttnn nightly matmul tests
-            cmd: pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"
-            owner: U06Q7ESTFEV # Borys Bradel
-          - name: ttnn nightly pool tests
-            cmd: pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
-            owner: U052J2QDDKQ # Pavle Josipovic
-    container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      env:
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ inputs.arch || 'wormhole_b0' }}
-        LOGURU_LEVEL: INFO
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    name: ${{ matrix.test-group.name }}
-    runs-on:
-      - ${{ inputs.runner-label || 'N150' }}
-      - "in-service"
-    steps:
-      - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }}
-        run: ${{ matrix.test-group.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        # Only notify during failed scheduled runs
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.owner }}
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
+    secrets: inherit
+    uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
+    with:
+      arch: ${{ inputs.arch || 'wormhole_b0' }}
+      runner-label: ${{ inputs.runner-label || 'N150' }}
+      timeout: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
