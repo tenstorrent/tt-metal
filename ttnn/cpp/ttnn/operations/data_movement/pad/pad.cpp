@@ -289,6 +289,12 @@ ttnn::Tensor invoke_tile(
         compute_requested_shape(input_logical_shape, padding_vec);
     const auto requested_rank = requested_logical_shape.rank();
 
+    // Consistent with behavior expected by callers
+    if (input_tensor.storage_type() != StorageType::DEVICE) {
+        ttnn::Shape zeros(ttnn::SmallVector<uint32_t>(input_logical_shape.rank(), 0));
+        return input_tensor.pad(requested_padded_shape, zeros, value);
+    }
+
     const bool pad_upper_dims = !std::equal(
         requested_logical_shape.view().rbegin() + 2,
         requested_logical_shape.view().rend(),
@@ -302,6 +308,7 @@ ttnn::Tensor invoke_tile(
     ttnn::Tensor output_tensor = ttnn::fill_implicit_tile_padding(input_tensor, value, memory_config_arg);
     if (requested_rank == 1 || (!pad_upper_dims && pad_current_tile_dim(-1) && pad_current_tile_dim(-2))) {
         output_tensor = ttnn::experimental::view(output_tensor, requested_logical_shape, requested_padded_shape);
+
     } else {
         // need to align the requested padding to tile size. Note that begin padding is not supported so now just
         // set to zero
@@ -323,6 +330,16 @@ ttnn::Tensor invoke_tile(
 
         // "slice" down to logical shape
         output_tensor = ttnn::experimental::view(output_tensor, requested_logical_shape, requested_padded_shape);
+    }
+    if (output_tensor.memory_config().shard_spec.has_value() !=
+        memory_config_arg.value_or(input_tensor.memory_config()).shard_spec.has_value()) {
+        const auto sharded_mem_config = create_sharded_memory_config(
+            ttnn::Shape{requested_logical_shape},
+            input_tensor.shard_spec()->grid,
+            ShardStrategy::HEIGHT,
+            ShardOrientation::ROW_MAJOR);
+        output_tensor =
+            ttnn::to_memory_config(output_tensor, memory_config_arg.value_or(sharded_mem_config), std::nullopt);
     }
     return output_tensor;
 }
