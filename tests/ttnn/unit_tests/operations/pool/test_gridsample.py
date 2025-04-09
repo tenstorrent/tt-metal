@@ -3,15 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import math
-from loguru import logger
-from typing import Union, Tuple
 
 import torch
 import torch.nn as nn
 import ttnn
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole, is_grayskull
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
