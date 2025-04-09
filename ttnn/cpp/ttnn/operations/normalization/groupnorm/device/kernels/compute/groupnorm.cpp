@@ -19,9 +19,68 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/matmul.h"
 
-// SPLIT REDUCE across Cores
 namespace NAMESPACE {
 void MAIN {
+    // clang-format off
+    // Definitions
+    //   out_block_...: This is the length of our Circular Buffer, sometimes our tensors are larger than L1 space, so we
+    //   have to process chunks of this data at a time
+    //
+    //   sender: This refers to a core that does aggregation calculations
+    //   for the group of cores
+    //
+    //   receiver: This regers to a core that receives the aggregated results from sender, they only do
+    //   local computations that they send to the sender for final aggregation
+    //
+    // GROUPNORM COMPUTE DESCIPTION
+    // This is a high level desciption of the stages of this kernel, tags will be added to show where in the code each
+    // stage starts and ends
+    //
+    // Batch Loop:
+    //   Group Loop:
+    //     This is the process which repeats for every group
+    //     Average Calc: E[x]
+    //       Local Reduce:
+    //           First we apply an input mask
+    //           This is where we sum up our core's subtensor
+    //           After summing up, we pass our scalar tile to cb_ex_partial
+    //           The reader kernels then aggregate all of the local scalars into a single tile
+    //       Global Reduce:
+    //           This single tile (cb_ex_external) is a tile that contains each partial reduce from all the other cores
+    //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
+    //           It's reader core the sends this data out to all other cores as cb_ex_global
+    //
+    //     Variance Calc: ∑(x-E[x])^2
+    //     This follows the same pattern as the average calculation
+    //       Local Reduce:
+    //           First we subtract each value from our core's subtensor by the average value
+    //           We next apply our input mask to zero our the values we wish to ignore
+    //           Next we square our residuals to obtain the squared residuals
+    //           After summing up, we pass our scalar tile to cb_ex2_partial
+    //           The reader kernels then aggregate all of the local scalars into a single tile
+    //       Global Reduce:
+    //           This single tile (cb_ex_external) is a tile that contains each partial reduce from all the other cores
+    //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
+    //           It's reader core the sends this data out to all other cores as cb_ex2_global
+    //
+    //     cb_ex2pe Calculation:
+    //       First we add cb_ex2_global with cb_eps
+    //       Then we take the sqrt
+    //       Lastly we take the reciprocal and he have the denominator of our calculation
+    //     Final Val Calc:
+    //       First we subtract each value from our core's subtensor by the average value
+    //       We next apply our input mask to zero our the values we wish to ignore
+    //       Next we multiply our residual with our denominator
+    //       Optional Gamma:
+    //           We multiply this value to gamma
+    //       Optional Beta:
+    //           We add beta to this value
+    //
+    // We are now done! Nice
+    //   To look at where the code starts and stops seach for
+    //   Start LABEL or End Label
+    //   Ex: Start Local Reduce or End Local Reduce
+    // clang-format on
     constexpr uint32_t is_mcast_sender = get_compile_time_arg_val(0);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);
@@ -180,59 +239,6 @@ void MAIN {
     if ((num_out_blocks_padded * num_cores_per_mcast_group * 16) % single_tile_size_bytes) {
         cb_ex_external_tiles_required++;
     }
-    // Definitions
-    //   out_block_...: This is the length of our Circular Buffer, sometimes our tensors are larger than L1 space, so we
-    //   have to process chunks of this data at a time sender: This refers to a core that does aggregation calculations
-    //   for the group of cores receiver: This the cores that receive the aggregated results from sender, they only do
-    //   local computations that they send to the sender for final aggregation
-    // GROUPNORM COMPUTE DESCIPTION
-    // This is a high level desciption of the stages of this kernel, tags will be added to show where in the code each
-    // stage starts and ends
-    //
-    // Batch Loop:
-    //   Group Loop:
-    //     This is the process which repeats for every group
-    //     Average Calc: E[x]
-    //       Local Reduce:
-    //           First we apply an input mask
-    //           This is where we sum up our core's subtensor
-    //           After summing up, we pass our scalar tile to cb_ex_partial
-    //           The reader kernels then aggregate all of the local scalars into a single tile
-    //       Global Reduce:
-    //           This single tile (cb_ex_external) is a tile that contains each partial reduce from all the other cores
-    //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
-    //           It's reader core the sends this data out to all other cores as cb_ex_global
-    //
-    //     Variance Calc: ∑(x-E[x])^2
-    //     This follows the same pattern as the average calculation
-    //       Local Reduce:
-    //           First we subtract each value from our core's subtensor by the average value
-    //           We next apply our input mask to zero our the values we wish to ignore
-    //           Next we square our residuals to obtain the squared residuals
-    //           After summing up, we pass our scalar tile to cb_ex2_partial
-    //           The reader kernels then aggregate all of the local scalars into a single tile
-    //       Global Reduce:
-    //           This single tile (cb_ex_external) is a tile that contains each partial reduce from all the other cores
-    //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
-    //           It's reader core the sends this data out to all other cores as cb_ex2_global
-    //
-    //     cb_ex2pe Calculation:
-    //       First we add cb_ex2_global with cb_eps
-    //       Then we take the sqrt
-    //       Lastly we take the reciprocal and he have the denominator of our calculation
-    //     Final Val Calc:
-    //       First we subtract each value from our core's subtensor by the average value
-    //       We next apply our input mask to zero our the values we wish to ignore
-    //       Next we multiply our residual with our denominator
-    //       Optional Gamma:
-    //           We multiply this value to gamma
-    //       Optional Beta:
-    //           We add beta to this value
-    //
-    // We are now done! Nice
-    //   To look at where the code starts and stops seach for
-    //   Start LABEL or End Label
-    //   Ex: Start Local Reduce or End Local Reduce
 
     // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {

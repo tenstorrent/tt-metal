@@ -89,7 +89,7 @@ std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor
                 if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
                     return {input_tensor.get_tensor_spec()};
                 } else {
-                    TT_FATAL(false, "inplace groupnorm not supported for unsharded tensors");
+                    TT_THROW(false, "inplace groupnorm not supported for unsharded tensors");
                 }
             }
 
@@ -110,7 +110,7 @@ std::vector<Tensor> GroupNorm::create_output_tensors(const std::vector<Tensor>& 
                 if constexpr (std::is_same_v<ProgramConfigType, GroupNormShardedMultiCoreProgramConfig>) {
                     return {input_tensor};
                 } else {
-                    TT_FATAL(false, "inplace groupnorm not supported for unsharded tensors");
+                    TT_THROW(false, "inplace groupnorm not supported for unsharded tensors");
                 }
             }
             return {create_device_tensor(this->compute_output_specs(input_tensors).at(0), input_tensor.device())};
