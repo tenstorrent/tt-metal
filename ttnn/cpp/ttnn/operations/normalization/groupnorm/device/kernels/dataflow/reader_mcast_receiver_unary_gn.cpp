@@ -67,7 +67,7 @@ void kernel_main() {
     constexpr uint32_t num_batch_group = get_compile_time_arg_val(4);
     constexpr uint32_t num_batches = get_compile_time_arg_val(5);
 
-    uint32_t num_groups = num_batch_group / num_batches;
+    constexpr uint32_t num_groups = num_batch_group / num_batches;
 
     constexpr uint32_t per_core_N = get_compile_time_arg_val(6);
     const uint32_t per_core_N_bytes = get_compile_time_arg_val(7);
@@ -75,7 +75,7 @@ void kernel_main() {
     constexpr uint32_t per_core_M = get_compile_time_arg_val(9);
     constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(10);
 
-    volatile uint32_t block_h = get_compile_time_arg_val(11);
+    constexpr uint32_t block_h = get_compile_time_arg_val(11);
     constexpr uint32_t block_w = get_compile_time_arg_val(12);
     constexpr uint32_t block_hw = get_compile_time_arg_val(13);
 
@@ -145,13 +145,13 @@ void kernel_main() {
     }
 #endif
 
-    uint32_t out_block_h_normal = block_h / num_out_blocks;
+    constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
-    if (block_h % num_out_blocks != 0) {
+    if constexpr(block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
         out_block_h_last = block_h % num_out_blocks;
