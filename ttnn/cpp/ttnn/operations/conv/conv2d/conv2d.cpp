@@ -195,7 +195,6 @@ Result conv2d_DRAM(
                 })),
         device);
     bool first_run = true;
-    bool auto_shard = false;
     std::optional<MemoryConfig> input_memory_config = std::nullopt;
     uint32_t input_memory_config_slice_dim = 0;
 
@@ -279,7 +278,6 @@ Result conv2d_DRAM(
                 groups,
                 bias_tensor.has_value(),
                 compute_config);
-            auto_shard = true;
         }
         if (!first_run) {
             // After the first run, never preprocess weights.

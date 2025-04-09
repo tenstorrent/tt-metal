@@ -169,8 +169,13 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
                 param.kernel_size,
                 param.stride,
                 param.padding,
-                {1, 1},  // dilation
-                1        // groups
+                {1, 1},        // dilation
+                1,             // groups
+                std::nullopt,  // bias tensor
+                std::nullopt,  // conv config
+                std::nullopt,  // compute config
+                std::nullopt,  // memory config
+                std::nullopt   // slice config
             );
 
         // move output tensor to dram
