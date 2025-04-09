@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 5
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 340, "max": 355}, 80: {"min": 39, "max": 41}}
+TSU_THRESHOLDS = {1: {"min": 340, "max": 355}, 10: {"min": 180, "max": 200}, 80: {"min": 39, "max": 41}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -492,10 +492,11 @@ def run_llama3_demo(
             users_decoding = False
 
     if not stress_test:
+        # print before assertion
+        out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
+        logger.info(out_of_targets_msg)
         # Assert at the end of test to check if the throughput recuperated
-        assert (
-            tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT
-        ), f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
+        assert tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT, out_of_targets_msg
 
     # Print out total number of tsu_failures
     logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
