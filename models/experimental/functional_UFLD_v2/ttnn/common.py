@@ -11,7 +11,6 @@ class TtnnUFLDV2Conv2D:
         conv,
         conv_pth,
         device=None,
-        cache={},
         activation="",
         activation_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
@@ -29,7 +28,6 @@ class TtnnUFLDV2Conv2D:
         self.padding = conv.padding
         self.stride = conv.stride
         self.groups = conv.groups
-        self.cache = cache
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -76,7 +74,6 @@ class TtnnUFLDV2Conv2D:
             stride=self.stride,
             padding=self.padding,
             conv_config=self.conv_config,
-            conv_op_cache=self.cache,
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,
