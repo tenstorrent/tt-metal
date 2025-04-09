@@ -149,7 +149,7 @@ void kernel_main() {
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
-    const uin32_t num_read_of_input = 3;
+    const uint32_t num_reads_of_input = 3;
     if constexpr(block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
@@ -252,12 +252,12 @@ void kernel_main() {
                     out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                 }
 
-                if (n == 0 || n == 1) {
+                if (cur_read_iteration == 0 || cur_read_iteration == 1) {
                     noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
                     uint32_t cb_mcast_receive;
-                    if (n == 0) {
+                    if (cur_read_iteration == 0) {
                         cb_mcast_receive = cb_ex_global;
-                    } else if (n == 1) {
+                    } else if (cur_read_iteration == 1) {
                         cb_mcast_receive = cb_ex2_global;
                     }
                     cb_reserve_back(cb_mcast_receive, 1);
