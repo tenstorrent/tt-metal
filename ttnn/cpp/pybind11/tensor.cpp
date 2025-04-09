@@ -257,6 +257,8 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def_readwrite("grid", &ShardSpec::grid, "Grid to layout shards.")
         .def_readwrite("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
         .def_readwrite("mode", &ShardSpec::mode, "Treat shard shape as physical (default) or logical")
+        .def_readwrite("physical_shard_shape", &ShardSpec::physical_shard_shape, "The shape of the shard including padding when logical sharding is used.")
+
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self);
