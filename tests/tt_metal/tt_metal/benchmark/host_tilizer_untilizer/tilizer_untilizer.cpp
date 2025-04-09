@@ -9,7 +9,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt_stl/indestructible.hpp>
-#include <tt-metalium/logger.hpp>
 
 // static std::vector<float> input_data;
 static constexpr PhysicalSize shape = {10240, 1024};

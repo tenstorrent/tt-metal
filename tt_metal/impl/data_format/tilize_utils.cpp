@@ -62,7 +62,9 @@ std::vector<T> convert_layout_row_major_to_tile_swizzled(
     uint32_t W = shape[1];
     uint32_t B = in_row_major.size() / (H * W);
 
-    TT_ASSERT(in_row_major.size() % (tile_H * tile_W) == 0 && in_row_major.size() % (H * W) == 0);
+    TT_FATAL(in_row_major.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
+    TT_FATAL((in_row_major.size() % (H * W)) == 0, "Input size must be divisible by H and W");
+    TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
     tilized_result.resize(in_row_major.size());
     uint64_t out_index = 0;
@@ -99,7 +101,9 @@ std::vector<T> convert_layout_tile_swizzled_to_row_major(
     uint32_t W = shape[1];
     uint32_t B = in_tile_swizzled.size() / (H * W);
 
-    TT_ASSERT(in_tile_swizzled.size() % (tile_H * tile_W) == 0 && in_tile_swizzled.size() % (H * W) == 0);
+    TT_FATAL(in_tile_swizzled.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
+    TT_FATAL((in_tile_swizzled.size() % (H * W)) == 0, "Input size must be divisible by H and W");
+    TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
     result.resize(in_tile_swizzled.size());
     uint64_t linear = 0;
@@ -138,7 +142,7 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
     auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
-    TT_ASSERT(in_tile_swizzled.size() % tile_HW == 0);
+    TT_FATAL(in_tile_swizzled.size() % tile_HW == 0, "Input size must be divisible by tile size");
     int num_tiles = in_tile_swizzled.size() / tile_HW;
     for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         std::vector<T> top_left, top_right, bottom_left, bottom_right;
@@ -213,7 +217,7 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
     auto face_HW = face_H * face_W;
     auto num_faces_col = tile_W / face_W;
     auto num_faces_row = tile_H / face_H;
-    TT_ASSERT(in_tile_nfaces.size() % tile_HW == 0);
+    TT_FATAL(in_tile_nfaces.size() % tile_HW == 0, "Input size must be divisible by tile size");
     int num_tiles = in_tile_nfaces.size() / tile_HW;
     size_t dest_idx = 0;
     for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
@@ -283,16 +287,24 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
 
     uint32_t H = shape[0];
     uint32_t W = shape[1];
-    uint32_t B = in_row_major.size() / (H * W);
-
-    TT_ASSERT(in_row_major.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
-    TT_ASSERT((in_row_major.size() % (H * W)) == 0, "Input size must be divisible by H and W");
+    uint32_t batch_size = H * W;
+    uint32_t B = in_row_major.size() / batch_size;  // Number of batches
 
     std::vector<T> tilized_input;
     tilized_input.reserve(in_row_major.size());
 
-    uint32_t block_num_elements = H * W;
-    uint32_t num_batches = in_row_major.size() / block_num_elements;
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+    auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
+    auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
+
+    uint32_t row_tiles = H / tile_H;
+    uint32_t col_tiles = W / tile_W;
+    uint32_t row_of_tiles_num_elements = tile_H * W;
+
+    TT_FATAL(in_row_major.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
+    TT_FATAL((in_row_major.size() % (H * W)) == 0, "Input size must be divisible by H and W");
+    TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
     auto write_face = [&](uint32_t face_idx, uint32_t face_height, uint32_t face_width, uint32_t stride) {
         size_t offset = tilized_input.size();
@@ -306,18 +318,8 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
         }
     };
 
-    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
-    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
-    auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
-    auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
-
-    uint32_t row_tiles = H / tile_H;
-    uint32_t col_tiles = W / tile_W;
-    uint32_t row_of_tiles_num_elements = tile_H * W;
-    TT_ASSERT((H % tile_H == 0) and (W % tile_W == 0), "m and n must be divisible by {} and {}", tile_H, tile_W);
-
     uint32_t batch_start = 0;
-    for (size_t b = 0; b < num_batches; b++) {
+    for (size_t b = 0; b < B; b++) {
         uint32_t tile_start = batch_start;
         for (uint32_t row_tile = 0; row_tile < row_tiles; row_tile++) {
             uint32_t row_tile_start = tile_start;
@@ -335,7 +337,7 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
             }
             tile_start += row_of_tiles_num_elements;
         }
-        batch_start += block_num_elements;
+        batch_start += batch_size;
     }
 
     return tilized_input;
@@ -354,15 +356,10 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
 
     uint32_t H = shape[0];
     uint32_t W = shape[1];
-    uint32_t B = in_nfaces.size() / (H * W);
-
-    TT_ASSERT(in_nfaces.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
-    TT_ASSERT((in_nfaces.size() % (H * W)) == 0, "Input size must be divisible by H and W");
+    uint32_t batch_size = H * W;
+    uint32_t B = in_nfaces.size() / batch_size;
 
     std::vector<T> untilized_input(in_nfaces.size());
-
-    uint32_t block_num_elements = H * W;
-    uint32_t num_blocks = in_nfaces.size() / block_num_elements;
 
     auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
@@ -371,7 +368,10 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     uint32_t row_tiles = H / tile_H;
     uint32_t col_tiles = W / tile_W;
     uint32_t row_of_tiles_num_elements = tile_H * W;
-    TT_ASSERT((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
+
+    TT_FATAL(in_nfaces.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
+    TT_FATAL((in_nfaces.size() % (H * W)) == 0, "Input size must be divisible by H and W");
+    TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
     const auto untilize_row_of_tiles =
         [&](std::vector<T>& out_data, tt::stl::Span<const T> in_data, uint32_t row_tile_start) {
@@ -392,14 +392,14 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
             }
         };
 
-    uint32_t block_start = 0;
-    for (size_t i = 0; i < num_blocks; i++) {
-        uint32_t row_tile_start = block_start;
+    uint32_t batch_start = 0;
+    for (size_t i = 0; i < B; i++) {
+        uint32_t row_tile_start = batch_start;
         for (uint32_t row_tile = 0; row_tile < row_tiles; row_tile++) {
             untilize_row_of_tiles(untilized_input, in_nfaces, row_tile_start);
             row_tile_start += row_of_tiles_num_elements;
         }
-        block_start += block_num_elements;
+        batch_start += batch_size;
     }
 
     return untilized_input;
