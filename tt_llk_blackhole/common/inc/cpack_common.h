@@ -464,14 +464,21 @@ inline void select_packer_dest_registers()
 // Program packer destination addresses from GPRs
 inline void program_packer_destination(uint32_t addr)
 {
+    /*
+       The GPR OUTPUT_ADDR is only used by the packer mop when writing tile headers.
+       Since we do not write tile headers in tt-metal, we do not need to wait for
+       packer to finish or say put a stallwait at this point.
+       We just need to make sure we wait before issuing the WRCFG.
+    */
     uint32_t new_l1_addr = (1 << 31) | addr;
     TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
     TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
 
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON | p_stall::PACK);
     TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
 
     TT_SETDMAREG(0, UPPER_HALFWORD(addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
+    TTI_DMANOP; // One NOP should be enough for WRCFG due to SETDMAREG above.
 }
 
 // RT: If multiple contexts are used, for issue #https://github.com/tenstorrent/tt-llk-bh/issues/20
@@ -506,7 +513,7 @@ inline void program_packer_dest_offset_registers(uint32_t dest_tile_offset)
 {
     TT_SETDMAREG(0, LOWER_HALFWORD(dest_tile_offset), 0, LO_16(p_gpr_pack::TEMP_TILE_OFFSET));
     TT_SETDMAREG(0, UPPER_HALFWORD(dest_tile_offset), 0, HI_16(p_gpr_pack::TEMP_TILE_OFFSET));
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON | p_stall::PACK);
     TTI_WRCFG(p_gpr_pack::TEMP_TILE_OFFSET, p_cfg::WRCFG_32b, PCK0_ADDR_BASE_REG_0_Base_ADDR32);
     TTI_DMANOP;
     TTI_DMANOP;
