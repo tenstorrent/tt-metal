@@ -52,6 +52,10 @@ def tensor_map():
     ],
 )
 @pytest.mark.parametrize(
+    "count_include_pad",
+    [True, False],
+)
+@pytest.mark.parametrize(
     "divisor_override",
     [
         None,
@@ -91,6 +95,7 @@ def test_avg_pool2d_post_commit(
         stride=stride,
         padding=padding,
         ceil_mode=ceil_mode,
+        count_include_pad=count_include_pad,
         divisor_override=divisor_override,
         shard_scheme=shard_scheme,
     )
