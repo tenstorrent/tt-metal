@@ -189,13 +189,9 @@ class TransformerBlock(LightweightModule):
             ),
         )
         # ff_out and h are both fractured across devices
-<<<<<<< HEAD
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
-=======
-        # h_val = ttnn.all_gather(h_val, dim=-1, num_links=1)
->>>>>>> c9a8a458de (Initial commit for mixtral on ttX)
         out = ttnn.add(
             h_val,
             ff_out,
