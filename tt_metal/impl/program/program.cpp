@@ -1879,22 +1879,22 @@ void detail::Program_::copy_runtime_args_from(const Program_& other) {
     for (size_t circular_buffers_idx = 0; circular_buffers_idx < circular_buffers_.size(); ++circular_buffers_idx) {
         auto& circular_buffer = circular_buffers_[circular_buffers_idx];
         auto& other_circular_buffer = other.circular_buffers_.at(circular_buffers_idx);
-        if (!other_circular_buffer->globally_allocated()) {
-            should_invalidate_cb_allocation =
+        if (!circular_buffer->globally_allocated()) {
+            should_invalidate_cb_allocation |=
                 circular_buffer->config().total_size() != other_circular_buffer->config().total_size();
         }
         circular_buffer->config() = other_circular_buffer->config();
-        /*if (auto shadow_global_cb = other_circular_buffer->get_shadow_global_circular_buffer()) {
+        if (auto shadow_global_cb = other_circular_buffer->get_shadow_global_circular_buffer()) {
             circular_buffer->set_global_circular_buffer(*shadow_global_cb);
-        }*/
+        }
         if (other_circular_buffer->globally_allocated()) {
             circular_buffer->assign_global_address();
         }
     }
 
-    // if (should_invalidate_cb_allocation) {
-    invalidate_circular_buffer_allocation();
-    //}
+    if (should_invalidate_cb_allocation) {
+        invalidate_circular_buffer_allocation();
+    }
 }
 
 }  // namespace tt::tt_metal
