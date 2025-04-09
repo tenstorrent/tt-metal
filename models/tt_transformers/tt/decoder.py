@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 
-
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.attention import Attention
@@ -30,6 +29,7 @@ class TransformerBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.layer_num = layer_num
 
         self.args = args
         self.hidden_size = args.dim
@@ -96,12 +96,8 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="attention_norm",
                 is_distributed=self.args.is_distributed_norm,
-                sharded_program_config=self.model_config[
-                    "SHARDED_NORM_ATTN_PRGM_CFG"
-                ],  # LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=(x=8,y=4),subblock_w=4,block_h=1,block_w=4,inplace=0)
-                sharded_output_config=self.model_config[
-                    "SHARDED_ATTN_INPUT_MEMCFG"
-                ],  # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=3)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
+                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
+                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
             ),
             args,
@@ -117,12 +113,8 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="ffn_norm",
                 is_distributed=self.args.is_distributed_norm,
-                sharded_program_config=self.model_config[
-                    "SHARDED_NORM_MLP_PRGM_CFG"
-                ],  # LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=(x=8,y=1),subblock_w=4,block_h=1,block_w=16,inplace=0)
-                sharded_output_config=self.model_config[
-                    "SHARDED_MLP_INPUT_MEMCFG"
-                ],  # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=0)]},shape={32, 512},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
+                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
+                sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
             ),
             args,
@@ -147,7 +139,6 @@ class TransformerBlock(LightweightModule):
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
-        # breakpoint()
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)  # input is sharded, but output is replicated
         # Attention takes replicated inputs and produces fractured outputs
@@ -162,6 +153,9 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )  # attn_out is sharded across devices,
+
+        # TODO - save a copy in torch and then perform the computation on the side
+        # to check if this is accurate to what we are expecting.
         # Here x and attn_out are both fractured across devices
         h_val = ttnn.add(
             x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
@@ -177,16 +171,7 @@ class TransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
         # Check the input sizes here and make sure they are what a MOE expects for Mixtral
         ff_out = self.feed_forward.forward(ff_in, mode)  # ff_out is replicated
-        ff_out = ff_out[:, :, :, 0:512]
-        # ff_out = ff_out.to_memory_config(memory_config=ttnn.MemoryConfig(memory_config=ttnn.MemoryConfig(memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,buffer_type=ttnn.BufferType.DRAM)))
-        ff_out = ttnn.to_memory_config(
-            ff_out,
-            memory_config=ttnn.MemoryConfig(
-                memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.DRAM
-            ),
-        )
-        # ff_out and h are both fractured across devices
-        # h_val = ttnn.all_gather(h_val, dim=-1, num_links=1)
+
         out = ttnn.add(
             h_val,
             ff_out,
@@ -195,4 +180,5 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
         )
+        ff_out.deallocate(True)
         return out  # fractured across devices
