@@ -366,14 +366,12 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     cb_indices.src_cb_id = cb_indices.get_next_cb_id();
     auto src_cb =
         create_circular_buffer(program, all_cores, cb_indices.src_cb_id, in_df, input_npages, in_page_size, src_buffer);
-    printf("src_cb size: %u\n", input_npages * in_page_size);
 
     uint32_t out_cb_pagesize = out_stick_nbytes;
     uint32_t out_cb_npages = max_out_nsticks_per_core;
     cb_indices.out_cb_id = cb_indices.get_next_cb_id();
     auto out_cb = create_circular_buffer(
         program, all_cores, cb_indices.out_cb_id, out_df, out_cb_npages, out_cb_pagesize, dst_buffer);
-    printf("out_cb size: %u\n", out_cb_npages * out_cb_pagesize);
 
     uint32_t pad_cb_pagesize = out_stick_nbytes;
     uint32_t pad_cb_npages = 1;
@@ -397,7 +395,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
             CircularBufferConfig(output_ntiles * out_tile_size, {{cb_indices.untilize_out_cb_id, out_df}})
                 .set_page_size(cb_indices.untilize_out_cb_id, out_tile_size)
                 .set_globally_allocated_address(*dst_buffer);  // untilize into the dst buffer for in place untilize
-        printf("untilize out CB size: %u\n", output_ntiles * out_tile_size);
         auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
         log_debug(
             tt::LogOp,
@@ -413,7 +410,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
             temp_cb_id = cb_indices.get_next_cb_id();
             auto temp_cb =
                 create_circular_buffer(program, all_cores, temp_cb_id, out_df, ntiles_per_block, out_tile_size);
-            printf("temp CB size: %u\n", ntiles_per_block * out_tile_size);
             log_debug(
                 tt::LogOp,
                 "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
