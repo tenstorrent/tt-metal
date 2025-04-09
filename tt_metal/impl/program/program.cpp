@@ -1884,9 +1884,6 @@ void detail::Program_::copy_runtime_args_from(const Program_& other) {
                 circular_buffer->config().total_size() != other_circular_buffer->config().total_size();
         }
         circular_buffer->config() = other_circular_buffer->config();
-        if (auto shadow_global_cb = other_circular_buffer->get_shadow_global_circular_buffer()) {
-            circular_buffer->set_global_circular_buffer(*shadow_global_cb);
-        }
         if (other_circular_buffer->globally_allocated()) {
             circular_buffer->assign_global_address();
         }
