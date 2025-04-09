@@ -271,12 +271,12 @@ int main(int argc, char** argv) {
         uint32_t fidel = 0;  // lofi
         uint32_t num_tests = 10;
         uint32_t num_blocks = 1;
-        bool matmul_block = 0;
-        bool packer_l1 = 0;
-        bool fp32 = 0;
+        bool matmul_block = false;
+        bool packer_l1 = false;
+        bool fp32 = false;
         uint32_t interm_cb_dtype = 0;
         uint32_t subblock_choice = 0;
-        bool single_core = 0;
+        bool single_core = false;
         bool fast_dispatch_mode = false;
         try {
             std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 11264);

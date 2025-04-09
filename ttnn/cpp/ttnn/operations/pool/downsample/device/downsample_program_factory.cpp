@@ -197,7 +197,7 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
 
     if (v.img_h == 0 && v.img_w == 0) {
         // Check for full images
-        while (1) {
+        while (true) {
             bool output_for_current_full_image =
                 v.output_flat_h + (output_img_height * output_img_width) <= output_end_flat_h + 1;
             bool input_for_current_full_image = v.input_flat_h + (img_height * img_width) <= input_end_flat_h + 1;
@@ -221,7 +221,7 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
 
     bool found_first_unskipped_row_in_bottom_partial_imgage = false;
     // check for bottom partial image rows
-    while (1) {
+    while (true) {
         bool output_for_bottom_partial_image_row = (v.next_img_h == v.img_h)
                                                        ? (v.output_flat_h + output_img_width <= output_end_flat_h + 1)
                                                        : true;  // true for skipped row
@@ -294,7 +294,7 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
     }
     TT_ASSERT(v.img_h < img_height && v.img_w < img_width);
 
-    if (0) {
+    if (false) {
         log_debug(tt::LogOp, "   top_partial_middle_aligned_row_width: {}", top_partial_middle_aligned_row_width);
         log_debug(tt::LogOp, "   skip_top_partial_middle_aligned_row: {}", skip_top_partial_middle_aligned_row);
         log_debug(tt::LogOp, "   top_partial_right_aligned_row_width: {}", top_partial_right_aligned_row_width);

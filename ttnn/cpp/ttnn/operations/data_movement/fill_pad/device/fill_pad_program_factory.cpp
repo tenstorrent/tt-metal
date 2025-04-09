@@ -56,7 +56,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
             .set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
 
     // pack bf16 vals
     uint32_t packed_fill_value = (std::uint32_t)fill_value;

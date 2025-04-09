@@ -78,11 +78,11 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
     auto dst_buffer = cache_tensor.buffer();
     auto page_table_buffer = page_table_tensor.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
 
-    bool page_table_is_dram = page_table_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool page_table_is_dram = page_table_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
 
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, (uint32_t)src0_cb_index, Wt};
 

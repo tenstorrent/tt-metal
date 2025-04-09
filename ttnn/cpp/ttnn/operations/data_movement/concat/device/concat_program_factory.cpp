@@ -588,7 +588,7 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
         cb_ids[input_id] = input_id;
     }
 
-    bool dst_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> reader_compile_time_args = {num_input_tensors};
     std::vector<uint32_t> writer_compile_time_args = {num_input_tensors, std::uint32_t(dst_is_dram)};
 
@@ -796,7 +796,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
-            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
             page_size_per_tensor[i] = buffer->page_size();
             if (dim == num_dims - 1) {
                 num_pages_per_block[i] = num_accum_pages;
@@ -813,7 +813,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
-            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
             uint32_t dim_pages = input_tensors[i].get_padded_shape()[dim] / scale_factor;
             num_pages_per_block[i] = num_accum_pages * dim_pages;
             num_output_pages_per_block += num_accum_pages * dim_pages;
@@ -831,7 +831,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)src0_cb_index,

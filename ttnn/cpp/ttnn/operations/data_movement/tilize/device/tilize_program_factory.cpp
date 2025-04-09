@@ -672,7 +672,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(

@@ -59,7 +59,7 @@ int main() {
     uint32_t src_addr = src_buffer->address();
 
     // configure and create circular buffers with the same address on each of the designated cores
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     uint32_t input_cb_index = CBIndex::c_0;
     CircularBufferConfig input_cb_config =
         CircularBufferConfig(shard_size * input_unit_size, {{input_cb_index, cb_data_format}})
