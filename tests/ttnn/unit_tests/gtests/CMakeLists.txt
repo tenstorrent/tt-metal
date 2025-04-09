@@ -6,6 +6,7 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_matmul_benchmark.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multiprod_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_cq_multi_dev.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_launch_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_capture_arguments_morehdot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_capture_arguments_transpose.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_query_op_constraints.cpp
