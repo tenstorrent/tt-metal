@@ -215,3 +215,32 @@ def test_invalid_broadcast_to_sharding(input, bcast, device):
 
     with pytest.raises(RuntimeError):
         _ = ttnn.experimental.broadcast_to(a_tt, bcast, memory_config=sharded_config)
+
+
+input_bcast_shape_pairs = [
+    ((1), (2, 10)),
+    ((1, 1, 1, 1), (1, 1, 1, 670)),
+    ((1, 1, 1, 1), (1, 1, 670, 1)),
+    ((1, 1, 1, 1), (1, 1, 270, 270)),
+    ((1, 1, 270, 270), (1, 1, 270, 270)),
+]
+
+
+@pytest.mark.parametrize("shape_and_broadcast_spec", input_bcast_shape_pairs)
+def test_broadcast_to_bf8_b(device, shape_and_broadcast_spec):
+    shape, broadcast_shape = shape_and_broadcast_spec
+    torch_input_tensor = gen_func_with_cast_tt(
+        partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat8_b
+    )(shape)
+    torch_result = torch_input_tensor.broadcast_to(broadcast_shape)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+
+    out_tt = ttnn.experimental.broadcast_to(input_tensor, ttnn.Shape(broadcast_shape))
+    output = ttnn.to_torch(out_tt)
+
+    assert (
+        output.shape == torch_result.shape
+    ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
+
+    assert_with_pcc(torch_result, output, 0.9999)
