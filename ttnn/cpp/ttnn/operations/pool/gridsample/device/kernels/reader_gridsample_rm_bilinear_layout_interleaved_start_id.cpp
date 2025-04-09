@@ -23,16 +23,14 @@ float lies_in_boundary(float x_in, float y_in, int row, int col, int offset, uin
 
     uint32_t cur_pos = offset + (int)y_in * col + (int)x_in;
 
-    float* ptr_1 = (float*)(data);
+    float* ptr = (float*)(data);
 
-    float x = (ptr_1[cur_pos]);
+    float x = (ptr[cur_pos]);
 
     return x;
 }
 
 bool interpolate(float x_in, float y_in, int row, int col, int offset, uint32_t data_writer, uint32_t dest_addr) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dest_addr);
-
     if (x_in == std::numeric_limits<float>::max() || y_in == std::numeric_limits<float>::max()) {
         fill_with_val(dest_addr, (0));
 
@@ -104,18 +102,18 @@ void kernel_main() {
             for (uint32_t i = 0; i < total_count; i += 2) {
                 cb_reserve_back(2, 1);
 
-                uint32_t l1_write_addr_2 = get_write_ptr(2);  // Read the entire input tensor in the cb : 2
+                uint32_t l1_grid_writer_addr = get_write_ptr(2);  // Read the entire input tensor in the cb : 2
 
                 uint64_t grid_noc_addr = get_noc_addr(0, s2);
 
-                noc_async_read(grid_noc_addr, l1_write_addr_2, grid_size);
+                noc_async_read(grid_noc_addr, l1_grid_writer_addr, grid_size);
 
                 noc_async_read_barrier();
 
-                float* ptr_2 = (float*)(l1_write_addr_2);
+                float* grid_ptr = (float*)(l1_grid_writer_addr);
 
-                float x = (ptr_2[(offset + i)]);
-                float y = (ptr_2[(offset + i + 1)]);
+                float x = (grid_ptr[(offset + i)]);
+                float y = (grid_ptr[(offset + i + 1)]);
 
                 cb_pop_front(2, 1);
 
@@ -125,17 +123,17 @@ void kernel_main() {
 
                 cb_reserve_back(1, 1);
 
-                uint32_t l1_write_addr_1 = get_write_ptr(1);  // Re>ad the entire input tensor in the c
+                uint32_t l1_src_writer_addr = get_write_ptr(1);  // Read the entire input tensor in the cb : 1
 
                 uint64_t src_noc_addr = get_noc_addr(0, s0);
 
-                noc_async_read(src_noc_addr, l1_write_addr_1, volume_size);
+                noc_async_read(src_noc_addr, l1_src_writer_addr, volume_size);
 
                 noc_async_read_barrier();
 
-                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+                uint32_t l1_dst_writer_addr = get_write_ptr(cb_id_in0);
 
-                interpolate(x, y, row, col, offset, l1_write_addr_1, l1_write_addr);
+                interpolate(x, y, row, col, offset, l1_src_writer_addr, l1_dst_writer_addr);
 
                 uint32_t l1_read_addr = get_read_ptr(cb_id_in0);
 
