@@ -14,10 +14,6 @@ float normalize_index(T val, int size, bool align_corners) {
         float computed = (val + 1) * 0.5 * (size - 1);
         return computed;
     } else {
-        if (val < -1 || val > 1) {
-            return std::numeric_limits<float>::max();
-        }
-
         float computed = ((val + 1) * 0.5 * (size)) - 0.5;
 
         return computed;
