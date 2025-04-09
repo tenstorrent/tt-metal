@@ -479,7 +479,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             0,
             input_tensor.buffer()->address(),  // tensor_address0
             semaphore.address(),
-            // input_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,            // num_tiles_to_read
             input_first_core_tile_start_offset,  // first_core_tile_start_offset
             input_tensor_cores_x.size(),         // num_cores
@@ -501,9 +500,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         for (auto nocy : noc_y_coords) {
             reader_rt_args.push_back(nocy);
         }
-        // reader_rt_args.push_back(ring_size * num_links);  // sem target value
-        // reader_rt_args.push_back(drain_sync_core.x);
-        // reader_rt_args.push_back(drain_sync_core.y);
         reader_rt_args.push_back(link == 0);
         reader_rt_args.push_back(concat_semaphore_id);
         reader_rt_args.insert(reader_rt_args.end(), nlp_local_core_x.begin(), nlp_local_core_x.end());
@@ -525,9 +521,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             output_tensor_cores_x.size(),         // num_cores
             wait_output_semaphore,                // wait_output_semaphore
             reset_global_semaphore,               // reset_global_semaphore
-            // drain_sync_core.x,                     // out_ready_sem_noc0_x
-            // drain_sync_core.y,                     // out_ready_sem_noc0_y
-            // out_ready_sem_wait_value,              // out_ready_sem_wait_value
             concat_semaphore_id,
         };
 
