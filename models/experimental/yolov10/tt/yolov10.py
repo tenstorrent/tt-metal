@@ -16,7 +16,7 @@ from models.experimental.yolo_common.yolo_utils import concat
 class TtnnYolov10:
     def __init__(self, device, parameters, conv_pt):
         self.device = device
-        self.conv1 = Conv(device, parameters.conv_args[0], conv_pt.model[0], config_override={"act_block_h": 64})
+        self.conv1 = Conv(device, parameters.conv_args[0], conv_pt.model[0], deallocate_activation=True)
         self.conv2 = Conv(
             device, parameters.conv_args[1], conv_pt.model[1], auto_shard=True, deallocate_activation=True
         )
@@ -50,7 +50,7 @@ class TtnnYolov10:
     def __call__(self, input_tensor):
         conv1_out = self.conv1(input_tensor)
         conv2_out = self.conv2(conv1_out)
-        features1 = self.c2f_1(conv2_out)
+        features1 = self.c2f_1(conv2_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         conv3_out = self.conv3(features1)
         features2 = self.c2f_2(conv3_out)
         down1 = self.scdown_1(features2)
@@ -61,16 +61,14 @@ class TtnnYolov10:
         attention_out = self.psa_1(sppf_out)
 
         deallocate_tensors(conv2_out, conv3_out, down1, down2, branch2, sppf_out)
-
         attention_out = interleaved_to_sharded(attention_out)
         up1 = ttnn.upsample(attention_out, scale_factor=2)
 
         if up1.is_sharded():
             up1 = ttnn.sharded_to_interleaved(up1, memory_config=ttnn.L1_MEMORY_CONFIG)
         up1 = ttnn.reshape(up1, (1, 1, up1.shape[0] * up1.shape[1] * up1.shape[2], up1.shape[3]))
-        up1 = ttnn.to_layout(up1, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        fused_1 = concat(-1, False, up1, branch1)
+        fused_1 = concat(-1, True, up1, branch1)
         branch3 = self.c2fcib_3(fused_1)
 
         deallocate_tensors(branch1, up1, fused_1)

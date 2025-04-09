@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ttnn
 from models.experimental.yolov10.tt.common import Conv
 
 
@@ -33,6 +34,7 @@ class TtnnCIB:
             device,
             parameters.cv1[3],
             self.conv_pt.cv1[3],
+            deallocate_activation=True,
         )
 
         self.conv4 = Conv(
@@ -42,6 +44,7 @@ class TtnnCIB:
         )
 
     def __call__(self, input_tensor):
+        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
         inputs = input_tensor
         conv0_out = self.conv0(input_tensor)
         conv1_out = self.conv1(conv0_out)
@@ -49,5 +52,5 @@ class TtnnCIB:
         conv3_out = self.conv3(conv2_out)
         conv4_out = self.conv4(conv3_out)
 
-        output = inputs + conv4_out
+        output = ttnn.add(inputs, conv4_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         return output
