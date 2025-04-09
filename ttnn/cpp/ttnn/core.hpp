@@ -11,15 +11,14 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {
 
-using tt::tt_metal::operation::OptionalConstTensors;
-using tt::tt_metal::operation::OptionalTensors;
-using tt::tt_metal::operation::Tensors;
+using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
+using OptionalTensors = std::vector<std::optional<Tensor>>;
+using Tensors = std::vector<Tensor>;
 
 using tt::tt_metal::is_tensor_on_device;
 using tt::tt_metal::is_tensor_on_device_or_multidevice;
