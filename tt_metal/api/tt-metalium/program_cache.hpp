@@ -25,13 +25,20 @@ struct CachedProgramFactory {
     static constexpr auto MAX_SIZE = 4096;
     static constexpr auto ALIGNMENT = 32;
 
-    tt::stl::unique_any<MAX_SIZE, ALIGNMENT> cached_program;
+    tt::tt_metal::Program program;
+    tt::stl::unique_any<MAX_SIZE, ALIGNMENT> shared_variables;
     // program_factory_index is used to map a runtime value to a program factory type that is being used
     std::size_t program_factory_index;
 
+    CachedProgramFactory() = default;
+
     template <typename shared_variables_t>
     CachedProgramFactory(CachedProgram<shared_variables_t>&& cached_program, std::size_t program_factory_index) :
-        cached_program{std::move(cached_program)}, program_factory_index{program_factory_index} {}
+        program{std::move(cached_program.program)},
+        shared_variables{std::move(cached_program.shared_variables)},
+        program_factory_index{program_factory_index} {}
+
+    void reset_shared_variables() { shared_variables = tt::stl::unique_any<MAX_SIZE, ALIGNMENT>{}; }
 };
 
 // Generic Program Cache: This data structure is tied to a device handle and can store generic program types from

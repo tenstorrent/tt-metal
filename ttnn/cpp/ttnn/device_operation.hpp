@@ -114,44 +114,32 @@ inline auto& create_or_get_program_from_cache(
     typename device_operation_t::tensor_return_value_t& tensor_return_value) {
 
     auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
-    auto [new_cached_program_factory, program_hash] = std::visit(
-        [&operation_attributes, &tensor_args, &tensor_return_value, program_factory_index = program_factory.index()](auto&& program_factory) -> std::pair<tt::tt_metal::program_cache::detail::CachedProgramFactory, tt::stl::hash::hash_t> {
+    auto new_cached_program_factory = std::visit(
+        [&operation_attributes, &tensor_args, &tensor_return_value, program_factory_index = program_factory.index()](auto&& program_factory) -> auto {
             using program_factory_t = std::decay_t<decltype(program_factory)>;
             auto cached_program = program_factory_t::create(operation_attributes, tensor_args, tensor_return_value);
             auto program_hash = cached_program.program.calculate_hash();
-            auto new_cached_program_factory = tt::tt_metal::program_cache::detail::CachedProgramFactory{
+            return tt::tt_metal::program_cache::detail::CachedProgramFactory{
                 std::move(cached_program),
                 program_factory_index
             };
-            return {std::move(new_cached_program_factory), program_hash};
         },
         program_factory);
 
+    auto program_hash = new_cached_program_factory.program.calculate_hash();
     auto program_cache_hit = program_cache.contains(program_hash);
+
     if (program_cache_hit) {
         ZoneScopedN("Program Cache Hit");
-        std::visit([&](auto&& program_factory) {
-            using program_factory_t = std::decay_t<decltype(program_factory)>;
-            using cached_program_t = decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
-            auto& cached_program_factory = program_cache.get(program_hash);
-            auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
-            auto& new_cached_program = new_cached_program_factory.cached_program.template get<cached_program_t>();
-
-            cached_program.program.copy_runtime_args_from(new_cached_program.program);
-            new_cached_program.program = std::move(cached_program.program);
-        }, program_factory);
+        auto& cached_program_factory = program_cache.get(program_hash);
+        cached_program_factory.program.copy_runtime_args_from(new_cached_program_factory.program);
+        new_cached_program_factory.program = std::move(cached_program_factory.program);
     } else {
         ZoneScopedN("Program Cache Miss");
     }
 
     program_cache.insert(program_hash, std::move(new_cached_program_factory));
-    return std::visit([&](auto&& program_factory) -> auto& {
-        using program_factory_t = std::decay_t<decltype(program_factory)>;
-        using cached_program_t = decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
-        auto& cached_program_factory = program_cache.get(program_hash);
-        auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
-        return cached_program.program;
-    }, program_factory);
+    return program_cache.get(program_hash);
 }
 
 struct CheckDeviceBufferIsAllocated {
@@ -273,8 +261,9 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
     };
 
     if (is_program_cache_enabled) {
-        auto& program = create_or_get_program_from_cache<device_operation_t>(
+        auto& program_factory = create_or_get_program_from_cache<device_operation_t>(
             program_cache, operation_attributes, tensor_args, tensor_return_value);
+        auto& program = program_factory.program;
 
         program.set_runtime_id(device_operation_id);
 
@@ -294,6 +283,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
             tensor_args,
             tensor_return_value);
 
+        program_factory.reset_shared_variables();
     } else {
         auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
 

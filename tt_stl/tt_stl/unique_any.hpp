@@ -15,6 +15,8 @@ template <auto MAX_STORAGE_SIZE, auto ALIGNMENT>
 struct unique_any final {
     using storage_t = std::array<std::byte, MAX_STORAGE_SIZE>;
 
+    unique_any() = default;
+
     template <typename Type, typename BaseType = std::decay_t<Type>>
     unique_any(Type&& object) :
         pointer{new(&type_erased_storage) BaseType{std::move(object)}},
