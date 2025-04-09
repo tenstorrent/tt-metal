@@ -192,7 +192,8 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     // pad input tensor
     tt::tt_metal::Array4D padded_shape = {n, padded_c, padded_h32, w};
     auto pad_mem_config = create_sharded_memory_config(ttnn::Shape(padded_shape), grid_size, shard_spec.orientation);
-    auto tt_output_tensor = ttnn::pad(input, padded_shape, tt::tt_metal::Array4D({0, 0, pad_h, 0}), 0, pad_mem_config);
+    auto tt_output_tensor = ttnn::pad(
+        input, padded_shape, tt::tt_metal::Array4D({0, 0, pad_h, 0}), 0, /*use_multicore*/ false, pad_mem_config);
 
     tt::log_debug("pad_output: {}", tt_output_tensor.get_logical_shape());
 
@@ -206,8 +207,13 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     // pad tensor W dim
     tt::tt_metal::Array4D padded_shape2 = {n, padded_c, padded_h32, padded_w32};
     auto pad_mem_config2 = create_sharded_memory_config(ttnn::Shape(padded_shape2), grid_size, shard_spec.orientation);
-    tt_output_tensor =
-        ttnn::pad(tt_output_tensor, padded_shape2, tt::tt_metal::Array4D({0, 0, pad_w, 0}), 0, pad_mem_config2);
+    tt_output_tensor = ttnn::pad(
+        tt_output_tensor,
+        padded_shape2,
+        tt::tt_metal::Array4D({0, 0, pad_w, 0}),
+        0,
+        /*use_multicore*/ false,
+        pad_mem_config2);
 
     tt::log_debug("pad_output: {}", tt_output_tensor.get_logical_shape());
 

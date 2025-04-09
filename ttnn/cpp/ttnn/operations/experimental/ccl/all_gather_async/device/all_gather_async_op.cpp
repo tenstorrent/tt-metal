@@ -72,7 +72,7 @@ void AllGatherAsync::validate_with_output_tensors(
         for (size_t i = 0; i < input_shape.size(); ++i) {
             if (i == this->dim) {
                 TT_FATAL(
-                    output_shape[i] == input_shape[i] * this->ring_size,
+                    output_shape[i] <= input_shape[i] * this->ring_size,
                     "Error, Output tensor shape at dimension {} should be {} but has {}",
                     i,
                     input_shape[i] * this->ring_size,
@@ -221,6 +221,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherAsync::create_mesh_w
 
 tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
     IDevice* target_device =
         input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
 
@@ -245,7 +246,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     }
 
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
-
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     switch (version) {

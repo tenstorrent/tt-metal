@@ -53,6 +53,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
     const std::vector<uint32_t>& l1_bank_remap = {},
+    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
     bool init_profiler = true,
     bool use_max_eth_core_count_on_all_devices = false);
 

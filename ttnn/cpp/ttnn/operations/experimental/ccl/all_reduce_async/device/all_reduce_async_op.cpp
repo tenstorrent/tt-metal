@@ -68,8 +68,9 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.get_logical_shape();
-    auto output_tensor_layout =
-        input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->output_mem_config);
+    tt::tt_metal::TensorLayout output_tensor_layout =
+        tt::tt_metal::TensorLayout(this->dtype, input_tensor.tensor_spec().page_config(), this->output_mem_config);
+
     return {TensorSpec(shape, output_tensor_layout)};
 }
 
@@ -140,6 +141,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         forward_device,
         backward_device,
         output_tensors[0],
+        this->dtype,
         this->num_links,
         this->ring_size,
         device_index,
@@ -155,7 +157,7 @@ const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
     auto input_memory_layout = input_tensors[0].get_layout();
     auto input_dtype = input_tensors[0].get_dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-
+    auto output_dtype = this->dtype;
     return tt::tt_metal::operation::hash_operation<AllReduceAsync>(
         this->num_links,
         this->ring_size,
@@ -164,7 +166,8 @@ const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config);
+        input_memory_config,
+        output_dtype);
 }
 
 namespace operations {
@@ -178,6 +181,7 @@ Tensor all_reduce_async_impl(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -192,6 +196,7 @@ Tensor all_reduce_async_impl(
 
     tt::tt_metal::operation::launch_op(
         [num_preferred_links,
+         dtype,
          memory_config,
          cluster_axis,
          num_devices,
@@ -210,6 +215,7 @@ Tensor all_reduce_async_impl(
                 ttnn::AllReduceAsync{
                     num_preferred_links.has_value() ? num_preferred_links.value() : 1,
                     num_devices,
+                    dtype.value_or(input_tensor.get_dtype()),
                     memory_config.value_or(input_tensor.memory_config()),
                     topology,
                     multi_device_global_semaphore,
@@ -232,6 +238,7 @@ Tensor all_reduce_async(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -243,6 +250,7 @@ Tensor all_reduce_async(
         mesh_device,
         topology,
         multi_device_global_semaphore,
+        dtype,
         memory_config,
         num_preferred_links,
         subdevice_id,
@@ -256,6 +264,7 @@ std::vector<Tensor> all_reduce_async(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -270,6 +279,7 @@ std::vector<Tensor> all_reduce_async(
             mesh_device,
             topology,
             multi_device_global_semaphore.global_semaphores[i],
+            dtype,
             memory_config,
             num_preferred_links,
             subdevice_id,

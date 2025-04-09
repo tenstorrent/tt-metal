@@ -45,7 +45,7 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "logger.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "semaphore.hpp"
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
@@ -250,7 +250,7 @@ void SetRuntimeArgsImpl(
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
     const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
-    bool blocking) {
+    bool /*blocking*/) {
     std::vector<uint32_t> resolved_runtime_args = {};
     resolved_runtime_args.reserve(runtime_args_ptr->size());
 
@@ -384,7 +384,8 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t l1_small_size,
     const size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& l1_bank_remap,
+    const std::vector<uint32_t>& /*l1_bank_remap*/,
+    const size_t worker_l1_size,
     bool init_profiler,
     bool use_max_eth_core_count_on_all_devices) {
     // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
@@ -398,6 +399,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
         trace_region_size,
         dispatch_core_config,
         {},
+        worker_l1_size,
         init_profiler,
         use_max_eth_core_count_on_all_devices);
 
@@ -969,11 +971,12 @@ IDevice* CreateDevice(
     const size_t l1_small_size,
     const size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& l1_bank_remap) {
+    const std::vector<uint32_t>& l1_bank_remap,
+    const size_t worker_l1_size) {
     ZoneScoped;
 
     tt::DevicePool::initialize(
-        {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap);
+        {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
     auto dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }

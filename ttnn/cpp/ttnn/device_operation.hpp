@@ -8,7 +8,7 @@
 #include <optional>
 #include <random>
 #include <tt_stl/overloaded.hpp>
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/program_cache.hpp>

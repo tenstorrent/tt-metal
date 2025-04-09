@@ -33,7 +33,7 @@
 // This looks like an API level test
 #include "llrt/hal.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
@@ -73,7 +73,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 50;
     uint32_t l1_buffer_size = single_tile_size * num_tiles;
-    uint32_t l1_buffer_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+    uint32_t l1_buffer_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     // For ethernet core, need to have smaller buffer at a different address
     if (is_eth_core) {

@@ -28,6 +28,7 @@ using ccl::EriscDatamoverBuilder;
 struct AllReduceAsync {
     const uint32_t num_links;
     const uint32_t ring_size;
+    const DataType dtype;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
@@ -39,6 +40,7 @@ struct AllReduceAsync {
     AllReduceAsync(
         uint32_t num_links,
         uint32_t ring_size,
+        DataType dtype,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         GlobalSemaphore semaphore,
@@ -48,6 +50,7 @@ struct AllReduceAsync {
         const distributed::MeshDevice* mesh_device) :
         num_links(num_links),
         ring_size(ring_size),
+        dtype(dtype),
         output_mem_config(output_mem_config),
         topology(topology),
         semaphore(semaphore),
@@ -63,6 +66,7 @@ struct AllReduceAsync {
 
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);
+        attrs.emplace_back("dtype", dtype);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
@@ -88,6 +92,7 @@ namespace all_reduce_async_detail {
 AllReduceAsync create_all_reduce_async_struct(
     const Tensor& input_tensor,
     const uint32_t num_links,
+    const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
     const ccl::Topology topology,
@@ -107,6 +112,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
+    DataType output_dtype,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -126,6 +132,7 @@ Tensor all_reduce_async(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
@@ -138,6 +145,7 @@ std::vector<Tensor> all_reduce_async(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<const DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,

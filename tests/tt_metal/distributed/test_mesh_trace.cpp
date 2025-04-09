@@ -40,7 +40,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include "strong_type.hpp"
 #include <tt-metalium/sub_device_types.hpp>

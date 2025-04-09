@@ -8,7 +8,7 @@
 #include <ttnn/tensor/tensor.hpp>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt_stl/reflection.hpp>
@@ -941,8 +941,10 @@ public:
             this->compute_output_specs_impl_ = other.compute_output_specs_impl_;
             this->create_output_tensors_impl_ = other.create_output_tensors_impl_;
             this->create_program_impl_ = other.create_program_impl_;
+            this->create_mesh_workload_impl_ = other.create_mesh_workload_impl_;
             this->create_op_performance_model_impl_ = other.create_op_performance_model_impl_;
-            this->override_runtime_arguments_impl_ = other.override_runtime_arguments_impl_;
+            this->override_runtime_arguments_program_impl_ = other.override_runtime_arguments_program_impl_;
+            this->override_runtime_arguments_workload_impl_ = other.override_runtime_arguments_workload_impl_;
             this->uses_custom_program_hash_impl_ = other.uses_custom_program_hash_impl_;
             this->has_create_workload_method_impl_ = other.has_create_workload_method_impl_;
             this->compute_program_hash_impl_ = other.compute_program_hash_impl_;

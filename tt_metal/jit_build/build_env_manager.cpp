@@ -139,7 +139,7 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
     return build_key;
 }
 
-JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t device_id, uint8_t num_hw_cqs, bool is_fw) {
+JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_id*/, uint8_t num_hw_cqs, bool is_fw) {
     // Get the dispatch message address for this device
     CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     uint32_t dispatch_message_addr =
