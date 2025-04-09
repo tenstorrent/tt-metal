@@ -111,10 +111,44 @@ void kernel_main() {
     }
 
     index_b_offset = 0;
+    // Definitions
+    //   out_block_...: This is the length of our Circular Buffer, sometimes our tensors are larger than L1 space, so we
+    //   have to process chunks of this data at a time sender: This refers to a core that does aggregation calculations
+    //   for the group of cores receiver: This the cores that receive the aggregated results from sender, they only do
+    //   local computations that they send to the sender for final aggregation
+    // GROUPNORM COMPUTE DESCIPTION
+    // This is a high level desciption of the stages of this kernel, tags will be added to show where in the code each
+    // stage starts and ends
+    //
+    // Batch Loop:
+    //   Group Loop:
+    //     This is the process which repeats for every group
+    //     First Read of data:
+    //       If Reciever:
+    //           Send partial reduction of Average to Sender Core
+    //       If Sender:
+    //           Pack Partials:
+    //               Accumulate partial reductions into single tile
+    //               Calculates the Global average sum
+    //           Send Global:
+    //               Send Global Average to all Receiver cores
+    //     Second Read of data:
+    //       If Reciever:
+    //           Send partial reduction of Varience to Sender Core
+    //       If Sender:
+    //           Pack Partials:
+    //               Accumulate partial reductions into single tile
+    //               Calculates the Global Varience sum
+    //           Send Global:
+    //               Send Global Varience to all Receiver cores
+    //     Third Read of data:
+
+    // Start Batch Loop:
     for (uint32_t b = 0; b < num_batches; ++b) {
         index_g_offset = 0;
         row_offset = num_cols_per_group;
 
+        // Start Group Loop:
         for (uint32_t i = 0; i < num_groups; ++i) {
             for (uint32_t n = 0; n < 3; ++n) {
                 uint32_t out_block_start_id_offset = 0;
@@ -239,9 +273,9 @@ void kernel_main() {
                     index_g_offset += block_w_minus_two;
                 }
             }
-        }
+        }  // End Group Loop:
         index_b_offset += num_tiles_per_batch;
-    }
+    }  // End Batch Loop:
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
     uint32_t l1_write_addr_repack = get_write_ptr(cb_out0);

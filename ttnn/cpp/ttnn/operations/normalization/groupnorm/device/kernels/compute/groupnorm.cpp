@@ -180,7 +180,61 @@ void MAIN {
     if ((num_out_blocks_padded * num_cores_per_mcast_group * 16) % single_tile_size_bytes) {
         cb_ex_external_tiles_required++;
     }
+    // Definitions
+    //   out_block_...: This is the length of our Circular Buffer, sometimes our tensors are larger than L1 space, so we
+    //   have to process chunks of this data at a time sender: This refers to a core that does aggregation calculations
+    //   for the group of cores receiver: This the cores that receive the aggregated results from sender, they only do
+    //   local computations that they send to the sender for final aggregation
+    // GROUPNORM COMPUTE DESCIPTION
+    // This is a high level desciption of the stages of this kernel, tags will be added to show where in the code each
+    // stage starts and ends
+    //
+    // Batch Loop:
+    //   Group Loop:
+    //     This is the process which repeats for every group
+    //     Average Calc: E[x]
+    //       Local Reduce:
+    //           First we apply an input mask
+    //           This is where we sum up our core's subtensor
+    //           After summing up, we pass our scalar tile to cb_ex_partial
+    //           The reader kernels then aggregate all of the local scalars into a single tile
+    //       Global Reduce:
+    //           This single tile (cb_ex_external) is a tile that contains each partial reduce from all the other cores
+    //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
+    //           It's reader core the sends this data out to all other cores as cb_ex_global
+    //
+    //     Variance Calc: ∑(x-E[x])^2
+    //     This follows the same pattern as the average calculation
+    //       Local Reduce:
+    //           First we subtract each value from our core's subtensor by the average value
+    //           We next apply our input mask to zero our the values we wish to ignore
+    //           Next we square our residuals to obtain the squared residuals
+    //           After summing up, we pass our scalar tile to cb_ex2_partial
+    //           The reader kernels then aggregate all of the local scalars into a single tile
+    //       Global Reduce:
+    //           This single tile (cb_ex_external) is a tile that contains each partial reduce from all the other cores
+    //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
+    //           It's reader core the sends this data out to all other cores as cb_ex2_global
+    //
+    //     cb_ex2pe Calculation:
+    //       First we add cb_ex2_global with cb_eps
+    //       Then we take the sqrt
+    //       Lastly we take the reciprocal and he have the denominator of our calculation
+    //     Final Val Calc:
+    //       First we subtract each value from our core's subtensor by the average value
+    //       We next apply our input mask to zero our the values we wish to ignore
+    //       Next we multiply our residual with our denominator
+    //       Optional Gamma:
+    //           We multiply this value to gamma
+    //       Optional Beta:
+    //           We add beta to this value
+    //
+    // We are now done! Nice
+    //   To look at where the code starts and stops seach for
+    //   Start LABEL or End Label
+    //   Ex: Start Local Reduce or End Local Reduce
 
+    // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
 
@@ -191,7 +245,10 @@ void MAIN {
         index_block_w = 0;
         output_tile_index = 0;
 
+        // Start Group Loop
         for (uint32_t g = 0; g < group; ++g) {
+            // Start Average Calc
+            // Start Local Reduce
             cb_wait_front(cb_input_mask, block_w);
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 uint32_t out_block_h_actual, out_block_hw_actual;
@@ -240,7 +297,7 @@ void MAIN {
                 cb_push_back(cb_x, out_block_hw_normal);
                 reconfig_data_format_srcb(cb_input_mask, cb_scaler);
 
-                // Partial-E[x]
+                // Partial/E[x]
                 index_h_offset = 0;
                 reduce_init_delta<false>(cb_x, cb_scaler, cb_ex_partial);
                 cb_reserve_back(cb_ex_partial, 1);
@@ -265,7 +322,8 @@ void MAIN {
 
                 cb_wait_front(cb_ex_partial, 1);
             }
-
+            // End Local Redcue
+            // Start Global Reduce
             if constexpr (is_mcast_sender) {
                 reduce_init_delta<false>(cb_ex_external, cb_scaler_global, cb_ex_global);
                 cb_reserve_back(cb_ex_global, 1);
@@ -289,7 +347,11 @@ void MAIN {
                     cb_push_back(cb_ex, 1);
                 }
             }
+            // End Global Reduce
+            // End Average Calc
 
+            // Start Variance Calc
+            // Start Local Reduce
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 uint32_t out_block_h_actual, out_block_hw_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
@@ -407,7 +469,8 @@ void MAIN {
                 cb_pop_front(cb_xmm, out_block_hw_normal);
                 reduce_revert_delta(cb_ex2_partial);
             }
-
+            // End Local Reduce
+            // Start Global Reduce
             if constexpr (is_mcast_sender) {
                 reduce_init_delta<false>(cb_ex_external, cb_scaler_global, cb_ex2_global);
                 cb_reserve_back(cb_ex2_global, 1);
@@ -431,8 +494,10 @@ void MAIN {
                     cb_push_back(cb_ex2, 1);
                 }
             }
+            // End Global Reduce
 
-            // global reduce results
+            // Start Variance Calc
+            //  global reduce results
             cb_wait_front(cb_eps, 1);
             cb_wait_front(cb_ex2_global, 1);
             cb_reserve_back(cb_ex2pe, 1);
@@ -454,12 +519,14 @@ void MAIN {
             tile_regs_release();
             cb_push_back(cb_ex2pe, 1);
             cb_pop_front(cb_ex2_global, 1);
+            // End Variance Calc
 
             bool start_copy_or_add = copy_or_add;
             uint32_t start_group_reset_index = group_reset_index;
             uint32_t start_index_block_w = index_block_w;
 
             uint32_t out_block_h_offset = 0;
+            // Start Final Val Calc
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 uint32_t out_block_h_actual, out_block_hw_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
@@ -620,6 +687,7 @@ void MAIN {
                 cb_pop_front(cb_reread_out, out_block_hw_normal);
                 cb_push_back(cb_reread_write_out, out_block_hw_normal);
 
+                // Start Optional Gamma:
                 if constexpr (do_gamma) {
                     index_h_offset = 0;
                     cb_reserve_back(cb_outgamma, out_block_hw_normal);
@@ -651,7 +719,9 @@ void MAIN {
                     cb_pop_front(cb_reread_write_out, out_block_hw_normal);
                     cb_wait_front(cb_outgamma, out_block_hw_normal);
                 }
-
+                // End Optional Gamma
+                //
+                // Start Optional Beta
                 if constexpr (do_beta) {
                     index_h_offset = 0;
                     cb_reserve_back(cb_outbeta, out_block_hw_normal);
@@ -682,6 +752,7 @@ void MAIN {
                     cb_pop_front(cb_inbeta, out_block_hw_normal);
                     cb_wait_front(cb_outbeta, out_block_hw_normal);
                 }
+                // End Optional Beta
 
 #ifdef UNTILIZE_OUT
                 // untilize
@@ -696,6 +767,7 @@ void MAIN {
                 untilize_uninit(cb_untilize_in);
 #endif
             }
+            // End Final Val Calc
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
                 if (row_offset == TILE_WIDTH) {
                     index_g_offset += block_w;
@@ -730,7 +802,9 @@ void MAIN {
             cb_pop_front(cb_ex2pe, 1);
             cb_pop_front(cb_input_mask, block_w);
         }
+        // End Group Loop
         index_b_offset += num_tiles_per_batch;
     }
+    // End Batch Loop
 }
 }  // namespace NAMESPACE
