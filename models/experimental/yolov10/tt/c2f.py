@@ -19,14 +19,14 @@ class TtnnC2f:
             self.conv_pt.cv1,
             deallocate_activation=True,
         )
-        self.cv2 = Conv(device, parameters.cv2, self.conv_pt.cv2, auto_shard=True, deallocate_activation=True)
+        self.cv2 = Conv(device, parameters.cv2, self.conv_pt.cv2, deallocate_activation=True)
 
         self.m = [
             TtnnBottleNeck(self.shortcut, device=self.device, parameters=self.parameters[_], conv_pt=self.conv_pt.m[_])
             for _ in range(n)
         ]
 
-    def __call__(self, input_tensor):
+    def __call__(self, input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG):
         cv1 = self.cv1(input_tensor)
         cv1 = ttnn.to_memory_config(cv1, memory_config=ttnn.L1_MEMORY_CONFIG)
         x1 = cv1[:, :, :, : cv1.shape[-1] // 2]
@@ -37,7 +37,7 @@ class TtnnC2f:
             out = m(y[-1])
             y.append(ttnn.to_layout(out, ttnn.TILE_LAYOUT))
 
-        out = ttnn.concat(y, -1)
+        out = ttnn.concat(y, -1, memory_config=memory_config)
 
         output = self.cv2(out)
 

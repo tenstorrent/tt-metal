@@ -19,13 +19,12 @@ class TtnnC2fCIB:
             device,
             parameters.cv1,
             self.conv_pt.cv1,
-            auto_shard=True,
         )
         self.cv2 = Conv(
             device,
             parameters.cv2,
             self.conv_pt.cv2,
-            auto_shard=True,
+            use_1d_systolic_array=False,
         )
 
         self.m = [
