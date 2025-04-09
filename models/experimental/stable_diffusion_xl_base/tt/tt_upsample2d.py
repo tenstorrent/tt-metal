@@ -5,6 +5,8 @@
 import torch.nn as nn
 import ttnn
 
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
+
 
 class TtUpsample2D(nn.Module):
     def __init__(self, device, state_dict, module_path, stride, padding, dilation, groups):
@@ -18,49 +20,25 @@ class TtUpsample2D(nn.Module):
         self.scale_factor = 2  # fixed number for now
 
         weights = state_dict[f"{module_path}.conv.weight"]
-        bias = state_dict[f"{module_path}.conv.bias"]
+        bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        self.tt_weights = ttnn.from_torch(weights, ttnn.bfloat16)
-        self.tt_bias = (
-            ttnn.from_torch(bias.unsqueeze(0).unsqueeze(0).unsqueeze(0), ttnn.bfloat16) if bias is not None else None
+        self.compute_config, self.conv_config, self.tt_weights, self.tt_bias = prepare_conv_params(
+            device, weights, bias, ttnn.bfloat8_b
         )
 
-        self.input_channels = self.tt_weights.shape[0]
-        self.output_channels = self.tt_weights.shape[1]
+        self.input_channels = self.tt_weights.shape[1]
+        self.output_channels = self.tt_weights.shape[0]
         self.kernel_w = self.tt_weights.shape[2]
         self.kernel_h = self.tt_weights.shape[3]
 
     def interpolate(self, hidden_states):
-        hidden_states = ttnn.upsample(hidden_states, (2, 2))
+        hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
         B, H, W, C = list(hidden_states.shape)
         return hidden_states, [B, C, H, W]
 
     def forward(self, hidden_states):
         hidden_states, input_shape = self.interpolate(hidden_states)
         B, C, H, W = input_shape
-
-        conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat16,
-            weights_dtype=ttnn.bfloat16,
-            shard_layout=None,
-            input_channels_alignment=32,
-            deallocate_activation=False,
-            enable_act_double_buffer=False,
-            enable_split_reader=False,
-            enable_subblock_padding=False,
-            reshard_if_not_optimal=True,
-            act_block_w_div=1,
-            act_block_h_override=0,
-            preprocess_weights_on_device=True,
-            always_preprocess_weights=True,
-            transpose_shards=True,
-        )
-        compute_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
 
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=hidden_states,
@@ -76,12 +54,12 @@ class TtUpsample2D(nn.Module):
             batch_size=B,
             input_height=H,
             input_width=W,
-            conv_config=conv_config,
-            compute_config=compute_config,
+            conv_config=self.conv_config,
+            compute_config=self.compute_config,
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
 
-        return tt_output_tensor_on_device, [out_height, out_width]
+        return tt_output_tensor_on_device, [self.output_channels, out_height, out_width]

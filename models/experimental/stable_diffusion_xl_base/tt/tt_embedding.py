@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import torch
 import ttnn
+
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
 
 class TtTimestepEmbedding(nn.Module):
@@ -18,23 +19,8 @@ class TtTimestepEmbedding(nn.Module):
         weights_2 = state_dict[f"{module_path}.linear_2.weight"].unsqueeze(0).unsqueeze(0)
         bias_2 = state_dict[f"{module_path}.linear_2.bias"]
 
-        self.tt_weights_1 = ttnn.from_torch(
-            torch.permute(weights_1, (0, 1, 3, 2)), ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
-        )
-        self.tt_bias_1 = (
-            ttnn.from_torch(bias_1, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-            if bias_1 is not None
-            else None
-        )
-
-        self.tt_weights_2 = ttnn.from_torch(
-            torch.permute(weights_2, (0, 1, 3, 2)), ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
-        )
-        self.tt_bias_2 = (
-            ttnn.from_torch(bias_2, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-            if bias_1 is not None
-            else None
-        )
+        self.tt_weights_1, self.tt_bias_1 = prepare_linear_params(device, weights_1, bias_1, ttnn.bfloat8_b)
+        self.tt_weights_2, self.tt_bias_2 = prepare_linear_params(device, weights_2, bias_2, ttnn.bfloat8_b)
 
     def forward(self, sample):
         sample = ttnn.linear(sample, self.tt_weights_1, bias=self.tt_bias_1, activation="silu")
