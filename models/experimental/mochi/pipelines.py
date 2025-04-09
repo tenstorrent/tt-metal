@@ -87,8 +87,8 @@ def sample_model(device, dit, conditioning, **args):
         )
 
         assert cond_z_1BNI.shape == uncond_z_1BNI.shape
-        torch_cond = dit.reverse_preprocess(cond_z_1BNI, latent_t, latent_h, latent_w)
-        torch_uncond = dit.reverse_preprocess(uncond_z_1BNI, latent_t, latent_h, latent_w)
+        torch_cond = dit.reverse_preprocess(cond_z_1BNI, latent_t, latent_h, latent_w, N)
+        torch_uncond = dit.reverse_preprocess(uncond_z_1BNI, latent_t, latent_h, latent_w, N)
         torch_pred = torch_uncond + cfg_scale * (torch_cond - torch_uncond)
         return torch_pred
 
@@ -116,7 +116,7 @@ def sample_model(device, dit, conditioning, **args):
         z_BCTHW = z_BCTHW + dsigma * pred_BCTHW
 
     # Postprocess z
-    z_BCTHW = dit.reverse_preprocess(z_1BNI, latent_t, latent_h, latent_w, N).float()
+    # z_BCTHW = dit.reverse_preprocess(z_1BNI, latent_t, latent_h, latent_w, N).float()
     return dit_latents_to_vae_latents(z_BCTHW)
 
 
