@@ -326,6 +326,7 @@ def run_conv_with_split(
     fp32_accum=False,
     packer_l1_acc=False,
     auto_shard=False,
+    pcc=0.98,
 ):
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
@@ -457,7 +458,7 @@ def run_conv_with_split(
         else:
             torch_output_tensor = torch.concat([torch_output_tensor, torch_output_tensor_per_output_slice], dim=1)
 
-    assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.97)
+    assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
@@ -3185,6 +3186,7 @@ def test_conv2d_vae_sdxl(
             split_input_channels_factor=split_factor_input_channels,
             split_output_channels_factor=split_factor_output_channels,
             auto_shard=True,
+            pcc=0.97,
         )
     else:
         run_conv(
