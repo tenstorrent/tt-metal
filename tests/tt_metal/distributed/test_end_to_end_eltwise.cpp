@@ -17,7 +17,7 @@
 #include "host_api.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
+std::shared_ptr<tt::tt_metal::Program> EltwiseBinaryProgramGenerator(
     using namespace tt::tt_metal;
 
     const std::shared_ptr<distributed::MeshBuffer>& src0_buf,
