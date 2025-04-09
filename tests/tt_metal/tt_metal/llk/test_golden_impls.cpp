@@ -33,7 +33,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
     // Untilize outputs correct number of r_dim & num_faces
     // But assumes increments are still default 16x16 faces
     int face_size = 16 * 16 / 2;
-    int tile_size = face_size * config.num_faces;
+    int tile_size = face_size * (config.tiny_tile ? config.num_faces : 4);
 
     std::set<int> ind;
 

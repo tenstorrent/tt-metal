@@ -102,8 +102,8 @@ struct BroadcastConfig {
 };
 
 void mask_src_b_for_broadcast(std::vector<bfloat16>& tile, const std::vector<uint32_t>& shape, BroadcastDim dim) {
-    int num_cols = shape.at(0);
-    int num_rows = shape.at(1);
+    int num_rows = shape.at(0);
+    int num_cols = shape.at(1);
 
     for (int i = 0; i < num_rows; i++) {
         for (int j = 0; j < num_cols; j++) {
@@ -122,8 +122,8 @@ std::vector<bfloat16> gold_broadcast(
     EltwiseOp op,
     BroadcastDim dim,
     MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    int num_cols = shape.at(0);
-    int num_rows = shape.at(1);
+    int num_rows = shape.at(0);
+    int num_cols = shape.at(1);
 
     uint16_t srca_fid_mask = 0xFFFF;
     uint16_t srcb_fid_mask = 0xFFFF;
@@ -330,12 +330,12 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
     std::vector<bfloat16> input1 = generate_uniform_random_vector<bfloat16>(
         -1.0f, 1.0f, single_tile_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
 
-    mask_src_b_for_broadcast(input1, {tile_width, tile_height}, test_config.broadcast_dim);
+    mask_src_b_for_broadcast(input1, {tile_height, tile_width}, test_config.broadcast_dim);
 
     std::vector<bfloat16> golden = gold_broadcast(
         input0,
         input1,
-        {tile_width, tile_height},
+        {tile_height, tile_width},
         test_config.eltwise_op,
         test_config.broadcast_dim,
         test_config.math_fidelity);
@@ -344,7 +344,10 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
     auto packed_input1 = pack_vector<uint32_t, bfloat16>(input1);
     auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
     ::unit_tests::compute::GoldenConfig config = {
-        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .num_faces = tile_width / 16 * tile_height / 16};
+        .num_tiles_r_dim = 1,
+        .num_tiles_c_dim = 1,
+        .num_faces = tile_width / 16 * tile_height / 16,
+        .tiny_tile = test_config.tile_shape != TileShape::FULL_TILE};
     auto tilized_input0 = ::unit_tests::compute::gold_standard_tilize(packed_input0, config);
     auto tilized_input1 = ::unit_tests::compute::gold_standard_tilize(packed_input1, config);
 
