@@ -20,6 +20,9 @@ from tt_metal.tools.profiler.process_model_log import (
 from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
+DECODE_OP_START_INDEX = 4
+DECODE_OP_END_INDEX = -11
+
 perf_targets = {
     "RMSAllGather_0": {
         "op_name": "PreRMS_0",
@@ -468,7 +471,7 @@ def test_llama_TG_perf_device(
     df_model = df[int(len(df) / 3 * 2) :]
 
     # Excluding model embeddings and lmhead+sampling ops
-    df_layers = df_model[4:-11]
+    df_layers = df_model[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
     df_first_layer = df_layers[: int(len(df_layers) / num_layers)]
     df_mid_layers = df_layers[int(len(df_layers) / num_layers) :]
@@ -492,8 +495,10 @@ def test_llama_TG_perf_device(
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
 
     if len(kernel_duration_per_instance_averaged_dict) != len(perf_targets):
-        print(f"perf targets: {perf_targets}")
-        print(f"kernel_duration_per_instance_averaged_dict: {kernel_duration_per_instance_averaged_dict}")
+        print(f"perf_targets: {perf_targets}")
+
+    print(f"kernel_duration_per_instance_averaged_dict: {kernel_duration_per_instance_averaged_dict}")
+    print(f"dispatch_duration_per_instance_averaged_dict: {dispatch_duration_per_instance_averaged_dict}")
 
     assert len(kernel_duration_per_instance_averaged_dict) == len(
         perf_targets
@@ -633,7 +638,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = merge_device_rows(df)
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
-    df_layers = df_model[4:-11]
+    df_layers = df_model[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
@@ -646,6 +651,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     # Average over all iterations of each op instance
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
+
+    print(f"dispatch_duration_per_instance_averaged_dict: {dispatch_duration_per_instance_averaged_dict}")
 
     assert len(dispatch_duration_per_instance_averaged_dict) == len(
         perf_targets
