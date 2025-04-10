@@ -29,6 +29,7 @@
 #include "fabric_host_interface.h"
 #include "fabric_types.hpp"
 #include "fmt/base.h"
+#include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
@@ -87,7 +88,7 @@ inline std::string get_soc_description_file(
 }  // namespace
 namespace tt {
 
-Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
+Cluster::Cluster(llrt::RunTimeOptions& rtoptions, Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
     ZoneScoped;
     log_info(tt::LogDevice, "Opening user mode device driver");
 
@@ -114,7 +115,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
 void Cluster::detect_arch_and_target() {
     this->target_type_ = (rtoptions_.get_simulator_enabled()) ? TargetDevice::Simulator : TargetDevice::Silicon;
 
-    this->arch_ = get_platform_architecture(rtoptions_);
+    this->arch_ = tt_metal::get_platform_architecture(rtoptions_);
 
     TT_FATAL(
         this->target_type_ == TargetDevice::Silicon or this->target_type_ == TargetDevice::Simulator,
