@@ -241,7 +241,9 @@ DECODER_OP_END_IDX = -11
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}], indirect=True
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872, "worker_l1_size": 1344544}],
+    indirect=True,
 )
 def test_llama_demo(
     weights,
@@ -433,7 +435,7 @@ def average_per_instance_dict(input_dict):
 )
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG TT_METAL_WORKER_RINGBUFFER_SIZE=122880 TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
+# Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
 # Copy the printed kernel_duration_per_instance_averaged_dict and dispatch_duration_per_instance_averaged_dict dictionaries
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
@@ -603,7 +605,7 @@ def test_llama_TG_perf_device(
 )
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG TT_METAL_WORKER_RINGBUFFER_SIZE=122880 TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
+# Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
 # Copy the printed dispatch_duration_per_instance_averaged_dict dictionary
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
