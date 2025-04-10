@@ -15,6 +15,8 @@ enum class DataType;
 }
 
 namespace ttnn::operations::binary::utils {
+bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output);
+
 std::map<std::string, std::string> get_defines(
     BinaryOpType op_type,
     const std::optional<tt::tt_metal::DataType> in_dtype = std::nullopt,

@@ -134,7 +134,8 @@ protected:
         std::map<string, string> defines_in,
         bool is_active_eth_core,
         bool send_to_brisc,
-        bool force_watcher_no_inline);
+        bool force_watcher_no_inline,
+        tt::tt_metal::KernelBuildOptLevel opt_level = tt::tt_metal::KernelBuildOptLevel::Os);
     int GetPort(FDKernel* other, std::vector<FDKernel*>& kernels) {
         for (int idx = 0; idx < kernels.size(); idx++) {
             if (kernels[idx] == other) {

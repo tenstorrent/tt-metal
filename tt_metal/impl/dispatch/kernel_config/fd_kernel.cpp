@@ -120,7 +120,8 @@ void FDKernel::configure_kernel_variant(
     std::map<string, string> defines_in,
     bool is_active_eth_core,
     bool send_to_brisc,
-    bool force_watcher_no_inline) {
+    bool force_watcher_no_inline,
+    KernelBuildOptLevel opt_level) {
     // TODO: just pass in the programmable index
     uint32_t programmable_core_type_index =
         (GetCoreType() == CoreType::WORKER) ? hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
@@ -153,7 +154,7 @@ void FDKernel::configure_kernel_variant(
                 .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
                 .defines = defines,
-                .opt_level = KernelBuildOptLevel::Os});
+                .opt_level = opt_level});
     } else {
         tt::tt_metal::CreateKernel(
             *program_,
@@ -164,6 +165,6 @@ void FDKernel::configure_kernel_variant(
                 .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
                 .defines = defines,
-                .opt_level = KernelBuildOptLevel::Os});
+                .opt_level = opt_level});
     }
 }

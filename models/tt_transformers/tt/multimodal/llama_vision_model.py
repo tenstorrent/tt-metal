@@ -633,7 +633,10 @@ class CrossAttentionTransformer(torch.nn.Module):
         tt_out = tt_out[0, 0, last_token_idx, :]
         return tt_out
 
-    def process_output_decode(self, tt_out, B, S, argmax_on_device=False):
+    def process_output_decode(self, tt_out, B, S, is_tokens=False):
+        """
+        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
+        """
         tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         tt_out = tt_out[:, :, :B, :].reshape(B, S, -1)
         return tt_out
