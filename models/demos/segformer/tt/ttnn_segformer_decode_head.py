@@ -42,8 +42,7 @@ class TtSegformerDecodeHead:
 
         self.config = config
 
-    def __call__(self, encoder_hidden_states: ttnn.bfloat8_b, parameters) -> ttnn.Tensor:
-        device = encoder_hidden_states[-1].device()
+    def __call__(self, device, encoder_hidden_states: ttnn.bfloat8_b, parameters) -> ttnn.Tensor:
         batch_size = encoder_hidden_states[-1].shape[0]
 
         all_hidden_states = ()
@@ -51,7 +50,7 @@ class TtSegformerDecodeHead:
         index = 0
         for encoder_hidden_state, mlp in zip(encoder_hidden_states, self.linear_c):
             height = width = int(math.sqrt(encoder_hidden_state.shape[-2]))
-            encoder_hidden_state = mlp(encoder_hidden_state, parameters=parameters["linear_c"][index])
+            encoder_hidden_state = mlp(device, encoder_hidden_state, parameters=parameters["linear_c"][index])
             encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
             encoder_hidden_state = ttnn.reshape(encoder_hidden_state, (batch_size, height, width, -1))
 
@@ -74,6 +73,7 @@ class TtSegformerDecodeHead:
             )
             encoder_hidden_state = ttnn.to_memory_config(encoder_hidden_state, memory_config=input_memory_config)
 
+            # workaround hack until upscaling buffer assert is fixed in metal
             encoder_hidden_state = ttnn.upsample(
                 encoder_hidden_state,
                 scale_factor=(128 // encoder_hidden_state.shape[2], 128 // encoder_hidden_state.shape[2]),
