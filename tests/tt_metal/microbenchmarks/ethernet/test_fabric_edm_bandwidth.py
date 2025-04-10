@@ -209,7 +209,7 @@ def run_fabric_edm(
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
     enable_persistent_kernel_cache()
-    cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
+    cmd = f"TT_METAL_DEVICE_PROFILER=1 \
             {os.environ['TT_METAL_HOME']}/build/test/ttnn/unit_tests_ttnn_fabric_edm \
                 {int(is_unicast)} \
                 {noc_message_type} \

@@ -141,8 +141,6 @@ class RunTimeOptions {
     bool simulator_enabled = false;
     std::filesystem::path simulator_path = "";
 
-    bool erisc_iram_enabled = false;
-
     bool skip_eth_cores_with_retrain = false;
 
     RunTimeOptions();
@@ -335,8 +333,6 @@ public:
 
     inline bool get_simulator_enabled() { return simulator_enabled; }
     inline const std::filesystem::path& get_simulator_path() { return simulator_path; }
-
-    inline bool get_erisc_iram_enabled() { return erisc_iram_enabled; }
 
     inline bool get_skip_eth_cores_with_retrain() { return skip_eth_cores_with_retrain; }
 
