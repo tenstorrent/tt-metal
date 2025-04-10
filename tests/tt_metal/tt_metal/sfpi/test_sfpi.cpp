@@ -18,7 +18,7 @@
 
 #include <gtest/gtest.h>
 
-static constexpr std::string_view KernelDir = "tests/tt_metal/tt_metal/test_kernels/sfpi/";
+static constexpr std::string_view KernelDir = "tests/tt_metal/tt_metal/test_kernels/sfpi";
 
 static bool runTest(tt::tt_metal::IDevice* device, const CoreCoord& coord, const std::string& path, unsigned baseLen) {
     const char* phase;

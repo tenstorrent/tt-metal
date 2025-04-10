@@ -6,8 +6,8 @@
 namespace NAMESPACE {
 void MAIN {
     auto* args = reinterpret_cast<tt_l1_ptr uint32_t*>(get_compile_time_arg_val(0));
-    args[0] = 0c0ffee;
+    args[0] = 0xc0ffee;
     args[1] = 0xdeadbeef;
-    args[2] = 0xc0edbabe
+    args[2] = 0xc0edbabe;
 }
 }  // namespace NAMESPACE
