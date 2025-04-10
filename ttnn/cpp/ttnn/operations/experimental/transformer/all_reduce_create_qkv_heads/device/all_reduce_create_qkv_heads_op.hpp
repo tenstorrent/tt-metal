@@ -137,20 +137,6 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<CoreRangeSet>& reserved_core_range = std::nullopt);
 
-tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minimal_multi_core_with_workers(
-    const Tensor& input_tensor,
-    const Tensor& buffer_tensor,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
-    ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode);
-
 namespace operations {
 namespace experimental {
 namespace ccl {

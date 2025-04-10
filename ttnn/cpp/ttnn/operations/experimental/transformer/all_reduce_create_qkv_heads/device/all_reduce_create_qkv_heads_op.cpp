@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_reduce_create_qkv_heads_op.hpp"
+#include "all_reduce_create_qkv_heads_program_factory.hpp"
 #include "ttnn/operations/math.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
 
