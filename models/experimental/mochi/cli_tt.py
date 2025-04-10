@@ -16,7 +16,7 @@ from genmo.mochi_preview.pipelines import (
     linear_quadratic_schedule,
 )
 from models.experimental.mochi.pipelines import TTPipeline
-from models.experimental.mochi.factory import TtDiTModelFactory
+from models.experimental.mochi.factory import TtDiTModelFactory, TtDecoderModelFactory
 
 pipeline = None
 model_dir_path = os.getenv("MOCHI_DIR")
@@ -38,11 +38,12 @@ def load_model(mesh_device):
                 lora_path=lora_path,
                 mesh_device=mesh_device,
             ),
-            decoder_factory=DecoderModelFactory(
+            decoder_factory=TtDecoderModelFactory(
+                mesh_device=mesh_device,
                 model_path=f"{MOCHI_DIR}/decoder.safetensors",
             ),
             cpu_offload=cpu_offload,
-            decode_type="tiled_spatial",
+            decode_type="full",
             fast_init=not lora_path,
             strict_load=not lora_path,
             decode_args=dict(overlap=8),

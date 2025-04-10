@@ -1,5 +1,6 @@
 from typing import Any, Dict, Optional
 
+import ttnn
 import torch
 import torch.nn.functional as F
 from genmo.lib.progress import get_new_progress_bar
@@ -13,11 +14,9 @@ from genmo.mochi_preview.pipelines import (
     move_to_device,
     t5_tokenizer,
     get_conditioning,
-    decode_latents,
-    decode_latents_tiled_full,
-    decode_latents_tiled_spatial,
     compute_packed_indices,
 )
+from genmo.mochi_preview.vae.models import normalize_decoded_frames
 
 
 def sample_model(device, dit, conditioning, **args):
@@ -89,6 +88,9 @@ def sample_model(device, dit, conditioning, **args):
         assert cond_z_1BNI.shape == uncond_z_1BNI.shape
         torch_cond = dit.reverse_preprocess(cond_z_1BNI, latent_t, latent_h, latent_w, N)
         torch_uncond = dit.reverse_preprocess(uncond_z_1BNI, latent_t, latent_h, latent_w, N)
+        ttnn.deallocate(cond_z_1BNI)
+        ttnn.deallocate(uncond_z_1BNI)
+        ttnn.deallocate(z_1BNI)
         torch_pred = torch_uncond + cfg_scale * (torch_cond - torch_uncond)
         return torch_pred
 
@@ -117,19 +119,25 @@ def sample_model(device, dit, conditioning, **args):
 
     # Postprocess z
     # z_BCTHW = dit.reverse_preprocess(z_1BNI, latent_t, latent_h, latent_w, N).float()
+    ttnn.deallocate(rope_cos_1HND)
+    ttnn.deallocate(rope_sin_1HND)
     return dit_latents_to_vae_latents(z_BCTHW)
+
+
+def decode_latents(decoder, z):
+    assert z.ndim == 5
+    z, T = decoder.prepare_input(z)
+    samples = decoder(z)
+    samples = decoder.postprocess_output(samples, T)
+    return normalize_decoded_frames(samples)
 
 
 class TTPipeline(MochiSingleGPUPipeline):
     """TensorTorch-specific version of MochiSingleGPUPipeline."""
 
     def __call__(self, batch_cfg, prompt, negative_prompt, **kwargs):
+        assert self.decode_type not in ["tiled_spatial", "tiled_full"]
         with torch.inference_mode():
-            print_max_memory = lambda: print(
-                f"Max memory reserved: {torch.cuda.max_memory_reserved() / 1024**3:.2f} GB"
-            )
-            print_max_memory()
-
             print("get_conditioning")
             with move_to_device(self.text_encoder, self.device):
                 conditioning = get_conditioning(
@@ -140,20 +148,19 @@ class TTPipeline(MochiSingleGPUPipeline):
                     prompt=prompt,
                     negative_prompt=negative_prompt,
                 )
-            print_max_memory()
 
             print("sample_model")
             latents = sample_model(self.device, self.dit, conditioning, **kwargs)
-            print_max_memory()
 
-            with move_to_device(self.decoder, self.device):
-                if self.decode_type == "tiled_full":
-                    frames = decode_latents_tiled_full(self.decoder, latents, **self.decode_args)
-                elif self.decode_type == "tiled_spatial":
-                    frames = decode_latents_tiled_spatial(
-                        self.decoder, latents, **self.decode_args, num_tiles_w=4, num_tiles_h=2
-                    )
-                else:
-                    frames = decode_latents(self.decoder, latents)
-            print_max_memory()
+            if self.decode_type == "tiled_full":
+                # frames = decode_latents_tiled_full(self.decoder, latents, **self.decode_args)
+                pass
+            elif self.decode_type == "tiled_spatial":
+                # frames = decode_latents_tiled_spatial(
+                #     self.decoder, latents, **self.decode_args, num_tiles_w=4, num_tiles_h=2
+                # )
+                pass
+            else:
+                frames = decode_latents(self.decoder, latents)
+
             return frames.cpu().numpy()

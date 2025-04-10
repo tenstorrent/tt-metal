@@ -4,6 +4,8 @@ from typing import Optional, Dict, Any
 from genmo.mochi_preview.pipelines import ModelFactory, load_to_cpu
 from models.experimental.mochi.tt.dit.model import AsymmDiTJoint
 from models.experimental.mochi.tt.common import get_cache_path, get_mochi_dir
+from models.experimental.mochi.tt.vae.decoder import Decoder
+from models.experimental.mochi.tt.vae.common import load_decoder_weights
 
 
 class TtDiTModelFactory(ModelFactory):
@@ -101,3 +103,34 @@ class TtDiTModelFactory(ModelFactory):
         )
 
         return model
+
+
+class TtDecoderModelFactory(ModelFactory):
+    def __init__(self, mesh_device, *, model_path: str):
+        super().__init__(model_path=model_path)
+        self.mesh_device = mesh_device
+
+    def get_model(self, *, local_rank=0, device_id=0, world_size=1):
+        # TODO(ved): Set flag for torch.compile
+        # TODO(ved): Use skip_init
+        state_dict = load_decoder_weights()
+
+        decoder = Decoder(
+            mesh_device=self.mesh_device,
+            state_dict=state_dict,
+            state_dict_prefix="",
+            out_channels=3,
+            base_channels=128,
+            channel_multipliers=[1, 2, 4, 6],
+            temporal_expansions=[1, 2, 3],
+            spatial_expansions=[2, 2, 2],
+            num_res_blocks=[3, 3, 4, 6, 3],
+            latent_dim=12,
+            has_attention=[False, False, False, False, False],
+            output_norm=False,
+            nonlinearity="silu",
+            output_nonlinearity="silu",
+            causal=True,
+        )
+
+        return decoder

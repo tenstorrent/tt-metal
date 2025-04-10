@@ -5,13 +5,17 @@ import os
 import ttnn
 from models.experimental.mochi.tt.vae.decoder import Decoder as TtDecoder
 from genmo.mochi_preview.vae.models import Decoder as RefDecoder
-
+import time
 from models.experimental.mochi.tt.common import (
     compute_metrics,
     to_torch_tensor,
 )
 from models.experimental.mochi.tt.vae.common import load_decoder_weights
 from models.experimental.mochi.tests.dit.test_model import create_models
+from genmo.mochi_preview.vae.vae_stats import dit_latents_to_vae_latents
+from genmo.mochi_preview.vae.models import normalize_decoded_frames
+from pathlib import Path
+from genmo.lib.utils import save_video
 
 # Common test configurations
 PCC_REQUIRED = 0.99
@@ -124,7 +128,7 @@ def test_decoder(mesh_device, config, divide_T, use_program_cache, reset_seeds, 
     if load_dit_weights:
         # Load DiT weights to device to account for real world DRAM usage, checking for OOM.
         logger.info("Loading DiT weights")
-        reference_model, tt_model, state_dict = create_models(mesh_device, n_layers=48)
+        reference_model, tt_model_dit, state_dict = create_models(mesh_device, n_layers=48)
         del reference_model
 
     # Create models
@@ -166,3 +170,59 @@ def test_decoder(mesh_device, config, divide_T, use_program_cache, reset_seeds, 
     ), f"Output shapes do not match: {ref_output.shape} vs {tt_output_torch.shape}"
 
     validate_outputs(tt_output_torch, ref_output, "TtDecoder forward")
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+def test_decoder_gen_video(mesh_device, use_program_cache):
+    mesh_device.enable_async(True)
+    """Use real H100 output to test decoder"""
+    # Create models
+    logger.info("Creating VAE decoder models")
+    reference_model, tt_model = create_decoder_models(mesh_device, use_real_weights=True, **decoder_base_args)
+
+    from pathlib import Path
+
+    saved_outputs_dir = Path("../saved_outputs")
+    input_tensor = torch.load(saved_outputs_dir / "out_z_63.pt", map_location="cpu")
+    input_tensor = dit_latents_to_vae_latents(input_tensor)
+    # Convert to TTNN format [N, T, H, W, C]
+    input_tensor = input_tensor.permute(0, 2, 3, 4, 1)
+
+    def sample_decoder():
+        tt_input = ttnn.from_torch(
+            input_tensor,
+            device=mesh_device,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        )
+
+        samples = tt_model.forward(tt_input)
+        return tt_input, samples
+
+    tt_input, samples = sample_decoder()
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(samples)
+    logger.info("Running e2e after compiled")
+    start = time.perf_counter()
+    tt_input, samples = sample_decoder()
+    duration = time.perf_counter() - start
+    logger.info(f"Time taken: {duration} seconds")
+    samples = to_torch_tensor(samples, mesh_device, dim=1)
+    samples = samples.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
+    samples = normalize_decoded_frames(samples)
+    samples = samples.cpu().numpy()
+    logger.info(f"Samples shape: {samples.shape}")
+    save_video(samples[0], "decoder_output.mp4")
+
+    # Save samples
+    torch.save(samples, saved_outputs_dir / "out_samples.pt")

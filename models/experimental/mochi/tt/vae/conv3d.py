@@ -89,6 +89,7 @@ class ContextParallelConv3d(LightweightModule):
         if self.padding_mode == "zeros":
             # Do front and back padding
             x_pad_NTHWC = ttnn.pad(x_NTHWC, (0, 0, 0, 0, pad_front, pad_back), value=0.0)
+            ttnn.deallocate(x_NTHWC)
         elif self.padding_mode == "replicate":
             # Use concat to pad
             front_slice = x_NTHWC[:, 0:1, :, :, :]
@@ -133,19 +134,24 @@ class ContextParallelConv3d(LightweightModule):
                 topology=ttnn.Topology.Linear,
             )
             halo_tensors = ttnn.get_device_tensors(halos)
+            ttnn.deallocate(halo_tensors[0])
 
             for i in range(1, len(device_tensors)):
+                N, T, H, W, C = device_tensors[i].shape
                 halo_index = i - 1
-                device_tensors[i] = ttnn.concat(
+                local_halo = halo_tensors[i][:, halo_index * context_size : (halo_index + 1) * context_size, :, :, :]
+                ttnn.deallocate(halo_tensors[i])
+                local_padded_tensor = ttnn.concat(
                     [
-                        halo_tensors[i][:, halo_index * context_size : (halo_index + 1) * context_size, :, :, :],
+                        local_halo,
                         device_tensors[i],
                     ],
                     dim=1,
                 )
+                ttnn.deallocate(device_tensors[i])
+                device_tensors[i] = local_padded_tensor
 
             x_pad_NTHWC = ttnn.aggregate_as_tensor(device_tensors)
-            ttnn.deallocate(halos)
 
         out_NTHWC = ttnn.experimental.conv3d(
             input_tensor=x_pad_NTHWC,

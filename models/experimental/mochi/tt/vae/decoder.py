@@ -36,6 +36,7 @@ class Decoder(LightweightModule):
         self.channel_multipliers = channel_multipliers
         self.num_res_blocks = num_res_blocks
         self.output_nonlinearity = output_nonlinearity
+        self.mesh_device = mesh_device
         assert nonlinearity == "silu"
         assert causal
         assert not any(has_attention), "Attention is not supported in the decoder"
@@ -123,6 +124,25 @@ class Decoder(LightweightModule):
             packer_l1_acc=False,
         )
 
+    def prepare_input(self, z_BCTHW):
+        T = z_BCTHW.shape[2]
+        z_BTHWC = ttnn.from_torch(
+            z_BCTHW.permute(0, 2, 3, 4, 1),
+            device=self.mesh_device,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+        )
+        return z_BTHWC, T
+
+    def postprocess_output(self, x_NTHWC, T):
+        x_NTHWC = ttnn.all_gather(x_NTHWC, dim=1)
+        x_NTHWC = ttnn.to_torch(ttnn.get_device_tensors(x_NTHWC)[0])
+        x_NTHWC = x_NTHWC[:, :T]
+        x_NCTHW = x_NTHWC.permute(0, 4, 1, 2, 3)
+        return x_NCTHW
+
     def forward(self, x_NTHWC):
         """
         Forward pass for the decoder.
@@ -138,15 +158,21 @@ class Decoder(LightweightModule):
 
         # First set of residual blocks
         for block in self.first_blocks:
-            x_NTHWC = block(x_NTHWC)
+            x_res_NTHWC = block(x_NTHWC)
+            ttnn.deallocate(x_NTHWC)
+            x_NTHWC = x_res_NTHWC
 
         # Upsampling blocks
         for block in self.up_blocks:
-            x_NTHWC = block(x_NTHWC)
+            x_res_NTHWC = block(x_NTHWC)
+            ttnn.deallocate(x_NTHWC)
+            x_NTHWC = x_res_NTHWC
 
         # Last set of residual blocks
         for block in self.last_blocks:
-            x_NTHWC = block(x_NTHWC)
+            x_res_NTHWC = block(x_NTHWC)
+            ttnn.deallocate(x_NTHWC)
+            x_NTHWC = x_res_NTHWC
 
         # Apply output nonlinearity if needed
         if self.output_nonlinearity == "silu":
