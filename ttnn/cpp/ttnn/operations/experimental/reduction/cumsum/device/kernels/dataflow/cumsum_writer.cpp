@@ -24,7 +24,7 @@ void kernel_main() {
     uint32_t PLo = get_arg_val<uint32_t>(4);
     uint32_t HtWt = get_arg_val<uint32_t>(5);
 
-    constexpr uint32_t cb_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in = tt::CBIndex::c_1;
 
     // single tile ublock
     uint32_t ublock_size_bytes = get_tile_size(cb_in);

@@ -4,6 +4,104 @@
 
 #include <stdint.h>
 
-#include "debug/dprint.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/tile_move_copy.h"
 
-void kernel_main() {}
+#define APPROX false
+#include "compute_kernel_api/add_int32_sfpu.h"
+#include "compute_kernel_api/common.h"
+
+namespace NAMESPACE {
+void MAIN {
+    uint32_t num_rows = get_arg_val<uint32_t>(0);
+    uint32_t tiles_per_row = get_arg_val<uint32_t>(1);
+
+    constexpr uint32_t cb_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_out = tt::CBIndex::c_1;
+    constexpr uint32_t cb_zero = tt::CBIndex::c_16;
+    constexpr uint32_t cb_intermed = tt::CBIndex::c_24;
+
+    constexpr uint32_t TILE_DEST = 0;
+    constexpr uint32_t TILE_ACC = 1;
+
+    constexpr uint32_t first_tile = 0;
+
+    // ???
+    unary_op_init_common(cb_in, cb_out);
+
+    // [UNPACK]: Acquire lock on cb_zero
+    // cb_zero is only written once per execution: we can (and should) keep the lock
+    cb_wait_front(cb_zero, 1);
+
+    for (unsigned i = 0; i < num_rows; i++) {
+        // Initialize cb_intermed
+        // Initialize cb_intermed tile (for accumulator)
+        // To do this, we fill tile with 0, which are loaded in cb_zero
+
+        // [UNPACK]: Zero => TILE_DEST
+
+        // What makes this required ? Are operation synchronous ?
+        // Is it to prevent a data-race with UNPACK ?
+        tile_regs_acquire();
+        copy_tile_to_dst_init_short(cb_zero);
+        copy_tile(cb_zero, first_tile, TILE_DEST);
+        tile_regs_commit();
+
+        // [PACK]: Write TILE_DEST (Zero) to cb_intermed
+        tile_regs_wait();
+        cb_reserve_back(cb_intermed, 1);
+        pack_tile(TILE_DEST, cb_intermed);
+        cb_push_back(cb_intermed, 1);
+        tile_regs_release();
+
+        for (unsigned j = 0; j < tiles_per_row; j++) {
+            // [UNPACK]: Input => TILE_DEST
+            cb_wait_front(cb_in, 1);
+            copy_tile_to_dst_init_short(cb_in);
+            copy_tile(cb_in, first_tile, TILE_DEST);
+            cb_pop_front(cb_in, 1);
+
+            // [UNPACK]: Accumulator (db_intermed) => TILE_ACC
+            cb_wait_front(cb_intermed, 1);
+            copy_tile_to_dst_init_short(cb_intermed);
+            copy_tile(cb_intermed, first_tile, TILE_ACC);
+            cb_pop_front(cb_intermed, 1);
+
+            // MATH
+            tile_regs_acquire();  // acquire 8 tile registers
+
+            add_int32_tile_init();  // Why is this always int32 ?
+            add_int32_tile(TILE_DEST, TILE_ACC);
+            tile_regs_commit();
+            // compute
+            // add_tiles()
+
+            // [PACK]: Write back results
+            tile_regs_wait();
+
+            // [PACK]: TILE_DEST => cb_out
+            cb_reserve_back(cb_out, 1);
+            pack_tile(TILE_DEST, cb_out);
+            cb_push_back(cb_out, 1);
+
+            // [PACK]: TILE_DEST => cb_intermed
+            cb_reserve_back(cb_intermed, 1);
+            pack_tile(TILE_DEST, cb_intermed);
+            cb_push_back(cb_intermed, 1);
+
+            tile_regs_release();  // release 8 tile registers
+        }
+
+        // If we keep reserve_back() and push_back() into the CircularBuffer
+        // then it will eventually get filled if multiple iterations are performed.
+        // To avoid this, we pop the circular buffer.
+        cb_wait_front(cb_intermed, 1);
+        cb_pop_front(cb_intermed, 1);
+    }
+
+    cb_pop_front(cb_zero, 1);  // end of kernel: release lock on cb_zero
+}
+
+}  // namespace NAMESPACE

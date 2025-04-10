@@ -7,6 +7,7 @@
 #include <random>
 #include "cumsum_device_operation.hpp"
 #include "hostdevcommon/kernel_structs.h"
+#include "tt-metalium/base_types.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "tt-metalium/buffer.hpp"
 #include "tt-metalium/circular_buffer.hpp"
@@ -55,21 +56,14 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
 
     TT_FATAL(input_tensor.get_dtype() == output_tensor.get_dtype(), "Type conversion not supported yet");
 
-    TT_FATAL(output_tensor.get_dtype() == DataType::FLOAT32, "Only float32 data type supported for now");
+    const auto& output_dtype = output_tensor.dtype();
+    TT_FATAL(
+        output_dtype == DataType::FLOAT32 || output_dtype == DataType::INT32,
+        "Only float32 and int32 data type supported for now");
 
     TT_FATAL(output_tensor.get_layout() == Layout::TILE, "Only supported layout is TILE");
 
     TT_FATAL(input_tensor.get_padded_shape().rank() >= 3, "Only support 4D tensor");
-
-    TT_FATAL(
-        input_tensor.get_padded_shape()[tensor_rank - 1] % 32 == 0 &&
-            input_tensor.get_padded_shape()[tensor_rank - 2] % 32 == 0,
-        "Input tensor must have padding");
-
-    TT_FATAL(
-        output_tensor.get_padded_shape()[tensor_rank - 1] % 32 == 0 &&
-            output_tensor.get_padded_shape()[tensor_rank - 2] % 32 == 0,
-        "Output tensor must have padding");
 
     TT_FATAL(
         input_tensor.buffer()->size() == input_tensor.volume() * sizeof(float),
@@ -102,17 +96,25 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
 
     constexpr uint32_t cb_in_index = CBIndex::c_0;
     constexpr uint32_t cb_out_index = CBIndex::c_1;
+    constexpr uint32_t cb_zero_index = CBIndex::c_16;
     constexpr uint32_t cb_intermed_index = CBIndex::c_24;
 
-    DataFormat in_df = DataFormat::Float32;
-    DataFormat out_df = DataFormat::Float32;
+    DataFormat in_df = datatype_to_dataformat_converter(output_dtype);
+    ;
+    DataFormat out_df = in_df;
 
     CircularBufferConfig cb_in_config =
         CircularBufferConfig(single_tile_size, {{cb_in_index, in_df}}).set_page_size(cb_in_index, single_tile_size);
+    CircularBufferConfig cb_out_config =
+        CircularBufferConfig(single_tile_size, {{cb_out_index, in_df}}).set_page_size(cb_out_index, single_tile_size);
+    CircularBufferConfig cb_zero_config =
+        CircularBufferConfig(single_tile_size, {{cb_zero_index, in_df}}).set_page_size(cb_zero_index, single_tile_size);
     CircularBufferConfig cb_intermed_config = CircularBufferConfig(single_tile_size, {{cb_intermed_index, in_df}})
                                                   .set_page_size(cb_intermed_index, single_tile_size);
 
     CBHandle cb_in = CreateCircularBuffer(program, core, cb_in_config);
+    CBHandle cb_out = CreateCircularBuffer(program, core, cb_out_config);
+    CBHandle cb_zero = CreateCircularBuffer(program, core, cb_zero_config);
     CBHandle cb_intermed = CreateCircularBuffer(program, core, cb_intermed_config);
 
     KernelHandle cumsum_reader_handle_id = CreateKernel(
@@ -126,6 +128,17 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/dataflow/cumsum_writer.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    std::vector<uint32_t> compute_kernel_args = {};
+    KernelHandle cumsum_compute_handle_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/compute/cumsum_compute.cpp",
+        core,
+        ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = false,
+            .math_approx_mode = false,
+            .compile_args = compute_kernel_args});
 
     // Parameters setup
 
@@ -179,6 +192,15 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
             HtWt,
         });
 
+    SetRuntimeArgs(
+        program,
+        cumsum_compute_handle_id,
+        core,
+        {
+            PHi * PLo * HtWt,
+            num_tiles_per_row,
+        });
+
     return {std::move(program), {}};
 }
 
@@ -192,9 +214,10 @@ void CumSumDeviceOperation::SingleCore::override_runtime_arguments(
 
     TT_FATAL(false, "false");
 
-    TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32, "Unsupported input data type");
+    const auto& input_dtype = input_tensor.get_dtype();
+    TT_FATAL(input_dtype == DataType::FLOAT32 || input_dtype == DataType::INT32, "Unsupported input data type");
 
-    TT_FATAL(dtype == DataType::FLOAT32, "Unsupported data type");
+    TT_FATAL(dtype == DataType::FLOAT32 || dtype == DataType::INT32, "Unsupported data type");
 }
 
 }  // namespace ttnn::operations::experimental::reduction

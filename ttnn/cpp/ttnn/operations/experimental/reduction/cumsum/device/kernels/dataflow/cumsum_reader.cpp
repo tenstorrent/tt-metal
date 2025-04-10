@@ -26,37 +26,55 @@ void kernel_main() {
     uint32_t HtWt = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_out = tt::CBIndex::c_0;
-    constexpr uint32_t cb_intermed = tt::CBIndex::c_24;
+    constexpr uint32_t cb_zero = tt::CBIndex::c_16;
+    // constexpr uint32_t cb_intermed = tt::CBIndex::c_24;
+
+    const auto& input_data_format = get_dataformat(cb_out);  // Note: we don't use CB for now so that's OK
 
     // single tile ublock
     uint32_t ublock_size_bytes = get_tile_size(cb_out);
-
     uint32_t l1_addr_out = get_write_ptr(cb_out);
-    uint32_t tile_card = ublock_size_bytes / sizeof(float);
 
-    float sum = 0.f;
+    const uint32_t input_tile_bytes = ublock_size_bytes;
+    const uint32_t output_tile_bytes = ublock_size_bytes;
+    InterleavedAddrGenFast<true> dram_input_addrg = {
+        .bank_base_address = input_dram_base_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
 
-    // Set SRAM pointers
-    float* accumulator = (float*)intermed_sram_addr;
+    union {
+        int32_t i32;
+        float f32;
+    } scaler;
+
+    uint32_t bytes_per_element = 4;
+    switch (input_data_format) {
+        case DataFormat::Float32: scaler.f32 = 0.f; bytes_per_element = 4;
+        case DataFormat::Float16:
+            scaler.i32 = 0;  // {bin(0.h), bin(0.h)} == {0x0, 0x0} == 0u32
+            bytes_per_element = 2;
+            break;
+        default: scaler.i32 = 0; bytes_per_element = 4;
+    }
+
+    uint32_t tile_card = ublock_size_bytes / bytes_per_element;
+
+    // Fill cb_zero with zero
+    // TODO: Handle other data types
+    cb_reserve_back(cb_zero, 1);
+    uint32_t data_zero_addr = get_write_ptr(cb_zero);
+    int32_t* data_zero = (int32_t*)data_zero_addr;
+    // Dirty method: Write as if uint32_t element: if element size is lower then this writes multiple element per
+    // iteration
+    for (uint32_t i = 0; i < ublock_size_bytes / sizeof(uint32_t); i++) {
+        data_zero[i] = scaler.i32;
+    }
+    cb_push_back(cb_zero, 1);
 
     DPRINT << "[Cumsum Reader] #tiles/row = " << tiles_per_row << ", tile size = " << ublock_size_bytes
            << ", tile  card = " << tile_card << ", num rows = " << num_rows << ", PHi = " << PHi << ", PLo = " << PLo
            << ", HtWt = " << HtWt << ENDL();
 
-    const uint32_t input_tile_bytes = ublock_size_bytes;
-    const uint32_t output_tile_bytes = ublock_size_bytes;
-    const auto& input_data_format = get_dataformat(cb_out);  // Note: we don't use CB for now so that's OK
-
-    InterleavedAddrGenFast<true> dram_input_addrg = {
-        .bank_base_address = input_dram_base_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
-
     for (unsigned i0 = 0; i0 < PLo; i0++) {
         for (unsigned i1 = 0; i1 < PHi * HtWt; i1++) {
-            // Set accumulator to 0
-            for (unsigned i = 0; i < tile_card; i++) {
-                accumulator[i] = 0.f;
-            }
-
             for (unsigned j = 0; j < tiles_per_row; j++) {
                 uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, PLo, PHi, HtWt);
                 DPRINT << "[Cumsum Reader] tile = " << tileid << ENDL();
@@ -68,16 +86,7 @@ void kernel_main() {
                 noc_async_read_tile(tileid, dram_input_addrg, data_sram_addr);
                 noc_async_read_barrier();
 
-                float* const data = (float*)data_sram_addr;
-
-                // Accumulate within tile (which is in cb_out)
-                for (unsigned i = 0; i < tile_card; i++) {
-                    accumulator[i] += data[i];
-                    data[i] = accumulator[i];
-                }
-
                 // Write tile
-
                 cb_push_back(cb_out, 1);
             }
         }
