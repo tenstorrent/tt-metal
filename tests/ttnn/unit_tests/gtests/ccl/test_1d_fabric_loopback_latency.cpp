@@ -28,7 +28,8 @@ using LatencyTestWriterSpecs = std::vector<std::optional<WriterSpec>>;
 inline void RunPersistent1dFabricLatencyTest(
     // Args for the measured writer
     const LatencyTestWriterSpecs& writer_specs,
-    size_t line_size) {
+    size_t line_size,
+    bool enable_fused_payload_with_sync) {
     size_t num_links = 1;
 
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -247,8 +248,7 @@ inline void RunPersistent1dFabricLatencyTest(
             const auto& packet_spec = std::get<LatencyPacketTestWriterSpec>(writer_specs[i]->spec);
             bool payloads_are_mcast = false;
             bool sem_inc_only = writer_specs.at(i)->message_size_bytes == 0;
-            worker_ct_args = {false, payloads_are_mcast, sem_inc_only};
-
+            worker_ct_args = {!sem_inc_only && enable_fused_payload_with_sync, payloads_are_mcast, sem_inc_only};
         } else {
             log_info(tt::LogTest, "adding datapath busy writer");
             const auto& datapath_spec = std::get<DatapathBusyDataWriterSpec>(writer_specs[i]->spec);
@@ -420,6 +420,7 @@ int main(int argc, char** argv) {
     std::size_t num_downstream_fabric_congestion_writers = std::stoi(argv[arg_idx++]);
     std::size_t congestion_writers_message_size = std::stoi(argv[arg_idx++]);
     bool congestion_writers_use_mcast = std::stoi(argv[arg_idx++]) != 0;
+    bool enable_fused_payload_with_sync = std::stoi(argv[arg_idx++]) != 0;
     TT_FATAL(arg_idx == argc, "Read past end of args or didn't read all args");
 
     uint32_t test_expected_num_devices = 8;
@@ -484,5 +485,5 @@ int main(int argc, char** argv) {
             .message_size_bytes = congestion_writers_message_size};
     }
 
-    RunPersistent1dFabricLatencyTest(writer_specs, line_size);
+    RunPersistent1dFabricLatencyTest(writer_specs, line_size, enable_fused_payload_with_sync);
 }

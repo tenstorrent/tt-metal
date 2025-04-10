@@ -101,9 +101,16 @@ void kernel_main() {
         safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
     auto dest_payload_noc_addr = safe_get_noc_addr(
         static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), dest_dummy_payload_buffer_address, 0);
-    payload_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_payload_noc_addr}, payload_size_bytes);
-    sem_inc_packet_header->to_noc_unicast_atomic_inc(
-        NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
+    if constexpr (enable_fused_payload_with_sync) {
+        payload_packet_header->to_noc_fused_unicast_write_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                dest_payload_noc_addr, dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max(), false},
+            payload_size_bytes);
+    } else {
+        payload_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_payload_noc_addr}, payload_size_bytes);
+        sem_inc_packet_header->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
+    }
 
     auto send_seminc_packet = [&fabric_connection, sem_inc_packet_header]() {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
@@ -126,30 +133,50 @@ void kernel_main() {
         wait_for_semaphore_then_reset(1);
     }
 
+    auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(dest_dummy_payload_buffer_address);
     {
         for (size_t i = 0; i < num_bursts_to_send; i++) {
             // Wait for the fabric endpoint to have a completely empty sender channel buffer
+            if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
+                if (burst_size > 1) {
+                    while (1);  // invalid config -- hang instead of reporting garbage numbers
+                }
+                // Initialize to i + 1 so we can safely reset to 0 and not invalidate the first
+                // packet wait (without +1, we'd finish the loop before the first packet arrives
+                // since we reset to 0)
+                *payload_l1_ptr = i + 1;
+            }
 
             // Burst
             {
                 DeviceZoneScopedN("BURST-WRITE");
                 for (size_t j = 0; j < burst_size; j++) {
                     if constexpr (enable_fused_payload_with_sync) {
-                        static_assert(!enable_fused_payload_with_sync, "Fused payload with sync is not supported");
+                        send_payload_packet();
                     } else {
-                        if constexpr (!sem_inc_only) {
+                        if constexpr (sem_inc_only) {
+                            send_seminc_packet();
+                        } else {
                             send_payload_packet();
                         }
-                        send_seminc_packet();
                     }
                 }
                 // Don't want to include noc command buffer response time in the total latency measurement
                 noc_async_writes_flushed();
+                if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
+                    // TODO: add separate src buffer -- technically a race but in practice this will never hit.
+                    *payload_l1_ptr = 0;
+                }
 
                 {
                     DeviceZoneScopedN("WAIT-FOR-ALL-SEMAPHORES");
-                    for (size_t j = 0; j < burst_size; j++) {
-                        noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), j + 1);
+
+                    if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
+                        noc_semaphore_wait_min(payload_l1_ptr, i + 1);
+                    } else {
+                        for (size_t j = 0; j < burst_size; j++) {
+                            noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), j + 1);
+                        }
                     }
                 }
                 *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
