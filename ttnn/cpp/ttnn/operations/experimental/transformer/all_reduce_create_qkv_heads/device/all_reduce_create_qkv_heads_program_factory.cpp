@@ -28,7 +28,6 @@
 #include <type_traits>
 #include <ranges>
 #include <optional>
-using namespace tt::constants;
 
 namespace ttnn {
 
@@ -70,23 +69,23 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     const uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    const uint32_t head_tiles = head_dim / TILE_WIDTH;
+    const uint32_t head_tiles = head_dim / tt::constants::TILE_WIDTH;
     const uint32_t head_size = head_tiles * single_tile_size;
 
     const uint32_t element_size = output_tensor.element_size();
     const uint32_t sub_tile_line_bytes = 16 * element_size;
     const auto q_shard_spec = q_output_tensor.shard_spec().value();
     const auto q_cores = q_shard_spec.grid;
-    const auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
+    const auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / tt::constants::TILE_HW;
     const auto k_shard_spec = k_output_tensor.shard_spec().value();
     const auto k_cores = k_shard_spec.grid;
-    const auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
+    const auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / tt::constants::TILE_HW;
     const auto v_shard_spec = v_output_tensor.shard_spec().value();
     const auto v_cores = v_shard_spec.grid;
-    const auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
+    const auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / tt::constants::TILE_HW;
     const auto in_shard_spec = output_tensor.shard_spec().value();
     const auto in_cores = in_shard_spec.grid;
-    const auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
+    const auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / tt::constants::TILE_HW;
     uint32_t batch_offset_index_stick_size = 0;
     // auto qk_cores = q_cores;
 
@@ -211,12 +210,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec->grid;
     const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec->shape;
-    const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
+    const auto input_tensor_shard_num_pages =
+        input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / tt::constants::TILE_HW;
     const auto num_input_cores = input_tensor_cores.num_cores();
     const auto output_tensor_num_pages = output_tensor.buffer()->num_pages();
     const auto output_tensor_cores = output_tensor.memory_config().shard_spec->grid;
     const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec->shape;
-    const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
+    const auto output_tensor_shard_num_pages =
+        output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / tt::constants::TILE_HW;
     const auto num_output_cores = output_tensor_cores.num_cores();
 
     // Get worker cores, assuming 1 worker per link

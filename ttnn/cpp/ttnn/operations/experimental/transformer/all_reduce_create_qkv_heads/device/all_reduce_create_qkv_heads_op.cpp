@@ -144,7 +144,7 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
     const uint32_t num_users_supported = 32;
     uint32_t num_users = input_shape[2];
     TT_FATAL(
-        input_shape[3] % TILE_WIDTH == 0,
+        input_shape[3] % tt::constants::TILE_WIDTH == 0,
         "Unsupported input shape = {}",
         input_shape);  // head_dim must be multiple of TILE_WIDTH
     TT_FATAL(num_users <= num_users_supported, "Unsupported input shape = {}", input_shape);  // 32 users
@@ -225,8 +225,8 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     const Shape v_output_shape({input_shape[0], batch, this->num_kv_heads, head_dim});
     const Shape k_output_shape = v_output_shape;
 
-    auto num_q_heads_padded = ((this->num_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    auto num_kv_heads_padded = ((this->num_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    auto num_q_heads_padded = ((this->num_heads - 1) / tt::constants::TILE_HEIGHT + 1) * tt::constants::TILE_HEIGHT;
+    auto num_kv_heads_padded = ((this->num_heads - 1) / tt::constants::TILE_HEIGHT + 1) * tt::constants::TILE_HEIGHT;
 
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
     // auto input_core_grid = input_tensor.shard_spec().value().grid;
