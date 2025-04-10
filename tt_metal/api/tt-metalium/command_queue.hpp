@@ -79,6 +79,14 @@ public:
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
 
+    virtual void enqueue_write_to_core_l1(
+        const CoreCoord& virtual_core,
+        const void* src,
+        DeviceAddr address,
+        uint32_t size_bytes,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
 };
 

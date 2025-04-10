@@ -32,6 +32,12 @@ struct L1ReadDispatchParams {
     tt::stl::Span<const SubDeviceId> sub_device_ids;
 };
 
+struct L1WriteDispatchParams : public L1ReadDispatchParams {
+    const void* src = nullptr;
+};
+
+void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_params);
+
 void issue_l1_read_command_sequence(const L1ReadDispatchParams& dispatch_params);
 
 void read_l1_data_from_completion_queue(

@@ -317,7 +317,7 @@ void HWCommandQueue::enqueue_read_from_core_l1(
     TT_FATAL(
         address + size_bytes <= hal_ref.get_dev_addr(core_type, HalL1MemAddrType::BASE) +
                                     hal_ref.get_dev_size(core_type, HalL1MemAddrType::BASE),
-        "Region to read from L1 is out of bounds");
+        "Region to read from in L1 is out of bounds");
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
     device_dispatch::L1ReadDispatchParams dispatch_params(
@@ -334,6 +334,39 @@ void HWCommandQueue::enqueue_read_from_core_l1(
     this->issued_completion_q_reads_.push(
         std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadL1DataDescriptor>, dst, size_bytes));
     this->increment_num_entries_in_completion_q();
+
+    if (blocking) {
+        this->finish(sub_device_ids);
+    }
+}
+
+void HWCommandQueue::enqueue_write_to_core_l1(
+    const CoreCoord& virtual_core,
+    const void* src,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("HWCommandQueue_enqueue_write_to_core_l1");
+
+    const HalProgrammableCoreType core_type = this->device_->get_programmable_core_type(virtual_core);
+    TT_FATAL(
+        address + size_bytes <= hal_ref.get_dev_addr(core_type, HalL1MemAddrType::BASE) +
+                                    hal_ref.get_dev_size(core_type, HalL1MemAddrType::BASE),
+        "Region to write to in L1 is out of bounds");
+
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
+    device_dispatch::L1WriteDispatchParams dispatch_params{
+        virtual_core,
+        address,
+        size_bytes,
+        this->device_,
+        this->id_,
+        this->get_dispatch_core_type(),
+        this->expected_num_workers_completed_,
+        sub_device_ids,
+        src};
+    device_dispatch::issue_l1_write_command_sequence(dispatch_params);
 
     if (blocking) {
         this->finish(sub_device_ids);
