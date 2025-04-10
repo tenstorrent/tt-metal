@@ -197,6 +197,23 @@ static SubdeviceInfo create_subdevices(const std::vector<IDevice*>& devices) {
     return subdevice_info;
 }
 
+static SubdeviceInfo create_worker_subdevices(const std::vector<IDevice*>& devices) {
+    SubdeviceInfo subdevice_info;
+    std::unordered_map<chip_id_t, SubDeviceManagerId> sub_device_manager_ids;
+    for (auto device : devices) {
+        const auto& tensix_sub_device =
+            tt_metal::SubDevice(std::array{device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0})});
+        subdevice_info.sub_device_managers.insert(
+            {device->id(), device->create_sub_device_manager({tensix_sub_device}, 0)});
+        device->load_sub_device_manager(subdevice_info.sub_device_managers.at(device->id()));
+        subdevice_info.worker_subdevice_id.insert(
+            {device->id(), device->get_sub_device_ids().at(TEST_WORKERS_SUBDEVICE_INDEX)});
+        device->set_sub_device_stall_group({subdevice_info.worker_subdevice_id.at(device->id())});
+    }
+
+    return subdevice_info;
+}
+
 Correctness run_output_check(
     const std::vector<uint32_t>& all_zeros,
     const std::vector<uint32_t>& inputs,
@@ -2007,7 +2024,8 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
         log_info("Test must be run on WH");
         return;
     }
-    Fabric1DFixture test_fixture;
+    // Initialize MeshDevice with 1D Fabric
+    Fabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
@@ -2038,24 +2056,8 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     }
     // Need to make it a mesh tensor for use with the op
     const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
+    std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
 
-    // FABRIC setup
-    const bool enable_persistent_fabric = true;
-
-    std::vector<Program> dummy_worker_programs;
-    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
-    std::optional<std::vector<Program>> fabric_programs;
-    std::vector<Program*> fabric_program_ptrs;
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
-    setup_test_with_persistent_fabric(
-        devices,
-        dummy_worker_programs,
-        subdevice_managers,
-        fabric_programs,
-        fabric_program_ptrs,
-        fabric_handle,
-        enable_persistent_fabric,
-        num_links);
     log_info(tt::LogTest, "launching op");
 
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore multi_device_global_semaphore =
@@ -2079,16 +2081,6 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     // wait for op completion
     wait_for_worker_subdevice_program_completion(devices, subdevice_managers);
-    log_info(tt::LogTest, "Main op done");
-
-    log_info(tt::LogTest, "Fabric teardown");
-    persistent_fabric_teardown_sequence(
-        devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-
-    log_info(tt::LogTest, "Waiting for teardown completion");
-    for (auto d : devices) {
-        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
-    }
     log_info(tt::LogTest, "Finished");
 }
 
@@ -2107,7 +2099,8 @@ void run_ring_all_gather_with_persistent_fabric(
         log_info("Test must be run on WH");
         return;
     }
-    Fabric1DFixture test_fixture;
+    // Initialize MeshDevice with 1D Fabric
+    Fabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
@@ -2143,25 +2136,9 @@ void run_ring_all_gather_with_persistent_fabric(
     // Need to make it a mesh tensor for use with the op
     const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
 
-    // FABRIC setup
-    const bool enable_persistent_fabric = true;
-
-    std::vector<Program> dummy_worker_programs;
-    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
-    std::optional<std::vector<Program>> fabric_programs;
-    std::vector<Program*> fabric_program_ptrs;
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
+    std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
-    setup_test_with_persistent_fabric(
-        devices,
-        dummy_worker_programs,
-        subdevice_managers,
-        fabric_programs,
-        fabric_program_ptrs,
-        fabric_handle,
-        enable_persistent_fabric,
-        num_links,
-        topology);
+
     log_info(tt::LogTest, "launching op");
 
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore multi_device_global_semaphore =
@@ -2185,16 +2162,6 @@ void run_ring_all_gather_with_persistent_fabric(
 
     // wait for op completion
     wait_for_worker_subdevice_program_completion(devices, subdevice_managers);
-    log_info(tt::LogTest, "Main op done");
-
-    log_info(tt::LogTest, "Fabric teardown");
-    persistent_fabric_teardown_sequence(
-        devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-
-    log_info(tt::LogTest, "Waiting for teardown completion");
-    for (auto d : devices) {
-        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
-    }
     log_info(tt::LogTest, "Finished");
 }
 
