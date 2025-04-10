@@ -62,7 +62,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@70bd289d4bfb2f3d93f57dec4e78f3107baa04f5
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@williamly/19790-enable-watcher-bhpc
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
