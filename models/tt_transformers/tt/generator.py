@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 import ttnn
 import torch
 from loguru import logger
@@ -24,6 +25,18 @@ from models.tt_transformers.tt.common import (
     get_block_size,
     get_max_prefill_chunk_size,
 )
+
+
+@dataclass(frozen=True)
+class SamplingParams:
+    """
+    Used in Generator decode forward functions for greedy decoding / sampling on device.
+    The same data class exists in vLLM at vllm/worker/tt_model_runner.py.
+    """
+
+    temperature: float
+    top_k: int
+    top_p: float
 
 
 class Generator:
@@ -195,8 +208,13 @@ class Generator:
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
-        argmax_on_device=False,
+        sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
     ):
+        assert (
+            sampling_params is None or sampling_params.temperature == 0
+        ), "Currently only supporting greedy decoding (temperature=0) on device"
+        argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
+
         B = tokens.shape[0]
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
@@ -215,7 +233,7 @@ class Generator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits, B, argmax_on_device)
+            to_host = self.read_decode_output(tt_logits, B, is_tokens=(sampling_params is not None))
             return to_host
         else:
             return tt_logits
@@ -583,13 +601,14 @@ class Generator:
             return tt_logits
 
     # Note: This function is called by vLLM
-    def read_decode_output(self, tt_logits, unpadded_batch, argmax_on_device=False):
+    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
+        """
+        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
+        """
         batch_per_dp = unpadded_batch // self.data_parallel
         logits = []
         for i in range(self.data_parallel):
-            logits_i = self.model[i].process_output_decode(
-                tt_logits[i], B=batch_per_dp, S=1, argmax_on_device=argmax_on_device
-            )
+            logits_i = self.model[i].process_output_decode(tt_out[i], B=batch_per_dp, S=1, is_tokens=is_tokens)
             logits.append(logits_i)
         logits = torch.cat(logits, 0)
         return logits
