@@ -658,6 +658,15 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         } else {
             input_tensor = ttnn::to_device(
                 input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+            log_debug(
+                tt::LogOp,
+                "Input Tensor Memory Config is {}, expected {}",
+                input_tensor.memory_config(),
+                (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+            input_tensor = ttnn::to_memory_config(
+                input_tensor,
+                (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config),
+                std::nullopt);  // TODO: remove this line
         }
     }
     return {input_tensor, parallel_config, output_parallel_config};
