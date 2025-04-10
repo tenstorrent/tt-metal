@@ -4,6 +4,7 @@
 
 #include "ttnn/cluster.hpp"
 #include <umd/device/cluster.h>
+#include <filesystem>
 
 namespace ttnn {
 
