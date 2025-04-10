@@ -25,8 +25,6 @@ constexpr int MAX_HEAD = 32;
 
 namespace ttnn {
 
-using ccl::EriscDatamoverBuilder;
-
 struct AllReduceCreateQkvHeads {
     std::optional<IDevice*> forward_device;
     std::optional<IDevice*> backward_device;
