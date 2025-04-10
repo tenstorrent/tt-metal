@@ -241,9 +241,14 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
 
     auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(a.to_float() + kValToAdd); };
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
-    std::vector<bfloat16> golden_bf16 = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
+    std::vector<bfloat16> a_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, bfloat16_identity_transform);
+    std::vector<bfloat16> b_vec = unpack_uint32_vec_into_bfloat16_vec(b_data, bfloat16_identity_transform);
 
-    EXPECT_THAT(result_vec, Pointwise(Eq(), golden_bf16));
+    uint16_t total_values = result_data.size() * 2;
+
+    for (uint16_t i = 0; i < total_values; i++) {
+        EXPECT_EQ(result_vec[i], bfloat16(a_vec[i].to_float() + b_vec[i].to_float()));
+    }
 }
 
 class MeshEndToEndT3kTraceTests : public MeshDeviceFixtureBase {
@@ -315,9 +320,16 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
     auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(a.to_float() + kValToAdd); };
 
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
-    std::vector<bfloat16> golden_bf16 = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
+    std::vector<bfloat16> a_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, bfloat16_identity_transform);
+    std::vector<bfloat16> b_vec = unpack_uint32_vec_into_bfloat16_vec(b_data, bfloat16_identity_transform);
 
-    EXPECT_THAT(result_vec, Pointwise(Eq(), golden_bf16));
+    uint16_t total_values = result_data.size() * 2;
+
+    for (uint16_t i = 0; i < total_values; i++) {
+        EXPECT_EQ(result_vec[i], bfloat16(a_vec[i].to_float() + b_vec[i].to_float()));
+    }
+
+    // EXPECT_THAT(result_vec, Pointwise(Eq(), golden_bf16));
 }
 
 TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
@@ -376,7 +388,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToMul](const bfloat16 a) { return bfloat16(a.to_float() * kValToMul); };
+    auto transform_to_golden = [kValToMul](const bfloat16 a) { return bfloat16(a * bfloat16(kValToMul)); };
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_bf16 = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
