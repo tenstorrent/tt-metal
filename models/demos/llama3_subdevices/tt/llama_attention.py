@@ -269,7 +269,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         ttnn.deallocate(x)
@@ -353,7 +353,7 @@ class TtLlamaAttention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
                 scale=self.scale,
-                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                program_config=self.model_config["PAGED_SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
                 memory_config=sdpa_out_mem_cfg,
             )

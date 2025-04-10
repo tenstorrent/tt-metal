@@ -46,6 +46,7 @@
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
 #include "rtoptions.hpp"
+#include <tt-metalium/allocator.hpp>
 #include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
@@ -1679,7 +1680,7 @@ int main(int argc, char **argv) {
         }
 
         uint32_t worker_unreserved_base_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+            test_devices.begin()->second->device_handle->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
         if (metal_fabric_init_level == 0) {
             // manual init fabric

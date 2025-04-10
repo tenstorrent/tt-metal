@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 5
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 340, "max": 355}, 80: {"min": 39, "max": 41}}
+TSU_THRESHOLDS = {1: {"min": 340, "max": 355}, 10: {"min": 180, "max": 200}, 80: {"min": 39, "max": 41}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -492,10 +492,11 @@ def run_llama3_demo(
             users_decoding = False
 
     if not stress_test:
+        # print before assertion
+        out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
+        logger.info(out_of_targets_msg)
         # Assert at the end of test to check if the throughput recuperated
-        assert (
-            tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT
-        ), f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
+        assert tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT, out_of_targets_msg
 
     # Print out total number of tsu_failures
     logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
@@ -543,7 +544,7 @@ def run_llama3_demo(
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
@@ -558,7 +559,7 @@ def run_llama3_demo(
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
@@ -573,7 +574,7 @@ def run_llama3_demo(
             1024,  # max_seq_len
             32,  # batch_size
             4 * 128 * 1024,  # max_generated_tokens (same index for stress test)
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
@@ -603,7 +604,7 @@ def run_llama3_demo(
             1024,  # max_seq_len
             32,  # batch_size
             1,  # max_generated_tokens
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
@@ -632,8 +633,10 @@ def run_llama3_demo(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}], indirect=True
+@pytest.mark.parametrize(  # Worker size is selected to give 120kB ringbuffer size
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872, "worker_l1_size": 1344544}],
+    indirect=True,
 )
 def test_llama_demo(
     weights,
@@ -657,11 +660,6 @@ def test_llama_demo(
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
-
-    assert_msg = (
-        "Ring buffer size not set. Needs to be set env TT_METAL_WORKER_RINGBUFFER_SIZE=122880 (120KB) for best perf"
-    )
-    assert os.environ.get("TT_METAL_WORKER_RINGBUFFER_SIZE") is not None, assert_msg
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:

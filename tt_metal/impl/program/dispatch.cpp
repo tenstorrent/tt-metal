@@ -70,6 +70,9 @@ enum NOC : uint8_t;
 }  // namespace tt_metal
 }  // namespace tt
 
+namespace tt::tt_metal {
+namespace program_dispatch {
+
 namespace {
 CoreCoord get_sub_device_worker_origin(
     const tt::tt_metal::IDevice* device,
@@ -81,10 +84,16 @@ CoreCoord get_sub_device_worker_origin(
     }
     return grid.bounding_box().start_coord;
 }
-};  // namespace
 
-namespace tt::tt_metal {
-namespace program_dispatch {
+size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
+    if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
+        return device->allocator()->get_config().l1_unreserved_base -
+               hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+    } else {
+        return hal_ref.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    }
+}
+};  // namespace
 
 enum DispatchWriteOffsets {
     DISPATCH_WRITE_OFFSET_ZERO = 0,
@@ -204,11 +213,6 @@ uint32_t finalize_rt_args(
         programmable_core_type_index, kernels, kernel_groups, crta_base_offset, crta_offsets, crta_sizes);
 
     uint32_t offset = max_unique_rta_size + total_crta_size;
-    // TODO: this is asserted here as the leveling above can break the limits enforced by the API
-    // Once we use a ring buffer, memory space will be dynamic and this assert won't matter
-    std::uint32_t l1_kernel_config_size = tt::tt_metal::hal_ref.get_dev_size(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
-    TT_FATAL(offset <= l1_kernel_config_size, "offset {} cannot exceed config size {}", offset, l1_kernel_config_size);
 
     rta_offset = base_offset;
     return offset;
@@ -435,7 +439,8 @@ void finalize_program_offsets(T& workload, IDevice* device) {
 
         TT_ASSERT(offset == tt::align(offset, hal_ref.get_alignment(HalMemType::L1)));
 
-        auto max_size = hal_ref.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+        size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+
         TT_FATAL(
             offset < max_size,
             "Program size ({}) too large for kernel config buffer ({}) on {}",
@@ -1650,14 +1655,21 @@ void assemble_device_commands(
     TT_ASSERT(device_command_sequence.size_bytes() == device_command_sequence.write_offset_bytes());
 }
 
-void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr) {
+void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
     for (uint32_t index = 0; index < tt::tt_metal::hal_ref.get_programmable_core_type_count(); index++) {
+        uint32_t ringbuffer_size;
+        if (tt::tt_metal::hal_ref.get_programmable_core_type(index) == tt::tt_metal::HalProgrammableCoreType::TENSIX) {
+            ringbuffer_size = worker_l1_unreserved_start - tt::tt_metal::hal_ref.get_dev_addr(
+                                                               tt::tt_metal::hal_ref.get_programmable_core_type(index),
+                                                               tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+        } else {
+            ringbuffer_size = tt::tt_metal::hal_ref.get_dev_size(
+                tt::tt_metal::hal_ref.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+        }
         config_buffer_mgr.init_add_buffer(
             tt::tt_metal::hal_ref.get_dev_addr(
                 tt::tt_metal::hal_ref.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
-            tt::tt_metal::hal_ref.get_dev_size(
-                tt::tt_metal::hal_ref.get_programmable_core_type(index),
-                tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG));
+            ringbuffer_size);
     }
     // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
     // previous launch message.
@@ -2045,10 +2057,11 @@ uint32_t program_base_addr_on_core(
 void reset_config_buf_mgrs_and_expected_workers(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
-    uint32_t num_entries_to_reset) {
+    uint32_t num_entries_to_reset,
+    uint32_t worker_l1_unreserved_start) {
     for (uint32_t i = 0; i < num_entries_to_reset; ++i) {
         config_buffer_mgrs[i] = WorkerConfigBufferMgr();
-        initialize_worker_config_buf_mgr(config_buffer_mgrs[i]);
+        initialize_worker_config_buf_mgr(config_buffer_mgrs[i], worker_l1_unreserved_start);
     }
     std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_entries_to_reset, 0);
 }

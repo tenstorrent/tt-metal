@@ -10,8 +10,11 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt_stl/reflection.hpp>
+
 #include "ttnn/config.hpp"
+#include "ttnn/distributed/types.hpp"
 
 #include <tracy/Tracy.hpp>
 
@@ -39,6 +42,26 @@ template <typename OutputTensors = Tensors>
 struct CacheableProgram {
     Program program;
     std::optional<OverrideRuntimeArgumentsCallback<OutputTensors>> override_runtime_arguments_callback = std::nullopt;
+};
+
+template <typename OutputTensors = Tensors>
+using OverrideRuntimeArgumentsWorkloadCallback = std::function<void(
+    const void* operation,
+    distributed::MeshWorkload&,
+    const Tensors&,
+    const OptionalConstTensors&,
+    const OutputTensors&)>;
+
+template <typename OutputTensors = Tensors>
+struct CacheableMeshWorkload {
+    distributed::MeshWorkload workload;
+
+    // Either one of these callbacks can be set, but not both.
+    // TODO: #19569 - `per_program_callbacks` is used to assist old infra migration, which relied on per-program
+    // callbacks. This needs to be removed
+    std::optional<OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>> workload_callback = std::nullopt;
+    std::unordered_map<ttnn::MeshCoordinateRange, OverrideRuntimeArgumentsCallback<OutputTensors>>
+        per_program_callbacks;
 };
 
 template <typename... Args>
@@ -311,27 +334,60 @@ constexpr bool implements_create_output_tensors_with_optional_output_tensors() {
 template <class T, class... Args>
 using has_create_program_t = decltype(std::declval<T>().create_program(std::declval<Args>()...));
 
+template <class T, class... Args>
+using has_create_mesh_workload_t = decltype(std::declval<T>().create_mesh_workload(std::declval<Args>()...));
+
 template <class T>
 constexpr bool implements_create_program() {
     return std::experimental::is_detected_v<has_create_program_t, T, const Tensors&, Tensors&> or
            std::experimental::is_detected_v<has_create_program_t, T, const Tensors&, OptionalTensors&>;
 }
 
-template <class T, class... Args>
-using has_create_program_with_optional_input_tensors_t =
-    decltype(std::declval<T>().create_program(std::declval<Args>()...));
-
 template <class T>
 constexpr bool implements_create_program_with_optional_input_tensors() {
     return std::experimental::is_detected_v<
-               has_create_program_with_optional_input_tensors_t,
+               has_create_program_t,
                T,
                const Tensors&,
                const std::vector<std::optional<const Tensor>>&,
                Tensors&> or
            std::experimental::is_detected_v<
-               has_create_program_with_optional_input_tensors_t,
+               has_create_program_t,
                T,
+               const Tensors&,
+               const std::vector<std::optional<const Tensor>>&,
+               OptionalTensors&>;
+}
+
+template <class T>
+constexpr bool implements_create_mesh_workload() {
+    return std::experimental::is_detected_v<
+               has_create_mesh_workload_t,
+               T,
+               const ttnn::MeshCoordinateRangeSet&,
+               const Tensors&,
+               Tensors&> or
+           std::experimental::is_detected_v<
+               has_create_mesh_workload_t,
+               T,
+               const ttnn::MeshCoordinateRangeSet&,
+               const Tensors&,
+               OptionalTensors&>;
+}
+
+template <class T>
+constexpr bool implements_create_mesh_workload_with_optional_input_tensors() {
+    return std::experimental::is_detected_v<
+               has_create_mesh_workload_t,
+               T,
+               const ttnn::MeshCoordinateRangeSet&,
+               const Tensors&,
+               const std::vector<std::optional<const Tensor>>&,
+               Tensors&> or
+           std::experimental::is_detected_v<
+               has_create_mesh_workload_t,
+               T,
+               const ttnn::MeshCoordinateRangeSet&,
                const Tensors&,
                const std::vector<std::optional<const Tensor>>&,
                OptionalTensors&>;
@@ -374,7 +430,9 @@ constexpr bool implements_compute_program_hash_with_optional_input_tensors() {
 
 template <class T>
 constexpr bool is_device_operation() {
-    return implements_create_program<T>() or implements_create_program_with_optional_input_tensors<T>();
+    return implements_create_program<T>() || implements_create_mesh_workload<T>() ||
+           implements_create_program_with_optional_input_tensors<T>() ||
+           implements_create_mesh_workload_with_optional_input_tensors<T>();
 }
 
 template <class T, class... Args>
@@ -416,14 +474,15 @@ auto default_create_output_tensors(
 }
 
 template <class OutputTensorsT = Tensors>
-struct DeviceOperation final {
+class DeviceOperation final {
+public:
     using storage_t = std::array<std::byte, 1152>;
     using OutputTensors = OutputTensorsT;
     using ComputedSpecs = std::vector<ttnn::TensorSpec>;
 
-    inline const std::string get_type_name() const { return this->get_type_name_impl_(this->type_erased_storage); }
+    const std::string get_type_name() const { return this->get_type_name_impl_(this->type_erased_storage); }
 
-    inline const void validate(
+    const void validate(
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         const OptionalTensors& optional_output_tensors) const {
@@ -431,17 +490,17 @@ struct DeviceOperation final {
             this->type_erased_storage, input_tensors, optional_input_tensors, optional_output_tensors);
     }
 
-    inline const ComputedSpecs compute_output_specs(
+    const ComputedSpecs compute_output_specs(
         const Tensors& input_tensors, const OptionalTensors& output_tensors) const {
         return this->compute_output_specs_impl_(this->type_erased_storage, input_tensors, output_tensors);
     }
 
-    inline const OutputTensors create_output_tensors(
+    const OutputTensors create_output_tensors(
         const Tensors& input_tensors, const OptionalTensors& output_tensors) const {
         return this->create_output_tensors_impl_(this->type_erased_storage, input_tensors, output_tensors);
     }
 
-    inline CacheableProgram<OutputTensors> create_program(
+    CacheableProgram<OutputTensors> create_program(
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         OutputTensors& output_tensors) const {
@@ -449,7 +508,18 @@ struct DeviceOperation final {
             this->type_erased_storage, input_tensors, optional_input_tensors, output_tensors);
     }
 
-    inline OpPerformanceModelGeneral<OutputTensors> create_op_performance_model(
+    CacheableMeshWorkload<OutputTensors> create_mesh_workload(
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const Tensors& input_tensors,
+        const OptionalConstTensors& optional_input_tensors,
+        OutputTensors& output_tensors) const {
+        return this->create_mesh_workload_impl_(
+            this->type_erased_storage, tensor_coords, input_tensors, optional_input_tensors, output_tensors);
+    }
+
+    bool has_create_workload_method() const { return this->has_create_workload_method_impl_(); }
+
+    OpPerformanceModelGeneral<OutputTensors> create_op_performance_model(
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         OutputTensors& output_tensors) const {
@@ -457,13 +527,13 @@ struct DeviceOperation final {
             this->type_erased_storage, input_tensors, optional_input_tensors, output_tensors);
     }
 
-    inline void override_runtime_arguments(
+    void override_runtime_arguments(
         OverrideRuntimeArgumentsCallback<OutputTensors>& override_runtime_arguments_callback,
         Program& program,
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         OutputTensors& output_tensors) const {
-        return this->override_runtime_arguments_impl_(
+        return this->override_runtime_arguments_program_impl_(
             this->type_erased_storage,
             override_runtime_arguments_callback,
             program,
@@ -472,19 +542,34 @@ struct DeviceOperation final {
             output_tensors);
     }
 
-    inline bool uses_custom_program_hash() const { return this->uses_custom_program_hash_impl_(); }
+    void override_runtime_arguments(
+        OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>& override_runtime_arguments_callback,
+        distributed::MeshWorkload& workload,
+        const Tensors& input_tensors,
+        const OptionalConstTensors& optional_input_tensors,
+        OutputTensors& output_tensors) const {
+        return this->override_runtime_arguments_workload_impl_(
+            this->type_erased_storage,
+            override_runtime_arguments_callback,
+            workload,
+            input_tensors,
+            optional_input_tensors,
+            output_tensors);
+    }
 
-    inline const Hash compute_program_hash(
+    bool uses_custom_program_hash() const { return this->uses_custom_program_hash_impl_(); }
+
+    const Hash compute_program_hash(
         const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) const {
         ZoneScoped;
         return this->compute_program_hash_impl_(this->type_erased_storage, input_tensors, optional_input_tensors);
     }
 
-    inline const ProfilerInfo create_profiler_info(const Tensors& input_tensors) const {
+    const ProfilerInfo create_profiler_info(const Tensors& input_tensors) const {
         return this->create_profiler_info_impl_(this->type_erased_storage, input_tensors);
     }
 
-    inline const tt::stl::reflection::Attributes attributes() const {
+    const tt::stl::reflection::Attributes attributes() const {
         return this->attributes_impl_(this->type_erased_storage);
     }
 
@@ -538,16 +623,21 @@ struct DeviceOperation final {
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
                         "You cannot implement both validate and validate_with_output_tensors");
-                } else if constexpr (detail::implements_validate<T>() and not detail::implements_create_program<T>()) {
+                } else if constexpr (
+                    detail::implements_validate<T>() and
+                    not(detail::implements_create_program<T>() || detail::implements_create_mesh_workload<T>())) {
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
-                        "Operation doesn't implement both the validate and the correct create_program methods");
+                        "Operation doesn't implement both the validate and the correct create_program or "
+                        "create_mesh_workload methods");
                 } else if constexpr (
                     detail::implements_validate_with_optional_input_tensors<T>() and
-                    not detail::implements_create_program_with_optional_input_tensors<T>()) {
+                    not(detail::implements_create_program_with_optional_input_tensors<T>() ||
+                        detail::implements_create_mesh_workload_with_optional_input_tensors<T>())) {
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
-                        "Operation doesn't implement both the validate and the correct create_program methods with the "
+                        "Operation doesn't implement both the validate and the correct create_program or "
+                        "create_mesh_workload methods with the "
                         "optional input tensors");
                 }
 
@@ -616,13 +706,43 @@ struct DeviceOperation final {
                OutputTensors& output_tensors) -> CacheableProgram<OutputTensors> {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_create_program<T>()) {
-                    TT_ASSERT(optional_input_tensors.empty());
+                    TT_FATAL(
+                        optional_input_tensors.empty(),
+                        "Optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.create_program(input_tensors, output_tensors);
                 } else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
-                    TT_ASSERT(not optional_input_tensors.empty());
+                    TT_FATAL(
+                        not optional_input_tensors.empty(),
+                        "Non-optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.create_program(input_tensors, optional_input_tensors, output_tensors);
                 } else {
-                    static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement create_program");
+                    TT_THROW("Operation doesn't implement create_program");
+                }
+            }},
+        create_mesh_workload_impl_{
+            [](const storage_t& storage,
+               const ttnn::MeshCoordinateRangeSet& tensor_coords,
+               const Tensors& input_tensors,
+               const OptionalConstTensors& optional_input_tensors,
+               OutputTensors& output_tensors) -> CacheableMeshWorkload<OutputTensors> {
+                const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
+                if constexpr (detail::implements_create_mesh_workload<T>()) {
+                    TT_FATAL(
+                        optional_input_tensors.empty(),
+                        "Optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
+                    return operation.create_mesh_workload(tensor_coords, input_tensors, output_tensors);
+                } else if constexpr (detail::implements_create_mesh_workload_with_optional_input_tensors<T>()) {
+                    TT_FATAL(
+                        not optional_input_tensors.empty(),
+                        "Non-optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
+                    return operation.create_mesh_workload(
+                        tensor_coords, input_tensors, optional_input_tensors, output_tensors);
+                } else {
+                    TT_THROW("Operation doesn't implement create_mesh_workload");
                 }
             }},
         create_op_performance_model_impl_{
@@ -638,16 +758,25 @@ struct DeviceOperation final {
                         input_tensors, output_tensors, 1);  // TODO: account for optional_input_tensors
                 }
             }},
-        override_runtime_arguments_impl_{
+        override_runtime_arguments_program_impl_{
             [](const storage_t& storage,
-               OverrideRuntimeArgumentsCallback<OutputTensors>& override_runtime_arguments_callback,
+               OverrideRuntimeArgumentsCallback<OutputTensors>& callback,
                Program& program,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
                OutputTensors& output_tensors) -> void {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
-                override_runtime_arguments_callback(
-                    &operation, program, input_tensors, optional_input_tensors, output_tensors);
+                callback(&operation, program, input_tensors, optional_input_tensors, output_tensors);
+            }},
+        override_runtime_arguments_workload_impl_{
+            [](const storage_t& storage,
+               OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>& callback,
+               distributed::MeshWorkload& workload,
+               const Tensors& input_tensors,
+               const OptionalConstTensors& optional_input_tensors,
+               OutputTensors& output_tensors) -> void {
+                const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
+                callback(&operation, workload, input_tensors, optional_input_tensors, output_tensors);
             }},
         compute_program_hash_impl_{
             [](const storage_t& storage,
@@ -656,21 +785,41 @@ struct DeviceOperation final {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
 
                 if constexpr (detail::implements_compute_program_hash<T>()) {
-                    static_assert(detail::implements_create_program<T>());
-                    TT_ASSERT(optional_input_tensors.empty());
+                    static_assert(
+                        detail::implements_create_program<T>() || detail::implements_create_mesh_workload<T>());
+                    TT_FATAL(
+                        optional_input_tensors.empty(),
+                        "Optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.compute_program_hash(input_tensors);
                 } else if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
-                    static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
-                    TT_ASSERT(not optional_input_tensors.empty());
+                    static_assert(
+                        detail::implements_create_program_with_optional_input_tensors<T>() ||
+                        detail::implements_create_mesh_workload_with_optional_input_tensors<T>());
+                    TT_FATAL(
+                        not optional_input_tensors.empty(),
+                        "Non-optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.compute_program_hash(input_tensors, optional_input_tensors);
-                } else if constexpr (detail::implements_create_program<T>()) {
-                    TT_ASSERT(optional_input_tensors.empty());
+                } else if constexpr (
+                    detail::implements_create_program<T>() || detail::implements_create_mesh_workload<T>()) {
+                    TT_FATAL(
+                        optional_input_tensors.empty(),
+                        "Optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return hash_operation<T>(operation, input_tensors);
-                } else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
-                    TT_ASSERT(not optional_input_tensors.empty());
+                } else if constexpr (
+                    detail::implements_create_program_with_optional_input_tensors<T>() ||
+                    detail::implements_create_mesh_workload_with_optional_input_tensors<T>()) {
+                    TT_FATAL(
+                        not optional_input_tensors.empty(),
+                        "Non-optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return hash_operation<T>(operation, input_tensors, optional_input_tensors);
                 } else {
-                    static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement create_program");
+                    static_assert(
+                        tt::stl::concepts::always_false_v<T>,
+                        "Operation doesn't implement create_program or create_mesh_workload");
                 }
             }},
         uses_custom_program_hash_impl_{[]() -> bool {
@@ -681,6 +830,16 @@ struct DeviceOperation final {
             } else {
                 return false;
             }
+        }},
+        has_create_workload_method_impl_{[]() -> bool {
+            // Operation must implement exactly one of the `create_program` or `create_mesh_workload` methods.
+            static_assert(
+                (detail::implements_create_mesh_workload<T>() ||
+                 detail::implements_create_mesh_workload_with_optional_input_tensors<T>()) !=
+                (detail::implements_create_program<T>() ||  //
+                 detail::implements_create_program_with_optional_input_tensors<T>()));
+            return detail::implements_create_mesh_workload<T>() ||
+                   detail::implements_create_mesh_workload_with_optional_input_tensors<T>();
         }},
         create_profiler_info_impl_{[](const storage_t& storage, const Tensors& input_tensors) -> const ProfilerInfo {
             const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
@@ -709,9 +868,12 @@ struct DeviceOperation final {
         compute_output_specs_impl_{other.compute_output_specs_impl_},
         create_output_tensors_impl_{other.create_output_tensors_impl_},
         create_program_impl_{other.create_program_impl_},
+        create_mesh_workload_impl_{other.create_mesh_workload_impl_},
         create_op_performance_model_impl_{other.create_op_performance_model_impl_},
-        override_runtime_arguments_impl_{other.override_runtime_arguments_impl_},
+        override_runtime_arguments_program_impl_{other.override_runtime_arguments_program_impl_},
+        override_runtime_arguments_workload_impl_{other.override_runtime_arguments_workload_impl_},
         uses_custom_program_hash_impl_{other.uses_custom_program_hash_impl_},
+        has_create_workload_method_impl_{other.has_create_workload_method_impl_},
         compute_program_hash_impl_{other.compute_program_hash_impl_},
         create_profiler_info_impl_{other.create_profiler_info_impl_},
         attributes_impl_{other.attributes_impl_} {}
@@ -731,9 +893,12 @@ struct DeviceOperation final {
             this->compute_output_specs_impl_ = other.compute_output_specs_impl_;
             this->create_output_tensors_impl_ = other.create_output_tensors_impl_;
             this->create_program_impl_ = other.create_program_impl_;
+            this->create_mesh_workload_impl_ = other.create_mesh_workload_impl_;
             this->create_op_performance_model_impl_ = other.create_op_performance_model_impl_;
-            this->override_runtime_arguments_impl_ = other.override_runtime_arguments_impl_;
+            this->override_runtime_arguments_program_impl_ = other.override_runtime_arguments_program_impl_;
+            this->override_runtime_arguments_workload_impl_ = other.override_runtime_arguments_workload_impl_;
             this->uses_custom_program_hash_impl_ = other.uses_custom_program_hash_impl_;
+            this->has_create_workload_method_impl_ = other.has_create_workload_method_impl_;
             this->compute_program_hash_impl_ = other.compute_program_hash_impl_;
             this->create_profiler_info_impl_ = other.create_profiler_info_impl_;
             this->attributes_impl_ = other.attributes_impl_;
@@ -741,7 +906,7 @@ struct DeviceOperation final {
         return *this;
     }
 
-    DeviceOperation(DeviceOperation&& other) :
+    DeviceOperation(DeviceOperation&& other) noexcept :
         pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
         delete_storage{other.delete_storage},
         copy_storage{other.copy_storage},
@@ -751,14 +916,17 @@ struct DeviceOperation final {
         compute_output_specs_impl_{other.compute_output_specs_impl_},
         create_output_tensors_impl_{other.create_output_tensors_impl_},
         create_program_impl_{other.create_program_impl_},
+        create_mesh_workload_impl_{other.create_mesh_workload_impl_},
         create_op_performance_model_impl_{other.create_op_performance_model_impl_},
-        override_runtime_arguments_impl_{other.override_runtime_arguments_impl_},
+        override_runtime_arguments_program_impl_{other.override_runtime_arguments_program_impl_},
+        override_runtime_arguments_workload_impl_{other.override_runtime_arguments_workload_impl_},
         uses_custom_program_hash_impl_{other.uses_custom_program_hash_impl_},
+        has_create_workload_method_impl_{other.has_create_workload_method_impl_},
         compute_program_hash_impl_{other.compute_program_hash_impl_},
         create_profiler_info_impl_{other.create_profiler_info_impl_},
         attributes_impl_{other.attributes_impl_} {}
 
-    DeviceOperation& operator=(DeviceOperation&& other) {
+    DeviceOperation& operator=(DeviceOperation&& other) noexcept {
         if (other.pointer != this->pointer) {
             this->destruct();
             this->pointer = nullptr;
@@ -773,9 +941,12 @@ struct DeviceOperation final {
             this->compute_output_specs_impl_ = other.compute_output_specs_impl_;
             this->create_output_tensors_impl_ = other.create_output_tensors_impl_;
             this->create_program_impl_ = other.create_program_impl_;
+            this->create_mesh_workload_impl_ = other.create_mesh_workload_impl_;
             this->create_op_performance_model_impl_ = other.create_op_performance_model_impl_;
-            this->override_runtime_arguments_impl_ = other.override_runtime_arguments_impl_;
+            this->override_runtime_arguments_program_impl_ = other.override_runtime_arguments_program_impl_;
+            this->override_runtime_arguments_workload_impl_ = other.override_runtime_arguments_workload_impl_;
             this->uses_custom_program_hash_impl_ = other.uses_custom_program_hash_impl_;
+            this->has_create_workload_method_impl_ = other.has_create_workload_method_impl_;
             this->compute_program_hash_impl_ = other.compute_program_hash_impl_;
             this->create_profiler_info_impl_ = other.create_profiler_info_impl_;
             this->attributes_impl_ = other.attributes_impl_;
@@ -804,16 +975,32 @@ private:
 
     CacheableProgram<OutputTensors> (*create_program_impl_)(
         const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&, OutputTensors&);
+
+    CacheableMeshWorkload<OutputTensors> (*create_mesh_workload_impl_)(
+        const storage_t& value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const Tensors&,
+        const std::vector<std::optional<const Tensor>>&,
+        OutputTensors&);
+
     OpPerformanceModelGeneral<OutputTensors> (*create_op_performance_model_impl_)(
         const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&, OutputTensors&);
-    void (*override_runtime_arguments_impl_)(
+    void (*override_runtime_arguments_program_impl_)(
         const storage_t& value,
         OverrideRuntimeArgumentsCallback<OutputTensors>&,
         Program&,
         const Tensors&,
         const std::vector<std::optional<const Tensor>>&,
         OutputTensors&);
+    void (*override_runtime_arguments_workload_impl_)(
+        const storage_t& value,
+        OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>&,
+        distributed::MeshWorkload&,
+        const Tensors&,
+        const std::vector<std::optional<const Tensor>>&,
+        OutputTensors&);
     bool (*uses_custom_program_hash_impl_)();
+    bool (*has_create_workload_method_impl_)();
     const Hash (*compute_program_hash_impl_)(
         const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&);
     const ProfilerInfo (*create_profiler_info_impl_)(const storage_t& value, const Tensors& input_tensors);
@@ -838,6 +1025,9 @@ struct ExternalOperation {
 
 using ProgramWithCallbacks = CacheableProgram<Tensors>;
 using ProgramWithOptionalOutputTensors = CacheableProgram<OptionalTensors>;
+
+using MeshWorkloadWithCallbacks = CacheableMeshWorkload<Tensors>;
+using MeshWorkloadWithOptionalOutputTensors = CacheableMeshWorkload<OptionalTensors>;
 
 using Operation = std::variant<DeviceOperation<Tensors>, DeviceOperation<OptionalTensors>, ExternalOperation>;
 

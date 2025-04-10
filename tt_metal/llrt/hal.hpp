@@ -289,18 +289,31 @@ template <typename T>
 inline T Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
     uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
+    TT_FATAL(
+        !(programmable_core_type == HalProgrammableCoreType::TENSIX && addr_type == HalL1MemAddrType::UNRESERVED),
+        "Attempting to read addr of unreserved memory");
     return this->core_info_[index].get_dev_addr<T>(addr_type);
 }
 
 template <typename T>
 inline T Hal::get_dev_addr(uint32_t programmable_core_type_index, HalL1MemAddrType addr_type) const {
     TT_ASSERT(programmable_core_type_index < this->core_info_.size());
+    TT_FATAL(
+        !(get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::TENSIX &&
+          addr_type == HalL1MemAddrType::UNRESERVED),
+        "Attempting to read addr of unreserved memory");
     return this->core_info_[programmable_core_type_index].get_dev_addr<T>(addr_type);
 }
 
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
     uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
+    TT_FATAL(
+        !(programmable_core_type == HalProgrammableCoreType::TENSIX && addr_type == HalL1MemAddrType::UNRESERVED),
+        "Attempting to read size of unreserved memory");
+    TT_FATAL(
+        !(programmable_core_type == HalProgrammableCoreType::TENSIX && addr_type == HalL1MemAddrType::KERNEL_CONFIG),
+        "Attempting to read size of kernel config memory");
     return this->core_info_[index].get_dev_size(addr_type);
 }
 

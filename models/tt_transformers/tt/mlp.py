@@ -173,7 +173,7 @@ class MLP(LightweightModule):
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=activation_dtype or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
