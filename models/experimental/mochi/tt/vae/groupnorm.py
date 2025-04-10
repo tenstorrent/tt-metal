@@ -73,24 +73,13 @@ class GroupNorm(LightweightModule):
             )
         )
 
-    def forward(self, x_NTHWC):
-        # Reshape to format expected by group_norm [N, 1, H*W, C]
-        # print(f"x_NTHWC: {x_NTHWC.shape}")
-        # x_reshaped = ttnn.reshape(x_NTHWC, [N * T, 1, H * W, C])
-        # print(f"x_reshaped: {x_reshaped.shape}")
-
-        # # Tilize the input tensor
-        # x_tilized = ttnn.tilize_with_zero_padding(x_reshaped, use_multicore=True)
-        # print(f"x_tilized: {x_tilized.shape}")
+    def forward(self, x_tiled_NTHWC):
         # Determine proper num_out_blocks based on input dimensions
         # This is a simplified heuristic - adjust based on your model's specific needs
 
-        tensors = ttnn.get_device_tensors(x_NTHWC)
+        tensors = ttnn.get_device_tensors(x_tiled_NTHWC)
         outputs = []
         for i, tensor in enumerate(tensors):
-            N, T, H, W, C = tensor.shape
-            tensor = ttnn.reshape(tensor, [N * T, 1, H * W, C])
-            tensor = ttnn.tilize_with_zero_padding(tensor, use_multicore=True)
             HW = tensor.shape[2]
             T = tensor.shape[0]
             num_out_blocks_map = {
@@ -99,9 +88,11 @@ class GroupNorm(LightweightModule):
                 240 * 424: 40,
                 480 * 848: 135,
             }
+            # TODO: This is not robust to all shapes yet - small latents fails OOM L1
             num_out_blocks = num_out_blocks_map[HW] if HW in num_out_blocks_map else math.ceil(HW / 2000)
 
             grid_size_x = min(T, self.grid_size.x)
+
             # Apply group_norm
             core_grid = ttnn.CoreGrid(y=self.grid_size_y, x=grid_size_x)
             output = ttnn.group_norm(
@@ -117,8 +108,6 @@ class GroupNorm(LightweightModule):
                 inplace=False,
                 num_out_blocks=num_out_blocks,
             )
-            output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
-            output = ttnn.reshape(output, [N, T, H, W, C])
             outputs.append(output)
 
         output_tiled_NTHWC = ttnn.aggregate_as_tensor(outputs)

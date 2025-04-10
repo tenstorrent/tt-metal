@@ -11,6 +11,7 @@ from models.experimental.mochi.tt.common import (
     to_torch_tensor,
 )
 from models.experimental.mochi.tt.vae.common import load_decoder_weights
+from models.experimental.mochi.tests.dit.test_model import create_models
 
 # Common test configurations
 PCC_REQUIRED = 0.99
@@ -102,7 +103,8 @@ def validate_outputs(tt_output, ref_output, test_name):
     ],
     indirect=True,
 )
-def test_decoder(mesh_device, config, divide_T, use_program_cache, reset_seeds, use_real_weights):
+@pytest.mark.parametrize("load_dit_weights", [False, True], ids=["no_dit", "load_dit"])
+def test_decoder(mesh_device, config, divide_T, use_program_cache, reset_seeds, use_real_weights, load_dit_weights):
     """Test TtDecoder against reference implementation."""
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
@@ -119,7 +121,14 @@ def test_decoder(mesh_device, config, divide_T, use_program_cache, reset_seeds, 
         f"use_real_weights={use_real_weights}"
     )
 
+    if load_dit_weights:
+        # Load DiT weights to device to account for real world DRAM usage, checking for OOM.
+        logger.info("Loading DiT weights")
+        reference_model, tt_model, state_dict = create_models(mesh_device, n_layers=48)
+        del reference_model
+
     # Create models
+    logger.info("Creating VAE decoder models")
     reference_model, tt_model = create_decoder_models(mesh_device, use_real_weights=use_real_weights, **model_args)
 
     # Create input tensor (latent representation)

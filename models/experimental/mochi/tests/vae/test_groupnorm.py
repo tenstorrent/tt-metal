@@ -225,21 +225,22 @@ def test_tt_groupnorm_module(mesh_device, num_groups, B, C, T, H, W, affine):
 
     # Convert input to NTHWC format for TTGroupNorm
     input_nthwc = input_tensor.permute(0, 2, 3, 4, 1)  # B, T, H, W, C
+    input_nthwc = input_nthwc.reshape(B * T, 1, H * W, C)
     input_nthwc = ttnn.from_torch(
         input_nthwc,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
     # Run TTGroupNorm
     output_tt_nthwc = tt_groupnorm(input_nthwc)
-    output_tt = ttnn.to_torch(output_tt_nthwc, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+    output_tt = ttnn.to_torch(output_tt_nthwc, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
 
     # Convert TTGroupNorm output back to BCTHW format
-    output_tt = output_tt.permute(0, 4, 1, 2, 3)  # B, C, T, H, W
+    output_tt = output_tt.reshape(B, T, H, W, C).permute(0, 4, 1, 2, 3)  # B, C, T, H, W
 
     # Compare outputs
     pcc, mse, mae = compute_metrics(output_reference, output_tt)
