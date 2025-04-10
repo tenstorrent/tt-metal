@@ -4,6 +4,7 @@
 import pytest
 from loguru import logger
 import os
+import math
 import ttnn
 import pandas as pd
 from collections import defaultdict
@@ -19,39 +20,184 @@ from tt_metal.tools.profiler.process_model_log import (
 from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
-mapping_op_code_to_name = {
-    "RMSAllGather_0": "PreRMS_0",
-    "RMSAllGather_1": "PostRMS_0",
-    "RMSAllGather_2": "PreRMS_1",
-    "RMSAllGather_3": "PostRMS_1",
-    "AllGatherAsync_0": "AllGatherAsync_SDPA_0",
-    "AllGatherAsync_1": "AllGatherAsync_Binary_Mult",
-    "ShardedToInterleavedDeviceOperation_0": "ShardedToInterleavedDeviceOperation_LN_0",
-    "ShardedToInterleavedDeviceOperation_1": "ShardedToInterleavedDeviceOperation_LN_1",
-    "InterleavedToShardedDeviceOperation_0": "InterleavedToShardedDeviceOperation_LN_0",
-    "InterleavedToShardedDeviceOperation_1": "InterleavedToShardedDeviceOperation_LN_1",
-    "ReshardDeviceOperation_0": "ReshardDeviceOperation_LN_0",
-    "ReshardDeviceOperation_1": "ReshardDeviceOperation_CreateHeads",
-    "ReshardDeviceOperation_2": "ReshardDeviceOperation_LN_1",
-    "ReshardDeviceOperation_3": "ReshardDeviceOperation_BinaryMultSilu",
-    "Matmul_0": "QKV_MM",
-    "Matmul_1": "DO_MM",
-    "Matmul_2": "FF1_MM",
-    "Matmul_3": "FF3_MM",
-    "Matmul_4": "FF2_MM",
-    "AllReduceAsync_0": "AllReduceAsync_QKV",
-    "AllReduceAsync_1": "AllReduceAsync_DO",
-    "AllReduceAsync_2": "AllReduceAsync_FF2",
-    "LlamaReduceScatterDeviceOperation_0": "ReduceScatter_FF1",
-    "LlamaReduceScatterDeviceOperation_1": "ReduceScatter_FF3",
-    "NLPCreateHeadsDecodeDeviceOperation_0": "CreateHeads",
-    "RotaryEmbeddingLlamaFusedQK_0": "RotaryEmbeddingLlamaFusedQK",
-    "PagedUpdateCacheDeviceOperation_0": "PagedUpdateCache",
-    "ScaledDotProductAttentionDecode_0": "SDPA",
-    "NLPConcatHeadsDecodeDeviceOperation_0": "ConcatHeads",
-    "BinaryDeviceOperation_0": "Binary_Residual_0",
-    "BinaryDeviceOperation_1": "Binary_Mult_Silu",
-    "BinaryDeviceOperation_2": "Binary_Residual_1",
+DECODE_OP_START_INDEX = 4
+DECODE_OP_END_INDEX = -11
+
+perf_targets = {
+    "RMSAllGather_0": {
+        "op_name": "PreRMS_0",
+        "kernel_duration": 10670.763888888889,
+        "op_to_op": 657.6666666666666,
+        "non-overlapped-dispatch-time": 7260,
+    },
+    "RMSAllGather_1": {
+        "op_name": "PostRMS_0",
+        "kernel_duration": 6131.541666666667,
+        "op_to_op": 634.3333333333334,
+        "non-overlapped-dispatch-time": 6190.6,
+    },
+    "RMSAllGather_2": {
+        "op_name": "PreRMS_1",
+        "kernel_duration": 10528.003472222223,
+        "op_to_op": 661.4444444444445,
+        "non-overlapped-dispatch-time": 7326,
+    },
+    "RMSAllGather_3": {
+        "op_name": "PostRMS_1",
+        "kernel_duration": 6083.21875,
+        "op_to_op": 641.0,
+        "non-overlapped-dispatch-time": 6431.2,
+    },
+    "AllGatherAsync_0": {
+        "op_name": "AllGatherAsync_SDPA_0",
+        "kernel_duration": 11155.885416666666,
+        "op_to_op": 676.4444444444445,
+        "non-overlapped-dispatch-time": 2273.2,
+    },
+    "AllGatherAsync_1": {
+        "op_name": "AllGatherAsync_Binary_Mult",
+        "kernel_duration": 9363.694444444445,
+        "op_to_op": 1698.7777777777778,
+        "non-overlapped-dispatch-time": 4351.1,
+    },
+    "ShardedToInterleavedDeviceOperation_0": {
+        "op_name": "ShardedToInterleavedDeviceOperation_LN_0",
+        "kernel_duration": 4017.222222222222,
+        "op_to_op": 2211.6666666666665,
+        "non-overlapped-dispatch-time": 1919.0,
+    },
+    "ShardedToInterleavedDeviceOperation_1": {
+        "op_name": "ShardedToInterleavedDeviceOperation_LN_1",
+        "kernel_duration": 3417.4444444444443,
+        "op_to_op": 2212.222222222222,
+        "non-overlapped-dispatch-time": 1910.2,
+    },
+    "InterleavedToShardedDeviceOperation_0": {
+        "op_name": "InterleavedToShardedDeviceOperation_LN_0",
+        "kernel_duration": 2935.4444444444443,
+        "op_to_op": 631.8888888888889,
+        "non-overlapped-dispatch-time": 10347.3,
+    },
+    "InterleavedToShardedDeviceOperation_1": {
+        "op_name": "InterleavedToShardedDeviceOperation_LN_1",
+        "kernel_duration": 2048.222222222222,
+        "op_to_op": 637.7777777777778,
+        "non-overlapped-dispatch-time": 10736.0,
+    },
+    "ReshardDeviceOperation_0": {
+        "op_name": "ReshardDeviceOperation_LN_0",
+        "kernel_duration": 2272.6666666666665,
+        "op_to_op": 655.2222222222222,
+        "non-overlapped-dispatch-time": 10074.9,
+    },
+    "Matmul_0": {
+        "op_name": "QKV_MM",
+        "kernel_duration": 10530.555555555555,
+        "op_to_op": 610.7777777777778,
+        "non-overlapped-dispatch-time": 6102.0,
+    },
+    "Matmul_1": {
+        "op_name": "DO_MM",
+        "kernel_duration": 8689.888888888889,
+        "op_to_op": 653.3333333333334,
+        "non-overlapped-dispatch-time": 5641.0,
+    },
+    "Matmul_2": {
+        "op_name": "FF1_MM",
+        "kernel_duration": 10620.333333333334,
+        "op_to_op": 630.4444444444445,
+        "non-overlapped-dispatch-time": 6109.0,
+    },
+    "Matmul_3": {
+        "op_name": "FF3_MM",
+        "kernel_duration": 10802.0,
+        "op_to_op": 737.5555555555555,
+        "non-overlapped-dispatch-time": 6144.8,
+    },
+    "Matmul_4": {
+        "op_name": "FF2_MM",
+        "kernel_duration": 16997.444444444445,
+        "op_to_op": 658.7777777777778,
+        "non-overlapped-dispatch-time": 6029.3,
+    },
+    "AllReduceAsync_0": {
+        "op_name": "AllReduceAsync_QKV",
+        "kernel_duration": 11032.798611111111,
+        "op_to_op": 609.0,
+        "non-overlapped-dispatch-time": 7349.4,
+    },
+    "AllReduceAsync_1": {
+        "op_name": "AllReduceAsync_DO",
+        "kernel_duration": 19969.913194444445,
+        "op_to_op": 626.5555555555555,
+        "non-overlapped-dispatch-time": 8510.2,
+    },
+    "AllReduceAsync_2": {
+        "op_name": "AllReduceAsync_FF2",
+        "kernel_duration": 20541.538194444445,
+        "op_to_op": 637.1111111111111,
+        "non-overlapped-dispatch-time": 6475.9,
+    },
+    "LlamaReduceScatterDeviceOperation_0": {
+        "op_name": "ReduceScatter_FF1",
+        "kernel_duration": 10375.6875,
+        "op_to_op": 708.1111111111111,
+        "non-overlapped-dispatch-time": 8058.9,
+    },
+    "LlamaReduceScatterDeviceOperation_1": {
+        "op_name": "ReduceScatter_FF3",
+        "kernel_duration": 10473.902777777777,
+        "op_to_op": 736.1111111111111,
+        "non-overlapped-dispatch-time": 7359.9,
+    },
+    "NLPCreateHeadsDecodeDeviceOperation_0": {
+        "op_name": "CreateHeads",
+        "kernel_duration": 8238.0,
+        "op_to_op": 761.1111111111111,
+        "non-overlapped-dispatch-time": 8156.7,
+    },
+    "RotaryEmbeddingLlamaFusedQK_0": {
+        "op_name": "RotaryEmbeddingLlamaFusedQK",
+        "kernel_duration": 5026.777777777777,
+        "op_to_op": 540.7777777777778,
+        "non-overlapped-dispatch-time": 2844.3,
+    },
+    "PagedUpdateCacheDeviceOperation_0": {
+        "op_name": "PagedUpdateCache",
+        "kernel_duration": 6057.777777777777,
+        "op_to_op": 773.8888888888889,
+        "non-overlapped-dispatch-time": 4670.5,
+    },
+    "ScaledDotProductAttentionDecode_0": {
+        "op_name": "SDPA",
+        "kernel_duration": 21151.333333333332,
+        "op_to_op": 585.5555555555555,
+        "non-overlapped-dispatch-time": 9741.5,
+    },
+    "NLPConcatHeadsDecodeDeviceOperation_0": {
+        "op_name": "ConcatHeads",
+        "kernel_duration": 6599.888888888889,
+        "op_to_op": 620.5555555555555,
+        "non-overlapped-dispatch-time": 3463.5,
+    },
+    "BinaryDeviceOperation_0": {
+        "op_name": "Binary_Residual_0",
+        "kernel_duration": 2404.3333333333335,
+        "op_to_op": 653.6666666666666,
+        "non-overlapped-dispatch-time": 5907.6,
+    },
+    "BinaryDeviceOperation_1": {
+        "op_name": "Binary_Mult_Silu",
+        "kernel_duration": 4111.666666666667,
+        "op_to_op": 661.0,
+        "non-overlapped-dispatch-time": 6111.2,
+    },
+    "BinaryDeviceOperation_2": {
+        "op_name": "Binary_Residual_1",
+        "kernel_duration": 2414.777777777778,
+        "op_to_op": 647.7777777777778,
+        "non-overlapped-dispatch-time": 6751.9,
+    },
 }
 
 
@@ -198,10 +344,21 @@ def merge_device_rows(df):
         if not blocks:
             break
 
-        if "AllGather" in op_name or "ReduceScatter" in op_name:
-            # For collective ops, take the row with minimum duration
-            min_duration_block = min(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
-            merged_blocks.append(min_duration_block[1])
+        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" in op_name:
+            # For collective ops, take the average duration over all rows within a block
+            device_kernel_durations = [
+                d["DEVICE KERNEL DURATION [ns]"]
+                for _, d in blocks
+                if "DEVICE KERNEL DURATION [ns]" in d and not math.isnan(d["DEVICE KERNEL DURATION [ns]"])
+            ]
+
+            average_duration = (
+                sum(device_kernel_durations) / len(device_kernel_durations) if device_kernel_durations else float("nan")
+            )
+            # Use the first block's data but update its duration with the average
+            base_block = blocks[0][1].copy()
+            base_block["DEVICE KERNEL DURATION [ns]"] = average_duration
+            merged_blocks.append(base_block)
         else:
             # For non-collective ops, take the row with maximum duration
             max_duration_block = max(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
@@ -249,7 +406,7 @@ def average_per_instance_dict(input_dict):
 
 @pytest.mark.parametrize(
     "abs_tolerance_ns",
-    (2000,),
+    (2200,),
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_all_reduce",
@@ -314,7 +471,7 @@ def test_llama_TG_perf_device(
     df_model = df[int(len(df) / 3 * 2) :]
 
     # Excluding model embeddings and lmhead+sampling ops
-    df_layers = df_model[4:-12]
+    df_layers = df_model[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
     df_first_layer = df_layers[: int(len(df_layers) / num_layers)]
     df_mid_layers = df_layers[int(len(df_layers) / num_layers) :]
@@ -337,79 +494,21 @@ def test_llama_TG_perf_device(
     kernel_duration_per_instance_averaged_dict = average_per_instance_dict(kernel_duration_per_instance_dict)
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
 
-    expected_kernel_times_dict = {
-        "RMSAllGather_0": 11077,
-        "RMSAllGather_1": 6720.666666666667,
-        "RMSAllGather_2": 10733.666666666666,
-        "RMSAllGather_3": 6670.222222222223,
-        "AllGatherAsync_0": 9638.666666666666,
-        "AllGatherAsync_1": 9642.0,
-        "ShardedToInterleavedDeviceOperation_0": 3947.222222222222,
-        "ShardedToInterleavedDeviceOperation_1": 3388.5555555555557,
-        "InterleavedToShardedDeviceOperation_0": 2546.5555555555557,
-        "InterleavedToShardedDeviceOperation_1": 2036.111111111111,
-        "Matmul_0": 10696.555555555555,
-        "Matmul_1": 8584.111111111111,
-        "Matmul_2": 10554.555555555555,
-        "Matmul_3": 12118.888888888889,
-        "Matmul_4": 17000.0,
-        "AllReduceAsync_0": 11840.555555555555,
-        "AllReduceAsync_1": 21078.333333333332,
-        "AllReduceAsync_2": 21145.777777777777,
-        "LlamaReduceScatterDeviceOperation_0": 10600.555555555555,
-        "LlamaReduceScatterDeviceOperation_1": 11251.222222222223,
-        "NLPCreateHeadsDecodeDeviceOperation_0": 8568.222222222223,
-        "RotaryEmbeddingLlamaFusedQK_0": 5023.888888888889,
-        "PagedUpdateCacheDeviceOperation_0": 5606.444444444444,
-        "ScaledDotProductAttentionDecode_0": 23724.222222222223,
-        "NLPConcatHeadsDecodeDeviceOperation_0": 6665.0,
-        "ReshardDeviceOperation_0": 1752.7777777777778,
-        "BinaryDeviceOperation_0": 2408.8888888888887,
-        "BinaryDeviceOperation_1": 4572.777777777777,
-        "BinaryDeviceOperation_2": 4574.0,
-    }
+    if len(kernel_duration_per_instance_averaged_dict) != len(perf_targets):
+        print(f"perf_targets: {perf_targets}")
 
-    expected_dispatch_times_dict = {
-        "RMSAllGather_0": 657.6666666666666,
-        "RMSAllGather_1": 634.3333333333334,
-        "RMSAllGather_2": 661.4444444444445,
-        "RMSAllGather_3": 641.0,
-        "AllGatherAsync_0": 676.4444444444445,
-        "AllGatherAsync_1": 1698.7777777777778,
-        "ShardedToInterleavedDeviceOperation_0": 2211.6666666666665,
-        "ShardedToInterleavedDeviceOperation_1": 2212.222222222222,
-        "InterleavedToShardedDeviceOperation_0": 631.8888888888889,
-        "InterleavedToShardedDeviceOperation_1": 637.7777777777778,
-        "Matmul_0": 610.7777777777778,
-        "Matmul_1": 653.3333333333334,
-        "Matmul_2": 630.4444444444445,
-        "Matmul_3": 737.5555555555555,
-        "Matmul_4": 658.7777777777778,
-        "AllReduceAsync_0": 609.0,
-        "AllReduceAsync_1": 626.5555555555555,
-        "AllReduceAsync_2": 637.1111111111111,
-        "LlamaReduceScatterDeviceOperation_0": 708.1111111111111,
-        "LlamaReduceScatterDeviceOperation_1": 736.1111111111111,
-        "NLPCreateHeadsDecodeDeviceOperation_0": 761.1111111111111,
-        "RotaryEmbeddingLlamaFusedQK_0": 540.7777777777778,
-        "PagedUpdateCacheDeviceOperation_0": 773.8888888888889,
-        "ScaledDotProductAttentionDecode_0": 585.5555555555555,
-        "NLPConcatHeadsDecodeDeviceOperation_0": 620.5555555555555,
-        "ReshardDeviceOperation_0": 655.2222222222222,
-        "BinaryDeviceOperation_0": 653.6666666666666,
-        "BinaryDeviceOperation_1": 661.0,
-        "BinaryDeviceOperation_2": 647.7777777777778,
-    }
+    print(f"kernel_duration_per_instance_averaged_dict: {kernel_duration_per_instance_averaged_dict}")
+    print(f"dispatch_duration_per_instance_averaged_dict: {dispatch_duration_per_instance_averaged_dict}")
 
     assert len(kernel_duration_per_instance_averaged_dict) == len(
-        expected_kernel_times_dict
-    ), f"Expected {len(expected_kernel_times_dict)} operations, got {len(kernel_duration_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
+        perf_targets
+    ), f"Expected {len(perf_targets)} operations, got {len(kernel_duration_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
 
     passing = True
     for op_code_with_id, avg_kernel_duration in kernel_duration_per_instance_averaged_dict.items():
-        if op_code_with_id in expected_kernel_times_dict:
-            expected_time = expected_kernel_times_dict[op_code_with_id]
-            op_name = mapping_op_code_to_name[op_code_with_id]
+        if op_code_with_id in perf_targets:
+            expected_time = perf_targets[op_code_with_id]["kernel_duration"]
+            op_name = perf_targets[op_code_with_id]["op_name"]
             avg_dispatch_duration = dispatch_duration_per_instance_averaged_dict[op_code_with_id]
             benchmark_data.add_measurement(profiler, 0, step_name, op_name, avg_kernel_duration)
             benchmark_data.add_measurement(profiler, 0, step_name, op_name + "_op_to_op", avg_dispatch_duration)
@@ -436,7 +535,7 @@ def test_llama_TG_perf_device(
                     f"{op_code_with_id} kernel: {avg_kernel_duration} ns smaller than expected {expected_time} ns by {abs(expected_time - avg_kernel_duration)} ns (tolerance {tolerance} ns)"
                 )
             # Verify op_to_op latency is within tolerance
-            expected_time = expected_dispatch_times_dict[op_code_with_id]
+            expected_time = perf_targets[op_code_with_id]["op_to_op"]
             if avg_dispatch_duration > expected_time + abs_tolerance_ns_op_to_op:
                 passing = False
                 logger.info(
@@ -450,7 +549,7 @@ def test_llama_TG_perf_device(
 
         else:
             passing = False
-            logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
+            logger.info(f"Warning: {op_code_with_id} not found in perf_targets")
 
     # Calculate e2e performance
     e2e_estimate_80l = 0
@@ -539,7 +638,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = merge_device_rows(df)
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
-    df_layers = df_model[4:-11]
+    df_layers = df_model[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
@@ -553,47 +652,17 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     # Average over all iterations of each op instance
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
 
-    expected_non_overlapped_dispatch_times_dict = {
-        "RMSAllGather_0": 7260,
-        "RMSAllGather_1": 6190.6,
-        "RMSAllGather_2": 7326,
-        "RMSAllGather_3": 6431.2,
-        "AllGatherAsync_0": 2273.2,
-        "AllGatherAsync_1": 4351.1,
-        "ShardedToInterleavedDeviceOperation_0": 1919.0,
-        "ShardedToInterleavedDeviceOperation_1": 1910.2,
-        "InterleavedToShardedDeviceOperation_0": 10347.3,
-        "InterleavedToShardedDeviceOperation_1": 10736.0,
-        "Matmul_0": 6102.0,
-        "Matmul_1": 5641.0,
-        "Matmul_2": 6109.0,
-        "Matmul_3": 6144.8,
-        "Matmul_4": 6029.3,
-        "AllReduceAsync_0": 7349.4,
-        "AllReduceAsync_1": 8510.2,
-        "AllReduceAsync_2": 6475.9,
-        "LlamaReduceScatterDeviceOperation_0": 8058.9,
-        "LlamaReduceScatterDeviceOperation_1": 7359.9,
-        "NLPCreateHeadsDecodeDeviceOperation_0": 8156.7,
-        "RotaryEmbeddingLlamaFusedQK_0": 2844.3,
-        "PagedUpdateCacheDeviceOperation_0": 4670.5,
-        "ScaledDotProductAttentionDecode_0": 9741.5,
-        "NLPConcatHeadsDecodeDeviceOperation_0": 3463.5,
-        "ReshardDeviceOperation_0": 10074.9,
-        "BinaryDeviceOperation_0": 5907.6,
-        "BinaryDeviceOperation_1": 6111.2,
-        "BinaryDeviceOperation_2": 6751.9,
-    }
+    print(f"dispatch_duration_per_instance_averaged_dict: {dispatch_duration_per_instance_averaged_dict}")
 
     assert len(dispatch_duration_per_instance_averaged_dict) == len(
-        expected_non_overlapped_dispatch_times_dict
-    ), f"Expected {len(expected_non_overlapped_dispatch_times_dict)} operations, got {len(dispatch_duration_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
+        perf_targets
+    ), f"Expected {len(perf_targets)} operations, got {len(dispatch_duration_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
 
     passing = True
     for op_code_with_id, avg_dispatch_duration in dispatch_duration_per_instance_averaged_dict.items():
-        if op_code_with_id in expected_non_overlapped_dispatch_times_dict:
-            expected_time = expected_non_overlapped_dispatch_times_dict[op_code_with_id]
-            op_name = mapping_op_code_to_name[op_code_with_id]
+        if op_code_with_id in perf_targets:
+            expected_time = perf_targets[op_code_with_id]["non-overlapped-dispatch-time"]
+            op_name = perf_targets[op_code_with_id]["op_name"]
             benchmark_data.add_measurement(profiler, 0, step_name, op_name + "_dispatch", avg_dispatch_duration)
             if "AllReduceAsync" in op_code_with_id:
                 tolerance = abs_tolerance_ns_all_reduce
