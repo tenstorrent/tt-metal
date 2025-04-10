@@ -112,7 +112,6 @@ def test_print_short_profile_limit(device):
     ttnn.set_printoptions(profile="short")  # This is the default profile
     torch_tensor = torch.arange(16, dtype=torch.bfloat16).reshape(4, 4)
     tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-    print(tensor)
 
     tensor_as_string = str(tensor)
 
