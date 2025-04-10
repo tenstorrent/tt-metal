@@ -50,8 +50,8 @@ Result conv1d(
     uint32_t dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    const std::optional<const Conv1dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv1dConfig>& conv_config,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config,
     const std::optional<const MemoryConfig>& memory_config,
     bool return_output_dim,
     bool return_weights_and_bias) {
@@ -78,9 +78,7 @@ Result conv1d(
 
     auto [output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device] = conv2d::conv2d(
         input_tensor_4d,
-        // input_tensor,
         weight_tensor,
-        // weight_tensor,
         device,
         in_channels,
         out_channels,
@@ -93,8 +91,8 @@ Result conv1d(
         std::array<uint32_t, 2>{dilation, 1},
         groups,
         std::move(bias_tensor),
-        conv_config_,
-        compute_config_,
+        conv_config,
+        compute_config,
         memory_config);
 
     if (return_output_dim && return_weights_and_bias) {
@@ -123,8 +121,8 @@ Result Conv1dOperation::invoke(
     uint32_t dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    const std::optional<const Conv1dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv1dConfig>& conv_config,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config,
     const std::optional<const MemoryConfig>& memory_config,
     bool return_output_dim,
     bool return_weights_and_bias) {
@@ -142,8 +140,8 @@ Result Conv1dOperation::invoke(
         dilation,
         groups,
         std::move(bias_tensor),
-        std::move(conv_config_),
-        std::move(compute_config_),
+        std::move(conv_config),
+        std::move(compute_config),
         memory_config,
         return_output_dim,
         return_weights_and_bias);
@@ -164,8 +162,8 @@ Result Conv1dOperation::invoke(
     uint32_t dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    const std::optional<const Conv1dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv1dConfig>& conv_config,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config,
     const std::optional<const MemoryConfig>& memory_config,
     bool return_output_dim,
     bool return_weights_and_bias) {
@@ -183,8 +181,8 @@ Result Conv1dOperation::invoke(
         dilation,
         groups,
         std::move(bias_tensor),
-        std::move(conv_config_),
-        std::move(compute_config_),
+        std::move(conv_config),
+        std::move(compute_config),
         memory_config,
         return_output_dim,
         return_weights_and_bias);

@@ -132,7 +132,6 @@ def run_conv(
         pcc = 0.998
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
-    print(pcc_msg)
     assert passing
 
 
@@ -450,8 +449,7 @@ def test_with_prepare_weights(
         return_output_dim=True,
     )
 
-    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    torch_output_tensor = torch.Tensor(ttnn.to_torch(tt_output_tensor))
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor_on_device)
 
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_length, output_channels)
 

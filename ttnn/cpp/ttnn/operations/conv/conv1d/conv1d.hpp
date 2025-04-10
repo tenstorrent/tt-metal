@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <tuple>
 
@@ -40,8 +41,8 @@ Result conv1d(
     uint32_t dilation = 1,
     uint32_t groups = 1,
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-    const std::optional<const Conv1dConfig>& conv_config_ = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
+    const std::optional<const Conv1dConfig>& conv_config = std::nullopt,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     bool return_output_dim = true,
     bool return_weights_and_bias = true);
@@ -60,13 +61,13 @@ struct Conv1dOperation {
         uint32_t batch_size,
         uint32_t input_length,
         uint32_t kernel_size,
-        uint32_t stride,
-        std::variant<std::array<uint32_t, 2>, uint32_t> padding,
+        uint32_t stride = 1,
+        std::variant<std::array<uint32_t, 2>, uint32_t> padding = uint32_t{0},
         uint32_t dilation = 1,
         uint32_t groups = 1,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        const std::optional<const Conv1dConfig>& conv_config_ = std::nullopt,
-        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
+        const std::optional<const Conv1dConfig>& conv_config = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig>& compute_config = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         bool return_output_dim = true,
         bool return_weights_and_bias = true);
@@ -81,13 +82,13 @@ struct Conv1dOperation {
         uint32_t batch_size,
         uint32_t input_length,
         uint32_t kernel_size,
-        uint32_t stride,
-        std::variant<std::array<uint32_t, 2>, uint32_t> padding,
+        uint32_t stride = 1,
+        std::variant<std::array<uint32_t, 2>, uint32_t> padding = uint32_t{0},
         uint32_t dilation = 1,
         uint32_t groups = 1,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        const std::optional<const Conv1dConfig>& conv_config_ = std::nullopt,
-        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
+        const std::optional<const Conv1dConfig>& conv_config = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig>& compute_config = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         bool return_output_dim = true,
         bool return_weights_and_bias = true);
