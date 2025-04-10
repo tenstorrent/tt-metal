@@ -12,7 +12,6 @@
 #include "fabric_fixture.hpp"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include "rtoptions.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
 
@@ -21,7 +20,7 @@ namespace fabric_router_tests {
 
 TEST_F(ControlPlaneFixture, TestTGMeshGraphInit) {
     const std::filesystem::path tg_mesh_graph_desc_path =
-        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
     auto mesh_graph_desc = std::make_unique<MeshGraph>(tg_mesh_graph_desc_path.string());
 }
@@ -29,7 +28,7 @@ TEST_F(ControlPlaneFixture, TestTGMeshGraphInit) {
 TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
     tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D);
     const std::filesystem::path tg_mesh_graph_desc_path =
-        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(tg_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
@@ -50,7 +49,7 @@ TEST_F(ControlPlaneFixture, TestTGMeshAPIs) {
 TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
     tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D);
     const std::filesystem::path tg_mesh_graph_desc_path =
-        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(tg_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
@@ -62,7 +61,7 @@ TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
 
 TEST_F(ControlPlaneFixture, TestT3kMeshGraphInit) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
-        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
     auto mesh_graph_desc = std::make_unique<MeshGraph>(t3k_mesh_graph_desc_path.string());
 }
@@ -70,7 +69,7 @@ TEST_F(ControlPlaneFixture, TestT3kMeshGraphInit) {
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
     tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D);
     const std::filesystem::path t3k_mesh_graph_desc_path =
-        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(t3k_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
@@ -79,7 +78,7 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
 TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D);
     const std::filesystem::path t3k_mesh_graph_desc_path =
-        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(t3k_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
@@ -96,7 +95,7 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
 TEST_F(ControlPlaneFixture, TestQuantaGalaxyControlPlaneInit) {
     tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D);
     const std::filesystem::path quanta_galaxy_mesh_graph_desc_path =
-        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/quanta_galaxy_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(quanta_galaxy_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();

@@ -26,7 +26,7 @@
 #include "llrt/hal.hpp"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 #include "span.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -293,12 +293,12 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
 class EarlyReturnFixture : public DispatchFixture {
     void SetUp() override {
-        tt::llrt::RunTimeOptions::get_instance().set_kernels_early_return(true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(true);
         DispatchFixture::SetUp();
     }
     void TearDown() override {
         DispatchFixture::TearDown();
-        tt::llrt::RunTimeOptions::get_instance().set_kernels_early_return(false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_early_return(false);
     }
 };
 

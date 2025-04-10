@@ -54,7 +54,7 @@
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
@@ -146,7 +146,7 @@ void setControlBuffer(chip_id_t device_id, std::vector<uint32_t>& control_buffer
 
 void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     ZoneScopedC(tracy::Color::Tomato3);
-    if (!tt::llrt::RunTimeOptions::get_instance().get_profiler_sync_enabled()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_sync_enabled()) {
         return;
     }
     auto device_id = device->id();
@@ -370,7 +370,7 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
     ZoneScopedC(tracy::Color::Tomato4);
     std::string zoneName = fmt::format("sync_device_device_{}->{}", device_id_sender, device_id_receiver);
     ZoneName(zoneName.c_str(), zoneName.size());
-    if (!tt::llrt::RunTimeOptions::get_instance().get_profiler_sync_enabled()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_sync_enabled()) {
         return;
     }
 
@@ -714,7 +714,7 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
     std::scoped_lock<std::mutex> lock(device_mutex);
     const auto& dispatch_core_config = get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
-    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
         auto device_id = device->id();
         auto device_num_hw_cqs = device->num_hw_cqs();
         for (const CoreCoord& core :
@@ -730,7 +730,7 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
                 Finish(device->command_queue());
             }
         } else {
-            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
                 auto device_id = device->id();
                 constexpr uint8_t maxLoopCount = 10;
                 constexpr uint32_t loopDuration_us = 10000;

@@ -26,7 +26,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 #include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 
@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
         ids.push_back(id);
     }
 
-    const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
 

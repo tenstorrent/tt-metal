@@ -7,7 +7,6 @@
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <logger.hpp>
-#include <rtoptions.hpp>
 #include <unistd.h>
 #include <cassert>
 #include <chrono>
@@ -24,6 +23,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "impl/context/metal_context.hpp"
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
@@ -236,7 +236,7 @@ void wait_until_cores_done(
     // poll the cores until the set of not done cores is empty
     int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
-    bool is_simulator = llrt::RunTimeOptions::get_instance().get_simulator_enabled();
+    bool is_simulator = tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
 
     if (is_simulator) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
@@ -280,9 +280,10 @@ void wait_until_cores_done(
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
         // host-driven transactions through.
-        if (llrt::RunTimeOptions::get_instance().get_watcher_enabled() ||
-            llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
+        if (tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() ||
+            tt_metal::MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
     }
 }
 

@@ -41,7 +41,6 @@
 #include "kernel_types.hpp"
 #include "metal_soc_descriptor.h"
 #include "tt-metalium/program.hpp"
-#include "rtoptions.hpp"
 #include "span.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
@@ -597,7 +596,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                 "N300/T3K expects devices in mmio/remote pairs.");
             std::vector<DispatchKernelNode> nodes_for_one_mmio;
             // TODO: Put this in a better place
-            if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+            if (tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
                 TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
                 // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
                 nodes_for_one_mmio = two_chip_arch_1cq_fabric;

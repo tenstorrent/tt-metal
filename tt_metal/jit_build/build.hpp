@@ -18,7 +18,6 @@
 #include "data_format.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "jit_build_options.hpp"
-#include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
 #include "utils.hpp"
