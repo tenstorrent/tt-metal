@@ -63,7 +63,6 @@
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
 #include "tt-metalium/program.hpp"
-#include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
@@ -128,11 +127,12 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
-        tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled());
+        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled());
 
     for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
         compile_hash_str += "_";
-        compile_hash_str += tt::llrt::RunTimeOptions::get_instance().get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
+        compile_hash_str +=
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
     }
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 

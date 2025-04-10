@@ -5,7 +5,6 @@
 #include "watcher_server.hpp"
 
 #include <dev_msgs.h>
-#include <rtoptions.hpp>
 #include <unistd.h>
 #include <algorithm>
 #include <atomic>
@@ -94,8 +93,9 @@ static double get_elapsed_secs() {
 void create_log_file() {
     FILE* f;
 
-    const char* fmode = tt::llrt::RunTimeOptions::get_instance().get_watcher_append() ? "a" : "w";
-    std::filesystem::path output_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + watcher::logfile_path);
+    const char* fmode = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_append() ? "a" : "w";
+    std::filesystem::path output_dir(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + watcher::logfile_path);
     std::filesystem::create_directories(output_dir);
     string fname = output_dir.string() + watcher::logfile_name;
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
@@ -132,8 +132,9 @@ void create_log_file() {
 
 void create_kernel_file() {
     FILE* f;
-    const char* fmode = tt::llrt::RunTimeOptions::get_instance().get_watcher_append() ? "a" : "w";
-    std::filesystem::path output_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + watcher::logfile_path);
+    const char* fmode = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_append() ? "a" : "w";
+    std::filesystem::path output_dir(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + watcher::logfile_path);
     std::filesystem::create_directories(output_dir);
     string fname = output_dir.string() + watcher::kernel_file_name;
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
@@ -161,7 +162,7 @@ static void watcher_loop(int sleep_usecs) {
 
     // Print to the user which features are disabled via env vars.
     string disabled_features = "";
-    auto& disabled_features_set = tt::llrt::RunTimeOptions::get_instance().get_watcher_disabled_features();
+    auto& disabled_features_set = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_disabled_features();
     if (!disabled_features_set.empty()) {
         for (auto& feature : disabled_features_set) {
             disabled_features += feature + ",";
@@ -205,7 +206,7 @@ static void watcher_loop(int sleep_usecs) {
                 dump(logfile);
             } catch (std::runtime_error& e) {
                 // Depending on whether test mode is enabled, catch and stop server, or re-throw.
-                if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled()) {
+                if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
                     watcher::watcher_killed_due_to_error = true;
                     watcher::enabled = false;
                     break;
@@ -232,7 +233,8 @@ void watcher_init(chip_id_t device_id) {
     watcher_msg_t* data = reinterpret_cast<watcher_msg_t*>(&(watcher_init_val[0]));
 
     // Initialize watcher enable flag according to user setting.
-    data->enable = (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) ? WatcherEnabled : WatcherDisabled;
+    data->enable =
+        (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) ? WatcherEnabled : WatcherDisabled;
 
     // Initialize debug status values to "unknown"
     for (int idx = 0; idx < MAX_RISCV_PER_CORE; idx++) {
@@ -279,15 +281,18 @@ void watcher_init(chip_id_t device_id) {
     for (tt::llrt::RunTimeDebugFeatures delay_feature = tt::llrt::RunTimeDebugFeatureReadDebugDelay;
          (int)delay_feature <= tt::llrt::RunTimeDebugFeatureAtomicDebugDelay;
          delay_feature = (tt::llrt::RunTimeDebugFeatures)((int)delay_feature + 1)) {
-        std::vector<chip_id_t> chip_ids = tt::llrt::RunTimeOptions::get_instance().get_feature_chip_ids(delay_feature);
-        bool this_chip_enabled = tt::llrt::RunTimeOptions::get_instance().get_feature_all_chips(delay_feature) ||
-                                 std::find(chip_ids.begin(), chip_ids.end(), device_id) != chip_ids.end();
+        std::vector<chip_id_t> chip_ids =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_chip_ids(delay_feature);
+        bool this_chip_enabled =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_all_chips(delay_feature) ||
+            std::find(chip_ids.begin(), chip_ids.end(), device_id) != chip_ids.end();
         if (this_chip_enabled) {
             static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
             debug_insert_delays_msg_t delay_setup;
 
             // Create the mask based on the feature
-            uint32_t hart_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(delay_feature);
+            uint32_t hart_mask =
+                tt::tt_metal::MetalContext::instance().rtoptions().get_feature_riscv_mask(delay_feature);
             switch (delay_feature) {
                 case tt::llrt::RunTimeDebugFeatureReadDebugDelay: delay_setup.read_delay_riscv_mask = hart_mask; break;
                 case tt::llrt::RunTimeDebugFeatureWriteDebugDelay:
@@ -301,7 +306,7 @@ void watcher_init(chip_id_t device_id) {
 
             for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
                 std::vector<CoreCoord> delayed_cores =
-                    tt::llrt::RunTimeOptions::get_instance().get_feature_cores(delay_feature)[core_type];
+                    tt::tt_metal::MetalContext::instance().rtoptions().get_feature_cores(delay_feature)[core_type];
                 for (tt_xy_pair logical_core : delayed_cores) {
                     CoreCoord virtual_core;
                     bool valid_logical_core = true;
@@ -351,7 +356,7 @@ void watcher_init(chip_id_t device_id) {
             delay.second.read_delay_riscv_mask,
             delay.second.write_delay_riscv_mask,
             delay.second.atomic_delay_riscv_mask,
-            tt::llrt::RunTimeOptions::get_instance().get_watcher_debug_delay());
+            tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_debug_delay());
     }
 
     debug_insert_delays_msg_t debug_delays_val_zero = {0, 0, 0, 0};
@@ -412,7 +417,7 @@ void watcher_init(chip_id_t device_id) {
 void watcher_attach(chip_id_t device_id) {
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 
-    if (!watcher::enabled && tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
+    if (!watcher::enabled && tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         watcher::create_log_file();
         if (!watcher::kernel_file) {
             watcher::create_kernel_file();
@@ -422,7 +427,7 @@ void watcher_attach(chip_id_t device_id) {
 
         watcher::enabled = true;
 
-        int sleep_usecs = tt::llrt::RunTimeOptions::get_instance().get_watcher_interval() * 1000;
+        int sleep_usecs = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_interval() * 1000;
         std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_usecs);
         watcher_thread.detach();
     }
@@ -497,7 +502,8 @@ void watcher_server_set_error_flag(bool val) { watcher::watcher_killed_due_to_er
 void watcher_clear_log() { watcher::create_log_file(); }
 
 string watcher_get_log_file_name() {
-    return tt::llrt::RunTimeOptions::get_instance().get_root_dir() + watcher::logfile_path + watcher::logfile_name;
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + watcher::logfile_path +
+           watcher::logfile_name;
 }
 
 int watcher_get_dump_count() { return watcher::dump_count; }
@@ -510,7 +516,8 @@ void watcher_dump() {
 }
 
 void watcher_read_kernel_ids_from_file() {
-    std::filesystem::path output_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + watcher::logfile_path);
+    std::filesystem::path output_dir(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + watcher::logfile_path);
     string fname = output_dir.string() + watcher::kernel_file_name;
     FILE* f;
     if ((f = fopen(fname.c_str(), "r")) == nullptr) {

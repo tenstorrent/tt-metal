@@ -24,9 +24,7 @@
 #include "kernel_types.hpp"
 #include "mux.hpp"
 #include "prefetch.hpp"
-#include "rtoptions.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_cluster.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
@@ -138,7 +136,7 @@ void FDKernel::configure_kernel_variant(
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
     }
-    auto& rt_options = tt::llrt::RunTimeOptions::get_instance();
+    auto& rt_options = tt::tt_metal::MetalContext::instance().rtoptions();
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }

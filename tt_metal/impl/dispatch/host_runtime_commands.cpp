@@ -31,7 +31,6 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "llrt/hal.hpp"
 #include "tt-metalium/program.hpp"
-#include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
@@ -318,7 +317,7 @@ void EventSynchronize(const std::shared_ptr<Event>& event) {
         event->event_id);
 
     while (event->device->sysmem_manager().get_last_completed_event(event->cq_id) < event->event_id) {
-        if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled() &&
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled() &&
             tt::watcher_server_killed_due_to_error()) {
             TT_FATAL(
                 false,

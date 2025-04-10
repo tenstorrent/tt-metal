@@ -190,7 +190,7 @@ TEST_F(DeviceFixtureWithL1Small, TestWidthShardReadWrite) {
 }
 
 TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite) {
-    if (tt::llrt::RunTimeOptions::get_instance().get_simulator_enabled()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << fmt::format("Skipping {} because it is not supported in simulator", __func__);
     }
 

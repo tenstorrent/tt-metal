@@ -10,6 +10,7 @@
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/mesh_device.hpp>
 
 #include "dispatch_fixture.hpp"
@@ -45,7 +46,8 @@ protected:
                 ids.push_back(id);
             }
 
-            const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+            const auto& dispatch_core_config =
+                tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
             tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
             this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         } else {
@@ -75,7 +77,8 @@ protected:
                 ids.push_back(id);
             }
 
-            const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+            const auto& dispatch_core_config =
+                tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
             tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
             this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         } else {

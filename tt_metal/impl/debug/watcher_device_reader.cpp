@@ -10,7 +10,6 @@
 #include <fmt/base.h>
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
-#include <rtoptions.hpp>
 #include "impl/context/metal_context.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -186,7 +185,7 @@ WatcherDeviceReader::WatcherDeviceReader(
     set_watcher_exception_message(set_watcher_exception_message) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 &&
-        tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
+        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core :
              tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
@@ -206,7 +205,7 @@ WatcherDeviceReader::WatcherDeviceReader(
 WatcherDeviceReader::~WatcherDeviceReader() {
     // On close, read out eth link retraining register so that we can see if retraining has occurred.
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 &&
-        tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
+        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core :
              tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id)) {
@@ -341,7 +340,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
         log_info(LogLLRuntime, "{}Press ENTER to unpause core(s) and continue...", paused_cores_str);
-        if (!tt::llrt::RunTimeOptions::get_instance().get_watcher_auto_unpause()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_auto_unpause()) {
             while (std::cin.get() != '\n') {
                 ;
             }
@@ -384,7 +383,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
         logical_core.coord.y,
         virtual_core.coord.x,
         virtual_core.coord.y);
-    if (tt::llrt::RunTimeOptions::get_instance().get_watcher_phys_coords()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_phys_coords()) {
         CoreCoord phys_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_physical_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type, true);
@@ -428,7 +427,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
 
     if (enabled) {
         // Dump state only gathered if device is compiled w/ watcher
-        if (!tt::llrt::RunTimeOptions::get_instance().watcher_status_disabled()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().watcher_status_disabled()) {
             DumpWaypoints(virtual_core, mbox_data, false);
         }
         // Ethernet cores have firmware that starts at address 0, so no need to check it for a
@@ -436,16 +435,16 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
         if (!is_eth_core) {
             DumpL1Status(virtual_core, &mbox_data->launch[launch_msg_read_ptr]);
         }
-        if (!tt::llrt::RunTimeOptions::get_instance().watcher_noc_sanitize_disabled()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
             const auto NUM_NOCS_ = tt::tt_metal::hal_ref.get_num_nocs();
             for (uint32_t noc = 0; noc < NUM_NOCS_; noc++) {
                 DumpNocSanitizeStatus(virtual_core, core_str, mbox_data, noc);
             }
         }
-        if (!tt::llrt::RunTimeOptions::get_instance().watcher_assert_disabled()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled()) {
             DumpAssertStatus(virtual_core, core_str, mbox_data);
         }
-        if (!tt::llrt::RunTimeOptions::get_instance().watcher_pause_disabled()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().watcher_pause_disabled()) {
             DumpPauseStatus(virtual_core, core_str, mbox_data);
         }
     }
@@ -453,7 +452,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     // Dump state always available
     DumpLaunchMessage(virtual_core, mbox_data);
     // Ethernet cores don't use the sync reg
-    if (!is_eth_core && tt::llrt::RunTimeOptions::get_instance().get_watcher_dump_all()) {
+    if (!is_eth_core && tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_dump_all()) {
         // Reading registers while running can cause hangs, only read if
         // requested explicitly
         DumpSyncRegs(virtual_core);
@@ -476,7 +475,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]);
 
-        if (tt::llrt::RunTimeOptions::get_instance().get_watcher_text_start()) {
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_text_start()) {
             uint32_t kernel_config_base = mbox_data->launch[launch_msg_read_ptr].kernel_config.kernel_config_base[0];
             fprintf(f, " text_start:");
             for (size_t i = 0; i < NUM_PROCESSORS_PER_CORE_TYPE; i++) {
@@ -492,10 +491,10 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
 
     // Ring buffer at the end because it can print a bunch of data, same for stack usage
     if (enabled) {
-        if (!tt::llrt::RunTimeOptions::get_instance().watcher_stack_usage_disabled()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().watcher_stack_usage_disabled()) {
             DumpStackUsage(virtual_core, mbox_data);
         }
-        if (!tt::llrt::RunTimeOptions::get_instance().watcher_ring_buffer_disabled()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().watcher_ring_buffer_disabled()) {
             DumpRingBuffer(virtual_core, mbox_data, false);
         }
     }

@@ -14,7 +14,7 @@
 #include "hal_types.hpp"
 #include <tt_stl/indestructible.hpp>
 #include "llrt/hal.hpp"
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 #include "utils.hpp"
 
 namespace tt::tt_metal {
@@ -149,7 +149,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM) {
             device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_INTERFACE) {
-            if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+            if (tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
                 device_cq_addr_sizes_[dev_addr_idx] = tt_fabric::PACKET_HEADER_SIZE_BYTES;
             } else {
                 device_cq_addr_sizes_[dev_addr_idx] = 0;

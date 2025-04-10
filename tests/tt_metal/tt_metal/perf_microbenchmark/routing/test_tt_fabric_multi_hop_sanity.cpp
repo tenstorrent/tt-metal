@@ -36,8 +36,8 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
-#include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =
-            std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
             "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
         auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(tg_mesh_graph_desc_path.string());
         control_plane->write_routing_tables_to_all_chips();
@@ -647,7 +647,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

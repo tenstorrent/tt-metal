@@ -46,7 +46,6 @@
 #include <tt-metalium/logger.hpp>
 #include "noc/noc_parameters.h"
 #include <tt-metalium/program.hpp>
-#include "rtoptions.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
@@ -3775,7 +3774,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "test_prefetcher.cpp - Test Passed");
