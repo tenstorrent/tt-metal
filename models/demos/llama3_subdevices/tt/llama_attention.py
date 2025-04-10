@@ -458,7 +458,7 @@ class TtLlamaAttention(LightweightModule):
         xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv_fused,
             cluster_axis=1,
-            num_links=3,
+            num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="QKV",
         )
@@ -619,6 +619,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )
+        print("done matmul qkv")
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
@@ -628,7 +629,7 @@ class TtLlamaAttention(LightweightModule):
         output_11SH = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
-            num_links=3,
+            num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="WO",
         )
