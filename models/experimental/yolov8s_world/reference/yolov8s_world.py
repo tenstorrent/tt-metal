@@ -6,8 +6,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-# This file fixes ultralytics dependency for loading yolov8s-world model weights at ckpt = torch.load(w, map_location=map_location) as pip install ultralytics causes error in tt device.
-
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
     """Pad to 'same' shape outputs."""
@@ -16,25 +14,6 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
     if p is None:
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
-
-
-class BaseModel(nn.Module):
-    def forward(self, x, *args, **kwargs):
-        if isinstance(x, dict):
-            return self.loss(x, *args, **kwargs)
-        return self.predict(x, *args, **kwargs)
-
-    def predict(self, x, profile=False, visualize=False, augment=False, embed=None):
-        return self._predict_once(x, profile, visualize, embed)
-
-    def _predict_once(self, x, profile=False, visualize=False, embed=None):
-        y, dt, embeddings = [], [], []
-        for m in self.model:
-            if m.f != -1:
-                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]
-            x = m(x)
-            y.append(x if m.i in self.save else None)
-        return x
 
 
 class Conv(nn.Module):
@@ -60,10 +39,13 @@ class Bottleneck(nn.Module):
         c_ = int(c2 * e)
         self.cv1 = Conv(c1, c_, k[0], 1)
         self.cv2 = Conv(c_, c2, k[1], 1, g=g)
-        self.add = shortcut and c1 == c2
+        self.shortcut = shortcut
 
     def forward(self, x):
-        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+        cv1_out = self.cv1(x)
+        cv2_out = self.cv2(cv1_out)
+        add = self.shortcut and x.shape[1] == cv2_out.shape[1]  # Check channels
+        return x + cv2_out if add else cv2_out
 
 
 class C2f(nn.Module):
@@ -81,14 +63,6 @@ class C2f(nn.Module):
         """Forward pass through C2f layer."""
         # assert False, "inside c2f not fuse" #added by me
         y = list(self.cv1(x).chunk(2, 1))
-        y.extend(m(y[-1]) for m in self.m)
-        return self.cv2(torch.cat(y, 1))
-
-    def forward_split(self, x):
-        """Forward pass using split() instead of chunk()."""
-        assert False, "inside c2f"  # added by me
-        y = self.cv1(x).split((self.c, self.c), 1)
-        y = [y[0], y[1]]
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
 
@@ -182,13 +156,6 @@ class C2fAttn(nn.Module):
         y.append(self.attn(y[-1], guide))
         return self.cv2(torch.cat(y, 1))
 
-    def forward_split(self, x, guide):
-        """Forward pass using split() instead of chunk()."""
-        y = list(self.cv1(x).split((self.c, self.c), 1))
-        y.extend(m(y[-1]) for m in self.m)
-        y.append(self.attn(y[-1], guide))
-        return self.cv2(torch.cat(y, 1))
-
 
 class ImagePoolingAttn(nn.Module):
     """ImagePoolingAttn: Enhance the text embeddings with image-aware information."""
@@ -270,15 +237,15 @@ class DFL(nn.Module):
         return x
 
 
-# From here we should check
+class WorldDetect(nn.Module):
+    """Head for integrating YOLO detection models with semantic understanding from text embeddings."""
 
-
-class Detect(nn.Module):
     dynamic = False
     export = False  # export mode
     shape = None
 
-    def __init__(self, nc=80, ch=()):
+    def __init__(self, nc=80, embed=512, with_bn=False, ch=()):
+        """Initialize YOLO detection layer with nc classes and layer channels ch."""
         super().__init__()
         self.nc = nc
         self.nl = len(ch)
@@ -296,84 +263,25 @@ class Detect(nn.Module):
             ]
         )
 
-        self.cv3 = nn.ModuleList(
-            [
-                nn.Sequential(Conv(ch[i], self.c3, 3), Conv(self.c3, self.c3, 3), nn.Conv2d(self.c3, nc, 1))
-                for i in range(self.nl)
-            ]
-        )
+        c3 = max(ch[0], min(self.nc, 100))
+        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, embed, 1)) for x in ch)
 
         self.dfl = DFL(self.reg_max)
         self.anchors = None
         self.strides = None
         self.self_shape = None
-
-    def forward(self, x):
-        for i in range(self.nl):
-            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
-
-        shape = x[0].shape
-        if self.anchors is None or self.self_shape != shape:
-            temp = self._make_anchors(x)
-            self.anchors, self.strides = (i.transpose(0, 1) for i in temp)
-            self.anchors = self.anchors.unsqueeze(0)
-            self.strides = self.strides.unsqueeze(0)
-            self.self_shape = shape
-
-        x_cat = torch.cat([xi.reshape(shape[0], self.no, -1) for xi in x], 2)
-        box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
-
-        dfl_out = self.dfl(box)
-        dbox = self._decode_bboxes(dfl_out, self.anchors)
-        dbox = dbox * self.strides
-
-        return (torch.cat((dbox, cls.sigmoid()), 1), x)
-
-    def make_anchors(self, feats, strides, grid_cell_offset=0.5):
-        anchor_points, stride_tensor = [], []
-        assert feats is not None
-        dtype, device = feats[0].dtype, feats[0].device
-        for i, stride in enumerate(strides):
-            h, w = feats[i].shape[2:] if isinstance(feats, list) else (int(feats[i][0]), int(feats[i][1]))
-            sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset
-            sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset
-            sy, sx = torch.meshgrid(sy, sx)
-            anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
-            stride_tensor.append(torch.full((h * w, 1), stride, dtype=dtype, device=device))
-        return torch.cat(anchor_points), torch.cat(stride_tensor)
-
-    def decode_bboxes(self, distance, anchor_points, xywh=True, dim=1):
-        lt, rb = distance.chunk(2, dim)
-        x1y1 = anchor_points - lt
-        x2y2 = anchor_points + rb
-        if xywh:
-            c_xy = (x1y1 + x2y2) / 2
-            wh = x2y2 - x1y1
-            return torch.cat((c_xy, wh), dim)
-
-
-class WorldDetect(Detect):
-    """Head for integrating YOLO detection models with semantic understanding from text embeddings."""
-
-    def __init__(self, nc=80, embed=512, with_bn=False, ch=()):
-        """Initialize YOLO detection layer with nc classes and layer channels ch."""
-        super().__init__(nc, ch)
-        c3 = max(ch[0], min(self.nc, 100))
-        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, embed, 1)) for x in ch)
         self.cv4 = nn.ModuleList(BNContrastiveHead(embed) if with_bn else ContrastiveHead() for _ in ch)
 
     def forward(self, x, text):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
         for i in range(self.nl):
             x[i] = torch.cat((self.cv2[i](x[i]), self.cv4[i](self.cv3[i](x[i]), text)), 1)
-        if self.training:
-            return x
 
         # Inference path
         shape = x[0].shape  # BCHW
         x_cat = torch.cat([xi.view(shape[0], self.nc + self.reg_max * 4, -1) for xi in x], 2)
         if self.dynamic or self.shape != shape:
-            self.anchors, self.strides = (x.transpose(0, 1) for x in self.make_anchors(x, self.stride, 0.5))
+            self.anchors, self.strides = (x.transpose(0, 1) for x in self.make_anchors(x, 0.5))
             self.shape = shape
 
         if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:  # avoid TF FlexSplitV ops
@@ -396,25 +304,40 @@ class WorldDetect(Detect):
         y = torch.cat((dbox, cls.sigmoid()), 1)
         return y if self.export else (y, x)
 
-    def bias_init(self):
-        """Initialize Detect() biases, WARNING: requires stride availability."""
-        m = self  # self.model[-1]  # Detect() module
-        # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1
-        # ncf = math.log(0.6 / (m.nc - 0.999999)) if cf is None else torch.log(cf / cf.sum())  # nominal class frequency
-        for a, b, s in zip(m.cv2, m.cv3, m.stride):  # from
-            a[-1].bias.data[:] = 1.0  # box
-            # b[-1].bias.data[:] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
+    def decode_bboxes(self, distance, anchor_points, xywh=True, dim=1):
+        lt, rb = distance.chunk(2, dim)
+        x1y1 = anchor_points - lt
+        x2y2 = anchor_points + rb
+        if xywh:
+            c_xy = (x1y1 + x2y2) / 2
+            wh = x2y2 - x1y1
+            return torch.cat((c_xy, wh), dim)
+
+    def make_anchors(self, feats, grid_cell_offset=0.5):
+        anchor_points, stride_tensor = [], []
+        dtype, device = feats[0].dtype, feats[0].device
+        for i, stride in enumerate(self.stride):
+            h, w = feats[i].shape[2:]
+            sx = torch.arange(end=w) + grid_cell_offset
+            sy = torch.arange(end=h) + grid_cell_offset
+
+            sy, sx = torch.meshgrid(sy, sx)
+
+            temp = torch.stack((sx, sy), -1)
+            anchor_points.append(temp.view(-1, 2))
+            temp = torch.full((h * w, 1), stride, dtype=dtype, device=device)
+            stride_tensor.append(temp)
+
+        return torch.cat(anchor_points), torch.cat(stride_tensor)
 
 
-class DetectionModel(BaseModel):
-    def __init__(self, cfg="yolov8s-world.yaml", ch=3, nc=None, verbose=True):
+class WorldModel(nn.Module):
+    def __init__(self, model_torch=None, ch=3, nc=None, verbose=True):
         super().__init__()
-
-
-class WorldModel(DetectionModel):
-    def __init__(self, ch=3, nc=None, verbose=True):
-        super().__init__()
-        self.txt_feats = torch.randn(1, nc or 80, 512)
+        if model_torch != None:
+            self.txt_feats = model_torch.txt_feats
+        else:
+            self.txt_feats = torch.randn(1, nc or 80, 512)
         self.clip_model = None  # CLIP model placeholder
         self.model = nn.Sequential(
             Conv(3, 32, 3, 2),
@@ -494,9 +417,9 @@ class WorldModel(DetectionModel):
 
 
 class YOLOWorld(nn.Module):
-    def __init__(self, weights_path=None):
+    def __init__(self, model_torch=None, weights_path=None):
         super().__init__()
-        self.model = WorldModel()
+        self.model = WorldModel(model_torch=model_torch)
         if weights_path:
             self.load_state_dict(torch.load(weights_path), strict=False)
 
