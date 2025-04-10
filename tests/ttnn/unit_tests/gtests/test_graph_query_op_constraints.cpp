@@ -375,6 +375,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     {
         tt::tt_metal::IDevice* device = device_;
         const auto& output_spec = input_spec_a;
+        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::add,
@@ -382,7 +383,12 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
             input_spec_a,
             input_spec_b,
             output_spec.data_type(),
-            output_spec.tensor_layout().get_memory_config());
+            output_spec.tensor_layout().get_memory_config(),
+            std::nullopt,
+            none,
+            none,
+            none,
+            false);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
@@ -429,13 +435,13 @@ INSTANTIATE_TEST_SUITE_P(
             ResourceUsageMap{
                 {BoardType::N300,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 57344,
-                     .l1_buffers_peak_per_core = 26688,
+                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
+                     .l1_buffers_peak_per_core = 10240,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 57344,
-                     .l1_buffers_peak_per_core = 14720,
+                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
+                     .l1_buffers_peak_per_core = 6144,
                      .l1_output_buffer_per_core = 6144}}}),
         std::make_tuple(  // broadcast
             g_interleave_4_2_160_244_tiled,
@@ -443,13 +449,13 @@ INSTANTIATE_TEST_SUITE_P(
             ResourceUsageMap{
                 {BoardType::N300,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 57344,
-                     .l1_buffers_peak_per_core = 26688,
+                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
+                     .l1_buffers_peak_per_core = 10240,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 57344,
-                     .l1_buffers_peak_per_core = 14720,
+                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
+                     .l1_buffers_peak_per_core = 6144,
                      .l1_output_buffer_per_core = 6144}}})),
     [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ResourceUsageMap>>& info) {
         std::stringstream ss;

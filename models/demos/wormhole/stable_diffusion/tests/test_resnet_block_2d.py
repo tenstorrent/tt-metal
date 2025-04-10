@@ -16,7 +16,6 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    conv_cache,
     preprocess_and_push_input_to_device,
 )
 
@@ -132,8 +131,6 @@ def test_resnet_block_2d_512x512(
     temb = torch.randn(temb_shape)
 
     torch_output = resnet(input, temb.squeeze(0).squeeze(0))
-    reader_patterns_cache = {}
-    conv_cache.clear()
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
@@ -143,7 +140,6 @@ def test_resnet_block_2d_512x512(
     resnet_block = resnetBlock2D(
         device,
         parameters,
-        reader_patterns_cache,
         batch_size,
         input_height,
         input_width,

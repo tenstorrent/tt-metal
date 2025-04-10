@@ -29,8 +29,6 @@ def Conv1d(
     bias_tensor: ttnn.Tensor = None,
     conv_config: Conv1dConfig = None,  # config overrides by user
     compute_config: ttnn.DeviceComputeKernelConfig = None,
-    conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
-    debug=False,
     return_output_dim=False,
     return_weights_and_bias=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:

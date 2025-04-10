@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 
 namespace tt {
 namespace tt_metal {
