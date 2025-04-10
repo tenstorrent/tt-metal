@@ -60,7 +60,7 @@ class CommandQueue;
 class HWCommandQueue;
 
 namespace detail {
-class Program_;
+class ProgramImpl;
 
 void ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 KernelHandle AddKernel(
@@ -86,7 +86,7 @@ struct KernelGroup {
 
     KernelGroup();
     KernelGroup(
-        const detail::Program_& program,
+        const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
         kernel_id_array_t kernel_ids,
         bool erisc_is_idle,
@@ -191,7 +191,7 @@ public:
     uint32_t get_cb_memory_size() const;
 
 private:
-    std::unique_ptr<detail::Program_> pimpl_;
+    std::unique_ptr<detail::ProgramImpl> pimpl_;
 
     friend CBHandle CreateCircularBuffer(
         Program& program,
