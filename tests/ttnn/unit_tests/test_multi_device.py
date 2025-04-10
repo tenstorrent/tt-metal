@@ -761,3 +761,19 @@ def test_heterogenous_operation_dispatch():
     assert_with_pcc(
         ttnn.to_torch(ttnn_silu, mesh_composer=ttnn.ConcatMeshToTensor(submesh_1, dim=-1)), torch_silu, pcc=0.9999
     )
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
+def test_2x4_all_gather(mesh_device):
+    input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
+    ttnn_input_0 = ttnn.from_torch(
+        input_tensor,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1, linearization="ring"),
+        layout=ttnn.TILE_LAYOUT,
+    )
+    all_gathered_tensor = ttnn.all_gather(ttnn_input_0, dim=-1)
+
+    for device_tensor in ttnn.get_device_tensors(all_gathered_tensor):
+        device_tensor_torch = ttnn.to_torch(device_tensor)
+        assert_with_pcc(device_tensor_torch, input_tensor, pcc=0.9999)

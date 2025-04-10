@@ -10,6 +10,7 @@
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 
 namespace ttnn::distributed {
 
@@ -22,12 +23,13 @@ using SystemMesh = tt::tt_metal::distributed::SystemMesh;
 using MeshDeviceView = tt::tt_metal::distributed::MeshDeviceView;
 using MeshDeviceConfig = tt::tt_metal::distributed::MeshDeviceConfig;
 using MeshSubDeviceManagerId = tt::tt_metal::distributed::MeshSubDeviceManagerId;
-
+using DeviceLinearizationType = tt::tt_metal::DeviceLinearizationType;
 }  // namespace ttnn::distributed
 
 namespace ttnn {
 
 // These types are exported to the ttnn namespace for convenience.
+using ttnn::distributed::DeviceLinearizationType;
 using ttnn::distributed::MeshCoordinate;
 using ttnn::distributed::MeshCoordinateRange;
 using ttnn::distributed::MeshCoordinateRangeSet;
