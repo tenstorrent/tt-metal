@@ -14,15 +14,17 @@ namespace tt {
 namespace tt_metal {
 
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
-struct ReadProfilerControlVectorDescriptor {
+struct ReadL1DataDescriptor {
     void* dst;
+    uint32_t size_bytes;
 };
 
-namespace profiler_dispatch {
+namespace device_dispatch {
 
-struct ProfilerDispatchParams {
+struct L1ReadDispatchParams {
     const CoreCoord virtual_core;
     DeviceAddr address = 0;
+    uint32_t size_bytes = 0;
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
     CoreType dispatch_core_type;
@@ -30,16 +32,17 @@ struct ProfilerDispatchParams {
     tt::stl::Span<const SubDeviceId> sub_device_ids;
 };
 
-void issue_read_profiler_control_vector_command_sequence(const ProfilerDispatchParams& dispatch_params);
+void issue_l1_read_command_sequence(const L1ReadDispatchParams& dispatch_params);
 
-void read_profiler_control_vector_from_completion_queue(
-    ReadProfilerControlVectorDescriptor& read_descriptor,
+void read_l1_data_from_completion_queue(
+    const ReadL1DataDescriptor& read_descriptor,
     chip_id_t mmio_device_id,
     uint16_t channel,
     uint8_t cq_id,
-    SystemMemoryManager& sysmem_manager);
+    SystemMemoryManager& sysmem_manager,
+    std::atomic<bool>& exit_condition);
 
-}  // namespace profiler_dispatch
+}  // namespace device_dispatch
 
 }  // namespace tt_metal
 }  // namespace tt

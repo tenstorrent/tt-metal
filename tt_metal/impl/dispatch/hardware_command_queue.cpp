@@ -23,7 +23,7 @@
 
 #include "assert.hpp"
 #include "buffers/dispatch.hpp"
-#include "profiler/dispatch.hpp"
+#include "device/dispatch.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/host_runtime_commands.hpp"
@@ -304,26 +304,35 @@ CoreType HWCommandQueue::get_dispatch_core_type() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 }
 
-void HWCommandQueue::enqueue_read_profiler_control_vector(
-    const CoreCoord& virtual_core, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("HWCommandQueue_enqueue_read_profiler_control_vector");
+void HWCommandQueue::enqueue_read_from_core_l1(
+    const CoreCoord& virtual_core,
+    void* dst,
+    DeviceAddr address,
+    uint32_t size_bytes,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("HWCommandQueue_enqueue_read_from_core_l1");
 
     const HalProgrammableCoreType core_type = this->device_->get_programmable_core_type(virtual_core);
-    profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+    TT_FATAL(
+        address + size_bytes <= hal_ref.get_dev_addr(core_type, HalL1MemAddrType::BASE) +
+                                    hal_ref.get_dev_size(core_type, HalL1MemAddrType::BASE),
+        "Region to read from L1 is out of bounds");
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-    profiler_dispatch::ProfilerDispatchParams dispatch_params(
+    device_dispatch::L1ReadDispatchParams dispatch_params(
         virtual_core,
-        reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+        address,
+        size_bytes,
         this->device_,
         this->id_,
         this->get_dispatch_core_type(),
         this->expected_num_workers_completed_,
         sub_device_ids);
-    profiler_dispatch::issue_read_profiler_control_vector_command_sequence(dispatch_params);
+    device_dispatch::issue_l1_read_command_sequence(dispatch_params);
 
     this->issued_completion_q_reads_.push(
-        std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadProfilerControlVectorDescriptor>, dst));
+        std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadL1DataDescriptor>, dst, size_bytes));
     this->increment_num_entries_in_completion_q();
 
     if (blocking) {
@@ -561,10 +570,15 @@ void HWCommandQueue::read_completion_queue() {
                             ZoneScopedN("CompletionQueueReadEvent");
                             event_dispatch::read_events_from_completion_queue(
                                 read_descriptor, mmio_device_id, channel, this->id_, this->manager_);
-                        } else if constexpr (std::is_same_v<T, ReadProfilerControlVectorDescriptor>) {
-                            ZoneScopedN("CompletionQueueReadProfilerControlVector");
-                            profiler_dispatch::read_profiler_control_vector_from_completion_queue(
-                                read_descriptor, mmio_device_id, channel, this->id_, this->manager_);
+                        } else if constexpr (std::is_same_v<T, ReadL1DataDescriptor>) {
+                            ZoneScopedN("CompletionQueueReadL1Data");
+                            device_dispatch::read_l1_data_from_completion_queue(
+                                read_descriptor,
+                                mmio_device_id,
+                                channel,
+                                this->id_,
+                                this->manager_,
+                                this->exit_condition_);
                         }
                     },
                     read_descriptor);

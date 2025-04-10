@@ -38,7 +38,7 @@
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "tt_metal/impl/profiler/dispatch.hpp"
+#include "tt_metal/impl/device/dispatch.hpp"
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {
