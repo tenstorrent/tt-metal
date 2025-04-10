@@ -46,7 +46,7 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
-MetalContext::MetalContext() {}
+MetalContext::MetalContext() = default;
 
 Cluster& MetalContext::get_cluster() { return cluster_; }
 
