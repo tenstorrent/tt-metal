@@ -26,7 +26,7 @@ def buffer_address(tensor):
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, expected_compile_time, expected_inference_time",
     [
-        [1, ttnn.bfloat16, ttnn.bfloat16, 99, 99],
+        [1, ttnn.bfloat16, ttnn.bfloat16, 60, 0.0125],
     ],
 )
 def test_perf_segformer_trace_2cq(
