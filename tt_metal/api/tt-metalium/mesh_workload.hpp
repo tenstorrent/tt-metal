@@ -38,7 +38,7 @@ public:
     ~MeshWorkload();
     MeshWorkload(MeshWorkload&& other) noexcept;
     MeshWorkload& operator=(MeshWorkload&& other) noexcept;
-    
+
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs();
 
