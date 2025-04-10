@@ -91,7 +91,7 @@ SECTIONS
     *(COMMON)
     . = ALIGN(4);
     __ldm_bss_end = .;
-  } > REGION_APP_KERNEL_DATA :data
+  } > REGION_LDM :data
 
   .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
