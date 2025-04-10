@@ -9,7 +9,6 @@
 
 #include <cstdint>
 #include <cstddef>
-#include "debug/dprint.h"
 
 constexpr bool enable_fused_payload_with_sync = get_compile_time_arg_val(0) != 0;
 constexpr bool payloads_are_mcast = get_compile_time_arg_val(1) != 0;
@@ -18,7 +17,6 @@ constexpr bool sem_inc_only = get_compile_time_arg_val(2) != 0;
 void kernel_main() {
     using namespace tt::tt_fabric;
     size_t arg_idx = 0;
-    DPRINT << "Latency writer starting\n";
 
     // A safe location to dump payload data
     const size_t dest_dummy_payload_buffer_address = get_arg_val<uint32_t>(arg_idx++);
@@ -33,15 +31,12 @@ void kernel_main() {
     const size_t num_congestion_writers = get_arg_val<uint32_t>(arg_idx++);
 
     // Wait for all congestion writers to be ready
-    DPRINT << "Waiting for " << num_congestion_writers << " congestion writers to be ready\n";
     noc_semaphore_wait_min(
         reinterpret_cast<volatile uint32_t*>(congestion_writers_ready_semaphore), num_congestion_writers);
-    DPRINT << "All congestion writers ready\n";
 
     size_t has_upstream_congestion_writer = get_arg_val<uint32_t>(arg_idx++) != 0;
     uint64_t upstream_congestion_writer_teardown_noc_addr = 0;
     if (has_upstream_congestion_writer) {
-        DPRINT << "Has upstream congestion writer\n";
         size_t upstream_congestion_writer_teardown_bank_addr = get_arg_val<uint32_t>(arg_idx++);
         size_t upstream_congestion_writer_teardown_noc_x = get_arg_val<uint32_t>(arg_idx++);
         size_t upstream_congestion_writer_teardown_noc_y = get_arg_val<uint32_t>(arg_idx++);
@@ -65,20 +60,16 @@ void kernel_main() {
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
     for (size_t i = 0; i < num_downstream_congestion_writers; i++) {
-        DPRINT << "downstream congestion writer " << (uint32_t)i << "\n";
         uint64_t downstream_noc_addr = safe_get_noc_addr(
             downstream_congestion_writer_noc_x_list_ptr[i],
             downstream_congestion_writer_noc_y_list_ptr[i],
             downstream_congestion_writer_teardown_semaphore_addresses_ptr[i],
             0);
-        DPRINT << "\t " << (uint64_t)downstream_noc_addr << "\n";
-        DPRINT << "\tdistance: " << (uint32_t)downstream_congestion_writer_hop_distance_list_ptr[i] << "\n";
     }
 
     ASSERT(fabric_connection.is_logically_connected());
 
     if (!fabric_connection.is_logically_connected()) {
-        DPRINT << "Error - no fabric connection(s)\n";
         while (true) {
         }
     }
@@ -93,14 +84,11 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
 
     auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
-        DPRINT << "Waiting for semaphore at address " << (uint64_t)semaphore_address << " with target value "
-               << (uint32_t)target_value << "\n";
         noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);
         *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
     };
 
     // PACKET HEADER SETUP
-    DPRINT << "Fabric n_hops: " << (uint32_t)num_hops_over_loopback_fabric_to_self << "\n";
     if constexpr (payloads_are_mcast) {
         auto mcast_hops = static_cast<uint8_t>(num_hops_over_loopback_fabric_to_self);
         payload_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_hops)});
@@ -117,15 +105,9 @@ void kernel_main() {
     sem_inc_packet_header->to_noc_unicast_atomic_inc(
         NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
 
-    DPRINT << "num_bursts_to_send: " << (uint32_t)num_bursts_to_send << "\n";
-    DPRINT << "burst_size: " << (uint32_t)burst_size << "\n";
-    DPRINT << "dest_semaphore_noc_addr: " << (uint64_t)dest_semaphore_noc_addr << "\n";
-
     auto send_seminc_packet = [&fabric_connection, sem_inc_packet_header]() {
-        DPRINT << "Waiting for fabric write slot\n";
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         // print_pkt_header(sem_inc_packet_header);
-        DPRINT << "Sending seminc packet\n";
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
     };
@@ -138,7 +120,6 @@ void kernel_main() {
                 (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
         };
     // Flush the datapath
-    // DPRINT << "Waiting for fabric write slot0\n";
     {
         DeviceZoneScopedN("Flush");
         send_seminc_packet();
@@ -189,31 +170,22 @@ void kernel_main() {
         fabric_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
     };
     if (has_upstream_congestion_writer) {
-        DPRINT << "Tearing down upstream congestion writer\n";
         send_teardown_message(
             fabric_connection.get_backward_connection(), upstream_congestion_writer_teardown_noc_addr, 1);
-        DPRINT << "Done tearing down upstream congestion writer\n";
     }
     for (size_t i = 0; i < num_downstream_congestion_writers; i++) {
-        DPRINT << "Tearing down downstream congestion writer " << (uint32_t)i << "\n";
         uint64_t downstream_noc_addr = safe_get_noc_addr(
             downstream_congestion_writer_noc_x_list_ptr[i],
             downstream_congestion_writer_noc_y_list_ptr[i],
             downstream_congestion_writer_teardown_semaphore_addresses_ptr[i],
             0);
 
-        DPRINT << "Writing downstream to addr " << (uint64_t)downstream_noc_addr << " distance "
-               << (uint32_t)downstream_congestion_writer_hop_distance_list_ptr[i] << "\n";
-
         send_teardown_message(
             fabric_connection.get_forward_connection(),
             downstream_noc_addr,
             downstream_congestion_writer_hop_distance_list_ptr[i]);
-        DPRINT << "Done tearing down downstream congestion writer " << (uint32_t)i << "\n";
     }
 
-    DPRINT << "Closing\n";
     fabric_connection.close();
     noc_async_write_barrier();
-    DPRINT << "Done\n";
 }

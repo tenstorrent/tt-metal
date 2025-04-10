@@ -9,15 +9,12 @@
 
 #include <cstdint>
 #include <cstddef>
-#include "debug/dprint.h"
 
 constexpr bool use_mcast_mode = get_compile_time_arg_val(0) != 0;
 
 void kernel_main() {
     using namespace tt::tt_fabric;
     size_t arg_idx = 0;
-
-    DPRINT << "Starting latency test writer kernel\n";
 
     const size_t dest_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     const size_t packet_payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
@@ -86,7 +83,6 @@ void kernel_main() {
 
     // Continue normal operation
     while (*teardown_signal_addr == 0) {
-        // DPRINT << "Message \n";
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
             dest_bank_addr, packet_payload_size_bytes);
@@ -94,7 +90,6 @@ void kernel_main() {
             (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
     }
 
-    DPRINT << "Closing\n";
     fabric_connection.close();
     noc_async_write_barrier();
 }
