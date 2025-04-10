@@ -48,6 +48,20 @@ enum eth_chan_directions {
     COUNT = 4,
 };
 
+enum fabric_mode {
+    UNDEFINED,
+    FABRIC_1D_LINE,
+    FABRIC_1D_RING,
+    FABRIC_1D_LINE_LOW_LATENCY,
+    FABRIC_1D_RING_LOW_LATENCY,
+    FABRIC_2D_MESH,
+    FABRIC_2D_TORUS,
+    FABRIC_2D_MESH_LOW_LATENCY,
+    FABRIC_2D_TORUS_LOW_LATENCY,
+    FABRIC_2D_MESH_DYNAMIC,
+    FABRIC_2D_TORUS_DYNAMIC,
+};
+
 struct routing_table_t {
     chan_id_t dest_entry[MAX_MESH_SIZE];
 };

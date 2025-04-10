@@ -12,7 +12,6 @@
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
-#include "tt_metal/api/tt-metalium/fabric_types.hpp"
 #else
 #include <tt-metalium/assert.hpp>
 #endif
@@ -525,17 +524,22 @@ static constexpr size_t header_size_bytes = sizeof(PacketHeader);
 #ifndef FABRIC_CONFIG
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
-#elif FABRIC_CONFIG == 1 || FABRIC_CONFIG == 2 || FABRIC_CONFIG == 3 || \
-    FABRIC_CONFIG == 4  // 1D linear, ring, 2D, 2D push
-#if FABRIC_CONFIG == 1  // NOTE: experimentally switching header by 1
-#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
+#if FABRIC_CONFIG == 1 || FABRIC_CONFIG == 2  // FABRIC_1D_LINE/RING
 #define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields
-#endif
+#elif FABRIC_CONFIG == 3 || FABRIC_CONFIG == 4  // FABRIC_1D_LINE/RING_LOW_LATENCY
+#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
+#elif FABRIC_CONFIG == 5 || FABRIC_CONFIG == 6  // FABRIC_2D_MESH/TOURUS
+#define PACKET_HEADER_TYPE packet_header_t
+#elif FABRIC_CONFIG == 7 || FABRIC_CONFIG == 8  // FABRIC_2D_MESH/TOURUS_LOW_LATENCY
+#define PACKET_HEADER_TYPE low_latency_packet_header_t
+#elif FABRIC_CONFIG == 9 || FABRIC_CONFIG == 10  // FABRIC_2D_MESH/TOURUS_DYNAMIC
+static_assert(false, "Fabric config is not supported");
 #else
 static_assert(false, "Fabric config is not supported");
+#endif
 #endif
 
 }  // namespace tt::tt_fabric
