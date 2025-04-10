@@ -68,7 +68,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -112,14 +112,14 @@ jobs:
           name: ${{ inputs.wheel-artifact-name }}
       - uses: ./.github/actions/ensure-active-weka-mount
       - name: Run frequent reg tests scripts
-        timeout-minutes: 50
+        timeout-minutes: 30
         uses: ./.github/actions/docker-run
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -192,7 +192,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
