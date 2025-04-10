@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "dataflow_api.h"
-
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -18,7 +16,7 @@ constexpr bool payloads_are_mcast = get_compile_time_arg_val(1) != 0;
 constexpr bool sem_inc_only = get_compile_time_arg_val(2) != 0;
 
 void kernel_main() {
-    using namespace tt::fabric;
+    using namespace tt::tt_fabric;
     size_t arg_idx = 0;
     DPRINT << "Latency writer starting\n";
 
@@ -179,13 +177,13 @@ void kernel_main() {
     }
 
     auto send_teardown_message = [packet_header = payload_packet_header](
-                                     tt::fabric::WorkerToFabricEdmSender& fabric_connection,
+                                     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
                                      uint64_t teardown_noc_addr,
                                      size_t num_hops_on_fabric) {
         // Now that we are done, we need to notify all other congestion writers to teardown
         packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_on_fabric));
-        packet_header->to_noc_unicast_atomic_inc(
-            tt::fabric::NocUnicastAtomicIncCommandHeader{teardown_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
+        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            teardown_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
 
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));

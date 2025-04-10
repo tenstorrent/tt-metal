@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "dataflow_api.h"
-
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -16,7 +14,7 @@
 constexpr bool use_mcast_mode = get_compile_time_arg_val(0) != 0;
 
 void kernel_main() {
-    using namespace tt::fabric;
+    using namespace tt::tt_fabric;
     size_t arg_idx = 0;
 
     DPRINT << "Starting latency test writer kernel\n";

@@ -35,7 +35,7 @@ def profile_results(
     congestion_writers_message_size,
     congestion_writers_use_mcast,
 ):
-    freq = get_device_freq() / 1000.0
+    freq_hz = get_device_freq() * 1000 * 1000
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
     main_test_body_string = "WAIT-FOR-ALL-SEMAPHORES"
@@ -55,15 +55,19 @@ def profile_results(
     # device = devices[latency_measurement_worker_line_index]
     device = devices[0]
     print(f"keys: {devices_data['devices'][device]['cores']['DEVICE'].keys()}")
-    latency_avg_ns = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
+    latency_avg_cycles = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
         "Average"
     ]
-    latency_max_ns = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
+    latency_max_cycles = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
         "Max"
     ]
-    latency_min_ns = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
+    latency_min_cycles = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
         "Min"
     ]
+    Hz_per_GHz = 1e9
+    latency_avg_ns = latency_avg_cycles / (freq_hz / Hz_per_GHz)
+    latency_max_ns = latency_max_cycles / (freq_hz / Hz_per_GHz)
+    latency_min_ns = latency_min_cycles / (freq_hz / Hz_per_GHz)
     count = devices_data["devices"][device]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"]["Count"]
 
     return latency_avg_ns, latency_min_ns, latency_max_ns, count
@@ -158,24 +162,27 @@ def run_latency_test(
 # 1D All-to-All Multicast
 @pytest.mark.parametrize("line_size", [8])
 @pytest.mark.parametrize(
-    "latency_measurement_worker_line_index,expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
+    "latency_ping_message_size_bytes, latency_measurement_worker_line_index,expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
     [
-        (0, 11300, 10800, 12000, 820),
-        (1, 9800, 9200, 10300, 820),
-        (2, 8100, 7700, 8700, 820),
-        (3, 6700, 6200, 7300, 820),
-        (4, 5000, 4700, 5300, 820),
-        (5, 3300, 3000, 3700, 820),
-        (6, 1690, 1500, 1900, 820),
+        (16, 0, 11300, 10800, 12000, 820),
+        (16, 1, 9650, 9100, 10300, 805),
+        (4096, 1, 16800, 16250, 17300, 1400),
+        (16, 2, 8100, 7700, 8700, 820),
+        (16, 3, 6600, 6200, 6950, 820),
+        (16, 4, 5000, 4700, 5300, 820),
+        (16, 5, 3300, 3170, 3700, 820),
+        (16, 6, 1640, 1460, 1850, 820),
+        (1024, 6, 2285, 2042, 2740, 1140),
+        (2048, 6, 2770, 2560, 3010, 1386),
+        (4096, 6, 3220, 3070, 3430, 1600),
     ],
 )
 @pytest.mark.parametrize("latency_ping_burst_size", [1])
-@pytest.mark.parametrize("latency_ping_burst_count", [200])
+@pytest.mark.parametrize("latency_ping_burst_count", [62])
 @pytest.mark.parametrize("add_upstream_fabric_congestion_writers", [False])
 @pytest.mark.parametrize("num_downstream_fabric_congestion_writers", [0])
 @pytest.mark.parametrize("congestion_writers_message_size", [0])
 @pytest.mark.parametrize("congestion_writers_use_mcast", [False])
-@pytest.mark.parametrize("latency_ping_message_size_bytes", [0])
 def test_1D_fabric_latency_on_uncongested_fabric_minimal_packet_size(
     line_size,
     latency_measurement_worker_line_index,
@@ -206,38 +213,3 @@ def test_1D_fabric_latency_on_uncongested_fabric_minimal_packet_size(
         expected_max_latency_ns,
         expected_avg_hop_latency_ns,
     )
-
-
-# @pytest.mark.parametrize("line_size", [8])
-# @pytest.mark.parametrize("latency_measurement_worker_line_index", [0])  # ,1,2,3,4,5,6])
-# @pytest.mark.parametrize("latency_ping_burst_size", [1])
-# @pytest.mark.parametrize("latency_ping_burst_count", [1])  # 000])
-# @pytest.mark.parametrize("add_upstream_fabric_congestion_writers", [False])
-# @pytest.mark.parametrize("num_downstream_fabric_congestion_writers", [0])
-# @pytest.mark.parametrize("congestion_writers_message_size", [0])
-# @pytest.mark.parametrize("congestion_writers_use_mcast", [False])
-# @pytest.mark.parametrize("latency_ping_message_size_bytes,expected_mean_latency_ns", [(0, 1000)])  # , (512, 1300)])
-# def test_1D_fabric_latency_on_congested_fabric(
-#     line_size,
-#     latency_measurement_worker_line_index,
-#     latency_ping_message_size_bytes,
-#     latency_ping_burst_size,
-#     latency_ping_burst_count,
-#     add_upstream_fabric_congestion_writers,
-#     num_downstream_fabric_congestion_writers,
-#     congestion_writers_message_size,
-#     congestion_writers_use_mcast,
-#     expected_mean_latency_ns,
-# ):
-#     run_latency_test(
-#         line_size,
-#         latency_measurement_worker_line_index,
-#         latency_ping_message_size_bytes,
-#         latency_ping_burst_size,
-#         latency_ping_burst_count,
-#         add_upstream_fabric_congestion_writers,
-#         num_downstream_fabric_congestion_writers,
-#         congestion_writers_message_size,
-#         congestion_writers_use_mcast,
-#         expected_mean_latency_ns,
-#     )

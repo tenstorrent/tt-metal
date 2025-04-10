@@ -3157,7 +3157,7 @@ inline void RunPersistent1dFabricLatencyTest(
     TT_FATAL(writer_specs.size() < line_size, "num_devices_with_workers must be less than or equal to num_links");
     using namespace ttnn::ccl;
 
-    T3000TestDevice test_fixture;
+    Fabric1DFixture test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
     std::vector<IDevice*> devices_ = {
@@ -3237,7 +3237,8 @@ inline void RunPersistent1dFabricLatencyTest(
         fabric_handle,
         enable_persistent_fabric_mode,
         num_links,
-        ttnn::ccl::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval,
+        ttnn::ccl::Topology::Linear,
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval,
         true);
 
     for (IDevice* d : devices) {
@@ -3338,8 +3339,9 @@ inline void RunPersistent1dFabricLatencyTest(
         // reserve CB
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(
-                packet_header_cb_size_in_headers * sizeof(tt::fabric::PacketHeader), {{packet_header_cb_index, cb_df}})
-                .set_page_size(packet_header_cb_index, sizeof(tt::fabric::PacketHeader));
+                packet_header_cb_size_in_headers * sizeof(tt::tt_fabric::PacketHeader),
+                {{packet_header_cb_index, cb_df}})
+                .set_page_size(packet_header_cb_index, sizeof(tt::tt_fabric::PacketHeader));
         CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
 
         TT_FATAL(
@@ -3499,7 +3501,7 @@ inline void RunPersistent1dFabricLatencyTest(
     TT_FATAL(fabric_programs->size() == devices.size(), "Expected fabric programs size to be same as devices size");
     log_info(tt::LogTest, "Fabric teardown");
     persistent_fabric_teardown_sequence(
-        devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+        devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (IDevice* d : devices) {
