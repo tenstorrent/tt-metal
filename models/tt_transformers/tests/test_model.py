@@ -10,7 +10,7 @@ from models.tt_transformers.tt.common import (
     sample_host,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
+from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision
 from models.tt_transformers.tt.model import Transformer
 from models.utility_functions import (
     comp_pcc,
@@ -57,9 +57,10 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
-        pytest.param(ModelOptimizations.performance, id="performance"),
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers),
     ],
+    ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -82,12 +83,14 @@ def test_model_inference(
     use_program_cache,
     reset_seeds,
     ensure_gc,
+    request,
 ):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
     mesh_device.enable_async(True)
-    mode_accuracy = optimizations == ModelOptimizations.accuracy
+    test_id = request.node.callspec.id
+    mode_accuracy = test_id == "accuracy"
     instruct = False  # True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
     model_args = ModelArgs(
@@ -321,7 +324,7 @@ def test_model_inference(
             # Greedy decode (temperature = 0) the generated token and save it to print out later
             if run_ref_pt:
                 # Sample from reference model first
-                _, pt_out_tok = sample_host(ref_output, None, temperature=0, top_p=0.8)
+                _, pt_out_tok = sample_host(ref_output, temperature=0, top_p=0.8)
                 pt_decode_input = embd(pt_out_tok)
                 all_outputs_ref.append(pt_out_tok.squeeze(1).tolist()[0])
 
@@ -330,7 +333,7 @@ def test_model_inference(
                 all_outputs.append(pt_out_tok.squeeze(1).tolist()[0])
             else:
                 # If not running reference model, sample from TT model directly
-                _, tt_out_tok = sample_host(tt_output_torch, None, temperature=0, top_p=0.8)
+                _, tt_out_tok = sample_host(tt_output_torch, temperature=0, top_p=0.8)
                 tt_decode_input = embd(tt_out_tok)
                 all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])
 

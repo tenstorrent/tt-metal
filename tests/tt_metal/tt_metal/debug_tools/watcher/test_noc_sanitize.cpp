@@ -2,18 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug_tools_fixture.hpp"
-#include "debug_tools_test_utils.hpp"
-#include "llrt.hpp"
-
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "debug_tools_fixture.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
 // Do we really want to expose Hal like this?
 // This looks like an API level test
-#include <tt-metalium/hal.hpp>
+#include "llrt/hal.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "span.hpp"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
+#include "watcher_server.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -49,12 +73,12 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 50;
     uint32_t l1_buffer_size = single_tile_size * num_tiles;
-    uint32_t l1_buffer_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+    uint32_t l1_buffer_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     // For ethernet core, need to have smaller buffer at a different address
     if (is_eth_core) {
         l1_buffer_size = 1024;
-        l1_buffer_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        l1_buffer_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     }
 
     tt_metal::InterleavedBufferConfig l1_config{
@@ -124,10 +148,10 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
             // This is illegal because we'd be writing to the mailbox memory
             if (is_eth_core) {
                 l1_buffer_addr = std::min(
-                    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::MAILBOX),
-                    hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::MAILBOX));
+                    hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::MAILBOX),
+                    hal_ref.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::MAILBOX));
             } else {
-                l1_buffer_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
+                l1_buffer_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
             }
             break;
         default:

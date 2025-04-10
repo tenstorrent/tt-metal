@@ -65,7 +65,7 @@ ALWI void relu_min_tile_init() { MATH((llk_math_eltwise_unary_sfpu_relu_min_init
 
 // clang-format off
 /**
- * Performs element-wise computation of relu (0 if negative else 1) on each element of a tile
+ * Performs element-wise computation of relu(x) = (0 if x is negative else x) on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.

@@ -64,15 +64,9 @@ def test_llama_rms_norm_inference(
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
     first_layer_prefix = state_dict_prefix + "attention_norm."
 
-    prefetcher_setup = TtLlamaPrefetcherSetup(
-        mesh_device,
-        n_tensors=1,
-        n_layers=1,
-    )
-    mesh_device.set_sub_device_stall_group(
-        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
-    )
-    tt_ccl = TT_CCL(mesh_device, model_args.sub_core_grids, prefetcher_setup.worker_sub_device_id)
+    prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode=mode)
+    mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode=mode)
 
     # Create the inner RMSNormxw
     tt_inner_norm = TtRMSNorm(

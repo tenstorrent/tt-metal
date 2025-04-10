@@ -1,14 +1,11 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import math
 import torch
-import pytest
-from loguru import logger
 
 import ttnn
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor
 
 DMODEL = 8 * 1024
 FF_DIM = 32 * 1024

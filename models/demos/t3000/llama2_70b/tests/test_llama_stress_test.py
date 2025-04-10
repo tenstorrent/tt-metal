@@ -19,8 +19,6 @@ from models.demos.t3000.llama2_70b.tt.model_config import (
 )
 from models.demos.t3000.llama2_70b.tt.llama_common import get_llama_path, MAX_SEQ_LEN, BASE_URL, load_llama_state_dict
 from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
     skip_for_grayskull,
 )
 from tqdm import tqdm

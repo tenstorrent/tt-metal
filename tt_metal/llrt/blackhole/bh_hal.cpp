@@ -2,19 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <dev_msgs.h>
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
+#include <vector>
 
+#include "blackhole/bh_hal.hpp"
 #include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"
-#include <dev_msgs.h>
-#include "noc/noc_parameters.h"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
+#include "noc/noc_parameters.h"
 #include "tensix.h"
-
-#include "hal.hpp"
-#include "blackhole/bh_hal.hpp"
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
@@ -121,6 +122,9 @@ void Hal::initialize_bh() {
     this->noc_stream_reg_space_size_ = NOC_STREAM_REG_SPACE_SIZE;
     this->noc_stream_remote_dest_buf_size_reg_index_ = STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX;
     this->noc_stream_remote_dest_buf_start_reg_index_ = STREAM_REMOTE_DEST_BUF_START_REG_INDEX;
+    this->noc_stream_remote_dest_buf_space_available_reg_index_ = STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX;
+    this->noc_stream_remote_dest_buf_space_available_update_reg_index_ =
+        STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;

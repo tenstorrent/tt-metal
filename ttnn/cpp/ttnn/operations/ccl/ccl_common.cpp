@@ -12,12 +12,10 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
-#include "tt-metalium/hal_exp.hpp"
+#include "tt-metalium/hal.hpp"
 
 namespace ttnn {
 namespace ccl {
-
-using namespace tt::tt_metal::experimental;
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
     this->sem_ids.push_back(sem_id);
@@ -217,8 +215,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     const std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
     std::optional<uint32_t> receiver_device_id,
     std::optional<uint32_t> sender_device_id) {
-    auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(hal::get_arch());
-    auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(hal::get_arch());
+    auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::tt_metal::hal::get_arch());
+    auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::tt_metal::hal::get_arch());
     uint32_t sender_socket_idx = 0;
     uint32_t receiver_socket_idx = 0;
     if (receiver_device_id == sender_device_id) {
@@ -1417,6 +1415,38 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     log_trace(tt::LogOp, "--------------------------------");
 
     return worker_slice_shapes;
+}
+
+std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
+    size_t ring_size, size_t ring_index, Topology topology) {
+    // Used for experimentation for optimal perf
+    // May be uplifted to an op parameter if needed
+    constexpr bool enable_dynamic_alternate = false;
+    bool dynamic_alternate = false;
+    size_t num_targets_forward = 0;
+    size_t num_targets_backward = 0;
+    if (topology == Topology::Linear) {
+        LineTopology line_topology(ring_size, ring_index);
+        num_targets_forward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+        num_targets_backward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+    } else if (topology == ccl::Topology::Ring) {
+        // TODO: Commonize
+        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_backward = ring_size - 1 - num_targets_forward;
+        constexpr bool static_alternate = true;
+        if constexpr (static_alternate) {
+            if (ring_index % 2 == 0) {
+                std::swap(num_targets_forward, num_targets_backward);
+            }
+        }
+        if constexpr (enable_dynamic_alternate) {
+            // Even ring size will result in uneven fwd/backward distances
+            dynamic_alternate = ring_size % 2 == 0;
+        }
+    }
+    return std::make_tuple(num_targets_forward, num_targets_backward, dynamic_alternate);
 }
 
 }  // namespace ccl

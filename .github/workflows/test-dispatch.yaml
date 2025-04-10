@@ -10,7 +10,7 @@ on:
           - wormhole_b0
           - blackhole
       runner-label:
-        description: 'Optional: N150, N300, BH, config-t3000, config-tg, config-tgg'
+        description: 'Optional: N150, N300, BH, config-t3000, config-tg'
         required: true
         type: string
         default: '["in-service"]'
@@ -21,6 +21,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
+          - ASan
+          - TSan
       tracy:
         required: false
         type: boolean
@@ -33,6 +35,13 @@ on:
         type: string
         default: "Custom test dispatch"
         required: false
+      version:
+        required: false
+        type: choice
+        default: "22.04"
+        options:
+            - "22.04"
+            - "24.04"
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -49,37 +58,50 @@ jobs:
   #         echo "deployrunner=${{ inputs.runner-label }}" >> $GITHUB_OUTPUT
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.tracy }}
-    secrets: inherit
+      version: ${{ inputs.version }}
+      build-wheel: true
   test-dispatch:
     # needs: setup
     needs: build-artifact
     timeout-minutes: 1440
-    env:
-      ARCH_NAME: ${{ inputs.arch }}
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: ./.github/actions/ensure-active-weka-mount
         timeout-minutes: 3
         if: ${{ inputs.arch != 'blackhole' }}
-      - name: Set up dyanmic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name:  TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
-      - name: Run pre/post regression tests in a loop
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          pip install pytest-repeat
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ inputs.command }}
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Run regression in loop in docker
+        uses: ./.github/actions/docker-run
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          install_wheel: true
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ inputs.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+          run_args: |
+            pip3 install pytest-repeat
+            ${{ inputs.command }}

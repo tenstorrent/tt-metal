@@ -4,6 +4,8 @@
 
 #include "modules/positional_embeddings.hpp"
 
+#include <cmath>
+
 #include "autograd/autocast_tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "init/tensor_initializers.hpp"
@@ -22,8 +24,8 @@ autograd::AutocastTensor create_positional_embedding_tensor(uint32_t sequence_le
     for (uint32_t pos = 0; pos < sequence_length; ++pos) {
         for (uint32_t emb_idx = 0; emb_idx < embedding_dim; ++emb_idx) {
             float value = (emb_idx & 1)
-                              ? std::cosf(pos / std::powf(div_const, static_cast<float>(emb_idx - 1) / embedding_dim))
-                              : std::sinf(pos / std::powf(div_const, static_cast<float>(emb_idx) / embedding_dim));
+                              ? std::cos(pos / std::pow(div_const, static_cast<float>(emb_idx - 1) / embedding_dim))
+                              : std::sin(pos / std::pow(div_const, static_cast<float>(emb_idx) / embedding_dim));
             positional_embedding_data.push_back(value);
         }
     }

@@ -2,15 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "umd/device/types/cluster_descriptor_types.h"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal_exp.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "test_common.hpp"
+#include <benchmark/benchmark.h>
+#include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/rtoptions.hpp>
-#include <benchmark/benchmark.h>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <cstdlib>
+#include <exception>
+#include <map>
+#include <optional>
+#include <random>
+#include <string>
+#include <tuple>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "rtoptions.hpp"
+#include <tt-metalium/semaphore.hpp>
+#include "span.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "umd/device/types/xy_pair.h"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -27,6 +54,8 @@ constexpr uint32_t MAX_ARGS = 255;
 using std::vector;
 using namespace tt;
 
+static bool dump_test_info = false;
+
 struct TestInfo {
     uint32_t iterations = DEFAULT_ITERATIONS;
     uint32_t warmup_iterations = DEFAULT_WARMUP_ITERATIONS;
@@ -40,6 +69,7 @@ struct TestInfo {
     uint32_t n_common_args{0};
     uint32_t n_sems{0};
     uint32_t n_kgs{1};
+    uint32_t n_cb_gs{1};
     bool brisc_enabled{true};
     bool ncrisc_enabled{true};
     bool trisc_enabled{true};
@@ -56,7 +86,7 @@ std::tuple<uint32_t, uint32_t> get_core_count() {
     uint32_t core_x = 0;
     uint32_t core_y = 0;
 
-    std::string arch_name = tt::tt_metal::experimental::hal::get_arch_name();
+    std::string arch_name = tt::tt_metal::hal::get_arch_name();
     if (arch_name == "grayskull") {
         core_x = 11;
         core_y = 8;
@@ -192,12 +222,12 @@ bool initialize_program(
     const TestInfo& info, tt_metal::IDevice* device, tt_metal::Program& program, uint32_t run_cycles) {
     program = tt_metal::CreateProgram();
 
-    std::map<string, string> defines = {{"KERNEL_BYTES", std::to_string(info.kernel_size)}};
+    std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(info.kernel_size)}};
     if (run_cycles != 0) {
-        defines.insert(std::pair<string, string>("KERNEL_RUN_TIME", std::to_string(run_cycles)));
+        defines.insert(std::pair<std::string, std::string>("KERNEL_RUN_TIME", std::to_string(run_cycles)));
     }
     if (info.use_global) {
-        defines.insert(std::pair<string, string>("KERNEL_GLOBAL", "1"));
+        defines.insert(std::pair<std::string, std::string>("KERNEL_GLOBAL", "1"));
     }
 
     for (uint32_t i = 0; i < info.n_sems; i++) {
@@ -209,16 +239,22 @@ bool initialize_program(
     vector<uint32_t> common_args;
     common_args.resize(info.n_common_args);
 
-    for (int i = 0; i < info.n_cbs; i++) {
-        tt_metal::CircularBufferConfig cb_config =
-            tt_metal::CircularBufferConfig(16, {{i, tt::DataFormat::Float16_b}}).set_page_size(i, 16);
-        auto cb = tt_metal::CreateCircularBuffer(program, info.workers, cb_config);
+    CoreRange cbg = {info.workers.start_coord, {info.workers.end_coord.x - info.n_cb_gs + 1, info.workers.end_coord.y}};
+
+    for (uint32_t i = 0; i < info.n_cb_gs; i++) {
+        for (int j = 0; j < info.n_cbs; j++) {
+            tt_metal::CircularBufferConfig cb_config =
+                tt_metal::CircularBufferConfig(16, {{j, tt::DataFormat::Float16_b}}).set_page_size(j, 16);
+            auto cb = tt_metal::CreateCircularBuffer(program, cbg, cb_config);
+        }
+        cbg.start_coord = {cbg.end_coord.x + 1, cbg.end_coord.y};
+        cbg.end_coord = cbg.start_coord;
     }
 
     // first kernel group is possibly wide, remaining kernel groups are 1 column each
     CoreRange kg = {info.workers.start_coord, {info.workers.end_coord.x - info.n_kgs + 1, info.workers.end_coord.y}};
     for (uint32_t i = 0; i < info.n_kgs; i++) {
-        defines.insert(std::pair<string, string>(string("KG_") + std::to_string(i), ""));
+        defines.insert(std::pair<std::string, std::string>(std::string("KG_") + std::to_string(i), ""));
 
         if (info.brisc_enabled) {
             auto dm0 = tt_metal::CreateKernel(
@@ -328,6 +364,26 @@ static int pgm_dispatch(T& state, TestInfo info) {
     log_info(LogTest, "UniqueRTArgs: {}", info.n_args);
     log_info(LogTest, "CommonRTArgs: {}", info.n_common_args);
     log_info(LogTest, "Sems: {}", info.n_sems);
+    if constexpr (std::is_same_v<T, benchmark::State>) {
+        if (dump_test_info) {
+            state.counters["cores"] = benchmark::Counter(info.workers.size(), benchmark::Counter::kDefaults);
+            state.counters["kernel_size"] = benchmark::Counter(info.kernel_size, benchmark::Counter::kDefaults);
+            state.counters["fast_kernel_cycles"] =
+                benchmark::Counter(info.fast_kernel_cycles, benchmark::Counter::kDefaults);
+            state.counters["slow_kernel_cycles"] =
+                benchmark::Counter(info.slow_kernel_cycles, benchmark::Counter::kDefaults);
+            state.counters["kgs"] = benchmark::Counter(info.n_kgs, benchmark::Counter::kDefaults);
+            state.counters["cbs"] = benchmark::Counter(info.n_cbs, benchmark::Counter::kDefaults);
+            state.counters["rtas"] = benchmark::Counter(info.n_args, benchmark::Counter::kDefaults);
+            state.counters["crtas"] = benchmark::Counter(info.n_common_args, benchmark::Counter::kDefaults);
+            state.counters["sems"] = benchmark::Counter(info.n_sems, benchmark::Counter::kDefaults);
+            state.counters["brisc_enabled"] = benchmark::Counter(info.brisc_enabled, benchmark::Counter::kDefaults);
+            state.counters["ncrisc_enabled"] = benchmark::Counter(info.ncrisc_enabled, benchmark::Counter::kDefaults);
+            state.counters["trisc_enabled"] = benchmark::Counter(info.trisc_enabled, benchmark::Counter::kDefaults);
+            state.counters["erisc_enabled"] = benchmark::Counter(info.erisc_enabled, benchmark::Counter::kDefaults);
+            state.counters["cb_gs"] = benchmark::Counter(info.n_cb_gs, benchmark::Counter::kDefaults);
+        }
+    }
 
     tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(true);
 
@@ -344,12 +400,14 @@ static int pgm_dispatch(T& state, TestInfo info) {
             if constexpr (std::is_same_v<T, benchmark::State>) {
                 state.SkipWithError("Program creation failed");
             }
+            tt_metal::CloseDevice(device);
             return 1;
         }
         if (!initialize_program(info, device, program[1], info.fast_kernel_cycles)) {
             if constexpr (std::is_same_v<T, benchmark::State>) {
                 state.SkipWithError("Program creation failed");
             }
+            tt_metal::CloseDevice(device);
             return 1;
         }
 
@@ -403,6 +461,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         if constexpr (std::is_same_v<T, benchmark::State>) {
             state.counters["IterationTime"] = benchmark::Counter(
                 info.iterations, benchmark::Counter::kIsIterationInvariantRate | benchmark::Counter::kInvert);
+            state.counters["Clock"] = benchmark::Counter(get_tt_npu_clock(device), benchmark::Counter::kDefaults);
         }
 
         pass &= tt_metal::CloseDevice(device);
@@ -435,6 +494,8 @@ static void BM_pgm_dispatch_vary_slow_cycles(benchmark::State& state, TestInfo i
     info.slow_kernel_cycles = state.range(0);
     pgm_dispatch(state, info);
 }
+
+static void BM_pgm_dispatch_random(benchmark::State& state, TestInfo info) { pgm_dispatch(state, info); }
 
 static void Max12288Args(benchmark::internal::Benchmark* b) {
     b->Arg(256)->Arg(512)->Arg(1024)->Arg(2048)->Arg(4096)->Arg(8192)->Arg(12288);
@@ -495,6 +556,24 @@ BENCHMARK_CAPTURE(
     ->Apply(Max8192Args)
     ->UseManualTime();
 BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_1cb_8g,
+    TestInfo{.warmup_iterations = 5000, .n_cbs = 1, .n_cb_gs = 8, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_32cb_8g,
+    TestInfo{.warmup_iterations = 5000, .n_cbs = 32, .n_cb_gs = 8, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_1cb_1sem,
+    TestInfo{.warmup_iterations = 5000, .n_cbs = 1, .n_sems = 1, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
     BM_pgm_dispatch, all_processors_1_core_1_rta, TestInfo{.warmup_iterations = 5000, .n_args = 1, .use_trace = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
@@ -524,6 +603,18 @@ BENCHMARK_CAPTURE(
     ->UseManualTime();
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
+    all_processors_1_core_1_crta,
+    TestInfo{.warmup_iterations = 5000, .n_common_args = 1, .use_trace = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_1_core_128_crta,
+    TestInfo{.warmup_iterations = 5000, .n_common_args = 128, .use_trace = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
     all_processors_all_cores_1_rta,
     TestInfo{.warmup_iterations = 5000, .n_args = 1, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
@@ -538,6 +629,24 @@ BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
     all_processors_all_cores_128_rta,
     TestInfo{.warmup_iterations = 5000, .n_args = 128, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_1_crta,
+    TestInfo{.warmup_iterations = 5000, .n_common_args = 1, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_32_crta,
+    TestInfo{.warmup_iterations = 5000, .n_common_args = 32, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    all_processors_all_cores_128_crta,
+    TestInfo{.warmup_iterations = 5000, .n_common_args = 128, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
 BENCHMARK_CAPTURE(
@@ -572,6 +681,31 @@ BENCHMARK_CAPTURE(
     TestInfo{.warmup_iterations = 5000, .n_kgs = 8, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    kernel_groups_1_rta_trace,
+    TestInfo{.warmup_iterations = 5000, .n_args = 1, .n_kgs = 8, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    kernel_groups_128_rta_trace,
+    TestInfo{.warmup_iterations = 5000, .n_args = 128, .n_kgs = 8, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    kernel_groups_1_cb_trace,
+    TestInfo{.warmup_iterations = 5000, .n_cbs = 1, .n_kgs = 8, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    kernel_groups_32_cb_trace,
+    TestInfo{.warmup_iterations = 5000, .n_cbs = 32, .n_kgs = 8, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
 
 BENCHMARK_CAPTURE(
     BM_pgm_dispatch,
@@ -601,6 +735,10 @@ int main(int argc, char** argv) {
         return pgm_dispatch(state, info);
     }
 
+    if (test_args::has_command_option(input_args, "--dump-test-info")) {
+        dump_test_info = true;
+    }
+
     auto core_count = get_core_count();
 
     benchmark::RegisterBenchmark(
@@ -627,7 +765,43 @@ int main(int argc, char** argv) {
             .use_all_cores = true})
         ->Apply(Max8192Args)
         ->UseManualTime();
-    std::string arch_name = tt::tt_metal::experimental::hal::get_arch_name();
+
+    if (test_args::has_command_option(input_args, "--random-tests")) {
+        // Generate random tests to use when generating a model of dispatch time.
+        std::mt19937 gen;
+
+        for (size_t i = 0; i < 400; i++) {
+            uint32_t core_count_x = std::uniform_int_distribution{1u, std::get<0>(core_count)}(gen);
+            uint32_t core_count_y = std::uniform_int_distribution{1u, std::get<1>(core_count)}(gen);
+            TestInfo test_info{};
+            test_info.kernel_size = std::uniform_int_distribution(0, 12288)(gen);
+            test_info.workers = CoreRange({0, 0}, {core_count_x - 1, core_count_y - 1});
+            bool has_cbs = std::uniform_int_distribution(0, 1)(gen);
+            if (has_cbs) {
+                test_info.n_cbs = std::uniform_int_distribution(0, 32)(gen);
+            }
+            bool has_args = std::uniform_int_distribution(0, 1)(gen);
+            if (has_args) {
+                test_info.n_args = std::uniform_int_distribution(0, 128)(gen);
+            }
+            bool has_sems = std::uniform_int_distribution(0, 1)(gen);
+            if (has_sems) {
+                test_info.n_sems = std::uniform_int_distribution(0, 4)(gen);
+            }
+            test_info.n_kgs = std::uniform_int_distribution(1u, core_count_x)(gen);
+            test_info.n_cb_gs = std::uniform_int_distribution(1u, core_count_x)(gen);
+            // Ensure 1 core is enabled.
+            uint32_t cores_enabled = std::uniform_int_distribution(1, 7)(gen);
+            test_info.brisc_enabled = cores_enabled & 1;
+            test_info.ncrisc_enabled = cores_enabled & 2;
+            test_info.trisc_enabled = cores_enabled & 4;
+            test_info.use_trace = true;
+            benchmark::RegisterBenchmark(
+                "BM_pgm_dispatch_random/" + std::to_string(i), BM_pgm_dispatch_random, test_info)
+                ->UseManualTime();
+        }
+    }
+    std::string arch_name = tt::tt_metal::hal::get_arch_name();
     if (arch_name == std::string("wormhole_b0")) {
         benchmark::RegisterBenchmark(
             "BM_pgm_dispatch/eth_dispatch",

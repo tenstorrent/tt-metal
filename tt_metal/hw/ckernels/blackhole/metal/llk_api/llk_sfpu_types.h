@@ -92,4 +92,7 @@ enum SfpuType {
     fill,
     prelu,
     round,
+    cpy_values,
+    unary_max,
+    unary_min,
 };

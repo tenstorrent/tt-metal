@@ -7,12 +7,8 @@ import torch
 import pytest
 import ttnn
 import numpy as np
-from models.utility_functions import (
-    skip_for_grayskull,
-)
 
 
-@skip_for_grayskull()
 def test_dopout(device):
     t = torch.ones(
         (

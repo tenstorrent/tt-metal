@@ -3,18 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/bfloat8.hpp>
-
-#include <algorithm>
-#include <iostream>
+#include <tt_stl/span.hpp>
+#include <array>
+#include <functional>
 #include <random>
 #include <vector>
-#include <immintrin.h>
+#include <simde/x86/avx2.h>
 
 #include "assert.hpp"
 #include "blockfloat_common.hpp"
-#include "tt_backend_api_types.hpp"
-#include <tt_stl/span.hpp>
+#include "constants.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "math.hpp"
+#include "tile.hpp"
 #include "tracy/Tracy.hpp"
+#include "tt_backend_api_types.hpp"
 
 std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
     tt::stl::Span<const float> fp32_vec,
@@ -31,7 +35,7 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
 
-    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
 
     auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;
@@ -63,12 +67,12 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     int subtile_c;
     const std::vector<uint32_t> mask_vec = {0xff, 0xff00, 0xff0000, 0xff000000};
     const std::vector<uint32_t> shift_vec = {0, 8, 16, 24};
-    const __m128i mask = _mm_loadu_si128(reinterpret_cast<const __m128i*>(mask_vec.data()));
-    const __m128i shift = _mm_loadu_si128(reinterpret_cast<const __m128i*>(shift_vec.data()));
-    __m256i rebias_offset = _mm256_setzero_si256();
+    const simde__m128i mask = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(mask_vec.data()));
+    const simde__m128i shift = simde_mm_loadu_si128(reinterpret_cast<const simde__m128i*>(shift_vec.data()));
+    simde__m256i rebias_offset = simde_mm256_setzero_si256();
     if (is_exp_a) {
         rebias_offset =
-            _mm256_set1_epi32(-112);  // This rebias offset must be added if we are working with BFP8 format.
+            simde_mm256_set1_epi32(-112);  // This rebias offset must be added if we are working with BFP8 format.
     }
     uint32_t exp_word, sub_word_index;
 
@@ -97,67 +101,70 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> 2) &
                                          exp_bit_mask;  // Extract the byte in which the shared exponent is stored. Each
                                                         // byte is shared amongst 16 datums.
-                        __m256i exp_vector =
-                            _mm256_set1_epi32(get_byte(exp_word, sub_word_index));  // Replicate exp scalar in a vector
+                        simde__m256i exp_vector = simde_mm256_set1_epi32(
+                            get_byte(exp_word, sub_word_index));  // Replicate exp scalar in a vector
                         // Take 2 uint32_t values. These are 8 BFP8 values
-                        __m128i first = _mm_set1_epi32(bfp8_tiles.at(
+                        simde__m128i first = simde_mm_set1_epi32(bfp8_tiles.at(
                             num_exp_words +
                             tile_and_data_index));  // Replicate first uint32_t 4 times (one for each BFP8 value)
-                        __m128i second = _mm_set1_epi32(bfp8_tiles.at(
+                        simde__m128i second = simde_mm_set1_epi32(bfp8_tiles.at(
                             num_exp_words + tile_and_data_index + 1));  //  Replicate second uint32_t 4 times
-                        first = _mm_srlv_epi32(
-                            _mm_and_si128(first, mask), shift);  // Extract each BFP8 from the first uint32_t
-                        second = _mm_srlv_epi32(
-                            _mm_and_si128(second, mask), shift);  // Extract each BFP8 from the second uint32_t
-                        __m256i combined = _mm256_set_m128i(second, first);  // Concatenate 2 128 vectors to 1 256
+                        first = simde_mm_srlv_epi32(
+                            simde_mm_and_si128(first, mask), shift);  // Extract each BFP8 from the first uint32_t
+                        second = simde_mm_srlv_epi32(
+                            simde_mm_and_si128(second, mask), shift);  // Extract each BFP8 from the second uint32_t
+                        simde__m256i combined =
+                            simde_mm256_set_m128i(second, first);  // Concatenate 2 128 vectors to 1 256
                         // Extract sign and mantissa (expo extracted above)
-                        __m256i sign = _mm256_srl_epi32(combined, _mm_set_epi64x(0, 7));
-                        __m256i man = _mm256_and_si256(combined, _mm256_set1_epi32(0x7f));
+                        simde__m256i sign = simde_mm256_srl_epi32(combined, simde_mm_set_epi64x(0, 7));
+                        simde__m256i man = simde_mm256_and_si256(combined, simde_mm256_set1_epi32(0x7f));
                         // Initialize shift amount per datum to 0. This is incremented below.
-                        __m256i shift_cnt = _mm256_setzero_si256();
-                        __m256i select_mask = _mm256_cmpeq_epi32(
+                        simde__m256i shift_cnt = simde_mm256_setzero_si256();
+                        simde__m256i select_mask = simde_mm256_cmpeq_epi32(
                             man, shift_cnt);  // This mask is used to set mantissa values to 0, if they start at 0.
-                        __m256i man_shifted = man;  // Initialize updated mantissa
+                        simde__m256i man_shifted = man;  // Initialize updated mantissa
                         for (int shift_val = 0; shift_val < 7; shift_val++) {
                             // Shift each mantissa and update the corresponding shift_cnt until the 6th bit of the 8 bit
                             // data is set.
-                            __m256i shift_mask = _mm256_or_si256(
-                                _mm256_cmpgt_epi32(man_shifted, _mm256_set1_epi32(0x40)),
-                                _mm256_cmpeq_epi32(
+                            simde__m256i shift_mask = simde_mm256_or_si256(
+                                simde_mm256_cmpgt_epi32(man_shifted, simde_mm256_set1_epi32(0x40)),
+                                simde_mm256_cmpeq_epi32(
                                     man_shifted,
-                                    _mm256_set1_epi32(0x40)));  // If the 6th bit is set, propagate the current mantissa
-                                                                // value. Else take the left shifted value
-                            man_shifted = _mm256_blendv_epi8(
-                                _mm256_sll_epi32(man_shifted, _mm_set_epi64x(0, 1)), man_shifted, shift_mask);
-                            shift_cnt = _mm256_blendv_epi8(_mm256_set1_epi32(shift_val + 1), shift_cnt, shift_mask);
+                                    simde_mm256_set1_epi32(0x40)));  // If the 6th bit is set, propagate the current
+                                                                     // mantissa value. Else take the left shifted value
+                            man_shifted = simde_mm256_blendv_epi8(
+                                simde_mm256_sll_epi32(man_shifted, simde_mm_set_epi64x(0, 1)), man_shifted, shift_mask);
+                            shift_cnt =
+                                simde_mm256_blendv_epi8(simde_mm256_set1_epi32(shift_val + 1), shift_cnt, shift_mask);
                         }
-                        man_shifted = _mm256_and_si256(
-                            _mm256_sll_epi32(man_shifted, _mm_set_epi64x(0, 1)),
-                            _mm256_set1_epi32(0x7f));  // One more shift to clear 6th bit
-                        man = _mm256_blendv_epi8(
+                        man_shifted = simde_mm256_and_si256(
+                            simde_mm256_sll_epi32(man_shifted, simde_mm_set_epi64x(0, 1)),
+                            simde_mm256_set1_epi32(0x7f));  // One more shift to clear 6th bit
+                        man = simde_mm256_blendv_epi8(
                             man_shifted,
                             man,
                             select_mask);  // Choose new mantissa or keep old mantissa based on 0 initial condition.
-                        // Assert if the exponent and corresponding mantissa for a datum are non-zero and the
-                        // subtraction bias (shift_cnt) for that data is greater than the exponent value
-                        TT_ASSERT(
-                            !(_mm256_movemask_ps(
-                                  _mm256_castsi256_ps(_mm256_cmpgt_epi32(exp_vector, _mm256_setzero_si256()))) &
-                              _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpgt_epi32(shift_cnt, exp_vector))) &
-                              !_mm256_movemask_ps(_mm256_castsi256_ps(select_mask))),
-                            "Device returned incorrect data for Bfp8 formats: The Shift Count for a non-zero exponent "
-                            "is greater than the exponent value.");
-                        exp_vector = _mm256_blendv_epi8(
-                            _mm256_sub_epi32(exp_vector, _mm256_add_epi32(rebias_offset, shift_cnt)),
-                            _mm256_setzero_si256(),
+                        // Flush denormals to zero
+                        // Check if shift > exp and mantissa is not zero
+                        simde__m256i mask_shift_gt_exp = simde_mm256_cmpgt_epi32(shift_cnt, exp_vector);
+                        simde__m256i mask_nonzero_mantissa = simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
+                        simde__m256i mask_denormal = simde_mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
+
+                        exp_vector = simde_mm256_blendv_epi8(
+                            simde_mm256_sub_epi32(exp_vector, simde_mm256_add_epi32(rebias_offset, shift_cnt)),
+                            simde_mm256_setzero_si256(),
                             select_mask);  // Choose new (rebiased exponent) or keep previous exponent based on mantissa
                                            // intiial condition
 
-                        sign = _mm256_sll_epi32(sign, _mm_set_epi64x(0, 31));              // Shift sign
-                        exp_vector = _mm256_sll_epi32(exp_vector, _mm_set_epi64x(0, 23));  // Shift exp
-                        man = _mm256_sll_epi32(man, _mm_set_epi64x(0, 16));                // Shift mantissa
-                        man = _mm256_or_si256(
-                            sign, _mm256_or_si256(exp_vector, man));  // Store final value in mantissa register and save
+                        sign = simde_mm256_sll_epi32(sign, simde_mm_set_epi64x(0, 31));              // Shift sign
+                        exp_vector = simde_mm256_sll_epi32(exp_vector, simde_mm_set_epi64x(0, 23));  // Shift exp
+                        man = simde_mm256_sll_epi32(man, simde_mm_set_epi64x(0, 16));                // Shift mantissa
+                        man = simde_mm256_or_si256(
+                            sign,
+                            simde_mm256_or_si256(exp_vector, man));  // Store final value in mantissa register and save
+
+                        // Zero out lanes where mask_denormal is true
+                        man = simde_mm256_blendv_epi8(man, simde_mm256_setzero_si256(), mask_denormal);
 
                         uint32_t float_data_index;
                         if (row_major_output) {
@@ -166,7 +173,7 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
                             float_data_index = fp32_element_index;
                             fp32_element_index += 8;
                         }
-                        _mm256_storeu_ps(&float_vec[float_data_index], _mm256_castsi256_ps(man));
+                        simde_mm256_storeu_ps(&float_vec[float_data_index], simde_mm256_castsi256_ps(man));
                     }
                 }
             }

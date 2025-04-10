@@ -25,119 +25,6 @@ bool enable_fp32_dest_acc(
     return fp32_dest_acc_en;
 }
 
-// Helper struct to group related parameters
-struct UpdateCacheParams {
-    std::vector<uint32_t> reader_compile_time_args;
-    std::vector<uint32_t> writer_compile_time_args;
-    std::vector<uint32_t> compute_kernel_args;
-    CoreRangeSet cores;
-    uint32_t num_cores;
-    Buffer* dst_buffer;
-    uint32_t src_cb_indices[2];  // Stores pairs of src indices
-};
-
-struct UpdateCacheKernels {
-    uint32_t unary_reader_kernel_id;
-    uint32_t unary_writer_kernel_id;
-    uint32_t compute_kernel_id;
-    std::vector<CoreCoord> cores;
-};
-
-// Helper function to create and set kernel arguments
-UpdateCacheKernels setup_kernels_for_update_cache(
-    Program& program,
-    const UpdateCacheParams& params,
-    const IDevice* device,
-    bool use_index_tensor,
-    bool is_paged_cache,
-    bool share_cache,
-    uint32_t cache_batch_num_tiles,
-    uint32_t Wt,
-    uint32_t Wbytes,
-    const std::vector<uint32_t>& update_idxs,
-    bool row_major,
-    uint64_t index_buffer_addr,
-    std::optional<const Tensor>& page_table,
-    bool fp32_dest_acc_en,
-    int input_index) {
-    // Create reader kernel
-    auto unary_reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
-        "reader_update_cache_interleaved_start_id.cpp",
-        params.cores,
-        tt_metal::ReaderDataMovementConfig(params.reader_compile_time_args));
-
-    // Create writer kernel
-    auto unary_writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
-        "writer_update_cache_interleaved_start_id.cpp",
-        params.cores,
-        tt_metal::WriterDataMovementConfig(params.writer_compile_time_args));
-
-    // Create compute kernel
-    auto compute_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/update_cache.cpp",
-        params.cores,
-        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = params.compute_kernel_args});
-
-    const auto& cores = corerange_to_cores(params.cores, params.num_cores, row_major);
-
-    for (uint32_t i = 0; i < params.num_cores; ++i) {
-        const CoreCoord& core = cores.at(i);
-        const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
-
-        // Cache tile info
-        const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
-        const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
-        uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
-
-        // Calculate synchronization parameters
-        bool wait_to_start = share_cache ? (i != 0) : false;
-        bool send_signal = share_cache ? (i != params.num_cores - 1) : false;
-        uint32_t send_core_x = 0, send_core_y = 0;
-
-        if (share_cache && send_signal) {
-            auto next_core = cores.at(i + 1);
-            auto next_core_physical = device->worker_core_from_logical_core(next_core);
-            send_core_x = next_core_physical.x;
-            send_core_y = next_core_physical.y;
-        }
-
-        // Set runtime args for reader
-        SetRuntimeArgs(
-            program,
-            unary_reader_kernel_id,
-            core,
-            {
-                params.dst_buffer->address(),
-                use_index_tensor ? 0 : cache_start_id,
-                index_buffer_addr,
-                i,
-                is_paged_cache ? page_table.value().buffer()->address() : 0,
-                wait_to_start,
-            });
-
-        // Set runtime args for writer
-        SetRuntimeArgs(
-            program,
-            unary_writer_kernel_id,
-            core,
-            {
-                params.dst_buffer->address(),
-                use_index_tensor ? 0 : cache_start_id,
-                use_index_tensor ? 0 : tile_update_offset_B,
-                i,
-                send_signal,
-                send_core_x,
-                send_core_y,
-            });
-    }
-    return {unary_reader_kernel_id, unary_writer_kernel_id, compute_kernel_id, cores};
-}
-
 operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
     const Tensor& cache_tensor1,
     const Tensor& input_tensor1,
@@ -232,6 +119,8 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
     CoreRangeSet input1_cores = input1_shard_spec.value().grid;
     CoreRangeSet input2_cores = input2_shard_spec.value().grid;
     CoreRangeSet all_cores = input1_cores.merge(input2_cores);
+    CoreRangeSet all_cores_bb = all_cores.bounding_box();
+    CoreRangeSet unused_cores = all_cores_bb.subtract(all_cores);
     uint32_t input1_num_cores = input1_cores.num_cores();
     uint32_t input2_num_cores = input2_cores.num_cores();
 
@@ -255,7 +144,7 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
     const tt::CBIndex intermed2_cb_index = CBIndex::c_26;
     const tt::CBIndex output_cb_index = CBIndex::c_16;
 
-    create_cb(cache_cb_index, program, all_cores, cache_single_tile_size, num_cache_tiles, cache_cb_data_format);
+    create_cb(cache_cb_index, program, all_cores_bb, cache_single_tile_size, num_cache_tiles, cache_cb_data_format);
     auto [_1, cb_src1] = create_cb(
         src1_cb_index,
         program,
@@ -275,22 +164,23 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
     create_cb(
         {intermed0_cb_index, intermed1_cb_index},
         program,
-        all_cores,
+        all_cores_bb,
         interm_single_tile_size,
         num_interm_tiles,
         interm_cb_data_format);
-    create_cb(intermed2_cb_index, program, all_cores, interm_single_tile_size, num_interm_tiles, interm_cb_data_format);
-    create_cb(output_cb_index, program, all_cores, cache_single_tile_size, num_output_tiles, cache_cb_data_format);
+    create_cb(
+        intermed2_cb_index, program, all_cores_bb, interm_single_tile_size, num_interm_tiles, interm_cb_data_format);
+    create_cb(output_cb_index, program, all_cores_bb, cache_single_tile_size, num_output_tiles, cache_cb_data_format);
 
     auto in0_sequential_mode_semaphore_id = tt_metal::CreateSemaphore(
-        program, all_cores, 0);  // used for share cache for signaling when the cache is ready to be read
+        program, all_cores_bb, 0);  // used for share cache for signaling when the cache is ready to be read
 
     if (use_index_tensor) {
-        create_cb(cb_index_id, program, all_cores, index_tensor_tile_size, 1, index_data_format);
+        create_cb(cb_index_id, program, all_cores_bb, index_tensor_tile_size, 1, index_data_format);
     }
 
     if (is_paged_cache) {
-        create_cb(cb_pagetable_id, program, all_cores, page_table_stick_size, 1, page_table_data_format);
+        create_cb(cb_pagetable_id, program, all_cores_bb, page_table_stick_size, 1, page_table_data_format);
     }
 
     auto src1_buffer = input_tensor1.buffer();
@@ -302,10 +192,11 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
     bool src_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
-    std::vector<uint32_t> reader1_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t)src1_cb_index,
+        (std::uint32_t)src2_cb_index,
         (std::uint32_t)dst_is_dram,
         (std::uint32_t)cache_cb_index,
-        (std::uint32_t)src1_cb_index,
         // Index tensor args
         (std::uint32_t)use_index_tensor,
         (std::uint32_t)index_is_dram,
@@ -327,10 +218,8 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
         St,
         in0_sequential_mode_semaphore_id,
     };
-    std::vector<uint32_t> reader2_compile_time_args = reader1_compile_time_args;
-    reader2_compile_time_args[2] = src2_cb_index;
 
-    std::vector<uint32_t> writer1_compile_time_args = {
+    std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)dst_is_dram,
         (std::uint32_t)output_cb_index,
         (std::uint32_t)intermed0_cb_index,
@@ -352,11 +241,11 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
         St,
         in0_sequential_mode_semaphore_id,
     };
-    std::vector<uint32_t> writer2_compile_time_args = writer1_compile_time_args;
 
-    std::vector<uint32_t> compute1_kernel_args = {
-        cache_cb_index,
+    std::vector<uint32_t> compute_kernel_args = {
         src1_cb_index,
+        src2_cb_index,
+        cache_cb_index,
         intermed0_cb_index,
         intermed1_cb_index,
         intermed2_cb_index,
@@ -364,51 +253,162 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
         Wt,
         num_heads,
     };
-    std::vector<uint32_t> compute2_kernel_args = compute1_kernel_args;
-    compute2_kernel_args[1] = src2_cb_index;
 
-    // Create array of input parameters
-    UpdateCacheParams update_cache_inputs[2] = {// Input 1 parameters
-                                                {.reader_compile_time_args = reader1_compile_time_args,
-                                                 .writer_compile_time_args = writer1_compile_time_args,
-                                                 .compute_kernel_args = compute1_kernel_args,
-                                                 .cores = input1_cores,
-                                                 .num_cores = input1_num_cores,
-                                                 .dst_buffer = dst1_buffer,
-                                                 .src_cb_indices = {cache_cb_index, src1_cb_index}},
-                                                // Input 2 parameters
-                                                {.reader_compile_time_args = reader2_compile_time_args,
-                                                 .writer_compile_time_args = writer2_compile_time_args,
-                                                 .compute_kernel_args = compute2_kernel_args,
-                                                 .cores = input2_cores,
-                                                 .num_cores = input2_num_cores,
-                                                 .dst_buffer = dst2_buffer,
-                                                 .src_cb_indices = {cache_cb_index, src2_cb_index}}};
+    // Create reader kernel
+    auto unary_reader_kernel_id = tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+        "reader_paged_fused_update_cache_interleaved_start_id.cpp",
+        all_cores_bb,
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    // setup kernels both inputs
-    UpdateCacheKernels update_cache_kernels[2];
-    for (int i = 0; i < num_caches; i++) {
-        update_cache_kernels[i] = setup_kernels_for_update_cache(
+    // Create writer kernel
+    auto unary_writer_kernel_id = tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+        "writer_paged_fused_update_cache_interleaved_start_id.cpp",
+        all_cores_bb,
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+
+    // Create compute kernel
+    auto compute_kernel_id = tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/paged_fused_update_cache.cpp",
+        all_cores_bb,
+        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
+
+    constexpr bool has_work = true;
+    constexpr bool is_input1 = true;
+
+    const auto& cores1 = corerange_to_cores(input1_cores, input1_cores.num_cores(), row_major);
+    const auto& cores2 = corerange_to_cores(input2_cores, input2_cores.num_cores(), row_major);
+
+    for (uint32_t i = 0; i < cores1.size(); ++i) {
+        const CoreCoord& core1 = cores1.at(i);
+        const CoreCoord& core2 = cores2.at(i);
+
+        const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
+
+        // Cache tile info
+        const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
+        const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+        uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
+
+        // Calculate synchronization parameters
+        bool wait_to_start = share_cache and (i != 0);
+        bool send_signal = share_cache and (i != cores1.size() - 1);
+        uint32_t send_core1_x = 0, send_core1_y = 0;
+        uint32_t send_core2_x = 0, send_core2_y = 0;
+
+        if (send_signal) {
+            auto next_core = cores1.at(i + 1);
+            auto next_core_physical = device->worker_core_from_logical_core(next_core);
+            send_core1_x = next_core_physical.x;
+            send_core1_y = next_core_physical.y;
+
+            next_core = cores2.at(i + 1);
+            next_core_physical = device->worker_core_from_logical_core(next_core);
+            send_core2_x = next_core_physical.x;
+            send_core2_y = next_core_physical.y;
+        }
+
+        // Input1 args
+        // Set runtime args for reader
+        SetRuntimeArgs(
             program,
-            update_cache_inputs[i],
-            device,
-            use_index_tensor,
-            is_paged_cache,
-            share_cache,
-            cache_batch_num_tiles,
-            Wt,
-            Wbytes,
-            update_idxs,
-            row_major,
-            index_buffer_addr,
-            page_table,
-            fp32_dest_acc_en,
-            i);
+            unary_reader_kernel_id,
+            core1,
+            {
+                has_work,
+                is_input1,
+                dst1_buffer->address(),
+                use_index_tensor ? 0 : cache_start_id,
+                index_buffer_addr,
+                i,
+                is_paged_cache ? page_table.value().buffer()->address() : 0,
+                wait_to_start,
+            });
+
+        // Set runtime args for writer
+        SetRuntimeArgs(
+            program,
+            unary_writer_kernel_id,
+            core1,
+            {
+                has_work,
+                dst1_buffer->address(),
+                use_index_tensor ? 0 : cache_start_id,
+                use_index_tensor ? 0 : tile_update_offset_B,
+                i,
+                send_signal,
+                send_core1_x,
+                send_core1_y,
+            });
+
+        // Set runtime args for compute
+        SetRuntimeArgs(
+            program,
+            compute_kernel_id,
+            core1,
+            {
+                has_work,
+                is_input1,
+            });
+
+        // Input2 args
+        // Set runtime args for reader
+        SetRuntimeArgs(
+            program,
+            unary_reader_kernel_id,
+            core2,
+            {
+                has_work,
+                !is_input1,
+                dst2_buffer->address(),
+                use_index_tensor ? 0 : cache_start_id,
+                index_buffer_addr,
+                i,
+                is_paged_cache ? page_table.value().buffer()->address() : 0,
+                wait_to_start,
+            });
+
+        // Set runtime args for writer
+        SetRuntimeArgs(
+            program,
+            unary_writer_kernel_id,
+            core2,
+            {
+                has_work,
+                dst2_buffer->address(),
+                use_index_tensor ? 0 : cache_start_id,
+                use_index_tensor ? 0 : tile_update_offset_B,
+                i,
+                send_signal,
+                send_core2_x,
+                send_core2_y,
+            });
+
+        // Set runtime args for compute
+        SetRuntimeArgs(
+            program,
+            compute_kernel_id,
+            core2,
+            {
+                has_work,
+                !is_input1,
+            });
     }
 
+    // Set runtime args for unused cores
+    SetRuntimeArgs(program, unary_reader_kernel_id, unused_cores, {!has_work});
+    SetRuntimeArgs(program, unary_writer_kernel_id, unused_cores, {!has_work});
+    SetRuntimeArgs(program, compute_kernel_id, unused_cores, {!has_work});
+
     auto override_runtime_arguments_callback =
-        [num_caches,
-         update_cache_kernels,
+        [unary_reader_kernel_id,
+         unary_writer_kernel_id,
+         cores1,
+         cores2,
          Wbytes,
          Wt,
          cb_src1,
@@ -425,10 +425,10 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
                 static_cast<const PagedUpdateCacheDeviceOperation*>(operation)->update_idxs;
 
             auto src1_buffer = input_tensors.at(1).buffer();
-
             auto src2_buffer = input_tensors.at(3).buffer();
 
-            std::vector dst_buffers = {input_tensors.at(0).buffer(), input_tensors.at(2).buffer()};
+            auto dst1_buffer = input_tensors.at(0).buffer();
+            auto dst2_buffer = input_tensors.at(2).buffer();
 
             auto index_tensor_addr = use_index_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
             auto page_table_tensor_addr = is_paged_cache ? optional_input_tensors.at(1).value().buffer()->address() : 0;
@@ -440,37 +440,50 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
                 UpdateDynamicCircularBufferAddress(program, cb_src3, *src2_buffer);
             }
 
-            for (int cache_idx = 0; cache_idx < num_caches; cache_idx++) {
-                auto& reader_args_by_core =
-                    GetRuntimeArgs(program, update_cache_kernels[cache_idx].unary_reader_kernel_id);
-                auto& writer_args_by_core =
-                    GetRuntimeArgs(program, update_cache_kernels[cache_idx].unary_writer_kernel_id);
-                const auto& cores = update_cache_kernels[cache_idx].cores;
+            auto& reader_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);
+            auto& writer_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
 
-                for (uint32_t i = 0, num_tiles_read = 0; i < cores.size(); ++i) {
-                    const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
-                    // Cache tile info
-                    const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
-                    const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
-                    // Offset to write into untilized cache
-                    uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
+            for (uint32_t i = 0, num_tiles_read = 0; i < cores1.size(); ++i) {
+                const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
+                // Cache tile info
+                const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
+                const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+                // Offset to write into untilized cache
+                uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
 
-                    const CoreCoord& core = cores.at(i);
+                const CoreCoord& core1 = cores1.at(i);
+                const CoreCoord& core2 = cores2.at(i);
 
-                    {
-                        auto& runtime_args = reader_args_by_core.at(core.x).at(core.y);
-                        runtime_args[0] = dst_buffers[cache_idx]->address();
-                        runtime_args[1] = cache_start_id;
-                        runtime_args[2] = index_tensor_addr;
-                        runtime_args[4] = page_table_tensor_addr;
-                    }
+                // Input1 args
+                {
+                    auto& runtime_args = reader_args_by_core.at(core1.x).at(core1.y);
+                    runtime_args[2] = dst1_buffer->address();
+                    runtime_args[3] = cache_start_id;
+                    runtime_args[4] = index_tensor_addr;
+                    runtime_args[6] = page_table_tensor_addr;
+                }
 
-                    {
-                        auto& runtime_args = writer_args_by_core.at(core.x).at(core.y);
-                        runtime_args[0] = dst_buffers[cache_idx]->address();
-                        runtime_args[1] = cache_start_id;
-                        runtime_args[2] = tile_update_offset_B;
-                    }
+                {
+                    auto& runtime_args = writer_args_by_core.at(core1.x).at(core1.y);
+                    runtime_args[1] = dst1_buffer->address();
+                    runtime_args[2] = cache_start_id;
+                    runtime_args[3] = tile_update_offset_B;
+                }
+
+                // Input2 args
+                {
+                    auto& runtime_args = reader_args_by_core.at(core2.x).at(core2.y);
+                    runtime_args[2] = dst2_buffer->address();
+                    runtime_args[3] = cache_start_id;
+                    runtime_args[4] = index_tensor_addr;
+                    runtime_args[6] = page_table_tensor_addr;
+                }
+
+                {
+                    auto& runtime_args = writer_args_by_core.at(core2.x).at(core2.y);
+                    runtime_args[1] = dst2_buffer->address();
+                    runtime_args[2] = cache_start_id;
+                    runtime_args[3] = tile_update_offset_B;
                 }
             }
         };

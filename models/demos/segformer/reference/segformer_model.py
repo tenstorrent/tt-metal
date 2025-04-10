@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import torch
 from typing import Union, Tuple, Optional
 from transformers.modeling_outputs import BaseModelOutput

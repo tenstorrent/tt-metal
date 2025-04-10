@@ -2,12 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include <functional>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::IDevice;

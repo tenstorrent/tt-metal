@@ -2,6 +2,20 @@ name: "[internal] TG model perf tests impl"
 
 on:
   workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
   tg-model-perf-tests:
@@ -13,65 +27,93 @@ jobs:
             name: "TG LLM model perf tests",
             model-type: "LLM",
             arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
+            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type llm_model_perf_tg_device --dispatch-mode ""'
-          },
+          },  # Austin Ho
           {
             name: "TG CNN model perf tests",
             model-type: "CNN",
             arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
+            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
+          },  # Austin Ho
+          {
+            name: "TG Llama 70B model perf tests",
+            model-type: "Llama 70B",
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_model_perf_tg_device --dispatch-mode ""',
+            owner_id: U044T8U8DEF # Johanna Rock
           },
           {
             name: "Llama TG Perf Unit Tests",
             arch: wormhole_b0,
             cmd: 'pytest models/demos/llama3_subdevices/tests/tg_perf_unit_tests',
-            timeout: 75,
+            timeout: 100,
             tracy: true,
-            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
+            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
             owner_id: U071CKL4AFK # Ammar Vora
-          }
+          },
         ]
     name: ${{ matrix.test-group.name }}
     env:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      TT_METAL_HOME: ${{ github.workspace }}
+      PYTHONPATH: ${{ github.workspace }}
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Enable performance mode
         run: |
           sudo cpupower frequency-set -g performance
       - uses: ./.github/actions/ensure-active-weka-mount
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - name: Download profiler build artifact
+      - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
-          name: TTMetal_build_any_profiler
+          name: ${{ inputs.build-artifact-name || 'build artifact not specified' }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name || 'wheel artifact not specified' }}
       - name: Run model perf regression tests
         timeout-minutes: 60
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
-      - name: Save environment data
-        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        uses: ./.github/actions/docker-run
         env:
-          PYTHONPATH: ${{ github.workspace }}
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+          install_wheel: true
+          run_args: |
+            ${{ matrix.test-group.cmd }}
+      - name: Save environment data
+        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests' || matrix.test-group.name == 'TG Llama 70B model perf tests') && !cancelled() }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+          install_wheel: true
+          run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests' || matrix.test-group.name == 'TG Llama 70B model perf tests') && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -80,7 +122,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !(matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        if: ${{ !(matrix.test-group.name == 'Llama TG Perf Unit Tests'|| matrix.test-group.name == 'TG Llama 70B model perf tests') && !cancelled() }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
@@ -130,8 +172,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
+          path: generated/test_reports/
           prefix: "test_reports_"
       - name: Disable performance mode
         if: always()

@@ -4,7 +4,13 @@ on:
   workflow_dispatch:
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      version: 22.04
   umd-unit-tests:
+    needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
@@ -17,3 +23,4 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

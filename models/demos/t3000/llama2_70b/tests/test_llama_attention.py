@@ -18,8 +18,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
     check_mesh_device,
     extract_pcc_from_log,
-    generate_rot_emb,
-    get_rotation_mat,
     gather_cos_sin,
     precompute_freqs,
     MAX_SEQ_LEN,
@@ -34,7 +32,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     should_skip_model_load,
     check_kv_cache,
 )
-from models.utility_functions import nearest_32
 
 from dataclasses import dataclass
 

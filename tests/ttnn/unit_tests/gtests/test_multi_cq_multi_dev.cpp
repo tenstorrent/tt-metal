@@ -2,16 +2,50 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn_test_fixtures.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "ttnn/async_runtime.hpp"
-#include "ttnn/operations/functions.hpp"
 #include <tt-metalium/event.hpp>
-#include <cmath>
+#include <map>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include "fmt/base.h"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "ttnn/async_runtime.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn_test_fixtures.hpp"
+#include "umd/device/types/arch.h"
+
+namespace ttnn {
+namespace operations {
+namespace unary {
+enum class UnaryOpType;
+struct UnaryWithParam;
+}  // namespace unary
+}  // namespace operations
+}  // namespace ttnn
 
 using namespace tt;
 using namespace tt_metal;

@@ -98,7 +98,7 @@ exclude_patterns = []
 html_theme = "sphinx_rtd_theme"
 html_logo = "images/tt_logo.svg"
 html_favicon = "images/favicon.png"
-html_baseurl = f"/{metal_sphinx_config.shortname}/" + os.environ["DOCS_VERSION"]
+html_baseurl = f"/tt-metal/" + os.environ["DOCS_VERSION"] + f"/{metal_sphinx_config.shortname}"
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,

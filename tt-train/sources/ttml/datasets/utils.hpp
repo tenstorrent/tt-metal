@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include <numeric>
 #include <random>
 #include <span>
+#include <string>
 
 #include "autograd/auto_context.hpp"
 #include "dataset_subset.hpp"
@@ -16,7 +18,11 @@ namespace ttml::datasets {
 
 template <typename Tokenizer>
 std::tuple<InMemoryTokenDataset, std::unique_ptr<tokenizers::TokenizerBase>> create_in_memory_token_dataset(
-    const std::string& text, uint32_t seq_length);
+    const std::string& text, uint32_t seq_length, const std::string& json_file_path = "");
+
+template <typename Tokenizer>
+std::tuple<InMemoryTokenDataset, std::unique_ptr<tokenizers::TokenizerBase>> create_in_memory_token_dataset(
+    const std::vector<uint32_t>& tokens, uint32_t seq_length, const std::string& json_file_path = "");
 
 template <typename DatasetType>
 std::vector<DatasetSubset<DatasetType>> random_split(
@@ -46,5 +52,7 @@ std::vector<DatasetSubset<DatasetType>> random_split(
 
     return subsets;
 }
+
+std::vector<uint32_t> load_tokens_from_space_separated_file(const std::string& file_path);
 
 }  // namespace ttml::datasets

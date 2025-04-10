@@ -15,9 +15,9 @@
 #include <pybind11/iostream.h>
 #endif
 
-#include "fmt/color.h"
-#include "fmt/core.h"
-#include "fmt/ostream.h"
+#include <fmt/color.h>
+#include <fmt/core.h>
+#include <fmt/ostream.h>
 
 namespace tt {
 

@@ -15,8 +15,8 @@ from transformers import AutoImageProcessor
 
 import ttnn
 
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
-from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_data_loader, get_batch
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -33,7 +33,7 @@ from pathlib import Path
 
 def get_expected_times(functional_vit):
     return {
-        ttnn_optimized_sharded_vit: (12, 0.08),
+        ttnn_optimized_sharded_vit_gs: (12, 0.08),
     }[functional_vit]
 
 
@@ -52,7 +52,7 @@ def get_imagenet_label_dict():
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("sequence_size", [224])
-@pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit])
+@pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit_gs])
 def test_accuracy(
     device,
     use_program_cache,
@@ -73,7 +73,7 @@ def test_accuracy(
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
 
-    if functional_vit == ttnn_optimized_sharded_vit:
+    if functional_vit == ttnn_optimized_sharded_vit_gs:
         tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_vit: {functional_vit}")
@@ -114,7 +114,7 @@ def test_accuracy(
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
     ##################
 
     iterations = 50

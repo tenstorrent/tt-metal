@@ -4,9 +4,8 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include <tt-metalium/allocator.hpp>
+#include <cstdint>
 
 namespace tt {
 

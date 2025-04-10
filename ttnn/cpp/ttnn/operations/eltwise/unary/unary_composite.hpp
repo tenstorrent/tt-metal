@@ -120,10 +120,6 @@ struct ExecuteRdiv {
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
-struct ExecuteMish {
-    static Tensor invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt);
-};
-
 }  // namespace unary
 }  // namespace operations
 
@@ -205,7 +201,6 @@ constexpr auto lgamma = ttnn::register_operation_with_auto_launch_op<
 constexpr auto log1p = ttnn::register_operation_with_auto_launch_op<
     "ttnn::log1p",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOG1P>>();
-constexpr auto mish = ttnn::register_operation_with_auto_launch_op<"ttnn::mish", operations::unary::ExecuteMish>();
 constexpr auto multigammaln = ttnn::register_operation_with_auto_launch_op<
     "ttnn::multigammaln",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>();

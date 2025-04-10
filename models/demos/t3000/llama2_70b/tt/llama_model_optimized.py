@@ -10,12 +10,9 @@ import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 
 
-from models.utility_functions import nearest_32, profiler
 from models.demos.t3000.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
 from models.demos.t3000.llama2_70b.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    freqs_to_rotation_matrix,
-    get_rotation_mat,
     precompute_freqs,
     gather_cos_sin,
     get_rot_transformation_mat,

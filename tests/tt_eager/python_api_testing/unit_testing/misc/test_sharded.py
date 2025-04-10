@@ -2377,7 +2377,7 @@ def test_interleaved_2_sharded_DRAM(device, dtype, y):
     yt = ttnn.interleaved_to_sharded(xt, shard_grid, (y // 8, 18 * 32), shard_scheme, ttnn.ShardOrientation.ROW_MAJOR)
 
 
-@run_for_wormhole_b0()
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "seq_len",
     (32,),
@@ -2423,19 +2423,30 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_pro
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 0),
+                ttnn.CoreCoord(11, 0) if is_wormhole_b0() else ttnn.CoreCoord(7, 0),  # Blackhole coord
             ),
         }
     )
+    if is_wormhole_b0():
+        w1_w3_shard_spec = ttnn.ShardSpec(dram_core_range_set, (4096, 320), ttnn.ShardOrientation.ROW_MAJOR)
+    else:
+        assert is_blackhole()
+        w1_w3_shard_spec = ttnn.ShardSpec(dram_core_range_set, (4096, 448), ttnn.ShardOrientation.ROW_MAJOR)
     w1_w3_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(dram_core_range_set, (4096, 320), ttnn.ShardOrientation.ROW_MAJOR),
+        w1_w3_shard_spec,
     )
+
+    if is_wormhole_b0():
+        w2_shard_spec = ttnn.ShardSpec(dram_core_range_set, (3584, 352), ttnn.ShardOrientation.ROW_MAJOR)
+    else:
+        assert is_blackhole()
+        w2_shard_spec = ttnn.ShardSpec(dram_core_range_set, (3584, 512), ttnn.ShardOrientation.ROW_MAJOR)
     w2_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(dram_core_range_set, (3584, 352), ttnn.ShardOrientation.ROW_MAJOR),
+        w2_shard_spec,
     )
     pc_1 = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=4,

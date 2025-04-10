@@ -20,6 +20,11 @@
  * LLK UNPACK COMMON
  *************************************************************************/
 
+inline bool should_reconfigure_cbs(std::uint32_t old_operand, std::uint32_t new_operand) {
+    return (unpack_src_format[old_operand] != unpack_src_format[new_operand]) ||
+           (unpack_dst_format[old_operand] != unpack_dst_format[new_operand]);
+}
+
 void llk_zero_operand(std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t fifo_base_addr =
@@ -76,7 +81,7 @@ inline void llk_unpack_reconfig_data_format_srca(
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
 
-    if ((unpack_src_format[old_srca_operand_id] != unpack_src_format[new_srca_operand_id])) {
+    if (should_reconfigure_cbs(srca_old_operand, srca_new_operand)) {
         llk_unpack_reconfig_data_format_srca<to_from_int8, is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
             srca_new_operand);
     } else if constexpr (is_tile_dim_reconfig_en) {
@@ -91,7 +96,7 @@ inline void llk_unpack_reconfig_data_format_srcb(
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
-    if ((unpack_src_format[old_srcb_operand_id] != unpack_src_format[new_srcb_operand_id])) {
+    if (should_reconfigure_cbs(srcb_old_operand, srcb_new_operand)) {
         llk_unpack_reconfig_data_format_srcb<to_from_int8, is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
             srcb_new_operand);
     } else if constexpr (is_tile_dim_reconfig_en) {

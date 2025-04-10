@@ -89,6 +89,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         mesh_device,
         from_remote_multi_device_global_semaphore,
         to_remote_multi_device_global_semaphore,
+        std::nullopt,  // persistent_output_tensors
         math_op,
         out_memory_config,
         topology,
@@ -101,6 +102,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         mesh_device,
         topology,
         gather_multi_device_global_semaphore,
+        std::nullopt,  // persistent_output_tensor
         out_memory_config,
         num_preferred_links,
         worker_subdevice_id_opt,
@@ -113,6 +115,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<const DataType> dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
@@ -125,6 +128,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         mesh_device,
         topology,
         multi_device_global_semaphore,
+        dtype,
         out_memory_config,
         num_preferred_links,
         worker_subdevice_id_opt,

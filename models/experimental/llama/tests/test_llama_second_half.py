@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-from torch import nn
 import ttnn
 from loguru import logger
 from transformers import AutoTokenizer, AutoModelForCausalLM

@@ -105,4 +105,4 @@ def test_print(device, dtype, layout, profile, deallocate):
 def test_print_0d(device):
     torch_tensor = torch.ones((), dtype=torch.bfloat16)
     tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-    assert str(tensor) == "ttnn.Tensor([ 1.00000], shape=Shape([]), dtype=DataType::BFLOAT16, layout=Layout::TILE)"
+    assert str(tensor) == "ttnn.Tensor( 1.00000, shape=Shape([]), dtype=DataType::BFLOAT16, layout=Layout::TILE)"

@@ -70,6 +70,7 @@ TEST_F(DataLoaderTest, TestLastBatchHandling) {
 
 // Test that shuffling works correctly
 TEST_F(DataLoaderTest, TestShuffling) {
+    ttml::autograd::ctx().set_seed(1337U);
     ttml::datasets::DataLoader<InMemoryDatasetFloatVecInt> dataloader(*dataset, 2, true);
 
     auto first_batch_before_shuffle = *dataloader.begin();

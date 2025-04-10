@@ -4,12 +4,19 @@
 
 #pragma once
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device.hpp"
-#include "mesh_device_view.hpp"
-#include "shape2d.hpp"
+#include <stdint.h>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <variant>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/shape2d.hpp>
 
 namespace tt::tt_metal::distributed {
 

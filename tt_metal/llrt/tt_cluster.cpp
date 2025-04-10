@@ -4,10 +4,16 @@
 
 #include "tt_cluster.hpp"
 
+#include <core_coord.hpp>
+#include <dev_msgs.h>
+#include <logger.hpp>
+#include <metal_soc_descriptor.h>
+#include <rtoptions.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -20,32 +26,25 @@
 #include <utility>
 #include <vector>
 
+#include "control_plane.hpp"
+#include "fabric_host_interface.h"
+#include "fabric_types.hpp"
 #include "fmt/base.h"
-#include <logger.hpp>
-#include <metal_soc_descriptor.h>
-#include <tt_backend_api_types.hpp>
-#include "umd/device/types/arch.h"
-#include "umd/device/tt_cluster_descriptor.h"
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "umd/device/cluster.h"
-#include "umd/device/tt_soc_descriptor.h"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/xy_pair.h"
-#include "umd/device/hugepage.h"
-
-#include <dev_msgs.h>
-
-#include <hal.hpp>
-
-#include "tracy/Tracy.hpp"
-#include "umd/device/tt_simulation_device.h"
-
-#include "sanitize_noc_host.hpp"
-#include <rtoptions.hpp>
-#include "tt_metal/llrt/tlb_config.hpp"
-#include <core_coord.hpp>
-
 #include "get_platform_architecture.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "sanitize_noc_host.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_metal/llrt/tlb_config.hpp"
+#include <umd/device/cluster.h>
+#include <umd/device/hugepage.h>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/tt_simulation_device.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_types.h>
+#include <umd/device/types/xy_pair.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
@@ -53,7 +52,7 @@ static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
 namespace {
 
 inline std::string get_soc_description_file(
-    const tt::ARCH& arch, tt::TargetDevice target_device, const std::string& output_dir = "") {
+    const tt::ARCH& arch, tt::TargetDevice target_device, [[maybe_unused]] const std::string& output_dir = "") {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
     std::string tt_metal_home;
     if (getenv("TT_METAL_HOME")) {
@@ -89,11 +88,6 @@ inline std::string get_soc_description_file(
 }  // namespace
 namespace tt {
 
-Cluster& Cluster::instance() {
-    static Cluster inst;
-    return inst;
-}
-
 Cluster::Cluster() {
     ZoneScoped;
     log_info(tt::LogDevice, "Opening user mode device driver");
@@ -101,10 +95,13 @@ Cluster::Cluster() {
     this->detect_arch_and_target();
 
     if (arch_ != ARCH::GRAYSKULL) {
-        routing_info_addr_ = tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
+        routing_info_addr_ = tt::tt_metal::hal_ref.get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
     }
 
     this->initialize_device_drivers();
+
+    this->disable_ethernet_cores_with_retrain();
 
     this->reserve_ethernet_cores_for_tunneling();
 
@@ -132,7 +129,7 @@ bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == ClusterT
 
 ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
-FabricConfig Cluster::get_fabric_config() const { return this->fabric_config_; }
+tt_metal::FabricConfig Cluster::get_fabric_config() const { return this->fabric_config_; }
 
 BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
@@ -153,27 +150,42 @@ void Cluster::generate_cluster_descriptor() {
                 break;
             }
         }
-        bool all_n300 = true;
-        bool all_n150 = true;
+        TT_ASSERT(this->cluster_desc_->get_all_chips().size() > 0, "No chips detected in the cluster");
+        const auto board_type = this->cluster_desc_->get_board_type(*this->cluster_desc_->get_all_chips().begin());
+        bool all_same_board = true;
         for (const auto& chip_id : this->cluster_desc_->get_all_chips()) {
-            all_n300 &= (this->cluster_desc_->get_board_type(chip_id) == BoardType::N300);
-            all_n150 &= (this->cluster_desc_->get_board_type(chip_id) == BoardType::N150);
-        }
-        if (all_n300) {
-            if (this->cluster_desc_->get_all_chips().size() == 2) {
-                this->cluster_type_ = ClusterType::N300;
-            } else if (this->cluster_desc_->get_all_chips().size() == 8) {
-                this->cluster_type_ = ClusterType::T3K;
-            }
-        } else if (all_n150) {
-            if (this->cluster_desc_->get_all_chips().size() == 1) {
-                this->cluster_type_ = ClusterType::N150;
+            if (this->cluster_desc_->get_board_type(chip_id) != board_type) {
+                all_same_board = false;
+                break;
             }
         }
 
-        if ((this->cluster_desc_->get_all_chips().size() == this->cluster_desc_->get_chips_with_mmio().size()) and
-            (this->cluster_desc_->get_all_chips().size() == 32)) {
-            this->cluster_type_ = ClusterType::GALAXY;
+        if (all_same_board) {
+            if (board_type == BoardType::N300) {
+                if (this->cluster_desc_->get_all_chips().size() == 2) {
+                    this->cluster_type_ = ClusterType::N300;
+                } else if (this->cluster_desc_->get_all_chips().size() == 8) {
+                    this->cluster_type_ = ClusterType::T3K;
+                }
+            } else if (board_type == BoardType::N150) {
+                if (this->cluster_desc_->get_all_chips().size() == 1) {
+                    this->cluster_type_ = ClusterType::N150;
+                }
+            } else if (board_type == BoardType::P100) {
+                if (this->cluster_desc_->get_all_chips().size() == 1) {
+                    this->cluster_type_ = ClusterType::P100;
+                }
+            } else if (board_type == BoardType::P150) {
+                if (this->cluster_desc_->get_all_chips().size() == 1) {
+                    this->cluster_type_ = ClusterType::P150;
+                } else if (this->cluster_desc_->get_all_chips().size() == 2) {
+                    this->cluster_type_ = ClusterType::P150_X2;
+                } else if (this->cluster_desc_->get_all_chips().size() == 4) {
+                    this->cluster_type_ = ClusterType::P150_X4;
+                }
+            } else if (board_type == BoardType::UBB) {
+                this->cluster_type_ = ClusterType::GALAXY;
+            }
         }
     }
 
@@ -272,8 +284,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
         // umd::Cluster::detect_available_device_ids only lists MMIO device ids, since we need remote chip ids
         // generate the cluster desc and pull chip ids from there
-        auto temp_cluster_desc =
-            tt_ClusterDescriptor::create_from_yaml(tt_ClusterDescriptor::get_cluster_descriptor_file_path());
+        auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
         std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         // This is the target/desired number of mem channels per arch/device.
@@ -300,11 +311,13 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     }
 
     barrier_address_params barrier_params;
-    barrier_params.tensix_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
-    barrier_params.dram_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
+    barrier_params.tensix_l1_barrier_base =
+        tt_metal::hal_ref.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
+    barrier_params.dram_barrier_base = tt_metal::hal_ref.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
 
-    if (tt_metal::hal.get_arch() != tt::ARCH::GRAYSKULL) {
-        barrier_params.eth_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
+    if (tt_metal::hal_ref.get_arch() != tt::ARCH::GRAYSKULL) {
+        barrier_params.eth_l1_barrier_base = tt_metal::hal_ref.get_dev_addr(
+            tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
     }
     device_driver->set_barrier_address_params(barrier_params);
 
@@ -484,7 +497,7 @@ CoreCoord Cluster::get_physical_coordinate_from_logical_coordinates(
 }
 
 CoreCoord Cluster::get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip);
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip);
     tt::umd::CoreCoord logical_core =
         get_soc_desc(chip).translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
     return {logical_core.x, logical_core.y};
@@ -492,7 +505,7 @@ CoreCoord Cluster::get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCo
 
 const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_x(chip_id_t chip_id) const {
     std::unordered_map<int, int> worker_logical_to_virtual_x;
-    const auto& soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
+    const auto& soc_desc = this->get_soc_desc(chip_id);
     for (const tt::umd::CoreCoord& logical_core : soc_desc.get_cores(CoreType::TENSIX, CoordSystem::LOGICAL)) {
         tt::umd::CoreCoord translated_core = soc_desc.translate_coord_to(logical_core, CoordSystem::TRANSLATED);
         worker_logical_to_virtual_x[logical_core.x] = translated_core.x;
@@ -502,7 +515,7 @@ const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_x(chip
 
 const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip_id_t chip_id) const {
     std::unordered_map<int, int> worker_logical_to_virtual_y;
-    const auto& soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
+    const auto& soc_desc = this->get_soc_desc(chip_id);
     for (const tt::umd::CoreCoord& logical_core : soc_desc.get_cores(CoreType::TENSIX, CoordSystem::LOGICAL)) {
         tt::umd::CoreCoord translated_core = soc_desc.translate_coord_to(logical_core, CoordSystem::TRANSLATED);
         worker_logical_to_virtual_y[logical_core.y] = translated_core.y;
@@ -511,11 +524,6 @@ const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip
 }
 
 int Cluster::get_device_aiclk(const chip_id_t& chip_id) const {
-    if (this->arch_ == tt::ARCH::BLACKHOLE) {
-        // For Blackhole bring up remove AICLK query due to lack of ARC message support
-        log_info(tt::LogDevice, "For Blackhole hardcode AICLK to 1350 MHz due to lack of ARC message support");
-        return 1350;
-    }
     if (this->device_to_mmio_device_.find(chip_id) != this->device_to_mmio_device_.end()) {
         // get_clocks returns MMIO device ID -> clock frequency
         // There is one driver per MMIO device, so we use that to index returned map
@@ -580,7 +588,7 @@ void Cluster::read_dram_vec(
 }
 
 void Cluster::write_core(
-    const void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool /*small_access*/) const {
     chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
@@ -596,7 +604,7 @@ void Cluster::write_core(
 }
 
 void Cluster::read_core(
-    void *mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool /*small_access*/) const {
     int chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
@@ -863,6 +871,38 @@ void Cluster::initialize_ethernet_sockets() {
     }
 }
 
+void Cluster::disable_ethernet_cores_with_retrain() {
+    std::vector<uint32_t> read_vec;
+    const auto& chips = this->cluster_desc_->get_all_chips();
+    for (const auto& chip_id : chips) {
+        if (this->frequent_retrain_cores_.find(chip_id) == this->frequent_retrain_cores_.end()) {
+            this->frequent_retrain_cores_.insert({chip_id, {}});
+        }
+        const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
+        for (const auto& [other_chip_id, eth_cores] : connected_chips) {
+            for (const auto& eth_core : eth_cores) {
+                if (llrt::RunTimeOptions::get_instance().get_skip_eth_cores_with_retrain() and
+                    this->cluster_desc_->get_board_type(chip_id) == BoardType::UBB) {
+                    tt_cxy_pair virtual_eth_core(
+                        chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
+                    auto retrain_count_addr = tt::tt_metal::hal_ref.get_dev_addr(
+                        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
+                        tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
+                    this->read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);
+                    if (read_vec[0] != 0) {
+                        log_warning(
+                            LogDevice,
+                            "Disabling active eth core {} due to retraining (count={})",
+                            virtual_eth_core.str(),
+                            read_vec[0]);
+                        this->frequent_retrain_cores_[chip_id].insert(eth_core);
+                    }
+                }
+            }
+        }
+    }
+}
+
 void Cluster::reserve_ethernet_cores_for_tunneling() {
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
@@ -962,6 +1002,11 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
                     skip_reserved_tunnel_cores) {
                     continue;
                 }
+                if (this->frequent_retrain_cores_.at(chip_id).find(eth_core) !=
+                    this->frequent_retrain_cores_.at(chip_id).end()) {
+                    continue;
+                }
+
                 active_ethernet_cores.insert(eth_core);
             }
         }
@@ -969,13 +1014,21 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     return active_ethernet_cores;
 }
 
-void Cluster::initialize_fabric_config(FabricConfig fabric_config) {
+tt::tt_fabric::ControlPlane* Cluster::get_control_plane() {
+    if (control_plane_.get() == nullptr) {
+        this->initialize_control_plane();
+    }
+    return control_plane_.get();
+}
+
+void Cluster::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
-    if (fabric_config != FabricConfig::DISABLED) {
+    if (fabric_config != tt_metal::FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
     } else {
         this->release_ethernet_cores_for_fabric_routers();
     }
+    this->get_control_plane()->configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 void Cluster::reserve_ethernet_cores_for_fabric_routers() {
@@ -1120,7 +1173,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
     std::vector<chip_id_t> non_mmio_devices;
     std::vector<chip_id_t> mmio_devices = target_mmio_devices;
     if (mmio_devices.size() == 0) {
-        mmio_devices.reserve(tt::Cluster::instance().number_of_pci_devices());
+        mmio_devices.reserve(this->number_of_pci_devices());
         for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
             mmio_devices.emplace_back(assoc_mmio_device);
         }
@@ -1208,6 +1261,29 @@ uint32_t Cluster::get_mmio_device_tunnel_count(chip_id_t mmio_device) const {
 uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
     chip_id_t mmio_device_id = this->get_associated_mmio_device(chip_id);
     return (mmio_device_id == chip_id) ? 0 : this->cluster_desc_->get_ethernet_link_distance(chip_id, mmio_device_id);
+}
+
+void Cluster::initialize_control_plane() {
+    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
+    // descriptors
+    std::string mesh_graph_descriptor;
+    switch (this->cluster_type_) {
+        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::GALAXY: mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
+        default: TT_THROW("Unknown cluster type"); // TODO: we could expose this as a custom mesh graph option
+    }
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+
+    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
 }
 
 }  // namespace tt

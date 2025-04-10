@@ -18,7 +18,7 @@ from models.experimental.grok.tt.grok_decoder import TtTransformerBlock
 from models.experimental.grok.reference.model import DecoderLayer
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.utility_functions import comp_pcc, comp_allclose
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.timeout(500 * 8)

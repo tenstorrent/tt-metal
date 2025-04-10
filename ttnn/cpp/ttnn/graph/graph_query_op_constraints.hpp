@@ -8,10 +8,28 @@
 #include <string>
 
 #include <nlohmann/json.hpp>
+#include <tt-metalium/logger.hpp>
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 
 namespace ttnn::graph {
+
+namespace detail {
+
+// These overloaded extract_output_tensor functions abstract the return type of an arbitrary op from the rest of the
+// constraints query function. An overload resolution failure means the return type for the op in that query is not yet
+// supported and a new overload should be added
+
+// most ops just return a tensor
+inline Tensor extract_output_tensor(const Tensor& result) { return result; }
+
+// conv2d output
+template <typename... Args>
+Tensor extract_output_tensor(const std::tuple<Tensor, Args...>& result) {
+    return std::get<0>(result);
+}
+
+}  // namespace detail
 
 struct ResourceUsage {
     size_t cb_peak_size_per_core = 0;
@@ -22,6 +40,7 @@ struct ResourceUsage {
 struct ConstraintQueryResponse {
     ExecutionStatus status = ExecutionStatus::Error;
     ResourceUsage resource_usage;
+    std::optional<TensorSpec> output_tensor_spec;
     std::optional<std::string> error_message;
 };
 
@@ -42,47 +61,49 @@ struct ConstraintQueryResponse {
  */
 template <typename Op, typename... Args>
 auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
-    uint32_t num_of_active_graph_captures = 0;
-    try {
-        nlohmann::json op_trace;
-        // outer graph capture is to avoid dispatching/allocating dummy input tensors
-        {
-            auto capture_outer = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
+    nlohmann::json op_trace;
+    Tensor output;
+    // outer graph capture is to avoid dispatching/allocating dummy input tensors
+    {
+        auto capture_outer = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
 
-            // helper lambda to transform TensorSpec to DeviceTensor
-            auto transform_arg = [device](auto&& arg) {
-                if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
-                    return create_device_tensor(arg, device);
-                } else {
-                    return std::forward<decltype(arg)>(arg);
-                }
-            };
-            auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
+        // helper lambda to transform TensorSpec to DeviceTensor
+        auto transform_arg = [device](auto&& arg) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
+                return create_device_tensor(arg, device);
+            } else {
+                return std::forward<decltype(arg)>(arg);
+            }
+        };
+        auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
 
-            // inner graph capture is to capture the actual op graph trace
-            {
-                auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
-                std::apply(op, transformed_args);
-                op_trace = capture_inner.end_graph_capture();
-            }  // end of inner graph capture
+        // inner graph capture is to capture the actual op graph trace
+        try {
+            auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
+            output = detail::extract_output_tensor(std::apply(op, transformed_args));
+            op_trace = capture_inner.end_graph_capture();
+        }  // end of inner graph capture
+        catch (const std::exception& e) {
+            tt::log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
+            return ConstraintQueryResponse{
+                ExecutionStatus::Error, {0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
+        }
 
-        }  // end of outer graph capture
+    }  // end of outer graph capture
 
-        // extract memory footprint from the trace
-        auto interleaved_storage_cores = device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
-        size_t cb_peak_size_per_core = extract_circular_buffers_peak_size_per_core(op_trace);
-        size_t l1_buffers_peak_per_core =
-            extract_l1_buffer_allocation_peak_size_per_core(op_trace, interleaved_storage_cores);
-        size_t l1_output_buffer_per_core =
-            extract_l1_output_buffer_allocation_size_per_core(op_trace, interleaved_storage_cores);
+    // extract memory footprint from the trace
+    auto interleaved_storage_cores = device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
+    size_t cb_peak_size_per_core = extract_circular_buffers_peak_size_per_core(op_trace);
+    size_t l1_buffers_peak_per_core =
+        extract_l1_buffer_allocation_peak_size_per_core(op_trace, interleaved_storage_cores);
+    size_t l1_output_buffer_per_core = output.buffer()->is_dram() ? 0
+                                                                  : extract_l1_output_buffer_allocation_size_per_core(
+                                                                        output, interleaved_storage_cores);
 
-        return ConstraintQueryResponse{
-            ExecutionStatus::Success, {cb_peak_size_per_core, l1_buffers_peak_per_core, l1_output_buffer_per_core}};
-
-    } catch (const std::exception& e) {
-        tt::log_debug(tt::LogOp, "op_constraints - error: {}", e.what());
-        return ConstraintQueryResponse{ExecutionStatus::Error, {0, 0, 0}, e.what()};
-    }
+    return ConstraintQueryResponse{
+        ExecutionStatus::Success,
+        {cb_peak_size_per_core, l1_buffers_peak_per_core, l1_output_buffer_per_core},
+        output.get_tensor_spec()};
 }
 
 }  // namespace ttnn::graph

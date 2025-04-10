@@ -4,7 +4,14 @@
 
 #pragma once
 
-#include "shape_base.hpp"
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <ostream>
+#include <tuple>
+
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
 
 namespace tt::tt_metal {
 

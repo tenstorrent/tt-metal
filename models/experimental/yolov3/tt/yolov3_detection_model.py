@@ -4,15 +4,12 @@
 
 import torch
 from torch import nn
-import warnings
 from copy import deepcopy
 from loguru import logger
 from pathlib import Path
 import contextlib
 import math
 from models.experimental.yolov3.reference.models.common import DetectMultiBackend
-from models.experimental.yolov3.tt.yolov3_conv import TtConv
-from models.experimental.yolov3.tt.yolov3_bottleneck import TtBottleneck
 from models.experimental.yolov3.tt.yolov3_upsample import TtUpsample
 from models.experimental.yolov3.tt.yolov3_concat import TtConcat
 from models.experimental.yolov3.tt.yolov3_detect import TtDetect
@@ -23,14 +20,11 @@ from models.experimental.yolov3.reference.utils.autoanchor import (
 )
 from models.experimental.yolov3.reference.utils.torch_utils import (
     fuse_conv_and_bn,
-    initialize_weights,
     model_info,
-    profile,
     scale_img,
-    select_device,
     time_sync,
 )
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor
 
 
 def parse_model(state_dict, base_address, yaml_dict, ch, device):  # model_dict, input_channels(3)

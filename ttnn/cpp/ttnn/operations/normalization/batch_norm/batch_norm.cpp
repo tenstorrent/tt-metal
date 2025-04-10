@@ -5,6 +5,7 @@
 #include "batch_norm.hpp"
 
 #include "device/batch_norm_device_operation.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 #include "device/running_statistics_device_operation.hpp"
@@ -32,10 +33,26 @@ Tensor BatchNorm::invoke(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     QueueId queue_id) {
-    Tensor batch_mean = mean_NHW(input, memory_config);
-    Tensor mean_sq = mean_NHW(ttnn::square(input, memory_config), memory_config);
-    Tensor batch_var = ttnn::subtract(mean_sq, ttnn::square(batch_mean, memory_config), std::nullopt, memory_config);
+    TT_FATAL(
+        input.get_logical_shape().rank() >= 4,
+        "batch_norm not supported for tensors with rank < 4. (rank={})",
+        input.get_logical_shape().rank(),
+        input.get_logical_shape().rank());
+
+    // For 0V tensors
+    if (input.get_logical_volume() == 0) [[unlikely]] {
+        return ttnn::clone(
+            input,
+            /*dtype=*/std::nullopt,
+            memory_config.value_or(input.memory_config()),
+            /*compute_kernel_config*/ std::nullopt);
+    }
+
+    Tensor batch_mean, batch_var;
     if (training) {
+        batch_mean = mean_NHW(input, memory_config);
+        auto mean_sq = mean_NHW(ttnn::square(input, memory_config), memory_config);
+        batch_var = ttnn::subtract(mean_sq, ttnn::square(batch_mean, memory_config), std::nullopt, memory_config);
         Tensor stats =
             ttnn::prim::running_statistics(batch_mean, batch_var, momentum, running_mean, running_var, memory_config);
     } else {

@@ -12,10 +12,15 @@ if(CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
     message(STATUS "Using specifed C compiler: ${CMAKE_C_COMPILER}")
 else()
     message(STATUS "No C or C++ compiler specified, defaulting to Clang-17")
-    FIND_AND_SET_CLANG17()
+    find_and_set_clang17()
 endif()
 
-project(ml-framework-cpp)
+project(
+    ml-framework-cpp
+    LANGUAGES
+        C
+        CXX
+)
 CHECK_COMPILERS()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -28,7 +33,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+option(ENABLE_LIBCXX "Enable using libc++" OFF)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
     find_library(LIBC++ c++)
     find_library(LIBC++ABI c++abi)
     if(NOT LIBC++ OR NOT LIBC++ABI)

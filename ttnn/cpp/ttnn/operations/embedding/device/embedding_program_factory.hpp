@@ -11,8 +11,9 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_log.h>
 #include <tt-metalium/work_split.hpp>
+
+#include <tracy/Tracy.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

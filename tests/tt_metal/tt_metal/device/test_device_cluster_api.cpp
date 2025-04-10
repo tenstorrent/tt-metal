@@ -3,12 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
 #include <algorithm>
+#include <iterator>
+#include <map>
+#include <set>
+#include <tuple>
+#include <unordered_set>
+#include <vector>
 
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
 
 namespace tt::tt_metal {
 

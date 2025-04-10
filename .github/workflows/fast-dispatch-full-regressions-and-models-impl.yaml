@@ -2,6 +2,16 @@ name: "[internal] Nightly fast dispatch tests impl"
 
 on:
   workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
 
 jobs:
   fd-nightly:
@@ -18,47 +28,57 @@ jobs:
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 70
-            },
+            }, # Nathan Sidwell
             {
               name: "WH N300 ttnn nightly",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N300", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 70
-            },
+            }, # Nathan Sidwell
           ]
+    defaults:
+      run:
+        shell: bash
     name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
-    env:
-      ARCH_NAME: ${{ matrix.test-group.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/retry-command
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
         with:
-          timeout-seconds: 100
-          max-retries: 10
-          backoff-seconds: 60
-          command: ./.github/scripts/cloud_utils/mount_weka.sh
-      - name: Set up dyanmic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: ./.github/actions/prepare-metal-run
-      - uses: ./.github/actions/install-python-deps
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+      - uses: ./.github/actions/ensure-active-weka-mount
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          install_wheel: true
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+          run_args: ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
+          path: generated/test_reports/
           prefix: "test_reports_"
   nightly-wh-models:
     strategy:
@@ -67,50 +87,60 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral7b, mistral7b_eth, resnet50, yolov4, whisper]
+        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral7b, mistral7b_eth, resnet50, yolov4, whisper, yolov8s_world, stable_diffusion_xl_base, vgg_unet, ufld_v2, mobilenetv2, functional_vanilla_unet]
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
-    env:
-      ARCH_NAME: wormhole_b0
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    defaults:
+      run:
+        shell: bash
     runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/retry-command
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
         with:
-          timeout-seconds: 100
-          max-retries: 10
-          backoff-seconds: 60
-          command: ./.github/scripts/cloud_utils/mount_weka.sh
-      - name: Set up dyanmic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Set up WH_ARCH_YAML for eth-enabled models
-        if: ${{ matrix.model != 'mistral7b' }}
-        run: |
-          echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
-      - uses: ./.github/actions/prepare-metal-run
-      - uses: ./.github/actions/install-python-deps
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+      - uses: ./.github/actions/ensure-active-weka-mount
       - name: Run frequent reg tests scripts
         timeout-minutes: 30
-        # Llama3 has a single pytest for multiple llama models, hence it requires calling it multiple times.
-        # Due to host OOM issues in CI vm, we currently only run llama-1B in the model matrix.
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          if [[ "${{ matrix.model }}" == *"llama3"* ]]; then
-            pytest -n auto tests/nightly/single_card/llama3 -k ${{ matrix.model }}
-          fi
-            if [[ "${{ matrix.model }}" != *"llama3"* ]]; then
-            pytest -n auto tests/nightly/single_card/${{ matrix.model }}
-          fi
+        uses: ./.github/actions/docker-run
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          install_wheel: true
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+          # Llama3 has a single pytest for multiple llama models, hence it requires calling it multiple times.
+          # Due to host OOM issues in CI vm, we currently only run llama-1B in the model matrix.
+          run_args: |
+            if [[ "${{ matrix.model }}" != "mistral7b" ]]; then
+              export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            fi
+
+            if [[ "${{ matrix.model }}" == *"llama3"* ]]; then
+              pytest -n auto tests/nightly/single_card/llama3 -k ${{ matrix.model }}
+            else
+              pytest tests/nightly/single_card/${{ matrix.model }}
+            fi
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
+          path: generated/test_reports/
           prefix: "test_reports_"
   nightly-wh-unstable-models:
     strategy:
@@ -136,38 +166,46 @@ jobs:
               # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 6
         card: [N150, N300]
     name: "[Unstable] Nightly ${{ matrix.card }} ${{ matrix.test-config.model }}"
-    env:
-      ARCH_NAME: wormhole_b0
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    defaults:
+      run:
+        shell: bash
     runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/retry-command
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
         with:
-          timeout-seconds: 100
-          max-retries: 10
-          backoff-seconds: 60
-          command: ./.github/scripts/cloud_utils/mount_weka.sh
-      - name: Set up dyanmic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Set up WH_ARCH_YAML for eth-enabled models
-        run: |
-          echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
-      - uses: ./.github/actions/prepare-metal-run
-      - uses: ./.github/actions/install-python-deps
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+      - uses: ./.github/actions/ensure-active-weka-mount
       - name: Run frequent reg tests scripts
         timeout-minutes: 60
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-config.cmd }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          install_wheel: true
+          docker_opts: |
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+            -e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+          run_args: ${{ matrix.test-config.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
+          path: generated/test_reports/
           prefix: "test_reports_"

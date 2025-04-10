@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 

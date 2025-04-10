@@ -39,7 +39,7 @@ public:
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         DebugToolsFixture::RunProgram(device, program);
-        tt::DprintServerAwait();
+        DprintServerAwait();
     }
 
 protected:
@@ -95,8 +95,8 @@ protected:
         IDevice* device
     ) {
         DebugToolsFixture::RunTestOnDevice(run_function, device);
-        tt::DPrintServerClearLogFile();
-        tt::DPrintServerClearSignals();
+        DPrintServerClearLogFile();
+        DPrintServerClearSignals();
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup

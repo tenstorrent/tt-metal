@@ -10,6 +10,8 @@
 #include <sstream>
 
 #include "autograd/tensor.hpp"
+#include "models/gpt2.hpp"
+#include "models/llama.hpp"
 #include "schedulers/lambda_scheduler.hpp"
 #include "schedulers/linear_scheduler.hpp"
 #include "schedulers/scheduler_base.hpp"
@@ -45,7 +47,7 @@ void save_training_state(
     const std::string &model_name,
     const std::string &optimizer_name) {
     ttml::serialization::MsgPackFile serializer;
-    std::visit([&](auto &model) { ttml::serialization::write_module(serializer, model_name, model.get()); }, model);
+    ttml::serialization::write_module(serializer, model_name, model.get());
     ttml::serialization::write_optimizer(serializer, optimizer_name, scheduler->get_optimizer().get());
     ttml::serialization::write_state_dict(serializer, "scheduler", scheduler->get_state_dict());
     serializer.serialize(model_path);
@@ -60,7 +62,7 @@ void load_training_state(
     const std::string &optimizer_name) {
     ttml::serialization::MsgPackFile deserializer;
     deserializer.deserialize(model_path);
-    std::visit([&](auto &model) { ttml::serialization::read_module(deserializer, model_name, model.get()); }, model);
+    ttml::serialization::read_module(deserializer, model_name, model.get());
     ttml::serialization::read_optimizer(deserializer, optimizer_name, scheduler->get_optimizer().get());
     auto state_dict = scheduler->get_state_dict();
     ttml::serialization::read_state_dict(deserializer, "scheduler", state_dict);
@@ -97,19 +99,41 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
     auto build_run_name = [&]() {
         auto &transformer_config = config.transformer_config;
 
-        auto is_nano_gpt_config = [&transformer_config]() {
-            return transformer_config.num_heads == 6 && transformer_config.embedding_dim == 384 &&
-                   transformer_config.num_blocks == 6;
+        auto is_nano_gpt_config = [&transformer_config]() -> bool {
+            return std::visit(
+                [](auto &&arg) -> bool {
+                    constexpr bool is_gpt2_config_type =
+                        std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>;
+                    return is_gpt2_config_type && arg.num_heads == 6U && arg.embedding_dim == 384U &&
+                           arg.num_blocks == 6U;
+                },
+                transformer_config);
         };
 
-        auto is_gpt2s_config = [&transformer_config]() {
-            return transformer_config.num_heads == 12 && transformer_config.embedding_dim == 768 &&
-                   transformer_config.num_blocks == 12;
+        auto is_gpt2s_config = [&transformer_config]() -> bool {
+            return std::visit(
+                [](auto &&arg) -> bool {
+                    constexpr bool is_gpt2_config_type =
+                        std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>;
+                    return is_gpt2_config_type && arg.num_heads == 12U && arg.embedding_dim == 768U &&
+                           arg.num_blocks == 12U;
+                },
+                transformer_config);
+        };
+
+        auto is_llama_config = [&transformer_config]() -> bool {
+            return std::visit(
+                [](auto &&arg) -> bool {
+                    return std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>;
+                },
+                transformer_config);
         };
 
         auto batch_size = config.batch_size * config.gradient_accumulation_steps;
 
-        if (is_nano_gpt_config()) {
+        if (is_llama_config()) {
+            ss << "llama";
+        } else if (is_nano_gpt_config()) {
             ss << "nano_gpt";
         } else if (is_gpt2s_config()) {
             ss << "gpt2s";

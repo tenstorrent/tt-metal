@@ -9,9 +9,10 @@
 #include <type_traits>
 #include <vector>
 
-#include "assert.hpp"
-#include "shape_base.hpp"
-#include "utils.hpp"
+#include <tt_stl/reflection.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -90,10 +91,13 @@ private:
 
 bool operator==(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator!=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
+
+// Compares two coordinates in lexicographical order.
 bool operator<(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator>(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator<=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
 bool operator>=(const MeshCoordinate& lhs, const MeshCoordinate& rhs);
+
 std::ostream& operator<<(std::ostream& os, const MeshCoordinate& shape);
 
 // Converts a MeshCoordinate to a linear index.
@@ -108,6 +112,9 @@ public:
 
     // Constructs a range that iterates over all coordinates in the mesh.
     explicit MeshCoordinateRange(const MeshShape& shape);
+
+    // Constructs a range that includes a single coordinate.
+    explicit MeshCoordinateRange(const MeshCoordinate& coord);
 
     // Returns the dimensionality of the range.
     size_t dims() const;
@@ -154,31 +161,50 @@ public:
     Iterator begin() const;
     Iterator end() const;
 
-    friend bool operator==(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
-    friend bool operator!=(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
-    friend std::ostream& operator<<(std::ostream& os, const MeshCoordinateRange& range);
-
 private:
     MeshCoordinate start_;
     MeshCoordinate end_;
 };
 
+bool operator==(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
+bool operator!=(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
+std::ostream& operator<<(std::ostream& os, const MeshCoordinateRange& range);
+
 // Represents a set of non-overlapping MeshCoordinateRanges.
+// `MeshCoordinateRangeSet` performs a best-effort merge of ranges, but does not guarantee that the set is minimal.
 class MeshCoordinateRangeSet {
 public:
     MeshCoordinateRangeSet() = default;
 
+    // Constructs a set with a single range.
+    explicit MeshCoordinateRangeSet(const MeshCoordinateRange&);
+
     // Merges the given range into the set.
     void merge(const MeshCoordinateRange& range);
 
+    // Returns the number of ranges in the set.
     size_t size() const { return ranges_.size(); }
+
+    // Returns true if the set is empty.
     bool empty() const { return ranges_.empty(); }
 
+    // Returns all ranges in the set, sorted in lexicographical order.
     const auto& ranges() const { return ranges_; }
+
+    // Flattens ranges and returns all coordinates that this set covers, sorted in lexicographical order.
+    std::vector<MeshCoordinate> coords() const;
+
+    // Needed for reflect / fmt
+    static constexpr auto attribute_names = std::forward_as_tuple("ranges");
+    auto attribute_values() const { return std::forward_as_tuple(ranges_); }
 
 private:
     std::vector<MeshCoordinateRange> ranges_;
 };
+
+bool operator==(const MeshCoordinateRangeSet& lhs, const MeshCoordinateRangeSet& rhs);
+bool operator!=(const MeshCoordinateRangeSet& lhs, const MeshCoordinateRangeSet& rhs);
+std::ostream& operator<<(std::ostream& os, const MeshCoordinateRangeSet& range_set);
 
 // Returns the set of ranges that result from subtracting the intersection from the parent range.
 MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoordinateRange& intersection);
@@ -445,21 +471,21 @@ struct tuple_element<1, tt::tt_metal::distributed::detail::MeshCoordinateValuePr
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinate> {
     size_t operator()(const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
-        size_t seed = 0;
-        for (const auto coord_value : coord.coords()) {
-            tt::utils::hash_combine(seed, coord_value);
-        }
-        return seed;
+        return tt::stl::hash::hash_objects_with_default_seed(coord.attribute_values());
     }
 };
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinateRange> {
     size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept {
-        size_t seed = 0;
-        tt::utils::hash_combine(seed, range.start_coord());
-        tt::utils::hash_combine(seed, range.end_coord());
-        return seed;
+        return tt::stl::hash::hash_objects_with_default_seed(range.attribute_values());
+    }
+};
+
+template <>
+struct hash<tt::tt_metal::distributed::MeshCoordinateRangeSet> {
+    size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept {
+        return tt::stl::hash::hash_objects_with_default_seed(range_set.attribute_values());
     }
 };
 

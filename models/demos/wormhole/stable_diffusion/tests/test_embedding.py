@@ -7,9 +7,6 @@ import torch
 from diffusers import StableDiffusionPipeline
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
-    skip_for_grayskull,
-)
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -18,9 +15,7 @@ import pytest
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_embeddings(
-    device,
-):
+def test_embeddings(device, use_program_cache):
     torch.manual_seed(0)
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)

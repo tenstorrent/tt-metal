@@ -14,16 +14,20 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+template <bool APPROXIMATION_MODE>
+inline void init_fmod(const uint value, const uint recip) {
+    // load vConstFloatPrgm0 = value
+    _sfpu_load_config32_(0xC, (value >> 16) & 0xFFFF, value & 0xFFFF);
+    // load vConstFloatPrgm1 = recip
+    _sfpu_load_config32_(0xD, (recip >> 16) & 0xFFFF, recip & 0xFFFF);
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_fmod(const uint value, const uint recip) {
     // SFPU microcode
-    Converter c_value;
-    c_value.u = value;
-    vFloat s = c_value.f;
+    vFloat s = vConstFloatPrgm0;
+    vFloat recip_val = vConstFloatPrgm1;
     s = sfpi::abs(s);
-
-    c_value.u = recip;
-    vFloat recip_val = c_value.f;
     recip_val = sfpi::abs(recip_val);
 
 #pragma GCC unroll 0
@@ -31,14 +35,25 @@ inline void calculate_fmod(const uint value, const uint recip) {
         vFloat val = dst_reg[0];
         vFloat v = sfpi::abs(val);
 
-        vFloat quotient = v * recip_val;
+        vFloat quotient;
+        vInt exp = exexp(v * recip_val);
+        v_if(exp < 0) { quotient = vConst0; }
+        // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
+        // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
+        // shifting it back using (0 - (exp - 23)).
+        v_elseif(exp < 23) {
+            quotient =
+                reinterpret<vFloat>(shft((shft(reinterpret<vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
+        }
+        v_else { quotient = v * recip_val; }
+        v_endif
 
-        vInt tmp = float_to_int16(quotient);  // TODO: Replace float_to_int16 to float_to_int32 once it is available
-        vFloat newquotient = int32_to_float(tmp);
-        v_if(newquotient > quotient) { newquotient = newquotient - 1; }
+        v_if(quotient > v * recip_val) {
+            quotient = quotient - 1;
+        }
         v_endif;
+        v = v - quotient * s;
 
-        v = v - newquotient * s;
         v = setsgn(v, val);
 
         v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }

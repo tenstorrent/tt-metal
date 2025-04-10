@@ -12,10 +12,10 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false /*unused*/>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_unary_sfpu_reciprocal(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_reciprocal<APPROXIMATE>, dst_index, vector_mode);
+        ckernel::sfpu::calculate_reciprocal<APPROXIMATE, 8, is_fp32_dest_acc_en>, dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>

@@ -1,22 +1,17 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
-import json
 import pytest
 from loguru import logger
-from time import time
-import sys
 from tqdm import tqdm
 import numpy as np
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn,
     get_single_rot_mat,
-    sample,
     cache_attention,
 )
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer

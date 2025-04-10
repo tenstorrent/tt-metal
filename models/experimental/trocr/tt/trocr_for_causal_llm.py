@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import torch.nn as nn
 from torch.nn import CrossEntropyLoss
 import copy

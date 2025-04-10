@@ -22,7 +22,6 @@ from models.experimental.grok.tt.grok_model import TtTransformer
 from models.experimental.grok.tt.grok_decoder import TtTransformerBlock
 from models.experimental.grok.reference.model import Grok1ModelForCausalLM as Transformer
 from models.experimental.grok.reference.model import DecoderLayer
-from models.experimental.grok.reference.tokenizer import Tokenizer
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.utility_functions import comp_pcc, comp_allclose
 from transformers import AutoTokenizer

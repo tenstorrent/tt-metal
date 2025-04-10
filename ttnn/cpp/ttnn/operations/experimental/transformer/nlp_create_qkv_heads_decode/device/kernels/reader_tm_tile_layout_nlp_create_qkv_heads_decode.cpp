@@ -62,8 +62,8 @@ void kernel_main() {
     uint32_t qkv_y = 0;
     uint32_t total_input_cores = num_x * num_y;
     uint32_t num_tiles_per_core = head_size_num_tiles * (num_q_heads + 2 * num_kv_heads) / total_input_cores;
-    uint32_t num_q_cores = num_tiles_per_core * num_q_heads * head_size_num_tiles;
-    uint32_t num_kv_cores = num_tiles_per_core * num_kv_heads * head_size_num_tiles;
+    uint32_t num_q_cores = (num_q_heads * head_size_num_tiles) / num_tiles_per_core;
+    uint32_t num_kv_cores = (num_kv_heads * head_size_num_tiles) / num_tiles_per_core;
 
     uint64_t qkv_read_addr =
         get_noc_addr(in0_mcast_noc_x[qkv_x], in0_mcast_noc_y[qkv_y], q_start_addr) + in_tile_offset_by_batch;

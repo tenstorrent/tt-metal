@@ -3,12 +3,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <host_api.hpp>
 #include <mesh_buffer.hpp>
 #include <mesh_coord.hpp>
-#include <mesh_device_view.hpp>
 #include <tt_stl/overloaded.hpp>
-#include <tt_metal.hpp>
-#include <host_api.hpp>
+#include <vector>
+
+#include "assert.hpp"
+#include "device.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {

@@ -2,17 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
+#include <boost/move/utility_core.hpp>
 #include <tt-metalium/shape2d.hpp>
-#include <ttnn/tensor/tensor.hpp>
+#include <initializer_list>
+#include <memory>
+#include <optional>
 
-#include "gtest/gtest.h"
-#include <tt-metalium/logger.hpp>
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/tensor/types.hpp"
-
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 #include "common_tensor_test_utils.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/shape.hpp>
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/alignment.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 using namespace ttnn;
 

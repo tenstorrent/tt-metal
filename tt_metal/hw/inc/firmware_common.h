@@ -16,6 +16,9 @@
 #include "noc/noc_parameters.h"
 #include "debug/dprint.h"
 #include "risc_common.h"
+#if !defined(COMPILE_FOR_TRISC)
+#include "dataflow_api.h"
+#endif
 
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
@@ -82,3 +85,48 @@ void wait_for_go_message() {
         invalidate_l1_cache();
     }
 }
+
+#if !defined(COMPILE_FOR_TRISC)
+FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) {
+    go_msg_t go_message;
+    go_message.all = go_message_in->all;
+    uint64_t addr = NOC_XY_ADDR(
+        NOC_X(go_message.master_x),
+        NOC_Y(go_message.master_y),
+        DISPATCH_MESSAGE_ADDR + NOC_STREAM_REG_SPACE_SIZE * go_message.dispatch_message_offset);
+    return addr;
+}
+
+FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index) {
+    // Workaround for BH inline writes does not apply here because this writes to a stream register.
+    // See comment in `noc_get_interim_inline_value_addr` for more details.
+    noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        1 << REMOTE_DEST_BUF_WORDS_FREE_INC,
+        dispatch_addr,
+        0xF,  // byte-enable
+        NOC_UNICAST_WRITE_VC,
+        false,  // mcast
+        true    // posted
+    );
+}
+#endif
+
+#if defined(DEBUG_EARLY_RETURN_KERNELS) && !defined(DISPATCH_KERNEL)
+// Used to early-return when NULLing out kernels. Will always return true while a kernel is running, but can't be
+// optimized away.
+FORCE_INLINE
+bool is_message_go() {
+    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+
+    return mailboxes->go_message.signal == RUN_MSG_GO;
+}
+
+#define EARLY_RETURN_FOR_DEBUG \
+    if (is_message_go()) {     \
+        return;                \
+    }
+#else
+#define EARLY_RETURN_FOR_DEBUG
+#endif

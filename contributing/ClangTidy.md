@@ -13,9 +13,9 @@ If the check being enabled has FIX-ITs (see [Clang-Tidy Checks](https://clang.ll
 Prepare a clang-tidy tree
 
 ```
-cmake --prefix clang-tidy-fix
-cmake --build --prefix clang-tidy-fix --target clean
-cmake --build --prefix clang-tidy-fix
+cmake --preset clang-tidy-fix
+cmake --build --preset clang-tidy-fix --target clean
+cmake --build --preset clang-tidy-fix
 ```
 Go home for the day.  This will take a long long time if you only have a dozen cores.
 

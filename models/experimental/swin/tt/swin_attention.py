@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple, Union
-import torch
+from typing import Optional, Tuple
 import torch.nn as nn
 
 import ttnn

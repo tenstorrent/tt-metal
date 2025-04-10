@@ -68,10 +68,12 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, cores](
-                                              const tt::tt_metal::Program& program,
-                                              const std::vector<tt::tt_metal::Buffer*>& input_buffers,
-                                              const std::vector<tt::tt_metal::Buffer*>&) {
-        auto src_buffer = input_buffers.at(0);
+                                              const void* operation,
+                                              tt::tt_metal::Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
 
         for (const auto& core : cores) {
             {

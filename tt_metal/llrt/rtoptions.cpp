@@ -4,11 +4,16 @@
 
 #include "rtoptions.hpp"
 
+#include <ctype.h>
 #include <stdio.h>
-#include <stdlib.h>
-
+#include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <stdexcept>
 #include <string>
+
+#include "assert.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 using std::vector;
 
@@ -42,7 +47,7 @@ RunTimeOptions::RunTimeOptions() {
     const char* cache_dir_str = std::getenv(TT_METAL_CACHE_ENV_VAR);
     if (cache_dir_str != nullptr) {
         this->is_cache_dir_env_var_set = true;
-        this->cache_dir_ = std::string(cache_dir_str) + "/";
+        this->cache_dir_ = std::string(cache_dir_str) + "/tt-metal-cache/";
     }
 
     const char* kernel_dir_str = std::getenv(TT_METAL_KERNEL_PATH_ENV_VAR);
@@ -79,7 +84,19 @@ RunTimeOptions::RunTimeOptions() {
             profiler_sync_enabled = true;
         }
     }
-    const char* profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
+
+    const char *profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
+    if (profiler_noc_events_str != nullptr && profiler_noc_events_str[0] == '1') {
+        profiler_enabled = true;
+        profiler_noc_events_enabled = true;
+    }
+
+    const char *profiler_noc_events_report_path_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH");
+    if (profiler_noc_events_report_path_str != nullptr) {
+        profiler_noc_events_report_path = profiler_noc_events_report_path_str;
+    }
+
+    const char *profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
     if (profile_buffer_usage_str != nullptr && profile_buffer_usage_str[0] == '1') {
         profiler_buffer_usage_enabled = true;
     }
@@ -90,6 +107,8 @@ RunTimeOptions::RunTimeOptions() {
 
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
 
+    kernels_early_return = (std::getenv("TT_METAL_KERNELS_EARLY_RETURN") != nullptr);
+
     clear_l1 = false;
     const char* clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
     if (clear_l1_enabled_str != nullptr) {
@@ -98,6 +117,16 @@ RunTimeOptions::RunTimeOptions() {
         }
         if (clear_l1_enabled_str[0] == '1') {
             clear_l1 = true;
+        }
+    }
+
+    const char* skip_eth_cores_with_retrain_str = std::getenv("TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN");
+    if (skip_eth_cores_with_retrain_str != nullptr) {
+        if (skip_eth_cores_with_retrain_str[0] == '0') {
+            skip_eth_cores_with_retrain = false;
+        }
+        if (skip_eth_cores_with_retrain_str[0] == '1') {
+            skip_eth_cores_with_retrain = true;
         }
     }
 
@@ -195,6 +224,9 @@ void RunTimeOptions::ParseWatcherEnv() {
 
     const char* watcher_phys_str = getenv("TT_METAL_WATCHER_PHYS_COORDS");
     watcher_phys_coords = (watcher_phys_str != nullptr);
+
+    const char* watcher_text_start_str = getenv("TT_METAL_WATCHER_TEXT_START");
+    watcher_text_start = (watcher_text_start_str != nullptr);
 
     // Auto unpause is for testing only, no env var.
     watcher_auto_unpause = false;

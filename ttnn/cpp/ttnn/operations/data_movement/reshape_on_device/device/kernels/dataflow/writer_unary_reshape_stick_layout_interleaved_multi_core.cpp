@@ -15,18 +15,10 @@ void kernel_main() {
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t new_stick_size = get_compile_time_arg_val(2);
 
-#define stick_size_is_pow2 get_compile_time_arg_val(3) == 1
-#if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(4);
-#else
-    constexpr uint32_t page_size = get_compile_time_arg_val(4);
-#endif
-#if (stick_size_is_pow2)
-    const InterleavedPow2AddrGen<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-    const InterleavedAddrGen<dst_is_dram> s = {.bank_base_address = dst_addr, .page_size = page_size};
-#endif
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(3) == 1;
+    constexpr uint32_t size = get_compile_time_arg_val(4);
+
+    const auto s = get_interleaved_addr_gen<dst_is_dram, stick_size_is_pow2>(dst_addr, size);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {

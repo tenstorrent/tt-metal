@@ -13,11 +13,11 @@ from transformers import AutoImageProcessor
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.experimental.functional_vit.tt import ttnn_optimized_interleaved_vit
+from models.demos.vit.tt import ttnn_optimized_interleaved_vit
 from models.utility_functions import torch_random, is_wormhole_b0, torch2tt_tensor, is_blackhole
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.functional_vit.reference import torch_functional_vit
+from models.demos.vit.reference import torch_functional_vit
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")

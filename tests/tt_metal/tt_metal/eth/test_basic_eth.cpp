@@ -2,20 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <cstdint>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 #include "command_queue_fixture.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "dispatch_fixture.hpp"
-#include "multi_device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/stimulus.hpp"
-#include "llrt.hpp"
-
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/logger.hpp>
+#include "multi_device_fixture.hpp"
+#include <tt-metalium/program.hpp>
+#include "span.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -382,7 +402,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsNocWriteNoReceive) {
 // TODO #14640: Run this on WH when i$ flush issue is addressed
 TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    uint32_t eth_l1_address = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    uint32_t eth_l1_address = hal_ref.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     tt_metal::EthernetConfig noc0_ethernet_config{
         .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_0};
     tt_metal::EthernetConfig noc1_ethernet_config{
@@ -422,7 +442,7 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc0) {
 
 TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    uint32_t eth_l1_address = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    uint32_t eth_l1_address = hal_ref.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     tt_metal::EthernetConfig noc0_ethernet_config{
         .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_1};
     tt_metal::EthernetConfig noc1_ethernet_config{
@@ -463,7 +483,7 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc1) {
 TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t read_write_size_bytes = WORD_SIZE * 2048;
-    uint32_t reader_dst_address = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    uint32_t reader_dst_address = hal_ref.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     uint32_t writer_src_address = reader_dst_address + read_write_size_bytes;
     tt_metal::EthernetConfig erisc0_ethernet_config{
         .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_0};

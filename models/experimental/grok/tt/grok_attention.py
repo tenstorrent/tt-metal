@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from models.utility_functions import nearest_32
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.experimental.grok.tt.grok_common import LightweightModule
 
 

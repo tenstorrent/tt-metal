@@ -7,6 +7,7 @@
 #include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
@@ -16,19 +17,6 @@
 
 namespace ttnn {
 namespace operations::pool {
-
-namespace {
-
-// Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
-uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
-    float value;
-    switch (pool_type) {
-        case Pool2DType::MAX_POOL2D: value = -std::numeric_limits<float>::infinity(); break;
-    }
-    return bfloat16(value).to_packed();
-}
-
-}  // namespace
 
 template <Pool2DType pool_type>
 Tensor Pool2DOp<pool_type>::invoke(
@@ -44,13 +32,14 @@ Tensor Pool2DOp<pool_type>::invoke(
     std::array<uint32_t, 2> dilation,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool ceil_mode) {
+    bool ceil_mode,
+    bool in_place_halo) {
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
             .input_hw = {input_h, input_w},
             .window_hw = {kernel_size.at(0), kernel_size.at(1)},
             .stride_hw = {stride.at(0), stride.at(1)},
-            .pad_hw = {padding.at(0), padding.at(1)},
+            .padding = {padding.at(0), padding.at(0), padding.at(1), padding.at(1)},
             .dilation_hw = {dilation.at(0), dilation.at(1)},
             .ceil_mode = ceil_mode,
     };
@@ -86,6 +75,7 @@ Tensor Pool2DOp<pool_type>::invoke(
                                             input_tensor.device()->compute_with_storage_grid_size(),
                                             ShardOrientation::ROW_MAJOR,
                                             false,
+                                            false,
                                             false);
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
@@ -120,7 +110,7 @@ Tensor Pool2DOp<pool_type>::invoke(
             .input_hw = {input_h, input_w},
             .window_hw = {kernel_size.at(0), kernel_size.at(1)},
             .stride_hw = {stride.at(0), stride.at(1)},
-            .pad_hw = {padding.at(0), padding.at(1)},
+            .padding = {padding.at(0), padding.at(0), padding.at(1), padding.at(1)},
             .dilation_hw = {dilation.at(0), dilation.at(1)},
             .num_cores_nhw = num_cores_nhw,
             .num_cores_c = num_cores_c,
@@ -139,7 +129,8 @@ Tensor Pool2DOp<pool_type>::invoke(
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         0,
         input_tensor_sharded.memory_config(),
-        is_out_tiled);
+        is_out_tiled,
+        in_place_halo);
 
     auto output_tensor = ttnn::prim::pool2d(
         queue_id,
@@ -157,6 +148,7 @@ Tensor Pool2DOp<pool_type>::invoke(
 }
 
 template class Pool2DOp<Pool2DType::MAX_POOL2D>;
+template class Pool2DOp<Pool2DType::AVG_POOL2D>;
 
 }  // namespace operations::pool
 }  // namespace ttnn

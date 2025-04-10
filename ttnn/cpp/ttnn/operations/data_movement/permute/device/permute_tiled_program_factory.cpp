@@ -5,7 +5,7 @@
 #include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -75,9 +75,8 @@ ttnn::SmallVector<uint32_t> get_inverse_permutation(const ttnn::SmallVector<uint
 
 uint32_t get_buffer_alignment(const ttnn::Tensor& tensor) {
     return (
-        tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-            ? tt::tt_metal::experimental::hal::get_dram_alignment()
-            : tt::tt_metal::experimental::hal::get_l1_alignment());
+        tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
+                                                                         : tt::tt_metal::hal::get_l1_alignment());
 }
 
 }  // namespace detail

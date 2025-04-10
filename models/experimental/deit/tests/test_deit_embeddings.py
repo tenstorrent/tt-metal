@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from transformers import AutoImageProcessor, DeiTModel
 from loguru import logger
 
@@ -13,7 +12,6 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose_and_pcc,
 )
-
 
 
 def test_deit_embeddings_inference(device, hf_cat_image_sample_input, pcc=0.99):
@@ -28,9 +26,7 @@ def test_deit_embeddings_inference(device, hf_cat_image_sample_input, pcc=0.99):
     head_mask = None
 
     # real input
-    image_processor = AutoImageProcessor.from_pretrained(
-        "facebook/deit-base-distilled-patch16-224"
-    )
+    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
     image = hf_cat_image_sample_input
     input_image = image_processor(images=image, return_tensors="pt")
     input_image = input_image["pixel_values"]
@@ -38,9 +34,7 @@ def test_deit_embeddings_inference(device, hf_cat_image_sample_input, pcc=0.99):
     torch_output = torch_embeddings(input_image, bool_masked_pos)
 
     # setup tt model
-    tt_embeddings = DeiTEmbeddings(
-        DeiTConfig(), base_address, state_dict, use_mask_token
-    )
+    tt_embeddings = DeiTEmbeddings(DeiTConfig(), base_address, state_dict, use_mask_token)
 
     tt_output = tt_embeddings(input_image, bool_masked_pos)
 

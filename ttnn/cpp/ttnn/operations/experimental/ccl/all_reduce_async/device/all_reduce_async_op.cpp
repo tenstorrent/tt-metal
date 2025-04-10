@@ -17,6 +17,7 @@ namespace all_reduce_detail {
 AllReduceAsync create_all_reduce_async_struct(
     const Tensor& input_tensor,
     const uint32_t num_links,
+    const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
@@ -35,9 +36,13 @@ AllReduceAsync create_all_reduce_async_struct(
             semaphore = semaphores.at(i);  // Get raw pointer
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(num_devices - 1);
             }
             if (i != num_devices - 1) {
                 forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
             }
         }
     }
@@ -48,6 +53,7 @@ AllReduceAsync create_all_reduce_async_struct(
         num_links,
         num_devices,
         device_index,
+        dtype.value_or(input_tensor.get_dtype()),
         memory_config.value_or(input_tensor.memory_config()),
         topology,
         semaphore.value(),
@@ -114,8 +120,9 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.get_logical_shape();
-    auto output_tensor_layout =
-        input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->output_mem_config);
+    tt::tt_metal::TensorLayout output_tensor_layout =
+        tt::tt_metal::TensorLayout(this->dtype, input_tensor.tensor_spec().page_config(), this->output_mem_config);
+
     return {TensorSpec(shape, output_tensor_layout)};
 }
 
@@ -149,6 +156,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
         this->forward_device,
         this->backward_device,
         output_tensors[0],
+        this->dtype,
         this->num_links,
         this->ring_size,
         this->ring_index,
@@ -164,7 +172,7 @@ const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
     auto input_memory_layout = input_tensors[0].get_layout();
     auto input_dtype = input_tensors[0].get_dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-
+    auto output_dtype = this->dtype;
     return tt::tt_metal::operation::hash_operation<AllReduceAsync>(
         this->num_links,
         this->ring_size,
@@ -174,7 +182,8 @@ const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config);
+        input_memory_config,
+        output_dtype);
 }
 
 namespace operations {
@@ -188,13 +197,11 @@ Tensor all_reduce_async(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode) {
-    TT_FATAL(
-        topology == ttnn::ccl::Topology::Linear,
-        "This all_reduce API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -204,6 +211,7 @@ Tensor all_reduce_async(
 
     tt::tt_metal::operation::launch_op(
         [num_preferred_links,
+         dtype,
          memory_config,
          mesh_view,
          cluster_axis,
@@ -231,6 +239,7 @@ Tensor all_reduce_async(
                 ttnn::ccl::all_reduce_detail::create_all_reduce_async_struct(
                     input_device_tensor,
                     num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+                    dtype,
                     memory_config,
                     devices,
                     topology,
@@ -248,23 +257,12 @@ Tensor all_reduce_async(
 }  // namespace experimental
 }  // namespace operations
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links,
-    size_t num_workers_per_link,
-    bool persistent_fabric_mode,
-    IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<CoreRangeSet>& reserved_core_range) {
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
+    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     if (persistent_fabric_mode) {
         const size_t num_workers_preferred = num_workers_per_link * num_links;
-        auto available_cores = device->worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX,
-            sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
-        if (reserved_core_range.has_value()) {
-            available_cores = available_cores.subtract(*reserved_core_range);
-        }
         if (available_cores.num_cores() < num_workers_preferred) {
             log_warning(
                 tt::LogOp,

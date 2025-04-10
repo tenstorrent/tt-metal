@@ -3,10 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import re
-import sys
-import sysconfig
-import platform
 import subprocess
 from dataclasses import dataclass
 from functools import partial
@@ -39,8 +35,6 @@ def get_arch_name():
 
 
 def get_metal_local_version_scheme(metal_build_config, version):
-    from setuptools_scm.version import ScmVersion, guess_next_version
-
     arch_name = metal_build_config.arch_name
 
     if version.dirty:
@@ -50,8 +44,6 @@ def get_metal_local_version_scheme(metal_build_config, version):
 
 
 def get_metal_main_version_scheme(metal_build_config, version):
-    from setuptools_scm.version import ScmVersion, guess_next_version
-
     is_release_version = version.distance is None or version.distance == 0
     is_dirty = version.dirty
     is_clean_prod_build = (not is_dirty) and is_release_version

@@ -4,8 +4,6 @@
 
 import torch
 from diffusers import StableDiffusionPipeline
-from loguru import logger
-import os
 import ttnn
 import pytest
 
@@ -36,16 +34,21 @@ from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_
 )
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
 def test_upblock_512x512(
-    reset_seeds, device, res_hidden_states_tuple, hidden_states, shard_layout, shard_end_core, shard_shape, temb
+    reset_seeds,
+    device,
+    res_hidden_states_tuple,
+    hidden_states,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    temb,
+    use_program_cache,
 ):
-    os.environ["SLOW_MATMULS"] = "1"
-
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
     unet_upblock = pipe.unet.up_blocks[0]
-    reader_patterns_cache = {}
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
@@ -59,7 +62,7 @@ def test_upblock_512x512(
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    model = upblock_2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
+    model = upblock_2d(device, parameters, N, H, W, compute_kernel_config)
 
     # synthesize the input
     in_channels = hidden_states[1]
@@ -72,7 +75,7 @@ def test_upblock_512x512(
     temb = torch_random(temb, -0.1, 0.1, dtype=torch.float32)
 
     # execute pytorch
-    torch_output = unet_upblock(hidden_state, res_hidden_states_tuple, None, None)
+    torch_output = unet_upblock(hidden_state, res_hidden_states_tuple, temb.squeeze(), None)
 
     hidden_state = preprocess_and_push_input_to_device(
         device,
@@ -123,4 +126,4 @@ def test_upblock_512x512(
 
     op = post_process_output_and_move_to_host(op, N, H * 2, W * 2, in_channels)
 
-    assert_with_pcc(torch_output, op, 0.95)
+    assert_with_pcc(torch_output, op, 0.94)

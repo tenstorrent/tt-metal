@@ -4,17 +4,33 @@
 
 #pragma once
 
+#include <fmt/base.h>
+#include <nlohmann/json.hpp>
+#include <stdint.h>
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
 #include <algorithm>
+#include <cstddef>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
-#include <nlohmann/json.hpp>
-#include "umd/device/tt_xy_pair.h"
-#include <tt_stl/reflection.hpp>
-#include <tt_stl/span.hpp>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+namespace stl {
+namespace json {
+template <typename T>
+struct from_json_t;
+template <typename T>
+struct to_json_t;
+}  // namespace json
+}  // namespace stl
+}  // namespace tt
 
 using CoreCoord = tt_xy_pair;
 

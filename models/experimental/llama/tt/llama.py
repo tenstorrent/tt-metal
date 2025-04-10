@@ -2,9 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-from typing import List, Optional, Tuple, Union
-from loguru import logger
 
 from models.experimental.llama.tt.llama_first_half import (
     TtLlamaModelFirstHFModel,

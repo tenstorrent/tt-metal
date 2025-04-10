@@ -102,7 +102,6 @@ def test_performance(device, use_program_cache, model_name, sequence_size, squee
         base_addr=f"transformer.",
         parameters=parameters,
         device=device,
-        reader_patterns_cache={},
     )
 
     tt_output = ttnn.from_device(tt_output, blocking=False)
@@ -124,7 +123,6 @@ def test_performance(device, use_program_cache, model_name, sequence_size, squee
             base_addr=f"transformer.",
             parameters=parameters,
             device=device,
-            reader_patterns_cache={},
         )
         tt_output = ttnn.from_device(tt_output, blocking=False)
     ttnn.synchronize_device(device)

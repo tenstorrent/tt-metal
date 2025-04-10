@@ -2,26 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-import os
 import torch
-import torchvision
 
 import ttnn
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
 from models.utility_functions import (
-    is_wormhole_b0,
-    is_grayskull,
     divup,
-    _nearest_y,
 )
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
-from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_data_loader, get_batch
 import transformers
 from transformers import AutoImageProcessor
 
@@ -51,13 +43,13 @@ class VitTestInfra:
         config = transformers.ViTConfig.from_pretrained(model_name)
         config.num_hidden_layers = 12
         model = transformers.ViTForImageClassification.from_pretrained(model_name, config=config)
-        self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+        self.config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
         image_processor = AutoImageProcessor.from_pretrained(model_name)
 
         self.parameters = preprocess_model_parameters(
             initialize_model=lambda: model,
             device=device,
-            custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
+            custom_preprocessor=ttnn_optimized_sharded_vit_gs.custom_preprocessor,
         )
 
         # cls_token & position embeddings expand to batch_size
@@ -145,7 +137,7 @@ class VitTestInfra:
 
     def run(self, tt_input_tensor=None):
         self.output_tensor = None
-        self.output_tensor = ttnn_optimized_sharded_vit.vit(
+        self.output_tensor = ttnn_optimized_sharded_vit_gs.vit(
             self.config,
             self.input_tensor,
             self.head_masks,

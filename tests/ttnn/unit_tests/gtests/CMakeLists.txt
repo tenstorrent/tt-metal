@@ -3,8 +3,10 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_add.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_basic.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_async_runtime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_matmul_benchmark.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multiprod_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_cq_multi_dev.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_launch_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_capture_arguments_morehdot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_capture_arguments_transpose.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_query_op_constraints.cpp
@@ -12,6 +14,8 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_reflect.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_to_and_from_json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sliding_window_infra.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_conv2d.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common_test_utils.cpp
 )
 
 set(TTNN_CCL_UNIT_TESTS_SRC

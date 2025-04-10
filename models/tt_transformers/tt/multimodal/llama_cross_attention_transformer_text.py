@@ -12,7 +12,6 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.common.rmsnorm import RMSNorm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.embedding import Embedding
 from models.tt_transformers.tt.rope import RotarySetup
 
 from models.utility_functions import (

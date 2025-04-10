@@ -8,7 +8,7 @@ from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering
 import ttnn
-from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
+from tt_lib.utils import pad_activation, pad_weight
 from models.utility_functions import comp_pcc, comp_allclose
 
 

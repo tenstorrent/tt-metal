@@ -10,6 +10,8 @@
 #include "debug/dprint.h"
 #include "debug/dprint_tile.h"
 
+enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
+
 template <bool DRAM, uint32_t tile_hw>
 void read_block_from_dram(
     uint32_t cb_id,
@@ -44,6 +46,10 @@ void kernel_main() {
     constexpr uint32_t batch = get_compile_time_arg_val(5);
 
     uint32_t rt_args_idx = 0;
+    uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
+    if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
+        return;
+    }
     const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
 

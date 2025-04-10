@@ -13,7 +13,7 @@ from transformers import AutoImageProcessor
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.experimental.functional_vit.tt import ttnn_functional_vit
+from models.demos.vit.tt import ttnn_functional_vit
 from models.utility_functions import torch_random, skip_for_wormhole_b0, is_wormhole_b0, is_blackhole
 
 from tests.ttnn.utils_for_testing import assert_with_pcc

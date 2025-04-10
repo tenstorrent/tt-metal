@@ -4,10 +4,34 @@
 
 // This file contains dispatch tests that are (generally) dispatch mode agnostic
 
-#include "dispatch_fixture.hpp"
-
-#include <tt-metalium/hal.hpp>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/allocator.hpp>
+#include <map>
+#include <memory>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "dispatch_fixture.hpp"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt/hal.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "rtoptions.hpp"
+#include "span.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
 
 namespace tt::tt_metal {
 
@@ -66,7 +90,7 @@ static void test_sems_across_core_types(
 
             // Set up args
             vector<uint32_t> eth_rtas = {
-                tt::tt_metal::hal.noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
+                tt::tt_metal::hal_ref.noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
                 eth_sem_id,
                 tensix_sem_id,
                 eth_sem_init_val,
@@ -82,7 +106,7 @@ static void test_sems_across_core_types(
             SetRuntimeArgs(program, eth_kernel, eth_core, eth_rtas);
 
             vector<uint32_t> tensix_rtas = {
-                tt::tt_metal::hal.noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
+                tt::tt_metal::hal_ref.noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
                 tensix_sem_id,
                 eth_sem_id,
                 tensix_sem_init_val,
@@ -252,18 +276,44 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
-        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);
-        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size >> 4);
+        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == cb_addr;
+        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == cb_size;
         bool num_pages_match_intermediate = cb_config_vector.at(intermediate_index + 2) == num_tiles;
         bool pass_intermediate = (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
         EXPECT_TRUE(pass_intermediate);
 
         uint32_t out_index = out_cb * sizeof(uint32_t);
-        bool addr_match_out = cb_config_vector.at(out_index) == ((cb_addr) >> 4);
-        bool size_match_out = cb_config_vector.at(out_index + 1) == (cb_size >> 4);
+        bool addr_match_out = cb_config_vector.at(out_index) == cb_addr;
+        bool size_match_out = cb_config_vector.at(out_index + 1) == cb_size;
         bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
         bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
         EXPECT_TRUE(pass_out);
+    }
+}
+
+class EarlyReturnFixture : public DispatchFixture {
+    void SetUp() override {
+        tt::llrt::RunTimeOptions::get_instance().set_kernels_early_return(true);
+        DispatchFixture::SetUp();
+    }
+    void TearDown() override {
+        DispatchFixture::TearDown();
+        tt::llrt::RunTimeOptions::get_instance().set_kernels_early_return(false);
+    }
+};
+
+TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
+    for (IDevice* device : devices_) {
+        CoreCoord worker{0, 0};
+        Program program;
+        // Kernel will block if it doesn't early return.
+        auto writer_kernel = CreateKernel(
+            program,
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            worker,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+        this->RunProgram(device, program);
     }
 }
 

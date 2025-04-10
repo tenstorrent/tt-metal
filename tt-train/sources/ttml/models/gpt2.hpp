@@ -7,22 +7,16 @@
 #include <yaml-cpp/yaml.h>
 
 #include "autograd/module_base.hpp"
+#include "models/common/transformer_common.hpp"
 
 namespace ttml::models::gpt2 {
+
+using RunnerType = common::transformer::RunnerType;
+using WeightTyingType = common::transformer::WeightTyingType;
 
 enum class PositionalEmbeddingType {
     Trainable,
     Fixed,
-};
-
-enum class RunnerType {
-    MemoryEfficient,
-    Default,
-};
-
-enum class WeightTyingType {
-    Disabled,
-    Enabled,
 };
 
 struct TransformerConfig {

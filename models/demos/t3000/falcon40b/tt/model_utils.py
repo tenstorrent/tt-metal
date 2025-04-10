@@ -379,6 +379,7 @@ def partial_layernorm(
                 bias=ln_beta,
                 memory_config=memconfig,
                 program_config=pgmconfig,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
             ttnn.sharded_to_interleaved_partial(
                 xs_slice,
@@ -397,6 +398,7 @@ def partial_layernorm(
             bias=ln_beta,
             memory_config=memconfig,
             program_config=pgmconfig,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         xs = convert_to_layout(xs, memconfig, get_dram_memcfg())
         xs_output_cat = ttnn.experimental.typecast(xs, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -497,6 +499,7 @@ def fused_partial_layernorm(
                 bias=None,
                 memory_config=memconfig,
                 program_config=pgmconfig,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
 
             # Apply first layernorm gamma+beta
@@ -560,6 +563,7 @@ def fused_partial_layernorm(
             bias=None,
             memory_config=memconfig,
             program_config=pgmconfig,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
 
         # Apply first layernorm gamma+beta

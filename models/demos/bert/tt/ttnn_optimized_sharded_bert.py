@@ -175,6 +175,7 @@ def bert_attention(
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         program_config=config.program_configs["layernorm_program_config"],
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     ttnn.deallocate(self_output)
 
@@ -223,6 +224,7 @@ def bert_output(
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         program_config=config.program_configs["layernorm_program_config"],
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     ttnn.deallocate(residual)
 
@@ -306,6 +308,7 @@ def bert(
         weight=parameters.embeddings.LayerNorm.weight,
         bias=parameters.embeddings.LayerNorm.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     ttnn.deallocate(word_plus_token_type_embeddings)
     ttnn.deallocate(position_embeddings)
@@ -386,7 +389,7 @@ def preprocess_inputs(
     position_ids = ttnn.from_torch(position_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if attention_mask is not None:
-        attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape)
+        attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape, torch.bfloat16)
         attention_mask = attention_mask.expand((batch_size, -1, -1, -1))
         attention_mask = torch.clamp(attention_mask, min=-100000)
         attention_mask = ttnn.from_torch(

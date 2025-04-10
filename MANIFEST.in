@@ -1,45 +1,12 @@
-# Top level files
-include Makefile
-include module.mk
-
-# Sources and build files for BUDA-M
-include tt_metal/host_api.hpp
-include tt_metal/tt_metal.cpp
-recursive-include tt_metal/build_kernels_for_riscv *.h *.cpp *.cc module.mk *.py
-recursive-include tt_metal/common *.h *.cpp *.cc module.mk *.py common.mk
-recursive-include tt_metal/device *.h *.cpp *.cc module.mk *.py
-recursive-include tt_metal/hostdevcommon *.h *.cpp *.cc module.mk *.py
-recursive-include tt_metal/impl *.h *.cpp *.cc module.mk *.py
-recursive-include tt_metal/kernels *.h *.cpp *.cc module.mk *.py
-recursive-include tt_metal/llrt *.h *.cpp *.cc module.mk *.py
-recursive-include tt_metal/python_env requirements.txt requirements-*.txt module.mk
-recursive-include tt_metal/tools requirements-*.txt *.h *.cpp *.cc module.mk *.py
-recursive-include tt_metal/kernels *.h *.cpp *.cc module.mk *.py
-
-# Sources for FW, LLK, SFPI etc
-recursive-include tt_metal/hw/ckernels *.h *.cpp *.cc *.py
-graft tt_metal/hw/ckernels/gen
-graft tt_metal/hw/meta
-recursive-include tt_metal/hw/firmware module.mk riscv/*
-
-# Third-party sources
-graft tt_metal/third_party
-recursive-exclude tt_metal/third_party **/doxygen/* **/docs/*
-
-# BUDA-Eager sources
-recursive-include tt_eager/ *.py *.hpp *.cpp module.mk
-
-# Things we never wanna see
-prune build/
-prune .git/
-prune .github/
-prune tt_metal/**/.git/
-prune tt_metal/**/.github/
-prune docs/doxygen_build/
-prune docs/build/
-exclude .pre-commit-config.yaml
-
-# Some sources we want to exclude and not advertise
-prune ttnn/ttnn/examples/bert/
-
-recursive-include runtime *
+include MANIFEST.in
+include build_metal.sh
+include CMakeLists.txt
+include CMakePresets.json
+include LICENSE
+include .gitmodules
+recursive-include cmake *.*
+recursive-include dependencies *.*
+recursive-include tt_metal *.*
+recursive-include ttnn *.*
+recursive-include tt_stl *.*
+global-exclude *.so *.dylib .git *.pyc *.swp

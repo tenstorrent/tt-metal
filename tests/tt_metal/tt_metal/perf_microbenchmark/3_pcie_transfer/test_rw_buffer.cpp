@@ -2,22 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <algorithm>
-#include <functional>
-#include <random>
+#include <cmath>
+#include <cstring>
+#include <exception>
+#include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
+#include <variant>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include "device_pool.hpp"
-#include "logger.hpp"
-#include "tt_cluster.hpp"
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include "fmt/base.h"
+#include <tt-metalium/logger.hpp>
 #include "test_common.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -94,7 +104,7 @@ int main(int argc, char** argv) {
             page_size);
 
         // Device setup
-        if (device_id >= tt::Cluster::instance().number_of_devices()) {
+        if (device_id >= tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices()) {
             log_info(LogTest, "Skip! Device id {} is not applicable on this system", device_id);
             return 1;
         }
@@ -136,7 +146,7 @@ int main(int argc, char** argv) {
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 float write_bw = transfer_size / (elapsed_us * 1000.0);
                 h2d_bandwidth.push_back(write_bw);
-                best_write_bw = fmax(best_write_bw, write_bw);
+                best_write_bw = std::fmax(best_write_bw, write_bw);
                 log_info(
                     LogTest,
                     "EnqueueWriteBuffer to {} (H2D): {:.3f}ms, {:.3f}GB/s",
@@ -152,7 +162,7 @@ int main(int argc, char** argv) {
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 float read_bw = transfer_size / (elapsed_us * 1000.0);
                 d2h_bandwidth.push_back(read_bw);
-                best_read_bw = fmax(best_read_bw, read_bw);
+                best_read_bw = std::fmax(best_read_bw, read_bw);
                 log_info(
                     LogTest,
                     "EnqueueReadBuffer from {} (D2H): {:.3f}ms, {:.3f}GB/s",

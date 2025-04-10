@@ -173,6 +173,182 @@ In this mode trace collection is faster because ops are dispatched to the device
 
 When run in the `NORMAL` mode, memory can be fragmented, which can lead to a different trace and you see real addresses where everything is allocated.
 
+## Getting operation arguments data
+Another capability of the Graph, is to collect the whole set of arguments provided for each operation executed in a ttnn call. This can be done in an individual operation, or a model as a whole, providing additional information about the internals of the operations
+
+### How to add it to python?
+```
+ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+.... # Your code here
+ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+captured_graph = ttnn.graph.end_graph_capture()
+```
+
+### How to add it in C++?
+https://github.com/tenstorrent/tt-metal/blob/a24a9be806feec4c3bf980443a35ce02e2498d0a/tests/ttnn/unit_tests/gtests/test_graph_capture_arguments_morehdot.cpp#L27-L30
+
+### How do I get the output?
+
+#### For C++
+https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/gtests/test_graph_capture_arguments_morehdot.cpp
+
+#### For Python
+https://github.com/tenstorrent/tt-metal/blob/a24a9be806feec4c3bf980443a35ce02e2498d0a/tests/ttnn/unit_tests/test_graph_capture.py#L189
+
+### What about getting the information in Json?
+Since not everybody is familiar with TT format to present the trace data, we have created a tool to convert it to json, so it can be parsed in any way of your convenience, to use it just do the following after calling
+
+https://github.com/tenstorrent/tt-metal/blob/de8049beac0a2fe81f50a91c9f56543731fecfcb/tests/ttnn/unit_tests/test_graph_capture.py#L372-L375
+
+Please remember to import the following function:
+```
+from ttnn.graph_tracer_utils import GraphTracerUtils
+```
+
+You can also check an example here: https://github.com/tenstorrent/tt-metal/blob/de8049beac0a2fe81f50a91c9f56543731fecfcb/tests/ttnn/unit_tests/test_graph_capture.py#L372-L375
+
+
+### How does the expected JSon looks like?
+
+Let's do the exercise of tracing the following demo: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/bert/demo/demo.py#L64-L166
+
+We are going to add the begin_capture before the first operation here: https://github.com/tenstorrent/tt-metal/blob/de8049beac0a2fe81f50a91c9f56543731fecfcb/models/demos/bert/demo/demo.py#L64
+
+and closing the capture here:
+https://github.com/tenstorrent/tt-metal/blob/de8049beac0a2fe81f50a91c9f56543731fecfcb/models/demos/bert/demo/demo.py#L157
+
+Giving as a result a code like this:
+
+```
+def run_bert_question_and_answering_inference(
+    device,
+    use_program_cache,
+    model_name,
+    batch_size,
+    sequence_size,
+    bert,
+    model_location_generator,
+    input_path,
+):
+    disable_persistent_kernel_cache()
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    model = str(model_location_generator(model_name, model_subdir="Bert"))
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model, torchscript=False)
+    hugging_face_reference_model.eval()
+
+    # set up tokenizer
+    tokenizer_name = str(model_location_generator(model_name, model_subdir="Bert"))
+    tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
+    config = hugging_face_reference_model.config
+    nlp = pipeline("question-answering", model=hugging_face_reference_model, tokenizer=tokenizer)
+
+    if bert == ttnn_bert:
+        tt_model_name = f"ttnn_{model_name}"
+    elif bert == ttnn_optimized_bert:
+        tt_model_name = f"ttnn_{model_name}_optimized"
+    else:
+        raise ValueError(f"Unknown bert: {bert}")
+
+    profiler.start(f"preprocessing_parameter")
+    parameters = preprocess_model_parameters(
+        model_name=tt_model_name,
+        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
+            model_name, torchscript=False
+        ).eval(),
+        custom_preprocessor=bert.custom_preprocessor,
+        device=device,
+    )
+    profiler.end(f"preprocessing_parameter")
+
+    context, question = load_inputs(input_path, batch_size)
+
+    preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
+    preprocess_params["max_seq_len"] = sequence_size
+    inputs = nlp._args_parser({"context": context, "question": question})
+    preprocessed_inputs = []
+    for i in range(batch_size):
+        model_input = next(nlp.preprocess(inputs[0][i], **preprocess_params))
+        single_input = {
+            "example": model_input["example"],
+            "inputs": model_input,
+        }
+        preprocessed_inputs.append(single_input)
+
+    bert_input = tokenizer.batch_encode_plus(
+        zip(question, context),
+        max_length=sequence_size,
+        padding="max_length",
+        truncation=True,
+        return_attention_mask=True,
+        return_token_type_ids=True,
+        return_tensors="pt",
+    )
+
+    position_ids = positional_ids(config, bert_input.input_ids)
+    profiler.start(f"preprocessing_input")
+    ttnn_bert_inputs = bert.preprocess_inputs(
+        bert_input["input_ids"],
+        bert_input["token_type_ids"],
+        position_ids,
+        bert_input["attention_mask"],
+        device=device,
+    )
+    profiler.end(f"preprocessing_input")
+
+    profiler.start(f"inference_time")
+    tt_output = bert.bert_for_question_answering(
+        config,
+        *ttnn_bert_inputs,
+        parameters=parameters,
+    )
+    profiler.end(f"inference_time")
+
+    tt_output = ttnn.to_torch(ttnn.from_device(tt_output)).reshape(batch_size, 1, sequence_size, -1).to(torch.float32)
+
+    tt_start_logits = tt_output[..., :, 0].squeeze(1)
+    tt_end_logits = tt_output[..., :, 1].squeeze(1)
+
+    model_answers = {}
+    profiler.start("post_processing_output_to_string")
+    for i in range(batch_size):
+        tt_res = {
+            "start": tt_start_logits[i],
+            "end": tt_end_logits[i],
+            "example": preprocessed_inputs[i]["example"],
+            **preprocessed_inputs[i]["inputs"],
+        }
+
+        tt_answer = nlp.postprocess([tt_res], **postprocess_params)
+
+        logger.info(f"answer: {tt_answer['answer']}\n")
+        model_answers[i] = tt_answer["answer"]
+
+    profiler.end("post_processing_output_to_string")
+    captured_graph = ttnn.graph.end_graph_capture()
+    data = GraphTracerUtils.serialize_graph(captured_graph)
+    measurements = {
+        "preprocessing_parameter": profiler.get("preprocessing_parameter"),
+        "preprocessing_input": profiler.get("preprocessing_input"),
+        "inference_time": profiler.get("inference_time"),
+        "post_processing": profiler.get("post_processing_output_to_string"),
+    }
+    logger.info(f"preprocessing_parameter: {measurements['preprocessing_parameter']} s")
+    logger.info(f"preprocessing_input: {measurements['preprocessing_input']} s")
+    logger.info(f"inference_time: {measurements['inference_time']} s")
+    logger.info(f"post_processing : {measurements['post_processing']} s")
+```
+
+The output of this should like like this:
+https://gist.github.com/dgomezTT/ad5af9cf42f245a9a220458f431919c4
+
+Please note that we have over 300.000 lines in the json file, so we just included a few in the gist.
+
+
+### What is next for this tool?
+- Supporting more operations
+- Bringing more tooling to the output
+
+
 ## Python
 Tracing is available through Python too
 https://github.com/tenstorrent/tt-metal/blob/4ae4ac3c30cd24ea27cbac8cc5811c90d077e9c0/tests/ttnn/unit_tests/test_graph_capture.py#L21-L25

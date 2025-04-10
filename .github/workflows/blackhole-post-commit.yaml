@@ -23,8 +23,10 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
+          - ASan
+          - TSan
   schedule:
-    - cron: "0 */2 * * *"
+    - cron: "0 */4 * * *"
   # Pause this since not enough runners to support every commit to main
   # push:
   #  branches: ["main"]
@@ -38,9 +40,6 @@ permissions:
   packages: write
 
 jobs:
-  static-checks:
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
@@ -62,16 +61,19 @@ jobs:
     secrets: inherit
     with:
       arch: "blackhole"
+      timeout: 20
       runner-label: ${{ inputs.runner-label || 'BH' }}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   umd-unit-tests:
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
     with:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   sd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml
@@ -79,16 +81,20 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
-      timeout: 30
-      os: "ubuntu-22.04"
+      timeout: 15
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   fd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
     with:
+      timeout: 20
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
-      os: "ubuntu-22.04"
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -97,8 +103,20 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
-      timeout: 60
-      os: "ubuntu-22.04"
+      timeout: 20
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  models-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/models-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 20
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
 #   profiler-regression:
 #     needs: build-artifact-profiler

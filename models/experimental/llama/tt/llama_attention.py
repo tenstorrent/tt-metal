@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
 import math
 import torch
 from torch import nn

@@ -8,7 +8,6 @@ import ttnn
 import time
 from pathlib import Path
 
-from torchvision import models
 from loguru import logger
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -111,7 +110,7 @@ def test_convnet_mnist(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 10954.46],
+        [1, 11282.62],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

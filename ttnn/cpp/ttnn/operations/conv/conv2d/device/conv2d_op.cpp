@@ -68,7 +68,6 @@ Tensor optimized_conv_new(
     const MemoryConfig& memory_config,
     DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
-    bool use_shallow_conv_variant,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
@@ -87,7 +86,6 @@ Tensor optimized_conv_new(
          memory_config,
          dtype,
          input_tensor_shape,
-         use_shallow_conv_variant,
          compute_kernel_config,
          enable_act_double_buffer,
          enable_weights_double_buffer,
@@ -133,7 +131,6 @@ Tensor optimized_conv_new(
                 memory_config,
                 dtype,
                 input_tensor_shape,
-                use_shallow_conv_variant,
                 compute_kernel_config,
                 enable_act_double_buffer,
                 enable_weights_double_buffer,
@@ -271,7 +268,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     auto& output_tensor = output_tensors.at(0);
     tt::tt_metal::IDevice* device = input_tensor_a.device();
 
-    const auto has_bias = input_tensor_bias.has_value();
+    const bool has_bias = input_tensor_bias.has_value();
 
     const auto weights_shape = input_tensor_b.get_padded_shape();
 
@@ -293,7 +290,6 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         block_config,
         dtype,
         input_tensor_shape,
-        use_shallow_conv_variant,
         compute_kernel_config,
         output_tensor,
         enable_act_double_buffer,
@@ -329,29 +325,26 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             input_tensor_shape[3],
             output_channels,
             kernel_dims[1],
-            sliding_window_config.get_output_shape()[2]));
+            sliding_window_config.get_output_shape()[2],
+            has_bias));
 
-    if (device->arch() != tt::ARCH::BLACKHOLE) {
-        // FIXME: This L1 calculation is not accurate for Blackhole due to different alignment.
-        // https://github.com/tenstorrent/tt-metal/issues/17216
-        TT_FATAL(
-            actual_cb_size == l1_usage.CB_allocation_size,
-            "Calculated CB size {} does not match with the actual CB size {}",
-            l1_usage.CB_allocation_size,
-            actual_cb_size);
+    TT_FATAL(
+        actual_cb_size == l1_usage.CB_allocation_size,
+        "Calculated CB size {} does not match with the actual CB size {}",
+        l1_usage.CB_allocation_size,
+        actual_cb_size);
 
-        // For now assume that if post_op_l1_allocation_size == 0 op is being run
-        // in graph capture NO_DISPATCH mode.
-        // ToDo: Device should offer an API to inform the op if it is running in NO_DISPATCH mode.
-        bool is_graph_capture_no_dispathch_mode = post_op_l1_allocation_size == 0;
-        TT_FATAL(
-            post_op_l1_allocation_size == (this->pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size) ||
-                is_graph_capture_no_dispathch_mode,
-            "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
-            this->pre_op_l1_allocation_size_bytes,
-            post_op_l1_allocation_size,
-            l1_usage.tensor_allocation_size);
-    }
+    // For now assume that if post_op_l1_allocation_size == 0 op is being run
+    // in graph capture NO_DISPATCH mode.
+    // ToDo: Device should offer an API to inform the op if it is running in NO_DISPATCH mode.
+    bool is_graph_capture_no_dispathch_mode = post_op_l1_allocation_size == 0;
+    TT_FATAL(
+        post_op_l1_allocation_size == (this->pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size) ||
+            is_graph_capture_no_dispathch_mode,
+        "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
+        this->pre_op_l1_allocation_size_bytes,
+        post_op_l1_allocation_size,
+        l1_usage.tensor_allocation_size);
     return program_with_cbs;
 }
 
@@ -368,8 +361,10 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
-    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
-    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
+    uint32_t pad_h = (uint32_t)sliding_window_config.get_pad_h();
+    uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
+    uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
+    uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
     const auto& t = output_tensors.at(0);
     if (t.storage_type() != StorageType::DEVICE) {
@@ -383,8 +378,12 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
     const int tensix_mul_adds_per_cycle_lofi = (arch == tt::ARCH::WORMHOLE_B0) ? 4096 : 2048;
 
     // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
-    int output_height = std::floor((conv_activation_h - filter_h + 2 * pad_h) / stride_h + 1);
-    int output_width = std::floor((conv_activation_w - filter_w + 2 * pad_w) / stride_w + 1);
+    auto [output_height, output_width] = calculate_output_image_size(
+        {conv_activation_h, conv_activation_w},
+        {filter_h, filter_w},
+        {stride_h, stride_w},
+        sliding_window_config.padding,
+        {dilation_h, dilation_w});
 
     // Calculate number of mul/add operations
     // TODO: add bias modeling

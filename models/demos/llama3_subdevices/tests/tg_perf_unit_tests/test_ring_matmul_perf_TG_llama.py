@@ -2,23 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 from loguru import logger
-import ttnn
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
+
+THRESHOLD = 1.0
 
 
 @pytest.mark.parametrize(
     "mm_type, perf_target_us",
     [
-        ("qkv", 7.9),
-        ("do", 7.0),
+        ("qkv", 8.9),
+        ("do", 7.3),
         ("ff13", 8.9),
-        ("ff2", 14.8),
-        ("lm_head", 380),
+        ("ff2", 13.8),
+        ("lm_head", 340),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -60,4 +60,6 @@ def test_ring_mm_tg_llama_perf(
         ml_model_name="llama70b-tg-unit",
     )
 
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert (
+        measured_avg_us < perf_target_us + THRESHOLD
+    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"

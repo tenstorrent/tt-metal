@@ -2,18 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <numeric>
-#include <thread>
-#include <gmock/gmock.h>
-
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn_test_fixtures.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include "ttnn/async_runtime.hpp"
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/event.hpp>
+#include <algorithm>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <thread>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include "gmock/gmock.h"
+#include <tt-metalium/shape.hpp>
+#include "ttnn/async_runtime.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn_test_fixtures.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -58,7 +72,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
         for (int j = 0; j < kNumIterations; j++) {
             Tensor t0_tensor = t0_host_tensor.to_device(device, mem_cfg, t0_io_cq);
             EXPECT_TRUE(is_tensor_on_device(t0_tensor));
-            EXPECT_THAT(t0_tensor.to_vector<float>(), Pointwise(FloatEq(), t0_host_data));
+            EXPECT_THAT(t0_tensor.to_vector<float>(t0_io_cq), Pointwise(FloatEq(), t0_host_data));
         }
     });
 
@@ -66,7 +80,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
         for (int j = 0; j < kNumIterations; j++) {
             Tensor t1_tensor = t1_host_tensor.to_device(device, mem_cfg, t1_io_cq);
             EXPECT_TRUE(is_tensor_on_device(t1_tensor));
-            EXPECT_THAT(t1_tensor.to_vector<float>(), Pointwise(FloatEq(), t1_host_data));
+            EXPECT_THAT(t1_tensor.to_vector<float>(t1_io_cq), Pointwise(FloatEq(), t1_host_data));
         }
     });
 

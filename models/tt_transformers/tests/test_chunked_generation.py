@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import bz2
 import torch
 import pytest
 from loguru import logger
@@ -13,7 +12,7 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.generator import Generator
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer as ReferenceTransformer
 from models.utility_functions import (
@@ -51,7 +50,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
+        pytest.param(lambda model_args: DecodersPrecision.accuracy(model_args.n_layers), id="accuracy"),
     ],
 )
 def test_chunked_prefill_single_user(
@@ -65,6 +64,7 @@ def test_chunked_prefill_single_user(
     reset_seeds,
     ensure_gc,
     is_ci_env,
+    request,
 ):
     mesh_device.enable_async(True)
 
@@ -72,10 +72,11 @@ def test_chunked_prefill_single_user(
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # This sets the minimum PCC for each iteration based on optimization mode
-    if optimizations == ModelOptimizations.accuracy:
+    test_id = request.node.callspec.id
+    if test_id == "accuracy":
         pcc = 0.91  # TODO Look on improving PCC
     else:  # performance mode
-        assert optimizations == ModelOptimizations.performance
+        assert test_id == "performance"
         pcc = 0.869  # TODO Look on improving PCC
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
@@ -126,7 +127,7 @@ def test_chunked_prefill_single_user(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
     )
-    generator = Generator(tt_model, model_args, mesh_device)
+    generator = Generator([tt_model], [model_args], mesh_device)
 
     logger.info("Model and caches loaded.")
 
@@ -150,13 +151,15 @@ def test_chunked_prefill_single_user(
     logger.info("Running TT model")
     for last_token_idx in range(prefill_chunk_size - 10, seq_len, prefill_chunk_size):
         logger.info(f"Running TT model for last_token_idx: {last_token_idx}")
-        tt_output_torch = generator.prefill_forward_single_user_text(
+        tt_output_device = generator.prefill_forward_single_user_text(
             tt_prefill_input,
             page_table=static_page_table,
             user_id=0,
             last_token_idx=last_token_idx,
             kv_cache=tt_kv_cache,
         )
+
+        tt_output_torch = tt_model.process_output_prefill(tt_output_device, last_token_idx=(last_token_idx % 32))
         tt_output_torch = tt_output_torch.reshape(batch_size, 1, -1)
 
         ref_output_slice = ref_output[:, last_token_idx : last_token_idx + 1, :]

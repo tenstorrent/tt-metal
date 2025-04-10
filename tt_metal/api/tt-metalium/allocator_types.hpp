@@ -7,8 +7,8 @@
 #include <vector>
 #include <cstdlib>
 #include <functional>
-#include "core_coord.hpp"
-#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <hostdevcommon/common_values.hpp>
 
 namespace tt::tt_metal {
 

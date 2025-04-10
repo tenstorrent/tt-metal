@@ -15,6 +15,7 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& input = tensor_args.input;
+    const auto input_data_format = datatype_to_dataformat_converter(input.get_dtype());
 
     auto dim = operation_attributes.dim;
     auto flip = operation_attributes.flip;
@@ -104,8 +105,14 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
-    std::map<string, string> compute_defines;
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_cumsum/device/kernels/moreh_cumsum_nc.cpp";
+    std::map<string, string> compute_defines;  // = {{"TRISC_MATH", "1"}};
+
+    bool isSFPU = (input_data_format == tt::DataFormat::UInt32 || input_data_format == tt::DataFormat::Int32);
+    fp32_dest_acc_en |= isSFPU;
+
+    const auto compute_kernel_file =
+        isSFPU ? "ttnn/cpp/ttnn/operations/moreh/moreh_cumsum/device/kernels/moreh_cumsum_sfpu_nc.cpp"
+               : "ttnn/cpp/ttnn/operations/moreh/moreh_cumsum/device/kernels/moreh_cumsum_nc.cpp";
     const auto compute_kernel_1_id = CreateComputeKernel(
         program,
         compute_kernel_file,

@@ -4,6 +4,44 @@
 
 #include "test_utils.hpp"
 
+#include <fmt/base.h>
+#include <algorithm>
+#include <array>
+#include <functional>
+#include <iterator>
+#include <utility>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include "fmt/base.h"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include "span.hpp"
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace unary {
+enum class UnaryOpType;
+struct UnaryWithParam;
+}  // namespace unary
+}  // namespace operations
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::distributed::test {
 
 static constexpr size_t TEST_WORKERS_SUBDEVICE_INDEX = 0;

@@ -4,19 +4,46 @@
 
 #pragma once
 
-#include <cstdint>
-#include <functional>
-
+#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/fabric_host_interface.h>
-#include "umd/device/device_api_metal.h"
-#include "umd/device/tt_cluster_descriptor.h"
-#include "umd/device/tt_xy_pair.h"
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-#include <tt-metalium/dev_msgs.h>
+#include "assert.hpp"
+#include "core_coord.hpp"
+#include "llrt/hal.hpp"
+#include <umd/device/cluster.h>
+#include <umd/device/device_api_metal.h>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_io.hpp>
+#include <umd/device/tt_silicon_driver_common.hpp>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/harvesting.h>
 
-#include <tt-metalium/hal.hpp>
+namespace tt {
+enum class ARCH;
+namespace tt_fabric {
+class ControlPlane;
+}  // namespace tt_fabric
+}  // namespace tt
+struct tt_device_params;
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
@@ -35,11 +62,15 @@ enum class TargetDevice : std::uint8_t {
 
 enum class ClusterType : std::uint8_t {
     INVALID = 0,
-    N150 = 1,    // Production N150
-    N300 = 2,    // Production N300
-    T3K = 3,     // Production T3K, built with 4 N300s
-    GALAXY = 4,  // Production Galaxy, all chips with mmio
-    TG = 5,      // Will be deprecated
+    N150 = 1,     // Production N150
+    N300 = 2,     // Production N300
+    T3K = 3,      // Production T3K, built with 4 N300s
+    GALAXY = 4,   // Production Galaxy, all chips with mmio
+    TG = 5,       // Will be deprecated
+    P100 = 6,     // Blackhole single card, ethernet disabled
+    P150 = 7,     // Blackhole single card, ethernet enabled
+    P150_X2 = 8,  // 2 Blackhole single card, ethernet connected
+    P150_X4 = 9,  // 4 Blackhole single card, ethernet connected
 };
 
 enum class EthRouterMode : uint32_t {
@@ -48,8 +79,6 @@ enum class EthRouterMode : uint32_t {
     FABRIC_ROUTER = 2,
 };
 
-enum class FabricConfig { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, FABRIC_2D_PUSH = 3, CUSTOM = 4 };
-
 class Cluster {
 public:
     Cluster& operator=(const Cluster&) = delete;
@@ -57,7 +86,8 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    static Cluster& instance();
+    Cluster();
+    ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
     // for user facing host apis
@@ -250,7 +280,9 @@ public:
         return this->tunnels_from_mmio_device.at(mmio_chip_id);
     }
 
-    void initialize_fabric_config(FabricConfig fabric_config);
+    tt::tt_fabric::ControlPlane* get_control_plane();
+
+    void initialize_fabric_config(tt_metal::FabricConfig fabric_config);
 
     // Returns whether we are running on Galaxy.
     bool is_galaxy_cluster() const;
@@ -260,7 +292,7 @@ public:
 
     ClusterType get_cluster_type() const;
 
-    FabricConfig get_fabric_config() const;
+    tt_metal::FabricConfig get_fabric_config() const;
 
     // Get all fabric ethernet cores
     std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const;
@@ -276,9 +308,6 @@ public:
     const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
 
 private:
-    Cluster();
-    ~Cluster();
-
     void detect_arch_and_target();
     void generate_cluster_descriptor();
     void initialize_device_drivers();
@@ -295,6 +324,13 @@ private:
     void reserve_ethernet_cores_for_tunneling();
 
     void initialize_ethernet_sockets();
+
+    // Disable ethernet cores that retrain
+    // This should be removed when we handle retraining or dropped links in control plane properly
+    void disable_ethernet_cores_with_retrain();
+
+    // Initialize control plane, which has mapping of physical device id to MeshGraph config
+    void initialize_control_plane();
 
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
@@ -325,6 +361,7 @@ private:
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_eth_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     ClusterType cluster_type_ = ClusterType::INVALID;
@@ -335,7 +372,9 @@ private:
     // Releases all reserved ethernet cores for fabric routers
     void release_ethernet_cores_for_fabric_routers();
 
-    FabricConfig fabric_config_ = FabricConfig::DISABLED;
+    tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
+
+    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
 
     // Tunnels setup in cluster
     std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};

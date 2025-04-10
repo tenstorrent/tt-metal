@@ -14,7 +14,7 @@ from datasets import load_dataset
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs
 from models.utility_functions import torch_random, is_wormhole_b0, torch2tt_tensor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -31,7 +31,7 @@ from models.perf.perf_utils import prep_perf_report
 def get_expected_times(functional_vit):
     return {
         ttnn_functional_vit: (12, 17),
-        ttnn_optimized_sharded_vit: (12, 0.08),
+        ttnn_optimized_sharded_vit_gs: (12, 0.08),
     }[functional_vit]
 
 
@@ -41,7 +41,7 @@ def get_expected_times(functional_vit):
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
-@pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit])
+@pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit_gs])
 def test_performance_vit_embeddings(device, model_name, batch_size, image_size, image_channels, functional_vit):
     # ttnn.experimental.device.EnableMemoryReports()
 
@@ -74,7 +74,7 @@ def test_performance_vit_embeddings(device, model_name, batch_size, image_size, 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         device=device,
-        custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
+        custom_preprocessor=ttnn_optimized_sharded_vit_gs.custom_preprocessor,
     )
 
     torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
@@ -128,7 +128,7 @@ def test_performance_vit_embeddings(device, model_name, batch_size, image_size, 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [196])  ## padded from 197 to 224
-@pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit])
+@pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit_gs])
 def test_performance_vit_encoder(device, use_program_cache, model_name, batch_size, sequence_size, functional_vit):
     # disable_persistent_kernel_cache()
 
@@ -141,7 +141,7 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
 
-    if functional_vit == ttnn_optimized_sharded_vit:
+    if functional_vit == ttnn_optimized_sharded_vit_gs:
         tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_vit: {functional_vit}")
@@ -173,7 +173,7 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
 
     durations = []
     for _ in range(1):
@@ -200,7 +200,7 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("sequence_size", [224])
-@pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit])
+@pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit_gs])
 def test_performance_vit_e2e(
     device, use_program_cache, model_name, batch_size, image_size, sequence_size, functional_vit
 ):
@@ -237,7 +237,7 @@ def test_performance_vit_e2e(
     #     torch_cls_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     # )
 
-    if functional_vit == ttnn_optimized_sharded_vit:
+    if functional_vit == ttnn_optimized_sharded_vit_gs:
         tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_vit: {functional_vit}")
@@ -263,7 +263,7 @@ def test_performance_vit_e2e(
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
 
     durations = []
     for _ in range(1):

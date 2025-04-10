@@ -4,11 +4,18 @@
 
 #pragma once
 
-#include "umd/device/device_api_metal.h"
-#include <tt_backend_api_types.hpp>
 #include <metal_soc_descriptor.h>
-
+#include <tt_backend_api_types.hpp>
 #include <unordered_map>
+
+#include <umd/device/device_api_metal.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+
+class tt_device;
+namespace tt {
+enum class ARCH;
+}  // namespace tt
+struct metal_SocDescriptor;
 
 namespace ll_api {
 

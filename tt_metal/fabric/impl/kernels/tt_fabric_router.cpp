@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 // clang-format on
 
 using namespace tt::tt_fabric;
@@ -27,6 +28,7 @@ constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(1);
 constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(2);
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(3);
 constexpr bool is_master = get_compile_time_arg_val(4);
+constexpr uint32_t router_direction = get_compile_time_arg_val(5);
 uint32_t sync_val;
 uint32_t router_mask;
 uint32_t master_router_chan;
@@ -35,52 +37,12 @@ bool terminated_slave_routers = false;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
-volatile tt_l1_ptr chan_req_buf* fvc_consumer_req_buf =
+volatile tt_l1_ptr chan_req_buf* fvc_outbound_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(FABRIC_ROUTER_REQ_QUEUE_START);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 
-volatile uint32_t* sync_sem_addr = (volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM;
-
 #define SWITCH_THRESHOLD 0x3FFF
-
-inline void wait_for_sem(uint32_t value) {
-    while (*sync_sem_addr != value) {
-        // context switch while waiting to allow slow dispatch traffic to go through
-        internal_::risc_context_switch();
-    }
-}
-
-inline void notify_master_router() {
-    // send semaphore increment to master router on this device.
-    // semaphore notifies all other routers that this router has completed
-    // startup handshake with its ethernet peer.
-    uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][master_router_chan], FABRIC_ROUTER_SYNC_SEM);
-    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
-        noc_index,
-        NCRISC_AT_CMD_BUF,
-        dest_addr,
-        NOC_UNICAST_WRITE_VC,
-        1,
-        31,
-        false,
-        false,
-        MEM_NOC_ATOMIC_RET_VAL_ADDR);
-}
-
-inline void notify_slave_routers(uint32_t notification) {
-    uint32_t remaining_cores = router_mask;
-    for (uint32_t i = 0; i < 16; i++) {
-        if (remaining_cores == 0) {
-            break;
-        }
-        if ((remaining_cores & (0x1 << i)) && (master_router_chan != i)) {
-            uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][i], FABRIC_ROUTER_SYNC_SEM);
-            noc_inline_dw_write(dest_addr, notification);
-            remaining_cores &= ~(0x1 << i);
-        }
-    }
-}
 
 void kernel_main() {
     tt_fabric_init();
@@ -89,6 +51,9 @@ void kernel_main() {
 #else
     fvc_inbound_push_state_t fvc_inbound_state;
     fvc_outbound_push_state_t fvc_outbound_state[4];
+    volatile tt_l1_ptr fabric_push_client_queue_t* client_queue =
+        reinterpret_cast<tt_l1_ptr fabric_push_client_queue_t*>(FABRIC_ROUTER_CLIENT_QUEUE_START);
+    zero_l1_buf((tt_l1_ptr uint32_t*)client_queue, sizeof(fabric_push_client_queue_t));
 #endif
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
@@ -102,7 +67,7 @@ void kernel_main() {
     router_state.sync_in = 0;
     router_state.sync_out = 0;
 
-    zero_l1_buf((tt_l1_ptr uint32_t*)fvc_consumer_req_buf, sizeof(chan_req_buf));
+    zero_l1_buf((tt_l1_ptr uint32_t*)fvc_outbound_req_buf, sizeof(chan_req_buf));
     zero_l1_buf((tt_l1_ptr uint32_t*)FVCC_IN_BUF_START, FVCC_IN_BUF_SIZE);
     zero_l1_buf((tt_l1_ptr uint32_t*)FVCC_OUT_BUF_START, FVCC_OUT_BUF_SIZE);
     write_kernel_status(kernel_status, TT_FABRIC_WORD_CNT_INDEX, (uint32_t)&router_state);
@@ -152,14 +117,14 @@ void kernel_main() {
     if constexpr (is_master) {
         // wait for all device routers to have incremented the sync semaphore.
         // sync_val is equal to number of tt-fabric routers running on a device.
-        wait_for_sem(sync_val - 1);
-        notify_slave_routers(sync_val);
+        wait_for_notification(FABRIC_ROUTER_SYNC_SEM, sync_val - 1);
+        notify_slave_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, sync_val);
         // increment the sync sem to signal host that handshake is complete
-        *sync_sem_addr += 1;
+        *((volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM) += 1;
     } else {
-        notify_master_router();
+        notify_master_router(master_router_chan, FABRIC_ROUTER_SYNC_SEM);
         // wait for the signal from the master router
-        wait_for_sem(sync_val);
+        wait_for_notification(FABRIC_ROUTER_SYNC_SEM, sync_val);
     }
 
 #ifndef FVC_MODE_PULL
@@ -178,13 +143,23 @@ void kernel_main() {
     while (1) {
         // Handle Ethernet Outbound Data
 #ifdef FVC_MODE_PULL
-        if (!fvc_req_buf_is_empty(fvc_consumer_req_buf) && fvc_req_valid(fvc_consumer_req_buf)) {
-            uint32_t req_index = fvc_consumer_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
-            chan_request_entry_t* req = (chan_request_entry_t*)fvc_consumer_req_buf->chan_req + req_index;
+        if (!fvc_req_buf_is_empty(fvc_outbound_req_buf) && fvc_req_valid(fvc_outbound_req_buf)) {
+            uint32_t req_index = fvc_outbound_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
+            chan_request_entry_t* req = (chan_request_entry_t*)fvc_outbound_req_buf->chan_req + req_index;
             pull_request_t* pull_req = &req->pull_request;
-            if (req->bytes[47] == FORWARD) {
-                // Data is packetized.
-                fvc_outbound_state.pull_data_to_fvc_buffer(pull_req);
+            uint32_t flags = pull_req->flags;
+            if (flags & (FORWARD | PACK_N_FORWARD)) {
+                if (flags == FORWARD) {
+                    // Data is packetized.
+                    fvc_outbound_state.pull_data_to_fvc_buffer<true>(pull_req, NULL);
+                } else {
+                    // Data is not packetized.
+                    // Packet header is in req_index + 1 entry of outbound request buffer.
+                    uint32_t header_index = (req_index + 1) & CHAN_REQ_BUF_SIZE_MASK;
+                    chan_request_entry_t* header_ptr =
+                        (chan_request_entry_t*)fvc_outbound_req_buf->chan_req + header_index;
+                    fvc_outbound_state.pull_data_to_fvc_buffer<false>(pull_req, &header_ptr->pull_request);
+                }
                 if (fvc_outbound_state.packet_words_remaining == 0 ||
                     fvc_outbound_state.pull_words_in_flight >= FVC_SYNC_THRESHOLD) {
                     fvc_outbound_state.total_words_to_forward += fvc_outbound_state.pull_words_in_flight;
@@ -200,7 +175,7 @@ void kernel_main() {
             if (fvc_outbound_state.packet_in_progress == 1 and fvc_outbound_state.packet_words_remaining == 0) {
                 // clear the flags field to invalidate pull request slot.
                 // flags will be set to non-zero by next requestor.
-                req_buf_advance_rdptr((chan_req_buf*)fvc_consumer_req_buf);
+                req_buf_advance_rdptr((chan_req_buf*)fvc_outbound_req_buf);
                 fvc_outbound_state.packet_in_progress = 0;
             }
             loop_count = 0;
@@ -213,8 +188,8 @@ void kernel_main() {
         if (fvc_outbound_state[curr_outbound_buffer].forward_data_from_fvc_buffer(eth_outbound_wrptr)) {
             loop_count = 0;
         } else {
-            if (*fvc_outbound_state[next_outbound_buffer].noc_word_credits ||
-                *fvc_outbound_state[next_outbound_buffer].sender_words_cleared) {
+            if (*fvc_outbound_state[next_outbound_buffer].slot_credits ||
+                *fvc_outbound_state[next_outbound_buffer].sender_slots_cleared) {
                 curr_outbound_buffer = next_outbound_buffer;
             }
             next_outbound_buffer = (next_outbound_buffer + 1) & 0x3;
@@ -223,7 +198,7 @@ void kernel_main() {
 
         // Handle Ethernet Inbound Data
         if (fvc_inbound_state.get_curr_packet_valid<FVC_MODE_ROUTER>()) {
-            fvc_inbound_state.process_inbound_packet<FVC_MODE_ROUTER>();
+            fvc_inbound_state.process_inbound_packet<FVC_MODE_ROUTER, router_direction>();
             loop_count = 0;
         }
 #ifdef TT_FABRIC_DEBUG
@@ -249,7 +224,7 @@ void kernel_main() {
                 // terminate signal from host sw.
                 if constexpr (is_master) {
                     if (!terminated_slave_routers) {
-                        notify_slave_routers(0);
+                        notify_slave_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, 0);
                         terminated_slave_routers = true;
                     }
                 }

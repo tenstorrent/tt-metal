@@ -7,8 +7,8 @@
 #include <array>
 #include <cstdint>
 
-#include "core_coord.hpp"
-#include "hal.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {

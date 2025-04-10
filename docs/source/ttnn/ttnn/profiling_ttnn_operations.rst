@@ -1,5 +1,5 @@
-Profiling ttnn Operations
-=========================
+Profiling TT-NN Operations
+==========================
 
 The following set of commands will generate perf reports for ``resnet`` as an example.
 

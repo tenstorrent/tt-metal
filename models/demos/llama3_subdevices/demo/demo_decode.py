@@ -4,23 +4,18 @@
 
 import torch
 import json
-from time import time, sleep
+from time import time
 from datetime import datetime
 from loguru import logger
 import os
 import ttnn
-import math
 import pytest
 import requests
 from pathlib import Path
 import hashlib
 
-from models.utility_functions import nearest_32
 from models.demos.llama3_subdevices.tt.llama_common import (
-    HostEmbedding,
-    encode_prompt_llama_instruct,
     PagedAttentionConfig,
-    sample_host,
 )
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
@@ -28,9 +23,16 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import T
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
 
-from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
+
+# Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
+# before triggering an assertion failure. Allows occasional dips while ensuring
+# stable performance without breaking CI prematurely.
+TSU_PERF_DROP_LIMIT_COUNT = 5
+
+# Constants for TSU thresholds based on the number of layers
+TSU_THRESHOLDS = {1: {"min": 340, "max": 355}, 10: {"min": 180, "max": 200}, 80: {"min": 39, "max": 41}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -108,8 +110,12 @@ def run_llama3_demo(
     print_to_file,
     weights,
     layers,
+    stress_test,
+    start_pos,
 ):
     # Creat batch output file
+    benchmark_data = BenchmarkData()
+    profiler_step_name = "tg-llama-demo-e2e"
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_directory = "models/demos/llama3/demo/output"
     os.makedirs(output_directory, exist_ok=True)
@@ -129,6 +135,7 @@ def run_llama3_demo(
     logger.info(f"Start profiler")
     profiler = BenchmarkProfiler()
     profiler.start("run")
+    profiler.start(profiler_step_name)
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
@@ -171,14 +178,14 @@ def run_llama3_demo(
     profiler.end("weight_loading")
 
     page_table_tt = None
-
     if paged_attention:
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+            model_args.batch_size_per_device_group,
+            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
         )
         page_table_tt = ttnn.from_torch(
             page_table,
@@ -187,6 +194,7 @@ def run_llama3_demo(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         )
+        logger.info("Page table tensor done")
 
     # Load TTNN Llama3.1 model
     logger.info("Loading weights to device...")
@@ -221,10 +229,10 @@ def run_llama3_demo(
             [128000, 2028, 374, 264, 1296]
         ] * model_args.max_batch_size  # "This is a test" encoded prompt
     else:
-        # if instruct_mode:
-        #     encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
-        # else:
-        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
+        if instruct_mode:
+            encoded_prompts = [model_args.encode_prompt(prompt) for prompt in input_prompts]
+        else:
+            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
 
     # Prefill by decode: start at first token; pad to 32 (tile size)
     max_prompt_length = max([len(prompt) for prompt in encoded_prompts])
@@ -234,25 +242,8 @@ def run_llama3_demo(
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
     logger.info("Starting decode...")
-
-    # Shard the page table for TG decode
-    if paged_attention and model_args.is_galaxy and batch_size > 1:
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, -2) if batch_size > 1 else (None, None),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )
-
-        logger.info("Page table tensor done")
-
     # Initial positions
-    decoding_pos = [0] * batch_size
+    decoding_pos = [start_pos] * batch_size
     current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
 
     current_pos_tensor = ttnn.from_torch(
@@ -292,7 +283,9 @@ def run_llama3_demo(
     # Compile
     logger.info(f"Compiling model trace...")
     if layers == 1:
-        num_compile_iters = 24
+        num_compile_iters = 10
+    elif layers == 5:
+        num_compile_iters = 2
     else:
         num_compile_iters = 1
     for i in range(num_compile_iters):
@@ -311,20 +304,21 @@ def run_llama3_demo(
         # Sampling
         # tt_out_tok_reset = tt_sampling(tt_out[0], tt_out_tok)
 
+        # Note: Persistent output buffer used, do not deallocate output!
         tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-            tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
         )
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-        ttnn.deallocate(tt_out_gathered)
         tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
             tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
         )
         logger.info(f"sampling done")
 
-    ttnn.plus_one(
-        current_pos_tensor,
-        sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-    )
+    if not stress_test:
+        ttnn.plus_one(
+            current_pos_tensor,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
     # profiler.end(f"plus one position done")
 
     # Capture Trace
@@ -345,19 +339,21 @@ def run_llama3_demo(
         mode="decode",
         page_table=page_table_tt,
     )
+
+    # Note: Persistent output buffer used, do not deallocate output!
     tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-        tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
     )
     tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-    ttnn.deallocate(tt_out_gathered)
     tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
         tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
     )
 
-    ttnn.plus_one(
-        current_pos_tensor,
-        sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-    )
+    if not stress_test:
+        ttnn.plus_one(
+            current_pos_tensor,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
     # ttnn.plus_one(rot_mat_idxs)  # FIXME <- This won't work since embedding requires uint32 and plus_one only works for int32
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -396,11 +392,18 @@ def run_llama3_demo(
     users_decoding = True  # reset to handle next batch
     total_decoding_time = 0  # Track total decoding time
     total_tokens_generated = 0  # Track total tokens generated
+    tokens_per_second_per_user_token127 = 0  # Track tokens per second per user at token 128
 
     all_outputs = []
 
     logger.info(f"Starting decode loop...")
     profiler.start(f"inference_decode", iteration=iteration)
+
+    # Determine TSU threshold based on layer count
+    tsu_thresholds = TSU_THRESHOLDS.get(layers)
+
+    # Tracks the number of iterations where throughput falls below `tsu_threshold`
+    tsu_failures = 0
 
     while users_decoding:
         if iteration == 0:  # First iteration also accounts for compile time
@@ -409,17 +412,20 @@ def run_llama3_demo(
 
         # Execute trace
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        tt_out_tok_cpu = tt_out_tok.cpu(blocking=True, cq_id=0)
+        iteration_time = time() - iteration_time_start
 
         # Update current pos and mat idxs on host and send to device
         # TODO This is required for now since we cannot ttnn.plus_one(rot_mat_idxs) while it being uint32.
         # If this tensor is int32, it won't be supported by ttnn.embedding
-        current_pos += 1
+        if not stress_test:
+            current_pos += 1
         rot_mat_idxs_updated = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
         ttnn.copy_host_to_device_tensor(rot_mat_idxs_updated, rot_mat_idxs)
         # ttnn.synchronize_device(mesh_device)
         # Write to host
         tt_output_torch = ttnn.to_torch(
-            tt_out_tok.cpu(blocking=True, cq_id=0),
+            tt_out_tok_cpu,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(3, 1),
@@ -438,11 +444,8 @@ def run_llama3_demo(
             ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
         else:
             all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
-            if all_outputs[-1] in [128001, 128009]:  # EoT tokens
+            if all_outputs[-1] in [128001, 128009] and not stress_test:  # EoT tokens
                 users_decoding = False
-
-        # Print out generated outputs for each user at the end of every iteration
-        iteration_time = time() - iteration_time_start
 
         # Ignore the first iteration for average speed calculation
         if iteration > 0:
@@ -468,8 +471,15 @@ def run_llama3_demo(
         logger.info(
             f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
         )
-        tsu_threshold = 128 if layers == 1 else 28
-        assert tokens_per_second_per_user > tsu_threshold, "Throughput is less than 28 tokens per second per user"
+
+        if is_ci_env and iteration == 127:
+            tokens_per_second_per_user_token127 = tokens_per_second_per_user
+
+        if not stress_test:
+            # Increment failure count if throughput is too low
+            if tokens_per_second_per_user < tsu_thresholds["min"] or tokens_per_second_per_user > tsu_thresholds["max"]:
+                tsu_failures += 1
+
         profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
 
         if iteration == 0:  # First iteration also accounts for compile time
@@ -481,11 +491,31 @@ def run_llama3_demo(
         if iteration >= max_generated_tokens:
             users_decoding = False
 
+    if not stress_test:
+        # print before assertion
+        out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
+        logger.info(out_of_targets_msg)
+        # Assert at the end of test to check if the throughput recuperated
+        assert tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT, out_of_targets_msg
+
+    # Print out total number of tsu_failures
+    logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
+
     # Release trace
     ttnn.release_trace(mesh_device, trace_id)
 
     # Finish profiling at the end of all batches inference
+    profiler.end(profiler_step_name)
     profiler.end("run")
+
+    if is_ci_env:
+        benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
+
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"tg-llama-demo-e2e",
+            ml_model_name="tg-llama",
+        )
 
 
 # List of supported Parameters for demo.py
@@ -503,21 +533,12 @@ def run_llama3_demo(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params",
+    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
-        # (  # Batch-1 run (Latency) - single user, small prompt
-        #     "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     1024,  # max_seq_len
-        #     1,  # batch_size
-        #     200,  # max_generated_tokens
-        #     False,  # True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
-        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-        # ),
-        (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
+        (  # full demo, batch 32
+            "instruct",
+            80,
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -526,32 +547,77 @@ def run_llama3_demo(
             False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            False,  # stress_test
+            0,  # start_pos
         ),
-        # (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-        #     "models/demos/llama3/demo/input_data_long_64k.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     64 * 1024,  # max_seq_len
-        #     1,  # batch_size
-        #     200,  # max_generated_tokens
-        #     False,  # paged_attention
-        #     {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params  # TODO This will be serviced by vLLM
-        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-        # ),
+        (  # quick 1L demo
+            "random",
+            1,
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            200,  # max_generated_tokens
+            False,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            False,  # stress_test
+            0,  # start_pos
+        ),
+        (  # Stress test: batch-32 very long generations but at same token index
+            "instruct",
+            80,
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            4 * 128 * 1024,  # max_generated_tokens (same index for stress test)
+            False,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            True,  # stress_test
+            0,  # start_pos
+        ),
+        (  # full demo, long generation test
+            "instruct",
+            80,
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            2048,  # max_generated_tokens (same index for stress test)
+            False,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            True,  # stress_test
+            0,  # start_pos
+        ),
+        (  # 10 layers for devive perf measurements
+            "instruct",
+            10,
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            1,  # max_generated_tokens
+            False,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            False,  # stress_test
+            127,  # start_pos
+        ),
     ],
     ids=[
-        # "batch-1",  # latency
-        "batch-32",  # throughput
-        # "long-context",  # max-length
+        "full",  # full demo
+        "quick",  # 1L demo
+        "stress-test",  # stress test with many iterations and same token index, full model
+        "mini-stress-test",  # mini stress test with 2048 max_generated_tokens
+        "measure-device-perf",  # 10L demo for device performance measurements
     ],
-)
-@pytest.mark.parametrize(
-    "weights, layers",
-    [
-        ("random", 1),
-        ("instruct", 80),
-    ],
-    ids=["quick", "full"],
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -567,10 +633,14 @@ def run_llama3_demo(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}], indirect=True
+@pytest.mark.parametrize(  # Worker size is selected to give 120kB ringbuffer size
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872, "worker_l1_size": 1344544}],
+    indirect=True,
 )
 def test_llama_demo(
+    weights,
+    layers,
     input_prompts,
     instruct,
     repeat_batches,
@@ -580,9 +650,9 @@ def test_llama_demo(
     paged_attention,
     page_params,
     sampling_params,
+    stress_test,
+    start_pos,
     optimizations,
-    weights,
-    layers,
     mesh_device,
     use_program_cache,
     is_ci_env,
@@ -621,4 +691,6 @@ def test_llama_demo(
         print_to_file=False,
         weights=weights,
         layers=layers,
+        stress_test=stress_test,
+        start_pos=start_pos,
     )

@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -38,7 +37,12 @@ class TtLlamaEmbedding(LightweightModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = ttnn.reshape(x, ttnn.Shape((1, 1, 1, x.shape[-2] * x.shape[-1])))
         x = ttnn.embedding(
-            x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=self.args.model_config["DECODE_RESIDUAL_MEMCFG"]
+            x,
+            self.weights,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=(
+                self.args.model_config["DECODE_RESIDUAL_MEMCFG"] if x.shape[-1] <= 32 else ttnn.DRAM_MEMORY_CONFIG
+            ),
         )
         x = ttnn.reshape(x, ttnn.Shape((1, 1, x.shape[-2], x.shape[-1])))
         return x

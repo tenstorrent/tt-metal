@@ -8,8 +8,8 @@
 #include <memory>
 #include <unordered_map>
 
-#include "sub_device.hpp"
-#include "sub_device_types.hpp"
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {

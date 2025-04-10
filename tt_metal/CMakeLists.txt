@@ -12,21 +12,21 @@ target_sources(
     PRIVATE
         tt_metal.cpp
         graph/graph_tracking.cpp
-        experimental/hal.cpp
+        hal.cpp
 )
 
 # TODO(afuller): this should be self-describing modules.
 #   For now just cherry-pick all the files I discovered empirally by trying to run a test.
+add_library(jitapi INTERFACE)
 target_sources(
-    tt_metal
-    PUBLIC
+    jitapi
+    INTERFACE
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             api/tt-metalium/circular_buffer_constants.h
             api/tt-metalium/dev_msgs.h
-            api/tt-metalium/tt_log.h
             api/tt-metalium/fabric_host_interface.h
             core_descriptors/blackhole_140_arch.yaml
             core_descriptors/wormhole_b0_80_arch.yaml
@@ -201,9 +201,9 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
         Reflect::Reflect
+        TT:STL
     PRIVATE
         Metalium::Metal::Impl
-        TT:STL
         metal_common_libs
         common
         jit_build
@@ -275,6 +275,7 @@ endif()
 install(
     TARGETS
         tt_metal
+        jitapi
     LIBRARY
         COMPONENT metalium-runtime
     FILE_SET

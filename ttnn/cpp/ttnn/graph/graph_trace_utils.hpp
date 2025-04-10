@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 #include <vector>
 
@@ -20,7 +21,7 @@ enum class ExecutionStatus { Success, Error };
 
 uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace);
 uint32_t extract_l1_output_buffer_allocation_size_per_core(
-    const nlohmann::json& trace, size_t interleaved_storage_cores);
+    const ttnn::Tensor& output_tensor, size_t interleaved_storage_cores);
 uint32_t extract_l1_buffer_allocation_peak_size_per_core(const nlohmann::json& trace, size_t interleaved_storage_cores);
 uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace);
 

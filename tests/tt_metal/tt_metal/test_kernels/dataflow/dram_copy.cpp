@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "dataflow_api.h"
 
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or
@@ -33,8 +34,17 @@ void kernel_main() {
     uint64_t dispatch_addr = NOC_XY_ADDR(
         NOC_X(mailboxes->go_message.master_x),
         NOC_Y(mailboxes->go_message.master_y),
-        DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
-    noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31, false);
+        DISPATCH_MESSAGE_ADDR + NOC_STREAM_REG_SPACE_SIZE * mailboxes->go_message.dispatch_message_offset);
+    noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        1 << REMOTE_DEST_BUF_WORDS_FREE_INC,
+        dispatch_addr,
+        0xF,  // byte-enable
+        NOC_UNICAST_WRITE_VC,
+        false,  // mcast
+        true    // posted
+    );
 #endif
 
     // DRAM NOC src address

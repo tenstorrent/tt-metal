@@ -4,12 +4,8 @@
 
 from typing import List
 import ttnn
-from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh, ConcatMesh2DToTensor
-from models.utility_functions import nearest_32
+from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh
 from models.demos.tg.llama3_70b.tt.llama_common import tt_all_reduce, tt_composite_sharded_all_reduce
-from models.demos.t3000.falcon40b.tt.model_utils import (
-    matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
-)
 
 
 class TtLlamaMLP_galaxy:
@@ -159,7 +155,7 @@ class TtLlamaMLP_galaxy:
             w1_out,
             w3_out,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat16,
         )
         w1_out.deallocate(True)
@@ -229,7 +225,7 @@ class TtLlamaMLP_galaxy:
         hidden_states = ttnn.mul(
             w1_out,
             w3_out,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

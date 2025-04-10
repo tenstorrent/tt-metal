@@ -151,14 +151,12 @@ def ttnn_vgg16(
                 tt_weight = ttnn.to_device(tt_weight, device)
                 tt_bias = ttnn.to_device(tt_bias, device)
             # Call ttnn.conv
-            conv_op_cache = {}
             tt_output_tensor_on_device = ttnn.conv2d(
                 input_tensor=tt_x,
                 weight_tensor=tt_weight,
                 bias_tensor=tt_bias,
                 **conv_kwargs,
                 compute_config=compute_config,
-                conv_op_cache=conv_op_cache,
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device)
@@ -305,14 +303,12 @@ def ttnn_vgg11(
                 tt_bias = ttnn.to_device(tt_bias, device)
 
             # Call ttnn.conv
-            conv_op_cache = {}
             tt_output_tensor_on_device = ttnn.conv2d(
                 input_tensor=tt_x,
                 weight_tensor=tt_weight,
                 bias_tensor=tt_bias,
                 **conv_kwargs,
                 compute_config=compute_config,
-                conv_op_cache=conv_op_cache,
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device)

@@ -4,16 +4,42 @@
 
 #pragma once
 
-#include "ttnn/async_runtime.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
+#include <stddef.h>
 #include <tt-metalium/mesh_device.hpp>
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/functions.hpp"
+#include <memory>
+#include <optional>
+#include <tuple>
+#include <unordered_map>
+#include <vector>
+
+#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "ttnn/async_runtime.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
-#include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
+#include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace ccl {
+class EdmLineFabricOpInterface;
+}  // namespace ccl
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::distributed::test {
 

@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <math.h>
+#include <optional>
+#include <variant>
+
 #include "cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "tt-metalium/circular_buffer_types.hpp"
@@ -11,8 +15,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/circular_buffer.hpp>
-#include <optional>
-#include <variant>
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;

@@ -4,19 +4,19 @@
 
 #pragma once
 
-#include <cstdint>
-#include <mutex>
-#include <vector>
-
-#include <tt-metalium/system_memory_cq_interface.hpp>
-
+#include <tt-metalium/dispatch_settings.hpp>
 // needed for private members
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/launch_message_ring_buffer_state.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
-#include <umd/device/tt_xy_pair.h>             // for tt_cxy_pair
-#include <umd/device/tt_device/tlb_manager.h>  // needed because tt_io.hpp requires needs TLBManager
-#include <umd/device/tt_io.hpp>                // for tt::Writer
+#include <tt-metalium/system_memory_cq_interface.hpp>
+#include <umd/device/chip_helpers/tlb_manager.h>  // needed because tt_io.hpp requires needs TLBManager
+#include <umd/device/tt_io.hpp>                   // for tt::Writer
+#include <umd/device/tt_xy_pair.h>                // for tt_cxy_pair
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <mutex>
+#include <vector>
 
 using chip_id_t = int;
 
@@ -73,7 +73,7 @@ public:
     // TODO: RENAME issue_queue_stride ?
     void issue_queue_push_back(uint32_t push_size_B, uint8_t cq_id);
 
-    uint32_t completion_queue_wait_front(uint8_t cq_id, volatile bool& exit_condition) const;
+    uint32_t completion_queue_wait_front(uint8_t cq_id, std::atomic<bool>& exit_condition) const;
 
     void send_completion_queue_read_ptr(uint8_t cq_id) const;
 

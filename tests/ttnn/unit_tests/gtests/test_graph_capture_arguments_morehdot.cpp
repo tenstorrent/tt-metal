@@ -2,15 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <nlohmann/json.hpp>
+#include <map>
+#include <optional>
+#include <vector>
+
+#include <tt-metalium/graph_tracking.hpp>
 #include "gtest/gtest.h"
-#include "ttnn_test_fixtures.hpp"
-#include "ttnn/device.hpp"
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/moreh/moreh_dot/moreh_dot.hpp"
-#include <optional>
-#include <string>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn_test_fixtures.hpp"
 
 namespace ttnn::graph::arguments::test {
 namespace {
@@ -50,10 +61,10 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
         "shape={32, 32},face_shape={16, "
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
         "BufferType::L1,shard_spec=std::nullopt),alignment=Alignment([32, 32]))))");
-    EXPECT_EQ(operation0.arguments[2], "[ unsupported type , std::__1::reference_wrapper<std::__1::nullopt_t const>]");
+    EXPECT_EQ(operation0.arguments[2], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
     EXPECT_EQ(operation0.arguments[3], "DataType::BFLOAT16");
-    EXPECT_EQ(operation0.arguments[4], "[ unsupported type , std::__1::reference_wrapper<std::__1::nullopt_t const>]");
-    EXPECT_EQ(operation0.arguments[5], "[ unsupported type , std::__1::reference_wrapper<std::__1::nullopt_t const>]");
+    EXPECT_EQ(operation0.arguments[4], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
+    EXPECT_EQ(operation0.arguments[5], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
 
     auto operation1 = operations[1];
     EXPECT_EQ(operation1.operation_name, "ttnn::prim::moreh_dot");
@@ -79,11 +90,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation1.arguments[2], "nullopt");
     EXPECT_EQ(operation1.arguments[3], "DataType::BFLOAT16");
     EXPECT_EQ(operation1.arguments[4], "nullopt");
-    EXPECT_EQ(
-        operation1.arguments[5],
-        "[ unsupported type , "
-        "std::__1::reference_wrapper<std::__1::optional<std::__1::variant<ttnn::GrayskullComputeKernelConfig, "
-        "ttnn::WormholeComputeKernelConfig>> const>]");
+    EXPECT_EQ(operation1.arguments[5], "nullopt");
 
     auto operation2 = operations[2];
     EXPECT_EQ(operation2.operation_name, "MorehDotOperation");
@@ -91,12 +98,12 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(
         operation2.arguments[0],
         "[ unsupported type , "
-        "std::__1::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t "
+        "std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t "
         "const>]");
     EXPECT_EQ(
         operation2.arguments[1],
         "[ unsupported type , "
-        "std::__1::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_args_t const>]");
+        "std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_args_t const>]");
 
     auto operation3 = operations[3];
     EXPECT_EQ(operation3.operation_name, "tt::tt_metal::create_device_tensor");
@@ -104,7 +111,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 1, 1, 1])");
     EXPECT_EQ(operation3.arguments[1], "DataType::BFLOAT16");
     EXPECT_EQ(operation3.arguments[2], "Tile");
-    EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::IDevice*>]");
+    EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]");
     EXPECT_EQ(
         operation3.arguments[4],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::"

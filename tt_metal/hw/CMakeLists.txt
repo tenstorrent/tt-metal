@@ -29,10 +29,8 @@ set(IRAM_OPTIONS
 )
 
 include(FetchContent)
-set(SFPI_x86_64_Linux_RELEASE
-    "v6.2.0/sfpi-release.tgz"
-    "c546b57c3161b06d03de7473c4add5e5"
-)
+# Break out the version setter for access control reasons
+include(cmake/sfpi-version.cmake)
 if(DEFINED SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE)
     set(SFPI_RELEASE "${SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE}")
     list(GET SFPI_RELEASE 0 SFPI_FILE)
@@ -167,7 +165,6 @@ foreach(ARCH IN LISTS ARCHS)
         substitutes
         tdma_xmov
         noc
-        ncrisc-halt
         ncrisc-halt-wormhole
     )
 
@@ -178,7 +175,6 @@ foreach(ARCH IN LISTS ARCHS)
     set(substitutes_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/substitutes.cpp")
     set(tdma_xmov_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tdma_xmov.c")
     set(noc_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/${ARCH}/noc.c")
-    set(ncrisc-halt_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/ncrisc-halt.S")
     set(ncrisc-halt-wormhole_SOURCE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/ncrisc-halt-wormhole.S")
 
     # Set GPP_FLAGS based on ARCH
@@ -215,23 +211,7 @@ foreach(ARCH IN LISTS ARCHS)
     list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_${ARCH_B0}/llk_lib)
 
     foreach(HWLIB IN LISTS HWLIBS)
-        if(
-            "${ARCH}"
-                STREQUAL
-                "blackhole"
-            AND (
-                (
-                    "${HWLIB}"
-                        STREQUAL
-                        "ncrisc-halt"
-                )
-                OR (
-                    "${HWLIB}"
-                        STREQUAL
-                        "tmu-crt0k-ncrisc"
-                )
-            )
-        )
+        if("${ARCH}" STREQUAL "blackhole" AND ("${HWLIB}" STREQUAL "tmu-crt0k-ncrisc"))
             continue() # Skip the iteration, blackhole doesn't have IRAM
         endif()
         if((NOT "${ARCH}" STREQUAL "wormhole") AND "${HWLIB}" STREQUAL "ncrisc-halt-wormhole")

@@ -2,15 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <array>
-#include <cstdint>
-
 #include <assert.hpp>
 #include <core_coord.hpp>
 #include <sub_device.hpp>
-#include <hal.hpp>
 #include <tt_stl/span.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <utility>
+
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 
@@ -29,7 +31,7 @@ SubDevice::SubDevice(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cor
 }
 
 void SubDevice::validate() const {
-    auto num_core_types = hal.get_programmable_core_type_count();
+    auto num_core_types = hal_ref.get_programmable_core_type_count();
     for (uint32_t i = num_core_types; i < NumHalProgrammableCoreTypes; ++i) {
         TT_FATAL(
             this->cores_[i].empty(),

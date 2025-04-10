@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 import torch
-import json
 import pytest
 from loguru import logger
 from time import time
@@ -26,7 +25,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbeddi
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.llm_demo_utils import create_benchmark_data
 
 
 class Emb(torch.nn.Module):

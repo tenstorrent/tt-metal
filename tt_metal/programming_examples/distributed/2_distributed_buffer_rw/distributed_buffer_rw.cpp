@@ -15,12 +15,12 @@
 // 2. Enqueue a Write command to the MeshBuffer with random data
 // 3. Enqueue a Read command to the MeshBuffer and read back the data to a local buffer
 // 4. Verify that the data read back matches the original data
-int main(int argc, char** argv) {
+int main() {
     using namespace tt::tt_metal;
     using namespace tt::tt_metal::distributed;
     using tt::tt_metal::distributed::ShardedBufferConfig;
 
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(2, 4)});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
     auto& cq = mesh_device->mesh_command_queue();
 
     // Define the shape of the shard and the distributed buffer.

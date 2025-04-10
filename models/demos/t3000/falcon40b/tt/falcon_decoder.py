@@ -10,7 +10,6 @@ from ttnn import ReplicateTensorToMesh
 
 from models.demos.t3000.falcon40b.tt.falcon_attention import TtFalconAttention
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
-from models.utility_functions import torch2tt_tensor
 
 from models.demos.t3000.falcon40b.tt.model_utils import fused_partial_layernorm
 
@@ -325,6 +324,7 @@ class TtFalconDecoderLayer:
             bias=self.ln_attn_beta,
             memory_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
             program_config=self.model_config["LN_ATTN_PROGCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         mlp_ln_output = ttnn.layer_norm(
             replicated_hidden_states,
@@ -333,6 +333,7 @@ class TtFalconDecoderLayer:
             bias=self.ln_mlp_beta,
             memory_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
             program_config=self.model_config["LN_MLP_PROGCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
 
         output = hidden_states

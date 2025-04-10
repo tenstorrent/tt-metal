@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh
 from models.experimental.grok.tt.grok_common import LightweightModule

@@ -1,0 +1,160 @@
+name: "conda post commit"
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 45
+      num-groups:
+        required: false
+        type: number
+        default: 12
+      docker-image:
+        required: true
+        type: string
+        default: quay.io/condaforge/linux-anvil-x86_64:alma9
+
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - BH
+      timeout:
+        required: false
+        type: number
+        default: 45
+      num-groups:
+        required: false
+        type: number
+        default: 12
+      docker-image:
+        required: true
+        type: string
+        default: quay.io/condaforge/linux-anvil-x86_64:alma9
+
+jobs:
+  ttnn:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: ttnn group 1
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 2
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 2 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 3
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 3 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 4
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 4 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 5
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 5 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 6
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 6 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 7
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 7 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 8
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 8 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 9
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 9 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 10
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 10 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 11
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 11 -m "not disable_fast_runtime_mode"
+          - name: ttnn group 12
+            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 12 -m "not disable_fast_runtime_mode"
+          - name: ttnn fast runtime off
+            cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
+            fast_runtime_mode_off: true
+          - name: ttnn example tests
+            cmd: ./tests/scripts/run_ttnn_examples.sh
+    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on:
+      - ${{ inputs.runner-label }}
+      - "in-service"
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        GITHUB_ACTIONS: true
+        LOGURU_LEVEL: DEBUG
+        PYTHONPATH: /work
+        TT_METAL_HOME: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Install Extra Tools
+        run: |
+          yum install -y git wget
+          git --version  # Verify installation
+
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+
+      - name: Create conda environment
+        run: |
+          source /opt/conda/etc/profile.d/conda.sh
+          conda create -y -n metalium_env python=3.10 tt-metalium accelerate click ipython multiprocess nbconvert nbformat pandas psutil pydantic pytest pytest-split pytest-timeout pytest-xdist pyyaml seaborn torchvision transformers -c conda-forge
+
+      - name: Set ttnn fast runtime if exists in config
+        if: ${{ matrix.test-group.fast_runtime_mode_off }}
+        run: |
+          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
+
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          source /opt/conda/etc/profile.d/conda.sh
+          conda activate metalium_env
+          export SITE_PACKAGES_DIR="$CONDA_PREFIX/lib/python$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages"
+          rm -rf $CONDA_PREFIX/share/tt-metalium/runtime/sfpi
+          wget https://github.com/tenstorrent/sfpi/releases/download/v6.5.0/sfpi-release.tgz
+          tar -xzf sfpi-release.tgz
+          mv sfpi $CONDA_PREFIX/share/tt-metalium/runtime/
+          ln -sf $SITE_PACKAGES_DIR/runtime runtime
+          export LD_LIBRARY_PATH=$CONDA_PREFIX/lib
+          ${{ matrix.test-group.cmd }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U07J3K6KS1K # Bryan Lozano
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

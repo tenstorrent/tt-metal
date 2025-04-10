@@ -23,6 +23,10 @@ jobs:
       }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      env:
+        ASAN_OPTIONS: "color=always"
+        TSAN_OPTIONS: "color=always"
+        UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
       volumes:
         - /work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -49,6 +53,8 @@ jobs:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
           TT_METAL_HOME: /usr/libexec/tt-metalium # TODO: Need to get away from env vars!
+          TT_METAL_WATCHER: 5
+          TT_METAL_WATCHER_TEST_MODE: 1
         run: |
           /usr/libexec/tt-metalium/validation/tt-metalium-validation-smoke
 
@@ -58,8 +64,10 @@ jobs:
           # Give it a dummy repo so it doesn't fail.
           git init
       - name: Test Report
+        # Because of https://github.com/tenstorrent/tt-metal/issues/19413, only run for our repo
+        # for now. No forks!
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
-        if: ${{ !cancelled() }}
         with:
           name: Metalium ${{ matrix.platform }} smoke tests
           path: /work/test-reports/*.xml
@@ -70,8 +78,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         with:
-          path: |
-            /work/test-reports/
+          path: /work/test-reports/
           prefix: "test_reports_"
 
       # Arbitrary limit that's higher than we would like, but the JIT build seems inconsistent.

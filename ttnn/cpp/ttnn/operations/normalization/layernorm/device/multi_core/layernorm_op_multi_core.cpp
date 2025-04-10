@@ -48,6 +48,39 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 
 // computes layernorm(a+*b)*gamma + beta
 // if b is nullptr it's treated as zero (no addition)
+bool CB_can_fit_in_L1(
+    uint32_t in0_size,
+    uint32_t in1_size,
+    uint32_t out0_size,
+    uint32_t im0_size,
+    uint32_t im3_size,
+    uint32_t in5_size,
+    uint32_t in6_size,
+    uint32_t im6_size,
+    uint32_t im5_size,
+    uint32_t im4_size,
+    uint32_t im1_size,
+    uint32_t in2_size,
+    uint32_t in3_size,
+    uint32_t im2_size,
+    uint32_t l1_size) {
+    uint32_t sum = 0;
+    sum += in0_size;
+    sum += in1_size;
+    sum += out0_size;
+    sum += im0_size;
+    sum += im3_size;
+    sum += in5_size;
+    sum += in6_size;
+    sum += im6_size;
+    sum += im5_size;
+    sum += im4_size;
+    sum += im1_size;
+    sum += in2_size;
+    sum += in3_size;
+    sum += im2_size;
+    return sum < l1_size * 0.95;
+}
 operation::ProgramWithCallbacks layernorm_multi_core(
     const Tensor& a,
     const std::optional<const Tensor>& b,
@@ -58,6 +91,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     float eps,
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    const uint32_t no_weights_max_size = 120;
+    const uint32_t with_weights_max_size = 60;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     const auto shape = a.get_padded_shape();
     uint32_t W = shape[-1], H = shape[-2];
@@ -143,6 +178,9 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
     // TODO(AP): can also add support for block_size=7 -> 63, 28
     uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
+    bool large_tensor_needed = false;
+    auto use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
+                                (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
     uint32_t in0_t = WtB;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
     uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
     uint32_t out0_t = block_size * 2;
@@ -162,10 +200,44 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t in2_t = 2;  // scaler for reduce coming from reader
     uint32_t in3_t = 2;  // epsilon coming from reader
     uint32_t im2_t = 2;  //
+    bool cb_fits_in_L1 = CB_can_fit_in_L1(
+        in0_t * in_single_tile_size,
+        in1_t * inb_single_tile_size,
+        out0_t * out_single_tile_size,
+        im0_t * single_tile_size,
+        im3_t * single_tile_size,
+        in5_t * gamma_single_tile_size,
+        in6_t * beta_single_tile_size,
+        im6_t * single_tile_size,
+        im5_t * single_tile_size,
+        im4_t * single_tile_size,
+        im1_t * single_tile_size,
+        in2_t * bfloat16_tile_size,
+        in3_t * bfloat16_tile_size,
+        im2_t * single_tile_size,
+        a.device()->l1_size_per_core());
+    if (!rms_norm and !use_row_major_kernel) {
+        if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
+            // In the case that the required space is larger than what can be handeled by the single pass
+            large_tensor_needed = true;
+            WtB = with_weights_max_size;
+        } else if (!cb_fits_in_L1) {
+            large_tensor_needed = true;
+            WtB = no_weights_max_size;
+        }
+    }
+    if (large_tensor_needed) {
+        in0_t = WtB;
+        im0_t = WtB;  // buffer for saving xmm
+        im3_t = WtB;  // buffer for xmm^2
+        in5_t = WtB;  // buffer for gamma
+        in6_t = WtB;  // buffer for beta
+        if (b) {
+            im6_t = WtB;
+            in0_t = 2 * block_size;
+        }
+    }
 
-    TT_ASSERT(
-        W <= TILE_WIDTH * im0_t &&
-        "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
     TT_ASSERT(
         in0_t % block_size == 0 &&
         "Size of buffer must be divisible by the size of block used by the reader and compute kernel.");
@@ -254,6 +326,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         reader_defines["FUSE_PRE_ADD"] = "1";
         compute_defines["FUSE_PRE_ADD"] = "1";
     }
+
     if (gamma.has_value()) {
         reader_defines["FUSE_GAMMA"] = "1";
     }
@@ -265,14 +338,18 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         compute_defines["RMSNORM"] = "1";
     }
 
-    auto use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or
-                                (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
+    auto reader_kernel_path = use_row_major_kernel
+                                  ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                    "reader_unary_interleaved_ln_rm_gb.cpp"
+                                  : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                                    "reader_unary_interleaved_ln.cpp";
+    reader_kernel_path = large_tensor_needed
+                             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                               "reader_unary_interleaved_ln_large_tensor.cpp"
+                             : reader_kernel_path;
     auto reader_kernels_id = CreateKernel(
         program,
-        use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                               "reader_unary_interleaved_ln_rm_gb.cpp"
-                             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                               "reader_unary_interleaved_ln.cpp",
+        reader_kernel_path,
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -287,7 +364,9 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
+        large_tensor_needed and !use_row_major_kernel and !rms_norm
+            ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp"
+            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -374,7 +453,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     }
 
     uint32_t curr_row = 0;
-    float winv = 1.0f / W;  // bcast-w scaler
+    float winv = 1.0f / W;
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     union {

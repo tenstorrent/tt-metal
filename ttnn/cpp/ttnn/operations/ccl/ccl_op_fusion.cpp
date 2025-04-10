@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 using namespace tt::tt_metal;
@@ -98,7 +98,7 @@ void MatmulFusedOpSignaler::init_all_gather(
 
 void MatmulFusedOpSignaler::init_fused_op(
     Program& program,
-    IDevice const* device,
+    const IDevice* device,
     const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
     FusedOpSignalerMode fused_op_signaler_mode) {
     this->fused_op_signaler_mode = fused_op_signaler_mode;

@@ -30,7 +30,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 )
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
 def test_cross_attention_midblock_512x512(
-    reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, temb
+    reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, temb, use_program_cache
 ):
     # Initialize PyTorch component
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
@@ -39,7 +39,6 @@ def test_cross_attention_midblock_512x512(
     torch_midblock = unet.mid_block
 
     # Initialize ttnn component
-    reader_patterns_cache = {}
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
@@ -47,9 +46,7 @@ def test_cross_attention_midblock_512x512(
     N, _, H, W = hidden_states
     compute_kernel_config = get_default_compute_config(device)
 
-    ttnn_midblock = unet_mid_block_2d_cross_attn(
-        device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config
-    )
+    ttnn_midblock = unet_mid_block_2d_cross_attn(device, parameters, N, H, W, compute_kernel_config)
 
     # Prepare inputs
     in_channels = hidden_states[1]

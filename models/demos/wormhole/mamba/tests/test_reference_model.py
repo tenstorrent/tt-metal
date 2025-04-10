@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-from loguru import logger
 from typing import Optional
 from transformers import AutoTokenizer
 

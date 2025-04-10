@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 from typing import List
-import torch
 import ttnn
 from ttnn import ShardTensorToMesh
 from models.utility_functions import nearest_32
@@ -251,7 +249,7 @@ class TtLlamaMLP_optimized:
             w1_out,
             w3_out,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat8_b,
         )
 

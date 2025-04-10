@@ -2,20 +2,53 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <random>
-
-#include "env_lib.hpp"
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
-
 #include <tt_stl/indestructible.hpp>
+#include <array>
+#include <cstdlib>
+#include <map>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <stdexcept>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "env_lib.hpp"
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/program.hpp>
+#include "span.hpp"
+#include "strong_type.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
-#include "tests/tt_metal/distributed/utils.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -204,6 +237,9 @@ TEST_F(MeshTraceTestT3000, EltwiseBinaryMeshTrace) {
 }
 
 TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
 
@@ -299,6 +335,9 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
 }
 
 TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     // Create 4 SubDevices
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});  // Sync with host
     SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({1, 1}, {1, 1}))});  // Run datacopy

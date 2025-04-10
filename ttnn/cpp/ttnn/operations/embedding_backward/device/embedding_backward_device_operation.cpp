@@ -21,10 +21,6 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
     const auto &index_tensor_shape = index_tensor.get_padded_shape();
     const auto &grad_tensor_shape = grad_tensor.get_padded_shape();
 
-    TT_FATAL(
-        index_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
-        "Embedding backwards is only implemented for Wormhole!");
-
     TT_FATAL(index_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
     TT_FATAL(
         index_tensor.get_dtype() == DataType::UINT32 or index_tensor.get_dtype() == DataType::BFLOAT16,
