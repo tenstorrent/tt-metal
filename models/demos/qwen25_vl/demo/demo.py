@@ -20,9 +20,12 @@ from models.tt_transformers.tt.common import (
     sample_host,
 )
 from models.demos.qwen25_vl.tt.common import preprocess_inputs_prefill
+from models.tt_transformers.tt.common import preprocess_inputs_prefill as ttt_preprocess_inputs_prefill
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data
-from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodel_rope_from_hf
+from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf
+from models.demos.qwen25_vl.tt.model import DropInVisionTransformer
+from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 
 
 def create_tt_model(
@@ -167,6 +170,7 @@ def test_demo(
         pytest.skip("TG only supports batch 1 and 32")
 
     mesh_device.enable_async(True)
+    use_tt_vision = True
     enable_trace = True  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
@@ -236,46 +240,76 @@ def test_demo(
     reference_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_args.model_name, torch_dtype="auto", device_map="auto"
     )
+    if use_tt_vision:
+        # Create the TorchVisionTransformer wrapper using the original vision model as reference
+        model_args = VisionModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_seq_len)
+        visual_model = DropInVisionTransformer(reference_model.visual, model_args, debug=True)  # show PCC
+    else:
+        visual_model = reference_model.visual
     processor = AutoProcessor.from_pretrained(model_args.model_name)
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
+        ttt_preprocess = False
         logger.info(f"Processing batch {batch_idx}")
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
         text = processor.apply_chat_template(input_prompts, tokenize=False, add_generation_prompt=True)
-        image_inputs, video_inputs = process_vision_info(input_prompts)
-        inputs = processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
-            return_tensors="pt",
-        )
-        # Vision prefill
-        image_tokens = reference_model.visual(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+        # image_inputs, video_inputs = process_vision_info(input_prompts)
+        # inputs = processor(
+        #     text=[text],
+        #     images=image_inputs,
+        #     videos=video_inputs,
+        #     padding=True,
+        #     return_tensors="pt",
+        # )
+        if ttt_preprocess:
+            (
+                input_prefill_pt,
+                encoded_prompts,
+                decoding_pos,
+                prefill_lens,
+            ) = ttt_preprocess_inputs_prefill(
+                [text],
+                tokenizer,
+                model_args,
+                instruct=False,  # processor.apply_chat_template already applied an instruct prompt
+                max_generated_tokens=max_generated_tokens,
+            )
+            input_prefill_pt = torch.stack(input_prefill_pt).view(batch_size, -1)
+            print(f"{input_prefill_pt.shape=}")
+            print(f"{tokenizer.decode(encoded_prompts[0])=}")
+        else:
+            image_inputs, video_inputs = process_vision_info(input_prompts)
+            inputs = processor(
+                text=[text],
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                return_tensors="pt",
+            )
+            # Vision prefill
+            image_embeds = (
+                visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+                if "pixel_values" in inputs
+                else torch.tensor([], dtype=torch.bfloat16)
+            )
 
-        # Prepare text + vision inputs for decoder model
-        # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
-        text_embeds = reference_model.model.embed_tokens(inputs.input_ids)
-        input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_tokens, reference_model.config)
-        (
-            input_prefill_pt,
-            decoding_pos,
-            prefill_lens,
-        ) = preprocess_inputs_prefill(
-            input_embeds,
-            model_args,
-            max_generated_tokens,
-        )
-        cos, sin, rope_deltas = multimodel_rope_from_hf(inputs, input_embeds, reference_model)
-        print(f"{rope_deltas=}")
-        # pad cos and sin to the same length as the input_prefill_pt, it doesn't matter what we pad with as we discard those parts
-        cos = torch.nn.functional.pad(cos, (0, 0, 0, input_prefill_pt.shape[1] - cos.shape[1]), value=1.0)
-        sin = torch.nn.functional.pad(sin, (0, 0, 0, input_prefill_pt.shape[1] - sin.shape[1]), value=0.0)
-        # replace our generated cos/sin with the reference model's versions
-        model.rope_setup.set_cos_sin(cos, sin)
-
+            # Prepare text + vision inputs for decoder model
+            # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
+            text_embeds = reference_model.model.embed_tokens(inputs.input_ids)
+            input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, reference_model.config)
+            (
+                input_prefill_pt,
+                decoding_pos,
+                prefill_lens,
+            ) = preprocess_inputs_prefill(
+                input_embeds,
+                model_args,
+            )
+            # replace our generated cos/sin with the reference model's versions
+            cos, sin = multimodal_rope_from_hf(inputs, input_embeds, reference_model, model_args.max_seq_len)
+            model.rope_setup.set_cos_sin(cos, sin)
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
@@ -304,6 +338,7 @@ def test_demo(
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
         )
+        torch.save(logits, f"ttnn_logits.pt")
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
@@ -321,7 +356,7 @@ def test_demo(
         # TODO Argmax on device is only supported for batch_size=1
         argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
 
-        # Initial positions
+        # Initial positions continuing from prefill, no need to offset by rope_deltas
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
 
         # Start decoding

@@ -37,7 +37,6 @@ def merge_vision_tokens(
 def preprocess_inputs_prefill(
     input_embeds,
     model_args,
-    max_generated_tokens,
     max_prefill_len=None,
 ):
     """
@@ -46,7 +45,6 @@ def preprocess_inputs_prefill(
     # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
     if max_prefill_len is None:
         max_prefill_len = model_args.max_seq_len
-    max_prefill_len -= max_generated_tokens
 
     # Print the length of encoded prompts
     logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in input_embeds))
@@ -69,7 +67,7 @@ def preprocess_inputs_prefill(
         prefill_seq_len = max(2 ** math.ceil(math.log(len(input_embed), 2)), 128)
 
         # Initial prefill tensors full of pad tokens
-        input_prefill_i = torch.full((prefill_seq_len, input_embeds.shape[-1]), pad_embedding, dtype=torch.int32)
+        input_prefill_i = torch.full((prefill_seq_len, input_embeds.shape[-1]), pad_embedding, dtype=input_embeds.dtype)
         input_prefill_i[: len(input_embed), :] = torch.tensor(input_embed).to(input_prefill_i)
         input_prefill.append(input_prefill_i)
 
@@ -86,18 +84,25 @@ def preprocess_inputs_prefill(
     )
 
 
-def multimodel_rope_from_hf(
+def multimodal_rope_from_hf(
     inputs,
     input_embeds,
     reference_model,
+    max_seq_len,
 ):
+    # Unlike the reference model, we will precompute cos and sin for the entire sequence length including the generated tokens
+    padded_inputs = torch.nn.functional.pad(inputs.input_ids, (0, max_seq_len - inputs.input_ids.shape[-1]))
+    padded_attention_mask = torch.nn.functional.pad(
+        inputs.attention_mask, (0, max_seq_len - inputs.attention_mask.shape[-1]), value=1.0
+    )
+
     # Qwen2_5_VLForConditionalGeneration.forward:
     position_ids, rope_deltas = reference_model.get_rope_index(
-        inputs.input_ids,
-        inputs.image_grid_thw,
+        padded_inputs,
+        inputs.image_grid_thw if "image_grid_thw" in inputs else None,
         video_grid_thw=None,
         second_per_grid_ts=None,
-        attention_mask=inputs.attention_mask,
+        attention_mask=padded_attention_mask,
     )
     # Qwen2_5_VLModel.forward:
     cos, sin = reference_model.model.rotary_emb(input_embeds, position_ids)
@@ -108,44 +113,5 @@ def multimodel_rope_from_hf(
     sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(unsqueeze_dim)
     # convert to meta-style interleaved format:
     cos, sin = convert_rope_style_hf_to_meta(cos, sin)
-    return cos, sin, rope_deltas
-
-
-def generate_position_ids(
-    model,
-    input_ids,
-    inputs_embeds,
-    position_ids,
-    cache_position,
-    image_grid_thw,
-    video_grid_thw,
-    second_per_grid_ts,
-    attention_mask,
-):
-    assert False, "Not implemented"
-    assert position_ids is None and (attention_mask is None or attention_mask.ndim == 2)
-
-    # calculate RoPE index once per generation in the pre-fill stage only
-    if (
-        (cache_position is not None and cache_position[0] == 0)
-        or model.rope_deltas is None
-        or (past_key_values is None or past_key_values.get_seq_length() == 0)
-    ):
-        position_ids, rope_deltas = model.get_rope_index(
-            input_ids,
-            image_grid_thw,
-            video_grid_thw,
-            second_per_grid_ts,
-            attention_mask,
-        )
-        model.rope_deltas = rope_deltas
-    # then use the prev pre-calculated rope-deltas to get the correct position ids
-    else:
-        batch_size, seq_length, _ = inputs_embeds.shape
-        delta = (cache_position[0] + model.rope_deltas).to(inputs_embeds.device) if cache_position is not None else 0
-        position_ids = torch.arange(seq_length, device=inputs_embeds.device)
-        position_ids = position_ids.view(1, -1).expand(batch_size, -1)
-        if cache_position is not None:  # otherwise `deltas` is an int `0`
-            delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
-        position_ids = position_ids.add(delta)
-        position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+    # we have precomputed embeddings for the entire sequence length and converted to 1D so we no longer need to track rope_deltas
+    return cos, sin

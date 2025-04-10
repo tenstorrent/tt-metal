@@ -120,9 +120,9 @@ class Transformer(LightweightModule):
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
         elif tokens.dim() == 3:
             # tokens is actually embeddings
-            S = tokens.shape[2]
+            S = tokens.shape[-2]
             tokens_embd = ttnn.from_torch(
-                tokens,
+                tokens.unsqueeze(1),
                 device=self.mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
