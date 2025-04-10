@@ -23,11 +23,11 @@ SortProgramFactory::cached_program_t SortProgramFactory::create(
     const tt::DataFormat value_tensor_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(0).get_dtype());
     const tt::DataFormat index_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(0).get_dtype());  // Uint16
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(0).get_dtype());
 
     const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
     const uint32_t value_tensor_tile_size = tile_size(value_tensor_cb_data_format);
-    const uint32_t index_tensor_tile_size = tile_size(index_tensor_cb_data_format);  // 2048
+    const uint32_t index_tensor_tile_size = tile_size(index_tensor_cb_data_format);
 
     auto input_buffer = tensor_args.input_tensor.buffer();
     auto value_buffer = output_tensors.at(0).buffer();
@@ -40,7 +40,7 @@ SortProgramFactory::cached_program_t SortProgramFactory::create(
     const uint32_t num_input_tiles = tensor_args.input_tensor.volume() / tt::constants::TILE_HW;
     const uint32_t num_value_tiles = output_tensors.at(0).volume() / tt::constants::TILE_HW;
 
-    const auto input_shape = tensor_args.input_tensor.get_padded_shape();  // [1,1,32,32]
+    const auto input_shape = tensor_args.input_tensor.get_padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
     const uint32_t Wt = input_shape[3] / tt::constants::TILE_WIDTH;
 
@@ -63,9 +63,28 @@ SortProgramFactory::cached_program_t SortProgramFactory::create(
             .set_page_size(index_tensor_cb_index, index_tensor_tile_size);
     auto cb_index_tensor = tt::tt_metal::CreateCircularBuffer(program, core, index_tensor_cb_config);
 
-    // TODO: CB for transposed input tiles?
-    // TODO: CB for transposed index tiles?
-    // TODO: CB for output sort values
+    constexpr uint32_t input_tensor_transposed_cb_index = tt::CBIndex::c_24;
+    const tt::tt_metal::CircularBufferConfig input_tensor_transposed_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            Wt * input_tensor_tile_size, {{input_tensor_transposed_cb_index, input_tensor_cb_data_format}})
+            .set_page_size(input_tensor_transposed_cb_index, input_tensor_tile_size);
+    auto cb_input_tensor_transposed =
+        tt::tt_metal::CreateCircularBuffer(program, core, input_tensor_transposed_cb_config);
+
+    constexpr uint32_t index_tensor_transposed_cb_index = tt::CBIndex::c_25;
+    const tt::tt_metal::CircularBufferConfig index_tensor_transposed_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            Wt * index_tensor_tile_size, {{index_tensor_transposed_cb_index, index_tensor_cb_data_format}})
+            .set_page_size(index_tensor_transposed_cb_index, index_tensor_tile_size);
+    auto cb_index_tensor_transposed =
+        tt::tt_metal::CreateCircularBuffer(program, core, index_tensor_transposed_cb_config);
+
+    constexpr uint32_t value_tensor_cb_index = tt::CBIndex::c_16;
+    const tt::tt_metal::CircularBufferConfig value_tensor_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            num_cb_unit * value_tensor_tile_size, {{value_tensor_cb_index, value_tensor_cb_data_format}})
+            .set_page_size(value_tensor_cb_index, index_tensor_tile_size);
+    auto cb_value_tensor = tt::tt_metal::CreateCircularBuffer(program, core, value_tensor_cb_config);
 
     constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_17;
     const tt::tt_metal::CircularBufferConfig index_tensor_output_cb_config =
@@ -84,12 +103,13 @@ SortProgramFactory::cached_program_t SortProgramFactory::create(
 
     SetRuntimeArgs(program, reader_kernel_id, core, {input_buffer->address()});
 
-    const std::vector<uint32_t> writer_compile_time_args = {// value_tensor_cb_index,
-                                                            index_tensor_output_cb_index,
-                                                            static_cast<uint32_t>(value_tensor_is_dram),
-                                                            static_cast<uint32_t>(index_tensor_is_dram),
-                                                            Ht,
-                                                            Wt};
+    const std::vector<uint32_t> writer_compile_time_args = {
+        value_tensor_cb_index,
+        index_tensor_output_cb_index,
+        static_cast<uint32_t>(value_tensor_is_dram),
+        static_cast<uint32_t>(index_tensor_is_dram),
+        Ht,
+        Wt};
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/writer.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -100,16 +120,15 @@ SortProgramFactory::cached_program_t SortProgramFactory::create(
     const std::vector<uint32_t> compute_compile_time_args = {
         input_tensor_cb_index,
         index_tensor_cb_index,
-        // input_tensor_transposed_cb_index,
-        // index_tensor_transposed_cb_index,
-        // value_tensor_cb_index,
+        input_tensor_transposed_cb_index,
+        index_tensor_transposed_cb_index,
+        value_tensor_cb_index,
         index_tensor_output_cb_index,
         Ht,
         Wt,
+        static_cast<uint32_t>(std::log2(Wt)),
         static_cast<uint32_t>(attributes.descending),
-        static_cast<uint32_t>(attributes.stable),
-        // TODO: Add more params
-    };
+        static_cast<uint32_t>(attributes.stable)};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/compute/sort.cpp";
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
