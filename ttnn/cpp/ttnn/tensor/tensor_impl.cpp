@@ -298,7 +298,7 @@ struct DimensionShortener {
 
     bool print_parenthesis_and_advance_index_if_reached_half_of_max_and_check_if_loop_is_done(
         std::ostream& ss, std::size_t& index, const std::string& before, const std::string& after) const {
-        if (this->max.has_value() and this->size >= this->max.value() and index == this->max.value() / 2) {
+        if (this->max.has_value() and this->size > this->max.value() and index == this->max.value() / 2) {
             ss << before << "...," << after;
             index = this->size - (this->max.value() / 2);
         }
