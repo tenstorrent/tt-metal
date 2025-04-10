@@ -33,7 +33,6 @@
 
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <thread>
-#include "llrt/hal.hpp"
 #include "impl/context/metal_context.hpp"
 
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
@@ -295,7 +294,7 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
 
     // eth core rt args
     std::vector<uint32_t> eth_receiver_rt_args = {
-        tt_metal::hal_ref.get_dev_addr(
+        tt_metal::MetalContext::instance().hal().get_dev_addr(
             tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED),
         static_cast<uint32_t>(params.num_packets),
         static_cast<uint32_t>(params.packet_size),

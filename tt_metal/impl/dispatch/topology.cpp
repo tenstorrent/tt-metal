@@ -1002,8 +1002,8 @@ void configure_2d_fabric_cores(IDevice* device) {
                 device->id(), router_chan);
         auto router_logical_core = device->logical_core_from_ethernet_core(virtual_eth_core);
         // initialize the semaphore
-        auto fabric_router_sync_sem_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        auto fabric_router_sync_sem_addr = MetalContext::instance().hal().get_dev_addr(
+            HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
         detail::WriteToDeviceL1(
             device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
     }

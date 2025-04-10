@@ -35,7 +35,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -96,7 +96,7 @@ void check_semaphores_are_initialized(
                     res);
                 std::vector<uint32_t> filtered_res;
                 static uint32_t num_u32_to_skip =
-                    tt_metal::hal_ref.get_alignment(tt_metal::HalMemType::L1) / sizeof(uint32_t);
+                    tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::L1) / sizeof(uint32_t);
                 for (int i = 0; i < res.size(); i += num_u32_to_skip) {
                     filtered_res.push_back(res.at(i));
                 }

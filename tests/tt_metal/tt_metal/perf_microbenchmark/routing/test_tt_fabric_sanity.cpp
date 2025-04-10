@@ -650,7 +650,7 @@ typedef struct test_device {
 
     inline uint32_t get_noc_offset(CoreCoord& logical_core) {
         CoreCoord phys_core = device_handle->worker_core_from_logical_core(logical_core);
-        return tt_metal::hal_ref.noc_xy_encoding(phys_core.x, phys_core.y);
+        return tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_core.x, phys_core.y);
     }
 
     void get_available_router_cores(
@@ -920,7 +920,7 @@ typedef struct test_traffic {
         test_results_address = test_results_address_;
 
         {
-            uint32_t mcast_encoding = tt::tt_metal::hal_ref.noc_multicast_encoding(
+            uint32_t mcast_encoding = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
                 tx_device->core_range_start_virtual.x,
                 tx_device->core_range_start_virtual.y,
                 tx_device->core_range_end_virtual.x,

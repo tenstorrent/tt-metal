@@ -159,7 +159,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.cmddat_q_size = my_dispatch_constants.prefetch_d_buffer_size();
 
-        uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
+        uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
         static_config_.scratch_db_base = (my_dispatch_constants.dispatch_buffer_base() +
                                           my_dispatch_constants.prefetch_d_buffer_size() + pcie_alignment - 1) &
                                          (~(pcie_alignment - 1));
@@ -479,7 +479,7 @@ void PrefetchKernel::UpdateArgsForFabric(
     tt::tt_fabric::mesh_id_t downstream_mesh_id,
     chip_id_t downstream_dev_id) {
     dependent_config_.fabric_router_noc_xy =
-        tt::tt_metal::hal_ref.noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
     dependent_config_.upstream_mesh_id = upstream_mesh_id;
     dependent_config_.upstream_dev_id = upstream_dev_id;
     dependent_config_.downstream_mesh_id = downstream_mesh_id;

@@ -7,7 +7,6 @@
 #include <dispatch_core_common.hpp>
 #include <host_api.hpp>
 #include <profiler.hpp>
-#include "impl/context/metal_context.hpp"
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <atomic>
@@ -46,7 +45,6 @@
 #include "hostdevcommon/profiler_common.h"
 #include "kernel_types.hpp"
 #include "llrt.hpp"
-#include "llrt/hal.hpp"
 #include "logger.hpp"
 #include "metal_soc_descriptor.h"
 #include "profiler_optional_metadata.hpp"
@@ -73,11 +71,11 @@ void DumpDeviceProfileResults(IDevice* device, const Program& program) {
     std::vector<CoreCoord> eth_cores_in_program;
 
     std::vector<std::vector<CoreCoord>> logical_cores = program.logical_cores();
-    for (uint32_t index = 0; index < hal_ref.get_programmable_core_type_count(); index++) {
-        if (hal_ref.get_core_type(index) == CoreType::WORKER) {
+    for (uint32_t index = 0; index < MetalContext::instance().hal().get_programmable_core_type_count(); index++) {
+        if (MetalContext::instance().hal().get_core_type(index) == CoreType::WORKER) {
             worker_cores_in_program = device->worker_cores_from_logical_cores(logical_cores[index]);
         }
-        if (hal_ref.get_core_type(index) == CoreType::ETH) {
+        if (MetalContext::instance().hal().get_core_type(index) == CoreType::ETH) {
             eth_cores_in_program = device->ethernet_cores_from_logical_cores(logical_cores[index]);
         }
     }
@@ -135,7 +133,8 @@ void setControlBuffer(chip_id_t device_id, std::vector<uint32_t>& control_buffer
                 CoreType = tt_metal::HalProgrammableCoreType::IDLE_ETH;
             }
         }
-        profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+        profiler_msg_t* profiler_msg =
+            MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
         tt::llrt::write_hex_vec_to_core(
@@ -758,8 +757,8 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
                         CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
                                                       : tt_metal::HalProgrammableCoreType::IDLE_ETH;
                     }
-                    profiler_msg_t* profiler_msg =
-                        hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+                    profiler_msg_t* profiler_msg = MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(
+                        CoreType, HalL1MemAddrType::PROFILER);
                     for (int i = 0; i < maxLoopCount; i++) {
                         std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                             device_id,

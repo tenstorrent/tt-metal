@@ -125,9 +125,11 @@ void FDKernel::configure_kernel_variant(
     KernelBuildOptLevel opt_level) {
     // TODO: just pass in the programmable index
     uint32_t programmable_core_type_index =
-        (GetCoreType() == CoreType::WORKER) ? hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
-        : is_active_eth_core ? hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
-                             : hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+        (GetCoreType() == CoreType::WORKER)
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
+        : is_active_eth_core
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
+            : MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
