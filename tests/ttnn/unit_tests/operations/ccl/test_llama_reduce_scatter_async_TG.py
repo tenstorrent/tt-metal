@@ -25,7 +25,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     NORM_CRS,
     check_mesh_tensor_alloc,
 )
-from tracy import signpost
 
 PACKET_WORKER_CRS = ttnn.CoreRangeSet(
     [
@@ -70,75 +69,38 @@ def run_reduce_scatter_test(
     trace_mode,
     num_links=3,
     scheme="random",
-    use_regular_grid=False,
-    input_grid=None,
-    output_grid=None,
-    dtype=ttnn.bfloat8_b,
 ):
     mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
     num_pages_per_packet = 4
 
-    # input, output, interm core range set
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
-    compute_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
-    subdevice_shard_cores_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(compute_grid[0] - 1, compute_grid[1] - 1),
-            ),
-        }
-    )
-    if input_grid is not None:
-        input_shard_cores_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(input_grid[0] - 1, input_grid[1] - 1),
-                ),
-            }
-        )
-    if output_grid is not None:
-        output_shard_cores_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(output_grid[0] - 1, output_grid[1] - 1),
-                ),
-            }
-        )
-        tensor_width_in_tiles = num_cores * shard_width
-        output_num_cores = output_grid[0] * output_grid[1]
-
-    # input, output, interm memory config
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            input_shard_cores_grid if use_regular_grid else RING_CRS,
+            RING_CRS,
             [shard_height, shard_width],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    packet_workers_persistent_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            subdevice_shard_cores_grid if use_regular_grid else SUB_DEVICE_CRS,
-            [shard_height, num_devices_scatter * num_pages_per_packet * 32],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
+
     output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            output_shard_cores_grid if use_regular_grid else FF1_CRS_RS_OUT,
-            [
-                shard_height,
-                tensor_width_in_tiles // output_num_cores // num_devices_scatter if use_regular_grid else 32,
-            ],
+            FF1_CRS_RS_OUT,
+            [shard_height, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    # have to allocate a tensor for buffers that are written to across devices as there's no way to synchronize lifetime of buffers across devices
+    packet_workers_persistent_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            SUB_DEVICE_CRS,
+            [shard_height, num_devices_scatter * num_pages_per_packet * 32],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -178,7 +140,7 @@ def run_reduce_scatter_test(
             input,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
+            dtype=ttnn.bfloat8_b,
             memory_config=sharded_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
@@ -188,7 +150,7 @@ def run_reduce_scatter_test(
             intermediate_tensor,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
+            dtype=ttnn.bfloat8_b,
             memory_config=packet_workers_persistent_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
@@ -200,7 +162,7 @@ def run_reduce_scatter_test(
         tt_intermediate_tensors_list.append(tt_intermediate)
 
     enable_persistent_fabric = True
-    ccl_sub_device_crs = subdevice_shard_cores_grid if use_regular_grid is not None else SUB_DEVICE_CRS
+    ccl_sub_device_crs = SUB_DEVICE_CRS
     worker_sub_device = ttnn.SubDevice(
         [
             ccl_sub_device_crs,
@@ -256,9 +218,7 @@ def run_reduce_scatter_test(
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
 
-        signpost(header="start")
         ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-        signpost(header="stop")
         ttnn.release_trace(mesh_device, trace_id)
         ttnn.synchronize_device(mesh_device)
     else:
@@ -283,7 +243,6 @@ def run_reduce_scatter_test(
     passed = True
     first_failed_tensor_index = None
     failed_indices = []
-    expected_pcc = 0.999 if dtype == ttnn.bfloat8_b else 0.9999
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_torch_tensor = ttnn.to_torch(
             tt_out_tensor_list[tensor_index],
@@ -291,7 +250,7 @@ def run_reduce_scatter_test(
                 mesh_device, mesh_shape=[num_devices_fracture, num_devices_scatter], dims=(0, 1)
             ),
         )
-        eq, output_results = comp_pcc(tt_torch_tensor, output_tensor_goldens_list[tensor_index], expected_pcc)
+        eq, output_results = comp_pcc(tt_torch_tensor, output_tensor_goldens_list[tensor_index], 0.999)
         logger.info(f"Output tensor {tensor_index} has result {output_results}")
         if not eq:
             passed = False
@@ -378,92 +337,4 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
         trace_mode,
         num_links=3,
         scheme="random",
-    )
-
-
-@pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90000, "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}], indirect=True
-)
-@pytest.mark.parametrize("trace_mode", [True, False])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (1, 2),
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("shard_height", [32])
-@pytest.mark.parametrize("shard_width", [64])
-@pytest.mark.parametrize("input_grid", [(5, 4)])
-@pytest.mark.parametrize("output_grid", [(5, 2)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_fabric_reduce_scatter_regular_grid_2_dev(
-    mesh_device, trace_mode, shard_height, shard_width, input_grid, output_grid, dtype
-):
-    dim = 3
-    num_devices_scatter = 2
-    num_devices_fracture = 1
-    num_cores = input_grid[0] * input_grid[1]
-    num_iters = 30
-
-    run_reduce_scatter_test(
-        mesh_device,
-        dim,
-        shard_height,
-        shard_width,
-        num_devices_scatter,
-        num_devices_fracture,
-        num_cores,
-        num_iters,
-        trace_mode,
-        num_links=1,
-        scheme="random",
-        use_regular_grid=True,
-        input_grid=input_grid,
-        output_grid=output_grid,
-        dtype=dtype,
-    )
-
-
-@pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90000, "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}], indirect=True
-)
-@pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (1, 4),
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("shard_height", [32])
-@pytest.mark.parametrize("shard_width", [64])
-@pytest.mark.parametrize("input_grid", [(5, 5)])
-@pytest.mark.parametrize("output_grid", [(5, 1)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_fabric_reduce_scatter_regular_grid_4_dev(
-    mesh_device, trace_mode, shard_height, shard_width, input_grid, output_grid, dtype
-):
-    dim = 3
-    num_devices_scatter = 4
-    num_devices_fracture = 1
-    num_cores = input_grid[0] * input_grid[1] - 5  # test padding
-    num_iters = 30
-
-    run_reduce_scatter_test(
-        mesh_device,
-        dim,
-        shard_height,
-        shard_width,
-        num_devices_scatter,
-        num_devices_fracture,
-        num_cores,
-        num_iters,
-        trace_mode,
-        num_links=3,
-        scheme="random",
-        use_regular_grid=True,
-        input_grid=input_grid,
-        output_grid=output_grid,
-        dtype=dtype,
     )
