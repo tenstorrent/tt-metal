@@ -8,7 +8,7 @@
 
 #include "tt_backend_api_types.hpp"
 #include "assert.hpp"
-#include "impl/context/metal_context.hpp"
+#include "llrt/rtoptions.hpp"
 #include <umd/device/pci_device.hpp>
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/tt_simulation_device.h>
@@ -48,10 +48,10 @@ namespace tt::tt_metal {
  * @see tt::get_arch_from_string
  * @see PCIDevice::enumerate_devices_info
  */
-inline tt::ARCH get_platform_architecture() {
+inline tt::ARCH get_platform_architecture(tt::llrt::RunTimeOptions& rtoptions) {
     auto arch = tt::ARCH::Invalid;
-    if (tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        tt_SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
+    if (rtoptions.get_simulator_enabled()) {
+        tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
         arch = init.get_arch_name();
     } else {
         // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
