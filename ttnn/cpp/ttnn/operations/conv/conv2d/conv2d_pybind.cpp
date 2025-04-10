@@ -5,11 +5,11 @@
 #include <tt-metalium/constants.hpp>
 #include "cpp/pybind11/decorators.hpp"
 
-#include "conv2d_pybind.hpp"
-#include "cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
-#include "conv2d.hpp"
-#include "conv2d_utils.hpp"
-#include "prepare_conv2d_weights.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
+#include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/types.hpp"
 
