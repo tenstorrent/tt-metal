@@ -407,6 +407,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         std::string compute_kernel;
         std::vector<uint32_t> compute_ct_args;
         if (wide_tensor) {
+            // wide tensors use a different compute kernel which requires use of a temp buffer for the intermediate
+            // untilized results
             temp_cb_id = cb_indices.get_next_cb_id();
             auto temp_cb =
                 create_circular_buffer(program, all_cores, temp_cb_id, out_df, ntiles_per_block, out_tile_size);

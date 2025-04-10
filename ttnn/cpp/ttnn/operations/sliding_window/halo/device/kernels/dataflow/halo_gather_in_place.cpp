@@ -179,12 +179,12 @@ steps:
 */
 
 void kernel_main() {
-    constexpr uint32_t padding_config_cb_id = get_compile_time_arg_val(0);  // has untilized input shard
-    constexpr uint32_t local_config_cb_id = get_compile_time_arg_val(1);    // has untilized input shard
-    constexpr uint32_t remote_config_cb_id = get_compile_time_arg_val(2);   // has untilized input shard
-    constexpr uint32_t remote_temp_cb_id = get_compile_time_arg_val(3);     // has untilized input shard
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(4);             // has untilized input shard
-    constexpr uint32_t in_cb_id = get_compile_time_arg_val(5);              // has untilized input shard
+    constexpr uint32_t padding_config_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t local_config_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t remote_config_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t remote_temp_cb_id = get_compile_time_arg_val(3);  // temp buffer for in place halo
+    constexpr uint32_t src_cb_id = get_compile_time_arg_val(4);          // the innput shard buffer
+    constexpr uint32_t in_cb_id = get_compile_time_arg_val(5);           // either the input shard or untilize output
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(6);      // output shard with padding and halo goes here
     constexpr uint32_t pad_cb_id = get_compile_time_arg_val(7);      // cb for const pad val buffer
     constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(8);    // pad value to fill pad buffer with
@@ -198,7 +198,8 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(17);
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(18);
     constexpr uint32_t in_out_buffer_start_delta = get_compile_time_arg_val(19);
-    constexpr uint32_t untilize_temp_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t untilize_temp_cb_id =
+        get_compile_time_arg_val(20);  // temp buffer for in place untilize with wide tensors
     constexpr uint32_t tile_cols = get_compile_time_arg_val(21);
     constexpr uint32_t tile_rows = get_compile_time_arg_val(22);
 
@@ -227,6 +228,7 @@ void kernel_main() {
     semaphore_addr = get_semaphore(semaphore_id);
 
     // make sure untilized data is available
+    // for wide tensors a temp CB must be used due to implementation of the untilize LLK function vs pack_untilize
     if (untilize_temp_cb_id && local_config_cb_id) {
         for (uint32_t i = 0; i < tile_rows; ++i) {
             cb_wait_front(untilize_temp_cb_id, tile_cols);
