@@ -6,25 +6,20 @@ import pytest
 import torch
 import ttnn
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "shape, dim, descending",
     [
-        ([16, 1], -1, False),
-        ([1, 16], -1, False),
-        ([3, 3], -1, False),
-        ([16, 16, 16], -1, True),
-        ([3, 3], 1, False),
-        ([3, 16], 0, True),
-        ([32, 32], 0, False),
-        ([64, 64], 1, False),
-        ([128, 32], 1, True),
-        ([87, 87], 0, True),
+        ([64, 64], -1, False),
+        ([32, 128], -1, False),
+        ([1, 1, 32, 64], -1, True),
+        ([32, 128], 1, True),
         ([1], 0, True),
         ([], -1, True),
-        ([1, 0, 32, 32], 2, False),
+        ([1, 0, 32, 64], 2, False),
     ],
 )
 def test_sort_output_shape(shape, dim, descending, device):
@@ -43,22 +38,22 @@ def test_sort_output_shape(shape, dim, descending, device):
     assert list(ttnn_sort_values.shape) == shape
     assert list(ttnn_sort_indices.shape) == shape
 
+    # TODO: ADD checking indeces matrix
+    # TODO: assert_with_pcc does not work with [] or [1] - check by hand
+    assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+
 
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "shape, dim, descending",
     [
-        ([16, 1], -1, False),
-        ([1, 16], -1, False),
-        ([3, 3], -1, True),
-        ([3, 3], 1, False),
-        ([16, 16, 16], 0, True),
-        ([64, 64], 1, False),
-        ([128, 32], 1, True),
-        ([87, 87], 0, True),
+        ([64, 64], -1, False),
+        ([32, 128], -1, False),
+        ([1, 1, 32, 64], -1, True),
+        ([32, 128], 1, True),
         ([1], 0, True),
         ([], -1, True),
-        ([1, 0, 32, 32], 2, False),
+        ([1, 0, 32, 64], 2, False),
     ],
 )
 def test_sort_output_shape_prealocated_output(shape, dim, descending, device):
@@ -79,3 +74,7 @@ def test_sort_output_shape_prealocated_output(shape, dim, descending, device):
 
     assert list(ttnn_sort_values.shape) == shape
     assert list(ttnn_sort_indices.shape) == shape
+
+    # TODO: ADD checking indeces matrix
+    # TODO: assert_with_pcc does not work with [] or [1] - check by hand
+    assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))

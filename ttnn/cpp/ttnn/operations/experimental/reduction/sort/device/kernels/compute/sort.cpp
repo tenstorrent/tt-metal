@@ -29,9 +29,10 @@ void MAIN {
     constexpr uint32_t index_tensor_output_cb_index = get_compile_time_arg_val(5);
     constexpr uint32_t Ht = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
-    constexpr uint32_t logWt = get_compile_time_arg_val(8);
-    constexpr bool descending = get_compile_time_arg_val(9);
-    constexpr bool stable = get_compile_time_arg_val(10);
+    constexpr bool descending = get_compile_time_arg_val(8);
+    constexpr bool stable =
+        get_compile_time_arg_val(9);  // TODO: In the future change LLK to have the option or add additional step with
+                                      // checking values and indexes after the sorting
 
     constexpr uint32_t one_tile = 1;
 
@@ -66,7 +67,7 @@ void MAIN {
             stages++;
         }
 
-        for (uint32_t stage = 2; stage <= stages; stage++) {  // TODO: Check if the first step is necessary
+        for (uint32_t stage = 2; stage <= stages; stage++) {
             for (uint32_t sub = stage; sub > 0; sub--) {
                 uint32_t sub_dist = 1 << (sub - 1);
                 for (uint32_t i = 0; i < Wt; i++) {
@@ -82,23 +83,23 @@ void MAIN {
 
                         copy_tile_to_dst_init_short_with_dt(
                             index_tensor_transposed_cb_index, input_tensor_transposed_cb_index);
-                        copy_tile(input_tensor_transposed_cb_index, left_tile_id, 0);
-                        copy_tile(input_tensor_transposed_cb_index, right_tile_id, 1);
+                        copy_tile(input_tensor_transposed_cb_index, left_tile_id, input_dest_start);
+                        copy_tile(input_tensor_transposed_cb_index, right_tile_id, input_dest_end);
 
                         copy_tile_to_dst_init_short_with_dt(
                             input_tensor_transposed_cb_index, index_tensor_transposed_cb_index);
-                        copy_tile(index_tensor_transposed_cb_index, left_tile_id, 2);
-                        copy_tile(index_tensor_transposed_cb_index, right_tile_id, 3);
+                        copy_tile(index_tensor_transposed_cb_index, left_tile_id, index_dest_start);
+                        copy_tile(index_tensor_transposed_cb_index, right_tile_id, index_dest_end);
 
                         ckernel::topk_local_sort(0, (int)ascending, 5);
 
                         pack_reconfig_data_format(input_tensor_transposed_cb_index);
-                        pack_tile<true>(0, input_tensor_transposed_cb_index, left_tile_id);
-                        pack_tile<true>(1, input_tensor_transposed_cb_index, right_tile_id);
+                        pack_tile<true>(input_dest_start, input_tensor_transposed_cb_index, left_tile_id);
+                        pack_tile<true>(input_dest_end, input_tensor_transposed_cb_index, right_tile_id);
 
                         pack_reconfig_data_format(index_tensor_transposed_cb_index);
-                        pack_tile<true>(2, index_tensor_transposed_cb_index, left_tile_id);
-                        pack_tile<true>(3, index_tensor_transposed_cb_index, right_tile_id);
+                        pack_tile<true>(index_dest_start, index_tensor_transposed_cb_index, left_tile_id);
+                        pack_tile<true>(index_dest_end, index_tensor_transposed_cb_index, right_tile_id);
 
                         release_dst();
                     }
