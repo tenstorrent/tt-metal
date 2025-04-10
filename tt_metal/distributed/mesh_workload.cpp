@@ -345,6 +345,10 @@ uint32_t MeshWorkloadImpl::get_cb_size(
 // Implementation of the public pimpl interface
 MeshWorkload::MeshWorkload() : impl_(std::make_unique<MeshWorkloadImpl>()) {}
 
+MeshWorkload::~MeshWorkload() = default;
+MeshWorkload::MeshWorkload(MeshWorkload&& other) noexcept = default;
+MeshWorkload& MeshWorkload::operator=(MeshWorkload&& other) noexcept = default;
+
 void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&& program) {
     impl_->add_program(device_range, std::move(program));
 }

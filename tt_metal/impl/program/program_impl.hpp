@@ -226,6 +226,9 @@ private:
     friend EnqueueProgramCommand;
     friend Program;
     friend Internal_;
+
+    template <typename T>
+    friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
 };
 
 }  // namespace detail

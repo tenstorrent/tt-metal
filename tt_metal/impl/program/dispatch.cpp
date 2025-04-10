@@ -47,6 +47,7 @@
 #include "math.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "program_device_map.hpp"
+#include "program_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "runtime_args_data.hpp"
 #include "semaphore.hpp"
@@ -353,8 +354,9 @@ uint32_t finalize_kernel_bins(
 // Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
 // program data structures in L1. Will be used when assembling dispatch commands for this program
 template <typename T>
-void finalize_program_offsets(T& workload, IDevice* device) {
-    if (workload.get_impl()->is_finalized()) {
+void finalize_program_offsets(T& workload_public, IDevice* device) {
+    auto& workload = *workload_public.get_impl();
+    if (workload.is_finalized()) {
         return;
     }
     // TODO (AS): Enacapsulate the variables below in a struct to avoid implicit updates on references.
@@ -450,7 +452,7 @@ void finalize_program_offsets(T& workload, IDevice* device) {
             magic_enum::enum_name(programmable_core_type));
 
         if constexpr (std::is_same_v<T, Program>) {
-            set_program_offsets_and_sizes(workload, index);
+            set_program_offsets_and_sizes(workload_public, index);
         } else {
             for (auto& [_, program] : workload.get_programs()) {
                 set_program_offsets_and_sizes(program, index);
@@ -459,7 +461,7 @@ void finalize_program_offsets(T& workload, IDevice* device) {
     }
     // The sem offsets cross programmable_core_types so must be set after the loop above
     if constexpr (std::is_same_v<T, Program>) {
-        set_program_attrs_across_core_types(workload);
+        set_program_attrs_across_core_types(workload_public);
     } else {
         for (auto& [_, program] : workload.get_programs()) {
             set_program_attrs_across_core_types(program);
@@ -2044,7 +2046,7 @@ template <typename WorkloadType, typename DeviceType>
 uint32_t program_base_addr_on_core(
     WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType programmable_core_type) {
     uint32_t index = hal_ref.get_programmable_core_type_index(programmable_core_type);
-    const auto& sub_device_ids = workload.determine_sub_device_ids(generic_device);
+    const auto& sub_device_ids = workload.get_impl()->determine_sub_device_ids(generic_device);
     // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
     // Addresses are not the same across sub-devices
     TT_FATAL(

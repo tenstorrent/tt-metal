@@ -52,12 +52,10 @@ private:
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
-    /* 
     template <typename T>
     friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
     template <typename WorkloadType, typename DeviceType>
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
-    */
     friend MeshCommandQueue;
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
 

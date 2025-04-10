@@ -191,8 +191,8 @@ public:
     uint32_t get_cb_memory_size() const;
 
     // For internal use
-    detail::Program_* get_impl() { return pimpl_.get(); }
-    const detail::Program_* get_impl() const { return pimpl_.get(); }
+    detail::ProgramImpl* get_impl() { return pimpl_.get(); }
+    const detail::ProgramImpl* get_impl() const { return pimpl_.get(); }
 
 private:
     std::unique_ptr<detail::ProgramImpl> pimpl_;
