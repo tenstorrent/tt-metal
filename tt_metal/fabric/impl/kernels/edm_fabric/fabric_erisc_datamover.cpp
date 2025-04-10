@@ -9,6 +9,7 @@
 #include "tt_metal/api/tt-metalium/edm_fabric_counters.hpp"
 #include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 
+#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
@@ -519,7 +520,6 @@ FORCE_INLINE void check_worker_connections(
             // if constexpr (enable_fabric_counters) {
             //     sender_channel_counters->add_connection();
             // }
-            did_something = true;
             channel_connection_established = true;
             local_sender_channel_worker_interface.cache_producer_noc_addr();
             if constexpr (enable_first_level_ack) {
@@ -531,7 +531,6 @@ FORCE_INLINE void check_worker_connections(
             }
         }
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
-        did_something = true;
         channel_connection_established = false;
         local_sender_channel_worker_interface.template teardown_connection<true>(
             local_sender_channel_worker_interface.local_rdptr.get_ptr());
@@ -619,9 +618,6 @@ void run_sender_channel_step(
             increment_local_update_ptr_val(
                 to_sender_packets_acked_streams[sender_channel_index], -acks_since_last_check);
         }
-        did_something = did_something || (completions_since_last_check + acks_since_last_check) > 0;
-    } else {
-        did_something = did_something || (completions_since_last_check > 0);
     }
 
     auto check_connection_status =
@@ -677,6 +673,7 @@ void run_receiver_channel_step(
             can_forward_packet_completely(cached_routing_fields, downstream_edm_interface);
         bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         if (can_send_to_all_local_chip_receivers && trid_flushed) {
+            did_something = true;
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
             receiver_forward_packet(
@@ -792,7 +789,9 @@ template <
     uint8_t RECEIVER_NUM_BUFFERS,
     uint8_t NUM_RECEIVER_CHANNELS,
     uint8_t SENDER_NUM_BUFFERS,
-    size_t NUM_SENDER_CHANNELS>
+    size_t NUM_SENDER_CHANNELS,
+    size_t MAX_NUM_SENDER_CHANNELS,
+    size_t MAX_NUM_RECEIVER_CHANNELS>
 void run_fabric_edm_main_loop(
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& local_receiver_channels,
     std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& local_sender_channels,
@@ -803,12 +802,12 @@ void run_fabric_edm_main_loop(
     std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_sender_channels,
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& remote_receiver_channels,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
-    std::array<volatile tt::tt_fabric::EdmFabricReceiverChannelCounters*, NUM_RECEIVER_CHANNELS>
+    std::array<volatile tt::tt_fabric::EdmFabricReceiverChannelCounters*, MAX_NUM_RECEIVER_CHANNELS>
         receiver_channel_counters_ptrs,
-    std::array<volatile tt::tt_fabric::EdmFabricSenderChannelCounters*, NUM_SENDER_CHANNELS>
+    std::array<volatile tt::tt_fabric::EdmFabricSenderChannelCounters*, MAX_NUM_SENDER_CHANNELS>
         sender_channel_counters_ptrs,
-    std::array<PacketHeaderRecorder, NUM_RECEIVER_CHANNELS>& receiver_channel_packet_recorders,
-    std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
+    std::array<PacketHeaderRecorder, MAX_NUM_RECEIVER_CHANNELS>& receiver_channel_packet_recorders,
+    std::array<PacketHeaderRecorder, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, 0>& receiver_channel_0_trid_tracker,
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, NUM_TRANSACTION_IDS>&
         receiver_channel_1_trid_tracker) {
@@ -823,7 +822,8 @@ void run_fabric_edm_main_loop(
     std::array<OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>
         outbound_to_receiver_channel_pointers;
     std::array<ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> receiver_channel_pointers;
-    std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established = {false, false, false};
+    std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established =
+        initialize_array<NUM_SENDER_CHANNELS, bool, false>();
 
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
@@ -969,7 +969,7 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
             connection_worker_info_ptr,
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[0]),
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
-            worker_sender0_sync_cmd_buf);
+            sender_channel_ack_cmd_buf_ids[0]);
     }
     {
         auto connection_live_semaphore_ptr =
@@ -981,7 +981,7 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
             connection_worker_info_ptr,
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[1]),
             reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
-            worker_sender1_sync_cmd_buf);
+            sender_channel_ack_cmd_buf_ids[1]);
     }
     if constexpr (NUM_SENDER_CHANNELS > 2) {
         {
@@ -995,12 +995,13 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                     connection_worker_info_ptr,
                     reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[2]),
                     reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
-                    worker_sender2_sync_cmd_buf);
+                    sender_channel_ack_cmd_buf_ids[2]);
         }
     }
 }
 
 void kernel_main() {
+    eth_txq_reg_write(DEFAULT_ETH_TXQ, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
@@ -1049,16 +1050,14 @@ void kernel_main() {
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
-#ifdef WAIT_FOR_HOST_SIGNAL
     volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_local_sync_ptr_addr);
-#endif
     volatile auto edm_status_ptr = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
 
     // In persistent mode, we must rely on static addresses for our local semaphores that are locally
     // initialized, rather than metal device APIs. This way different subdevice programs can reliably
     // resolve the semaphore addresses on the EDM core
 
-    std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> sender_channel_packet_recorders{
+    std::array<PacketHeaderRecorder, MAX_NUM_SENDER_CHANNELS> sender_channel_packet_recorders{
         PacketHeaderRecorder(
             reinterpret_cast<volatile uint32_t*>(sender_0_completed_packet_header_cb_address),
             sender_0_completed_packet_header_cb_size_headers),
@@ -1068,7 +1067,7 @@ void kernel_main() {
         PacketHeaderRecorder(
             reinterpret_cast<volatile uint32_t*>(sender_2_completed_packet_header_cb_address),
             sender_2_completed_packet_header_cb_size_headers)};
-    std::array<PacketHeaderRecorder, NUM_RECEIVER_CHANNELS> receiver_channel_packet_recorders{
+    std::array<PacketHeaderRecorder, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_packet_recorders{
         PacketHeaderRecorder(
             reinterpret_cast<volatile uint32_t*>(receiver_0_completed_packet_header_cb_address),
             receiver_0_completed_packet_header_cb_size_headers),
@@ -1185,32 +1184,47 @@ void kernel_main() {
     //////////////////////////////
     //////////////////////////////
 
-    const auto& local_sender_buffer_addresses = std::array<size_t, NUM_SENDER_CHANNELS>{
-        local_sender_0_channel_address, local_sender_1_channel_address, local_sender_2_channel_address};
-    const auto& remote_sender_buffer_addresses = std::array<size_t, NUM_SENDER_CHANNELS>{
-        remote_sender_0_channel_address, remote_sender_1_channel_address, remote_sender_2_channel_address};
-    const auto& local_receiver_buffer_addresses = std::array<size_t, NUM_RECEIVER_CHANNELS>{
-        local_receiver_0_channel_buffer_address, local_receiver_1_channel_buffer_address};
-    const auto& remote_receiver_buffer_addresses = std::array<size_t, NUM_RECEIVER_CHANNELS>{
-        remote_receiver_0_channel_buffer_address, remote_receiver_1_channel_buffer_address};
+    const auto& local_sender_buffer_addresses =
+        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
+            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
+                local_sender_0_channel_address, local_sender_1_channel_address, local_sender_2_channel_address});
+    const auto& remote_sender_buffer_addresses =
+        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
+            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
+                remote_sender_0_channel_address, remote_sender_1_channel_address, remote_sender_2_channel_address});
+    const auto& local_receiver_buffer_addresses =
+        take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, size_t>(
+            std::array<size_t, MAX_NUM_RECEIVER_CHANNELS>{
+                local_receiver_0_channel_buffer_address, local_receiver_1_channel_buffer_address});
+    const auto& remote_receiver_buffer_addresses =
+        take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, size_t>(
+            std::array<size_t, MAX_NUM_RECEIVER_CHANNELS>{
+                remote_receiver_0_channel_buffer_address, remote_receiver_1_channel_buffer_address});
+
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> remote_receiver_channels;
     std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> local_receiver_channels;
     std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> remote_sender_channels;
     std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> local_sender_channels;
     std::array<tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>
         local_sender_channel_worker_interfaces;
-    std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores = {
-        reinterpret_cast<size_t>(sender0_worker_semaphore_ptr),
-        reinterpret_cast<size_t>(sender1_worker_semaphore_ptr),
-        reinterpret_cast<size_t>(sender_2_worker_semaphore_ptr)};
-    std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses = {
-        local_sender_channel_0_connection_semaphore_addr,
-        local_sender_channel_1_connection_semaphore_addr,
-        local_sender_channel_2_connection_semaphore_addr};
-    std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_info_addresses = {
-        local_sender_channel_0_connection_info_addr,
-        local_sender_channel_1_connection_info_addr,
-        local_sender_channel_2_connection_info_addr};
+    std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =
+        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
+            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
+                reinterpret_cast<size_t>(sender0_worker_semaphore_ptr),
+                reinterpret_cast<size_t>(sender1_worker_semaphore_ptr),
+                reinterpret_cast<size_t>(sender_2_worker_semaphore_ptr)});
+    std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_live_semaphore_addresses =
+        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
+            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
+                local_sender_channel_0_connection_semaphore_addr,
+                local_sender_channel_1_connection_semaphore_addr,
+                local_sender_channel_2_connection_semaphore_addr});
+    std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_info_addresses =
+        take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
+            std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
+                local_sender_channel_0_connection_info_addr,
+                local_sender_channel_1_connection_info_addr,
+                local_sender_channel_2_connection_info_addr});
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
             local_sender_connection_info_addresses[i]);
@@ -1236,8 +1250,8 @@ void kernel_main() {
             reinterpret_cast<volatile uint32_t* const>(edm_vc0_forwarding_semaphore_address),
             reinterpret_cast<volatile uint32_t* const>(edm_vc0_teardown_semaphore_address),
             downstream_vc0_noc_interface_buffer_index_local_addr,
-            downstream_data_cmd_buf,
-            downstream_sync_cmd_buf);
+            receiver_channel_forwarding_data_cmd_buf_ids[0],
+            receiver_channel_forwarding_sync_cmd_buf_ids[0]);
     }
     if constexpr (enable_ring_support) {
         if (has_downstream_edm_vc1_buffer_connection) {
@@ -1257,8 +1271,8 @@ void kernel_main() {
                 reinterpret_cast<volatile uint32_t* const>(edm_vc1_forwarding_semaphore_address),
                 reinterpret_cast<volatile uint32_t* const>(edm_vc1_teardown_semaphore_address),
                 downstream_vc1_noc_interface_buffer_index_local_addr,
-                downstream_data_cmd_buf,
-                downstream_sync_cmd_buf);
+                receiver_channel_forwarding_data_cmd_buf_ids[1],
+                receiver_channel_forwarding_sync_cmd_buf_ids[1]);
         }
     }
     for (uint8_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
@@ -1316,28 +1330,28 @@ void kernel_main() {
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
 
-#ifdef WAIT_FOR_HOST_SIGNAL
-    if constexpr (is_local_handshake_master) {
-        wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
-        notify_slave_routers(
-            edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
-    } else {
-        notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
-        wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
+    if constexpr (wait_for_host_signal) {
+        if constexpr (is_local_handshake_master) {
+            wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
+            notify_slave_routers(
+                edm_channels_mask, local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
+        } else {
+            notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
+            wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
+        }
+
+        *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
+
+        wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+
+        if constexpr (is_local_handshake_master) {
+            notify_slave_routers(
+                edm_channels_mask,
+                local_handshake_master_eth_chan,
+                (uint32_t)edm_status_ptr,
+                tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+        }
     }
-
-    *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
-
-    wait_for_notification((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
-
-    if constexpr (is_local_handshake_master) {
-        notify_slave_routers(
-            edm_channels_mask,
-            local_handshake_master_eth_chan,
-            (uint32_t)edm_status_ptr,
-            tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
-    }
-#endif
 
     //////////////////////////////
     //////////////////////////////
@@ -1350,7 +1364,9 @@ void kernel_main() {
         RECEIVER_NUM_BUFFERS,
         NUM_RECEIVER_CHANNELS,
         SENDER_NUM_BUFFERS,
-        NUM_SENDER_CHANNELS>(
+        NUM_SENDER_CHANNELS,
+        MAX_NUM_SENDER_CHANNELS,
+        MAX_NUM_RECEIVER_CHANNELS>(
         local_receiver_channels,
         local_sender_channels,
         local_sender_channel_worker_interfaces,
@@ -1364,16 +1380,6 @@ void kernel_main() {
         sender_channel_packet_recorders,
         receiver_channel_0_trid_tracker,
         receiver_channel_1_trid_tracker);
-
-#ifdef WAIT_FOR_HOST_SIGNAL
-    if constexpr (is_local_handshake_master) {
-        notify_slave_routers(
-            edm_channels_mask,
-            local_handshake_master_eth_chan,
-            (uint32_t)termination_signal_ptr,
-            *termination_signal_ptr);
-    }
-#endif
 
     if constexpr (persistent_mode) {
         // we force these values to a non-zero value so that if we run the fabric back to back,
@@ -1389,6 +1395,16 @@ void kernel_main() {
 
     // re-init the noc counters as the noc api used is not incrementing them
     ncrisc_noc_counters_init();
+
+    if constexpr (wait_for_host_signal) {
+        if constexpr (is_local_handshake_master) {
+            notify_slave_routers(
+                edm_channels_mask,
+                local_handshake_master_eth_chan,
+                (uint32_t)termination_signal_ptr,
+                *termination_signal_ptr);
+        }
+    }
 
     *edm_status_ptr = tt::tt_fabric::EDMStatus::TERMINATED;
 

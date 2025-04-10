@@ -202,7 +202,7 @@ def test_all_gather_tg_llama(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set, input_dtype, output_dtype",
     [
         ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS, ttnn.bfloat8_b, None),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS, ttnn.bfloat16, ttnn.bfloat16),  # QKV all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS, ttnn.bfloat8_b, ttnn.bfloat16),  # QKV all reduce
         ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS, ttnn.bfloat8_b, None),  # FF1 all reduce
         ([1, 1, 32, 16 * 1024], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS, ttnn.bfloat8_b, None),  # LM head all reduce
     ],
