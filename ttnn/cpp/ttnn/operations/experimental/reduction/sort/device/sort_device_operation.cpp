@@ -33,6 +33,15 @@ void SortDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor_shape.rank() == 4, "Input shape must be 4D, got {}", input_tensor_shape.rank());
 
+    TT_FATAL(
+        input_tensor_shape[3] % 64 == 0,
+        "Input shape inner dim {} must be a multiple of 64, pad with +/-infinity if necessary",
+        input_tensor_shape[3]);
+    TT_FATAL(
+        (input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2]) % 32 == 0,
+        "Input height (combined input_shape[0-3]) {} must be a multiple of 32",
+        input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2]);
+
     TT_FATAL(attributes.output_mem_config.is_sharded() == false, "Sharded implementation not supported yet");
 
     TT_FATAL(tensor_args.input_tensor.get_layout() == Layout::TILE, "The input must be in tiled format");

@@ -68,10 +68,12 @@ void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, ui
 
     for (uint32_t i = 0; i < Wt; ++i) {
         acquire_dst();
+
         cb_reserve_back(dest_cb_index, one_tile);
         transpose_wh_tile(transposed_cb_index, i, 0);
         pack_tile(0, dest_cb_index);
         cb_push_back(dest_cb_index, one_tile);
+
         release_dst();
     }
 
