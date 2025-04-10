@@ -190,7 +190,7 @@ inline auto invoke_binary_ng(
     const std::optional<bool>& use_legacy) {
     const auto& output_mem_cfg = memory_config ? *memory_config : output ? output->memory_config() : MemoryConfig{};
 
-    if (use_legacy.value_or(true)) {
+    if (use_legacy.value_or(false)) {
         const std::vector activations(post_activations.begin(), post_activations.end());
         const std::optional lhs_activation =
             lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
@@ -368,7 +368,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
-    if (use_legacy.value_or(true)) {
+    if (use_legacy.value_or(false)) {
         return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, dtype, memory_config, output);
     }
 
