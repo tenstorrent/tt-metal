@@ -8,6 +8,14 @@ import ttnn
 import random
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 from models.utility_functions import skip_for_blackhole
+from tests.tt_eager.python_api_testing.sweep_tests import (
+    comparison_funcs,
+    generation_funcs,
+)
+from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
+    run_single_pytorch_test,
+)
+from functools import partial
 
 
 @pytest.mark.parametrize(
@@ -1014,3 +1022,24 @@ def test_unary_bitwise_not(input_shapes, device):
 
     pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
     assert pcc == 1
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_log1p_ttnn(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, 1e-6, 1e5, device)
+    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+
+    cq_id = 0
+    ttnn.log1p(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
+    golden_function = ttnn.get_golden_function(ttnn.log1p)
+    golden_tensor = golden_function(in_data)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
