@@ -37,12 +37,12 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        # True,
-        False,
+        True,
+        # False,
     ),
     ids=(
-        # "paged_attention",
-        "default_attention",
+        "paged_attention",
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(
