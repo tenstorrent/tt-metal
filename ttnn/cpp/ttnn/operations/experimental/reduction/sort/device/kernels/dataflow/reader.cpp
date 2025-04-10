@@ -12,7 +12,7 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
     cb_reserve_back(cb_id, 1);
 
     // Writer config
-    uint32_t writer_addr = get_write_ptr(cb_id);
+    const uint32_t writer_addr = get_write_ptr(cb_id);
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(writer_addr);
     const uint16_t wt_offset = wt << 5;  // wt * 2^(5)
 
@@ -57,7 +57,11 @@ void kernel_main() {
 
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t w = 0; w < Wt; w++) {
-            // TODO: Handle input tensor tile
+            cb_reserve_back(input_tensor_cb_index, one_tile);
+            const uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_index);
+            noc_async_read_tile(h * Wt + w, s, l1_write_addr);
+            noc_async_read_barrier();
+            cb_push_back(input_tensor_cb_index, one_tile);
 
             generate_index_tile(index_tensor_cb_index, w);
         }  // Wt loops
