@@ -69,7 +69,6 @@ enum DispatcherSelect : uint8_t {
 struct CQGenericDebugCmd {
     uint8_t pad;
     uint16_t key;       // prefetcher/dispatcher all write to watcher
-    uint32_t checksum;  // checksum of payload
     uint32_t size;      // size of payload
     uint32_t stride;    // stride to next Cmd (may be within the payload)
 } __attribute__((packed));

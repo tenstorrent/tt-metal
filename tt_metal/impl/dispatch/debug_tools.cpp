@@ -194,10 +194,9 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                 break;
             case CQ_DISPATCH_CMD_DEBUG:
                 cq_file << fmt::format(
-                    " (pad={}, key={}, checksum={:#010x}, size={}, stride={})",
+                    " (pad={}, key={}, size={}, stride={})",
                     val(cmd->debug.pad),
                     val(cmd->debug.key),
-                    val(cmd->debug.checksum),
                     val(cmd->debug.size),
                     val(cmd->debug.stride));
                 break;
@@ -273,10 +272,9 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                 break;
             case CQ_PREFETCH_CMD_DEBUG:
                 iq_file << fmt::format(
-                    " (pad={}, key={}, checksum={:#010x}, size={}, stride={})",
+                    " (pad={}, key={}, size={}, stride={})",
                     val(cmd->debug.pad),
                     val(cmd->debug.key),
-                    val(cmd->debug.checksum),
                     val(cmd->debug.size),
                     val(cmd->debug.stride));
                 stride = cmd->debug.stride;
