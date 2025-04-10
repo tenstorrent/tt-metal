@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 
 using namespace sfpi;
 
@@ -75,6 +74,47 @@ inline void calculate_comp_int() {
         // a[i] == 0
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
             v_if(v == 0) { v = 1; }
+            v_else { v = 0; }
+            v_endif;
+        }
+
+        // a[i] != 0
+        if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
+            v_if(v == 0) { v = 0; }
+            v_else { v = 1; }
+            v_endif;
+        }
+
+        // a[i] < 0
+        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+            v_if(v < 0) { v = 1; }
+            v_else { v = 0; }
+            v_endif;
+        }
+
+        // a[i] > 0
+        if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+            vInt temp = v;
+            v_if(v >= 0) { v = 1; }
+            v_else { v = 0; }
+            v_endif;
+            v_if(temp == 0) { v = 0; }
+            v_endif;
+        }
+
+        // a[i] <= 0
+        if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
+            vInt temp = v;
+            v_if(v < 0) { v = 1; }
+            v_else { v = 0; }
+            v_endif;
+            v_if(temp == 0) { v = 1; }
+            v_endif;
+        }
+
+        // a[i] >= 0
+        if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
+            v_if(v >= 0) { v = 1; }
             v_else { v = 0; }
             v_endif;
         }

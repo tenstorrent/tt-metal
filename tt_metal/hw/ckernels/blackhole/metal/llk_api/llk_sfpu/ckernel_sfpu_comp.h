@@ -78,6 +78,47 @@ inline void calculate_comp_int() {
             v_endif;
         }
 
+        // a[i] != 0
+        if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
+            v_if(v == 0) { v = 0; }
+            v_else { v = 1; }
+            v_endif;
+        }
+
+        // a[i] < 0
+        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+            v_if(v < 0) { v = 1; }
+            v_else { v = 0; }
+            v_endif;
+        }
+
+        // a[i] > 0
+        if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+            vInt temp = v;
+            v_if(v >= 0) { v = 1; }
+            v_else { v = 0; }
+            v_endif;
+            v_if(temp == 0) { v = 0; }
+            v_endif;
+        }
+
+        // a[i] <= 0
+        if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
+            vInt temp = v;
+            v_if(v < 0) { v = 1; }
+            v_else { v = 0; }
+            v_endif;
+            v_if(temp == 0) { v = 1; }
+            v_endif;
+        }
+
+        // a[i] >= 0
+        if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
+            v_if(v >= 0) { v = 1; }
+            v_else { v = 0; }
+            v_endif;
+        }
+
         dst_reg[0] = v;
         dst_reg++;
     }
