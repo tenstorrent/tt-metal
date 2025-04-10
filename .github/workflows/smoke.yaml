@@ -12,6 +12,10 @@ on:
       runner:
         required: true
         type: string
+      per-test-timeout:
+        required: false
+        type: string
+        default: 3.5
 
 jobs:
   metalium-smoke:
@@ -104,12 +108,12 @@ jobs:
                   root = tree.getroot()
                   for tc in root.findall(".//testcase"):
                       time = float(tc.get("time", 0))
-                      if time > 3.5:
+                      if time > float(${{ inputs.per-test-timeout }}):
                           slow_tests.append(f"{report_file}: {tc.get('classname', 'Unknown')}.{tc.get('name', 'Unknown')} ({time:.3f}s)")
               except Exception as e:
                   print(f"Error parsing {report_file}: {e}")
                   sys.exit(2)
 
           if slow_tests:
-              print("Some tests exceeded 3.5s:\n" + "\n".join(slow_tests))
+              print("Some tests exceeded float(${{ inputs.per-test-timeout }})s:\n" + "\n".join(slow_tests))
               sys.exit(3)
