@@ -268,7 +268,7 @@ int32_t calculate_num_pages_available_in_cq(
 
 uint32_t calculate_max_data_size(const CoreType& dispatch_core_type) {
     return DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size() -
-           (hal_ref.get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
+           (MetalContext::instance().hal().get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
 }
 
 bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer) {
@@ -292,7 +292,7 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
 void update_offset_on_issue_wait_cmd(uint32_t& byte_offset, bool issue_wait, uint32_t num_sub_devices) {
     if (issue_wait) {
         // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        byte_offset += (hal_ref.get_alignment(HalMemType::HOST) * num_sub_devices);
+        byte_offset += (MetalContext::instance().hal().get_alignment(HalMemType::HOST) * num_sub_devices);
     }
 }
 
@@ -328,7 +328,8 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
     const HalMemType buffer_mem_type = buffer.memory_type();
     const uint32_t partial_page_size = tt::align(
-        DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH, hal_ref.get_common_alignment_with_pcie(buffer_mem_type));
+        DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH,
+        MetalContext::instance().hal().get_common_alignment_with_pcie(buffer_mem_type));
     return partial_page_size;
 }
 
@@ -528,9 +529,9 @@ void write_interleaved_buffer_to_device(
     const BufferDispatchConstants& buf_dispatch_constants,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type) {
-    uint32_t byte_offset_in_cq =
-        hal_ref.get_alignment(HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
-                                                  // + CQ_DISPATCH_CMD_WRITE_PAGED
+    uint32_t byte_offset_in_cq = MetalContext::instance().hal().get_alignment(
+        HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
+                            // + CQ_DISPATCH_CMD_WRITE_PAGED
     while (dispatch_params.total_pages_to_write > 0) {
         dispatch_params.calculate_issue_wait();
 

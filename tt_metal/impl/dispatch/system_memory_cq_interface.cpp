@@ -7,7 +7,7 @@
 #include <tt-metalium/system_memory_cq_interface.hpp>
 
 #include "assert.hpp"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -24,10 +24,10 @@ SystemMemoryCQInterface::SystemMemoryCQInterface(uint16_t channel, uint8_t cq_id
     offset(get_absolute_cq_offset(channel, cq_id, cq_size)),
     id(cq_id) {
     TT_ASSERT(
-        this->command_completion_region_size % hal_ref.get_alignment(HalMemType::HOST) == 0 and
-            this->command_issue_region_size % hal_ref.get_alignment(HalMemType::HOST) == 0,
+        this->command_completion_region_size % MetalContext::instance().hal().get_alignment(HalMemType::HOST) == 0 and
+            this->command_issue_region_size % MetalContext::instance().hal().get_alignment(HalMemType::HOST) == 0,
         "Issue queue and completion queue need to be {}B aligned!",
-        hal_ref.get_alignment(HalMemType::HOST));
+        MetalContext::instance().hal().get_alignment(HalMemType::HOST));
     TT_ASSERT(this->issue_fifo_limit != 0, "Cannot have a 0 fifo limit");
     // Currently read / write pointers on host and device assumes contiguous ranges for each channel
     // Device needs absolute offset of a hugepage to access the region of sysmem that holds a particular command

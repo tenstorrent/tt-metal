@@ -17,7 +17,7 @@
 #include "command_queue_interface.hpp"
 #include "env_lib.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 #include "memcpy.hpp"
 #include <tt_stl/span.hpp>
 #include "tt_align.hpp"
@@ -227,8 +227,9 @@ private:
     uint32_t cmd_sequence_sizeB = 0;
     void* cmd_region = nullptr;
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t pcie_alignment =
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 
     vector_aligned<uint32_t> cmd_region_vector;
 };

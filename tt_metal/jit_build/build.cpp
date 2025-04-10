@@ -25,7 +25,6 @@
 #include "impl/context/metal_context.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build_settings.hpp"
-#include "llrt/hal.hpp"
 #include "logger.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"

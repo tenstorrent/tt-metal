@@ -88,14 +88,14 @@ inline std::string get_soc_description_file(
 }  // namespace
 namespace tt {
 
-Cluster::Cluster(llrt::RunTimeOptions& rtoptions, Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
+Cluster::Cluster(llrt::RunTimeOptions& rtoptions, tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
     ZoneScoped;
     log_info(tt::LogDevice, "Opening user mode device driver");
 
     this->detect_arch_and_target();
 
     if (arch_ != ARCH::GRAYSKULL) {
-        routing_info_addr_ = tt::tt_metal::hal_ref.get_dev_addr(
+        routing_info_addr_ = hal_.get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
     }
 
@@ -311,12 +311,12 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
 
     barrier_address_params barrier_params;
     barrier_params.tensix_l1_barrier_base =
-        tt_metal::hal_ref.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
-    barrier_params.dram_barrier_base = tt_metal::hal_ref.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
+        hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
+    barrier_params.dram_barrier_base = hal_.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
 
-    if (tt_metal::hal_ref.get_arch() != tt::ARCH::GRAYSKULL) {
-        barrier_params.eth_l1_barrier_base = tt_metal::hal_ref.get_dev_addr(
-            tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
+    if (hal_.get_arch() != tt::ARCH::GRAYSKULL) {
+        barrier_params.eth_l1_barrier_base =
+            hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
     }
     device_driver->set_barrier_address_params(barrier_params);
 
@@ -889,7 +889,7 @@ void Cluster::disable_ethernet_cores_with_retrain() {
                     this->cluster_desc_->get_board_type(chip_id) == BoardType::UBB) {
                     tt_cxy_pair virtual_eth_core(
                         chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
-                    auto retrain_count_addr = tt::tt_metal::hal_ref.get_dev_addr(
+                    auto retrain_count_addr = hal_.get_dev_addr(
                         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
                         tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
                     this->read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);

@@ -39,7 +39,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
-#include "llrt/hal.hpp"
 #include <tt-metalium/logger.hpp>
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/program.hpp>
@@ -231,7 +230,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
-    uint32_t rta_base0 = hal_ref.get_dev_addr(
+    uint32_t rta_base0 = MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     std::map<string, string> dummy_defines0 = {
         {"DATA_MOVEMENT", "1"},
@@ -254,7 +253,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     vector<uint32_t> dummy_kernel0_args_readback = tt::llrt::read_hex_vec_from_core(
         device->id(),
         eth_noc_xy,
-        hal_ref.get_dev_addr(
+        MetalContext::instance().hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
         dummy_kernel0_args.size() * sizeof(uint32_t));
 
@@ -324,12 +323,13 @@ bool test_dummy_EnqueueProgram_with_sems(
         for (const CoreCoord& core_coord : core_range) {
             vector<uint32_t> semaphore_vals;
             uint32_t expected_semaphore_vals_for_core_idx = 0;
-            const uint32_t semaphore_buffer_size = program_config.num_sems * hal_ref.get_alignment(HalMemType::L1);
+            const uint32_t semaphore_buffer_size =
+                program_config.num_sems * MetalContext::instance().hal().get_alignment(HalMemType::L1);
             uint32_t semaphore_base = program.get_sem_base_addr(device, core_coord, CoreType::WORKER);
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size();
-                 i += (hal_ref.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
+                 i += (MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
                 const bool is_semaphore_value_correct =
                     semaphore_vals[i] == expected_semaphore_vals_for_core[expected_semaphore_vals_for_core_idx];
                 expected_semaphore_vals_for_core_idx++;
@@ -821,7 +821,7 @@ std::pair<uint32_t, uint32_t> get_args_addr(const IDevice* device, const tt::RIS
         case tt::RISCV::ERISC: {
             HalProgrammableCoreType eth_core_type =
                 idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-            unique_args_addr = hal_ref.get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
+            unique_args_addr = MetalContext::instance().hal().get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
             common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             break;
         } break;
