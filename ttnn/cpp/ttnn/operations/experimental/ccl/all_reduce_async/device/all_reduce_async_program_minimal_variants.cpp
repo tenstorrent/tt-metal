@@ -7,6 +7,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/fabric_host_utils.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "all_reduce_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -68,16 +69,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         is_first_chip,
         is_last_chip);
 
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
-        ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device,
-            forward_device.value_or(nullptr),
-            backward_device.value_or(nullptr),
-            &program,
-            enable_persistent_fabric_mode,
-            num_links,
-            topology);
-
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
@@ -133,7 +124,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     tt::log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
+    const auto& edm_config = tt::tt_fabric::get_default_fabric_config();
+    const size_t packet_size_bytes = edm_config.channel_buffer_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = tt::div_up(output_tensor_cores.num_cores(), num_links) * output_tensor_shard_num_pages;
@@ -375,17 +367,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             output_tensor_cores_y.push_back(this_core.y);
         }
 
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
-            !forward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
-            !backward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
-
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),    // tensor_address0
@@ -455,30 +436,19 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        writer_rt_args.push_back(forward_fabric_connection.has_value());
-        if (forward_fabric_connection.has_value()) {
-            auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
-            append_worker_to_fabric_edm_sender_rt_args(
-                forward_fabric_connection.value(),
-                sender_worker_flow_control_semaphore_id,
-                sender_worker_teardown_semaphore_id,
-                sender_worker_buffer_index_semaphore_id,
-                writer_rt_args);
+
+        writer_rt_args.push_back(forward_device.has_value());
+        if (forward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_fabric_connection.has_value());
-        if (backward_fabric_connection.has_value()) {
-            auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
-            append_worker_to_fabric_edm_sender_rt_args(
-                backward_fabric_connection.value(),
-                sender_worker_flow_control_semaphore_id,
-                sender_worker_teardown_semaphore_id,
-                sender_worker_buffer_index_semaphore_id,
-                writer_rt_args);
+
+        writer_rt_args.push_back(backward_device.has_value());
+        if (backward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
+
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
 
         // Set reduction worker runtime args
