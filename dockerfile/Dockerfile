@@ -216,25 +216,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /tmp/iwyu \
-    && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
-    && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
-    && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
-    && cmake --build /tmp/iwyu/build --parallel \
-    && cmake --install /tmp/iwyu/build \
-    && rm -rf /tmp/iwyu
-
-
-RUN git config --global --add safe.directory '*'
-
-ENV CCACHE_TEMPDIR=/tmp/ccache
-
-#############################################################
-
-FROM ci-build AS ci-test
-
-ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
-
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
 RUN python3 -m venv $PYTHON_ENV_DIR
@@ -245,6 +226,19 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is activated on shell startup
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
+# Numpy needed for tt-train to build
+RUN python3 -m pip install --no-cache-dir build numpy setuptools
+
+RUN git config --global --add safe.directory '*'
+
+ENV CCACHE_TEMPDIR=/tmp/ccache
+
+#############################################################
+
+FROM ci-build AS ci-test
+
+ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
 # Create directories for infra
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
@@ -257,9 +251,8 @@ COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-met
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 
 RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
-    python3 -m pip install setuptools wheel==0.45.1 && \
-    python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-    python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
+    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
+    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
 
 # Adjust permissions to allow any user to use and modify the venv
 RUN chmod -R 777 $VIRTUAL_ENV
@@ -268,13 +261,35 @@ RUN chmod -R 777 $VIRTUAL_ENV
 
 FROM ci-test AS dev
 
-# Need this to build GDB
-RUN apt-get -y update \
-    && apt-get install -y libmpfr-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Install dev deps
+# libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
+# libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
+# switching to libgl1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    acl \
+    emacs \
+    gdb \
+    less \
+    libmpfr-dev \
+    nano \
+    openssh-server \
+    vim \
+    libgl1 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install the gdb that is compatible with clang-17
-RUN apt-get remove -y gdb || true \
+# IWYU could be useful to developers
+RUN mkdir -p /tmp/iwyu \
+    && wget -O /tmp/iwyu/iwyu.tar.gz https://github.com/include-what-you-use/include-what-you-use/archive/refs/tags/0.21.tar.gz \
+    && tar -xzf /tmp/iwyu/iwyu.tar.gz -C /tmp/iwyu --strip-components=1 \
+    && cmake -S /tmp/iwyu/ -B /tmp/iwyu/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-17 -DCMAKE_CXX_COMPILER=clang++-17 \
+    && cmake --build /tmp/iwyu/build --parallel \
+    && cmake --install /tmp/iwyu/build \
+    && rm -rf /tmp/iwyu
+
+# Remove gdb if we aren't on Ubuntu 24.04
+# 24.04 has gdb 15.1 by default, lets give that a chance before we decide we need to build something
+RUN [ "$UBUNTU_VERSION" != "24.04" ] && apt-get remove -y gdb || true
+RUN [ "$UBUNTU_VERSION" != "24.04" ] \
     && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
     && wget -O /tmp/gdb-build/gdb.tar.gz https://ftp.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
     && tar -xvf /tmp/gdb-build/gdb.tar.gz -C /tmp/gdb-build --strip-components=1 \
@@ -282,16 +297,6 @@ RUN apt-get remove -y gdb || true \
     && make -j$(nproc) \
     && make install \
     && rm -rf /tmp/gdb-build
-
-# Install dev deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    acl \
-    emacs \
-    less \
-    nano \
-    openssh-server \
-    vim \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 #############################################################
 

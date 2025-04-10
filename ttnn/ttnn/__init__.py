@@ -212,6 +212,7 @@ from ttnn.device import (
     synchronize_mesh_device,
     dump_device_memory_state,
     get_memory_view,
+    get_max_worker_l1_unreserved_size,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -296,6 +297,7 @@ sub = ttnn.subtract
 sub_ = ttnn.subtract_
 mul = ttnn.multiply
 mul_ = ttnn.multiply_
+div_ = ttnn.divide_
 
 
 # TODO: pybind the overloaded operators below

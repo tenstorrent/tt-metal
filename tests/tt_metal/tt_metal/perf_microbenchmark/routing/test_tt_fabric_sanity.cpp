@@ -6,6 +6,7 @@
 #include <fmt/base.h>
 #include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
+#include <tt_stl/span.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -42,9 +43,10 @@
 #include "llrt.hpp"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
 #include "rtoptions.hpp"
+#include <tt-metalium/allocator.hpp>
 #include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
@@ -490,7 +492,7 @@ typedef struct test_board {
         return control_plane->get_fabric_route(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_chan_id);
     }
 
-    inline std::vector<chip_id_t> get_intra_chip_neighbors(
+    inline stl::Span<const chip_id_t> get_intra_chip_neighbors(
         mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) {
         return control_plane->get_intra_chip_neighbors(src_mesh_id, src_chip_id, routing_direction);
     }
@@ -806,7 +808,7 @@ typedef struct test_device {
         }
     }
 
-    inline std::vector<chip_id_t> get_intra_chip_neighbors(RoutingDirection routing_direction) {
+    inline stl::Span<const chip_id_t> get_intra_chip_neighbors(RoutingDirection routing_direction) {
         return board_handle->get_intra_chip_neighbors(mesh_id, logical_chip_id, routing_direction);
     }
 
@@ -1678,7 +1680,7 @@ int main(int argc, char **argv) {
         }
 
         uint32_t worker_unreserved_base_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+            test_devices.begin()->second->device_handle->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
         if (metal_fabric_init_level == 0) {
             // manual init fabric

@@ -241,7 +241,8 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.upstream_sync_sem = 0;  // Unused
         } else if (auto dispatch_d = dynamic_cast<DispatchKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = dispatch_d->GetLogicalCore();
-            dependent_config_.upstream_dispatch_cb_sem_id = dispatch_d->GetStaticConfig().my_dispatch_cb_sem_id.value();
+            dependent_config_.upstream_dispatch_cb_sem_id =
+                dispatch_d->GetStaticConfig().my_downstream_cb_sem_id.value();
             dependent_config_.upstream_sync_sem = 0;  // Unused
         } else {
             TT_FATAL(false, "Unimplemented path");

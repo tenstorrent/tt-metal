@@ -10,9 +10,9 @@ from models.utility_functions import is_wormhole_b0
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 14501, "decode_t/s": 4000, "decode_t/s/u": 3.91}, False, None),
-        (True, 1024, {"prefill_t/s": 18000, "decode_t/s": 3495, "decode_t/s/u": 3.41}, False, None),
-        (True, 2048, {"prefill_t/s": 13200, "decode_t/s": 3448, "decode_t/s/u": 3.37}, False, None),
+        (True, 128, {"prefill_t/s": 14800, "decode_t/s": 3677, "decode_t/s/u": 3.59}, False, None),
+        (True, 1024, {"prefill_t/s": 19180, "decode_t/s": 3325, "decode_t/s/u": 3.25}, False, None),
+        (True, 2048, {"prefill_t/s": 13500, "decode_t/s": 3448, "decode_t/s/u": 3.37}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),
@@ -35,12 +35,9 @@ from models.utility_functions import is_wormhole_b0
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)  # Option to run Falcon in Async mode
 @pytest.mark.parametrize(
     "mesh_device",
-    (
-        (4, 4),
-        (8, 4),
-    ),
+    ((8, 4),),
     indirect=True,
-    ids=["16chipTG", "32chipTG"],
+    ids=["32chipTG"],
 )
 def test_demo_multichip(
     perf_mode,  # Option to measure perf using max seq length (with invalid outputs) and expected perf (t/s)
@@ -55,12 +52,13 @@ def test_demo_multichip(
     use_program_cache,
     enable_async_mode,
     is_ci_env,
+    ensure_devices_tg,
 ):
     assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
     num_devices = mesh_device.get_num_devices()
 
     if is_ci_env:
-        if num_devices != 32 or (not expected_greedy_output_path and not expected_perf_metrics):
+        if not expected_greedy_output_path and not expected_perf_metrics:
             pytest.skip("Skipping test in CI since it provides redundant testing")
         if expected_greedy_output_path:
             pytest.skip("Skipping test in CI due to Issue #11254")

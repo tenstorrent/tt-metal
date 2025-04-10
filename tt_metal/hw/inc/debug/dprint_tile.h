@@ -217,7 +217,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         this->cb_ptr += tile_idx * tile_info.tile_size;
 
         // Check for unprintable data, and return error as necessary
-        if (this->cb_ptr < L1_UNRESERVED_BASE || this->cb_ptr >= MEM_L1_SIZE) {
+        if (this->cb_ptr < *GET_MAILBOX_ADDRESS_DEV(core_info.l1_unreserved_start) || this->cb_ptr >= MEM_L1_SIZE) {
             this->return_code = DPrintErrorBadPointer;
             return;  // bad tile pointer, return
         }

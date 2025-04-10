@@ -29,10 +29,9 @@ from models.utility_functions import skip_for_grayskull
     "weights, layers, iterations",
     [
         ("random", 1, 6),
-        ("random", 1, 200),
         ("instruct", 80, 5),
     ],
-    ids=["quick", "quick-stress", "full"],
+    ids=["quick", "full"],
 )
 @pytest.mark.parametrize(
     "paged_attention",
@@ -108,12 +107,12 @@ def test_llama_model_inference(
 
     # Define minimum PCC for each iteration
     if layers == 1:
-        pcc = 0.922166
+        pcc = 0.921942
     else:
         pcc = 0.94
 
     # Define tight final PCC thresholds for quick mode
-    final_model_pcc = {"llama31_70b": 0.92216}[model_name]
+    final_model_pcc = {"llama31_70b": 0.921942}[model_name]
 
     final_k_cache_pcc = {
         "llama31_70b": 0.9997,

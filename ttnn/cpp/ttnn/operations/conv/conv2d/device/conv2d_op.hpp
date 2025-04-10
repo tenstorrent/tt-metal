@@ -165,7 +165,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const OptimizedConvBlockConfig& block_config,
     tt::tt_metal::DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
-    bool use_shallow_conv_variant,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     Tensor& output,
     bool enable_act_double_buffer,
@@ -185,7 +184,6 @@ struct OptimizedConvNew {
     tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape;  // For sharded input, input tensor shape is nonsense
-    bool use_shallow_conv_variant;
     const DeviceComputeKernelConfig compute_kernel_config;
     bool enable_act_double_buffer;
     bool enable_weights_double_buffer;
@@ -204,7 +202,6 @@ struct OptimizedConvNew {
         tt::tt_metal::MemoryConfig memory_config,
         tt::tt_metal::DataType dtype,
         std::array<std::uint32_t, 4> input_tensor_shape,
-        bool use_shallow_conv_variant,
         const DeviceComputeKernelConfig compute_kernel_config,
         bool enable_act_double_buffer,
         bool enable_weights_double_buffer,
@@ -221,7 +218,6 @@ struct OptimizedConvNew {
         memory_config(memory_config),
         dtype(dtype),
         input_tensor_shape(input_tensor_shape),
-        use_shallow_conv_variant(use_shallow_conv_variant),
         compute_kernel_config(compute_kernel_config),
         enable_act_double_buffer(enable_act_double_buffer),
         enable_weights_double_buffer(enable_weights_double_buffer),
@@ -254,7 +250,6 @@ struct OptimizedConvNew {
         "activation",
         "dtype",
         "input_tensor_shape",
-        "use_shallow_conv_variant",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "enable_split_reader",
@@ -272,7 +267,6 @@ struct OptimizedConvNew {
             std::cref(this->activation),
             std::cref(this->dtype),
             std::cref(this->input_tensor_shape),
-            std::cref(this->use_shallow_conv_variant),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_split_reader),
@@ -294,7 +288,6 @@ Tensor optimized_conv_new(
     const tt::tt_metal::MemoryConfig& memory_config,
     tt::tt_metal::DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
-    bool use_shallow_conv_variant,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,

@@ -25,7 +25,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt/hal.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>

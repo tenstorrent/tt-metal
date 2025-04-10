@@ -35,7 +35,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_memory.h>

@@ -134,8 +134,7 @@ struct WorkerToFabricEdmSenderImpl {
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             ASSERT(num_buffers_per_channel == EDM_NUM_BUFFER_SLOTS);
             for (size_t i = 0; i < EDM_NUM_BUFFER_SLOTS; ++i) {
-                edm_buffer_slot_addrs[i] =
-                    edm_buffer_base_addr + (i * (buffer_size_bytes + sizeof(eth_channel_sync_t)));
+                edm_buffer_slot_addrs[i] = edm_buffer_base_addr + (i * buffer_size_bytes);
             }
         }
     }
@@ -275,8 +274,7 @@ struct WorkerToFabricEdmSenderImpl {
         this->buffer_slot_wrptr = *this->buffer_slot_wrptr_ptr;
         if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
             this->edm_buffer_addr =
-                this->edm_buffer_base_addr +
-                (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+                this->edm_buffer_base_addr + (this->get_buffer_slot_index() * this->buffer_size_bytes);
         }
         ASSERT(this->buffer_slot_wrptr < 20);
     }
@@ -391,8 +389,7 @@ private:
             uint8_t wrptr = this->buffer_slot_wrptr;
             this->buffer_slot_wrptr = !(wrptr == ((this->num_buffers_per_channel * 2) - 1)) ? wrptr + 1 : 0;
             this->edm_buffer_addr =
-                this->edm_buffer_base_addr +
-                (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+                this->edm_buffer_base_addr + (this->get_buffer_slot_index() * this->buffer_size_bytes);
         }
     }
 
