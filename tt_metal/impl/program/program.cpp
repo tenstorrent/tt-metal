@@ -946,37 +946,6 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         return dst_noc_unicast_info;
     };
 
-    // Unicast/Multicast Semaphores
-    for (const Semaphore &semaphore : this->semaphores()) {
-        std::vector<uint32_t> semaphore_data(1);
-        semaphore_data[0] = semaphore.initial_value();
-
-        // TODO: use semaphore.core_type from main
-        if (semaphore.core_type() == CoreType::WORKER) {
-            uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-            std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                device->extract_dst_noc_multicast_info(
-                    semaphore.core_range_set().ranges(), CoreType::WORKER);
-            transfer_info transfer_info = {
-                .dst_base_addr = semaphore.offset(),
-                .dst_noc_info = dst_noc_multicast_info,
-                .linked = false,
-                .data = semaphore_data};
-            this->program_transfer_info.multicast_semaphores[semaphore.offset()].push_back(transfer_info);
-        } else if (semaphore.core_type() == CoreType::ETH) {
-            // TODO: we only fast dispatch to active eth...
-            uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-            std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
-                extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
-            transfer_info transfer_info = {
-                .dst_base_addr = semaphore.offset(),
-                .dst_noc_info = dst_noc_unicast_info,
-                .linked = false,
-                .data = semaphore_data};
-            this->program_transfer_info.unicast_semaphores[semaphore.offset()].push_back(transfer_info);
-        }
-    }
-
     // Circular Buffer Configs handled in EnqueueProgram
 
     // Assume here and in command queue that kg_buffers is populated with multicast buffers first then unicast buffers
