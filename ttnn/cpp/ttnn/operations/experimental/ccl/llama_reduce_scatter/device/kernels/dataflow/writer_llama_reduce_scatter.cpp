@@ -50,7 +50,6 @@ void kernel_main() {
     constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
     constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(14);
     constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(15);
-    constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(16);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -75,7 +74,6 @@ void kernel_main() {
     uint32_t linear_output_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
 
     if (sender_core) {
         auto fabric_connection =
@@ -84,7 +82,7 @@ void kernel_main() {
         // Set up packet headers once
         constexpr uint8_t device_order[other_devices] =
             DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
-        constexpr uint8_t packet_worker_cores[num_packet_worker_cores][2] = PACKET_WORKER_CORES;
+        constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
         const auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
         auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
@@ -111,12 +109,10 @@ void kernel_main() {
             auto& fabric_conn = target_device_id > chip_id ? fabric_connection.get_forward_connection()
                                                            : fabric_connection.get_backward_connection();
 
-            uint32_t num_pages_sent = 0;
-            uint32_t packet = sender_packet_start;
-            while (num_pages_sent < sender_total_num_pages) {
+            for (uint32_t packet = sender_packet_start; packet < sender_packet_end; packet++) {
                 // Determine packet size based on whether it's the last packet
-                auto num_pages_left = sender_total_num_pages - num_pages_sent;
-                const uint32_t curr_packet_num_pages = std::min(num_pages_per_packet, num_pages_left);
+                const uint32_t curr_packet_num_pages =
+                    packet == num_packets_total_per_device - 1 ? last_packet_num_pages : num_pages_per_packet;
                 const uint32_t curr_packet_size_bytes = curr_packet_num_pages * page_size_bytes;
 
                 const uint32_t receiver_core_x = packet_worker_cores[packet][x_index];
@@ -138,9 +134,6 @@ void kernel_main() {
                     (uint32_t)unicast_packet_header, packet_header_size);
 
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
-
-                num_pages_sent += curr_packet_num_pages;
-                packet++;
             }
 
             // Write the mcast packet (forward)
@@ -154,7 +147,6 @@ void kernel_main() {
             fabric_connection.close();
         }
     } else if (worker_core) {
-#ifndef SKIP_WRITE_BACK
         constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
         uint64_t noc_addresses[num_pages_per_packet];
         uint32_t accumulator_l1_addresses[num_pages_per_packet];
@@ -185,8 +177,5 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         cb_pop_front(accumulator_cb_id, num_pages_per_packet);
-#else
-        cb_wait_front(output_tensor_cb_id, num_pages_per_packet);
-#endif
     }
 }
