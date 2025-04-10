@@ -10,6 +10,9 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import comp_pcc
+import random
+import numpy as np
 
 
 @pytest.mark.parametrize("h", [32])
@@ -27,6 +30,39 @@ def test_layer_norm(device, h, w):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [64])
+def test_layer_norm_sim(device, h, w):
+    torch.manual_seed(0)
+    vals = []
+    for i in range(0, 1000):
+        h = random.randint(1, 2100)
+        w = random.randint(1, 2100)
+        r1 = -1000
+        r2 = 1000
+        torch_input_tensor = (r1 - r2) * torch.rand((h, w), dtype=torch.bfloat16) + r2
+        torch_weight = (r1 - r2) * torch.rand((w,), dtype=torch.bfloat16) + r2
+        torch_bias = (r1 - r2) * torch.rand((w,), dtype=torch.bfloat16) + r2
+
+        torch_output_tensor = torch.nn.functional.layer_norm(
+            torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
+        )
+
+        input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+        weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+        bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+
+        output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias)
+        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        output_tensor = ttnn.from_device(output_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+        pcc_passed, pcc_message = comp_pcc(torch_output_tensor, output_tensor, 0.99)
+        vals.append((h, w, pcc_passed))
+        print("Loop: " + str(i) + " Done")
+    data = np.array(vals)
+    np.save("data.npy", data)
 
 
 @pytest.mark.parametrize("h", [32])
