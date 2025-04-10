@@ -174,9 +174,9 @@ uint32_t SystemMemoryManager::get_last_completed_event(const uint8_t cq_id) {
 void SystemMemoryManager::reset(const uint8_t cq_id) {
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     cq_interface.issue_fifo_wr_ptr = (cq_interface.cq_start + cq_interface.offset) >> 4;  // In 16B words
-    cq_interface.issue_fifo_wr_toggle = 0;
+    cq_interface.issue_fifo_wr_toggle = false;
     cq_interface.completion_fifo_rd_ptr = cq_interface.issue_fifo_limit;
-    cq_interface.completion_fifo_rd_toggle = 0;
+    cq_interface.completion_fifo_rd_toggle = false;
 }
 
 void SystemMemoryManager::set_issue_queue_size(const uint8_t cq_id, const uint32_t issue_queue_size) {

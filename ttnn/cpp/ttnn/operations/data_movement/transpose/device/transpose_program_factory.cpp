@@ -141,9 +141,9 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor& a, Tensor&
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)src0_is_dram};
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -551,7 +551,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
 
     // create reader kernel with compile time and runtime args
     tt::tt_metal::Buffer* src_buffer = a.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
 
     uint32_t element_size = a.element_size();
     uint32_t padding_val_packed = 0;
@@ -584,7 +584,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
     // create writer kernel with compile time and runtime args
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)dst_is_dram,
         a.element_size(),
@@ -706,7 +706,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     }
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};
     if (row_major) {
         reader_compile_time_args.push_back((std::uint32_t)N);
@@ -728,7 +728,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
         reader_compile_time_args.push_back((std::uint32_t)(cb_data_format == tt::DataFormat::Float32));
         reader_compile_time_args.push_back((std::uint32_t)alignment);
     }
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
     if (row_major) {
         writer_compile_time_args.push_back((std::uint32_t)W * a.element_size());
@@ -1598,7 +1598,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         auto cb_im2 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_im2_config);
     }
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_is_dram,
     };
@@ -1623,7 +1623,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         }
     }
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
     if (row_major) {
         writer_compile_time_args.push_back(ht);

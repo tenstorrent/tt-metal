@@ -98,8 +98,8 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? true : false;
 
     uint32_t log2_page_size = 0;
     std::vector<uint32_t> compile_time_args = {cb_index, (uint32_t)src_is_dram, (uint32_t)dst_is_dram};

@@ -586,8 +586,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(
                                 "buffer already exists",
                                 buffer_index);
                         }
-                        cb_indices[buffer_index] = 1;
-                        target_cb_indices[buffer_index] = 1;
+                        cb_indices[buffer_index] = true;
+                        target_cb_indices[buffer_index] = true;
                     }
                 };
                 add_buffer_indices(circular_buffer->config().local_buffer_indices(), local_cb_indices);
