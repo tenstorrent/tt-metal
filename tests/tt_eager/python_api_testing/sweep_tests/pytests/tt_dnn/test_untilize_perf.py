@@ -6,6 +6,7 @@ import pytest
 import torch
 from functools import partial
 from loguru import logger
+import numpy as np
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
@@ -22,7 +23,30 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
 
-def get_profiler_data(perf_scope):
+def get_op_duration(device_data, op_name):
+    # TODO provide more bullet proof solution, currently assumes there is only 1 device and 1 core
+    core_name = list(device_data["devices"][0]["cores"].keys())[0]
+
+    # Get event timeseries for Unpacker and Packer cores (TRISC_0 and TRISC_2)
+    trisc0_data = device_data["devices"][0]["cores"][core_name]["riscs"]["TRISC_0"]["timeseries"]
+    trisc2_data = device_data["devices"][0]["cores"][core_name]["riscs"]["TRISC_2"]["timeseries"]
+
+    # TODO provide safe guards, OP existis, there is same number of OP occurences etc... Add error handling
+    # Get Unpacker op_name zone start time series
+    trisc0_op_start = [i for i in trisc0_data if (i[0]["zone_name"] == op_name and i[0]["type"] == "ZONE_START")]
+
+    # Get Packer op_name zone end time series
+    trisc2_op_end = [i for i in trisc2_data if (i[0]["zone_name"] == op_name and i[0]["type"] == "ZONE_END")]
+
+    # Get op duration for each OP occurence in timeseries, assuming everything is in place
+    op_duration = []
+    for i in range(len(trisc0_op_start)):
+        op_duration.append(trisc2_op_end[i][1] - trisc0_op_start[i][1])
+
+    return op_duration
+
+
+def get_profiler_data(perf_scope, op_name, op_duration=False):
     # Import profiler log file and run perf related statistic calculation
     setup = device_post_proc_config.perf_analysis()
     setup.deviceInputLog = profiler_log_path
@@ -31,20 +55,25 @@ def get_profiler_data(perf_scope):
 
     # Add UNTILIZE-BLOCK/OP zone average duration per trisc core
     data.append(
-        deviceData["devices"][0]["cores"]["DEVICE"]["analysis"][f"trisc0_untilize_{perf_scope}_duration"]["stats"][
+        deviceData["devices"][0]["cores"]["DEVICE"]["analysis"][f"trisc0_{op_name}_{perf_scope}_duration"]["stats"][
             "Average"
         ]
     )
     data.append(
-        deviceData["devices"][0]["cores"]["DEVICE"]["analysis"][f"trisc1_untilize_{perf_scope}_duration"]["stats"][
+        deviceData["devices"][0]["cores"]["DEVICE"]["analysis"][f"trisc1_{op_name}_{perf_scope}_duration"]["stats"][
             "Average"
         ]
     )
     data.append(
-        deviceData["devices"][0]["cores"]["DEVICE"]["analysis"][f"trisc2_untilize_{perf_scope}_duration"]["stats"][
+        deviceData["devices"][0]["cores"]["DEVICE"]["analysis"][f"trisc2_{op_name}_{perf_scope}_duration"]["stats"][
             "Average"
         ]
     )
+
+    op_name_profiler = op_name + "-op"
+    op_name_profiler = op_name_profiler.upper()
+    if op_duration:
+        data.append(np.mean(get_op_duration(deviceData, op_name_profiler)))
 
     return data
 
@@ -82,7 +111,7 @@ def test_untilize_test(input_shapes, untilize_args, device, function_level_defau
     if perf_scope == "block":
         os.environ["TT_LLK_PERF_BLOCK"] = "1"
 
-    for perf in ["op", "op_no_dm", "unpack", "pack"]:
+    for perf in ["op", "op_no_dm"]:
         # Set log csv file name, file will be used to store perf data
         ENVS = dict(os.environ)
         TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
@@ -97,6 +126,8 @@ def test_untilize_test(input_shapes, untilize_args, device, function_level_defau
             os.environ[f"TT_LLK_PERF_NO_DM"] = "1"
 
         with open(log_file, mode="w", newline="") as file:
+            if perf in ["op", "op_no_dm"] and perf_scope == "op":
+                get_op_duration = True
             writer = csv.writer(file)
             csv_header = [
                 "rt_dim",
@@ -108,6 +139,9 @@ def test_untilize_test(input_shapes, untilize_args, device, function_level_defau
                 "math_cycles_per_tile",
                 "pack_cycles_per_tile",
             ]
+            if get_op_duration:
+                csv_header.append("op_duration_cycles")
+                csv_header.append("op_duration_cycles_per_tile")
             writer.writerow(csv_header)
 
             # Run tilize test for different rt and ct dims
@@ -132,7 +166,7 @@ def test_untilize_test(input_shapes, untilize_args, device, function_level_defau
                     # Process profiler log file and extract tilize data
                     ttnn.DumpDeviceProfiler(device)
                     rt_div = rt_dim if perf_scope == "op" else 1
-                    profiler_data = get_profiler_data(perf_scope)
+                    profiler_data = get_profiler_data(perf_scope, "untilize", get_op_duration)
                     csv_data = [
                         rt_dim,
                         ct_dim,
@@ -143,6 +177,9 @@ def test_untilize_test(input_shapes, untilize_args, device, function_level_defau
                         f"{profiler_data[1] / ct_dim / rt_div:.2f}",
                         f"{profiler_data[2] / ct_dim / rt_div:.2f}",
                     ]
+                    if get_op_duration:
+                        csv_data.append(f"{profiler_data[3]:.2f}")
+                        csv_data.append(f"{profiler_data[3] / ct_dim / rt_div:.2f}")
                     writer.writerow(csv_data)
         # Unset env variable used to select perf measurement thread target(unpack, math, pack)
         if perf in ["unpack", "pack", "math"]:
