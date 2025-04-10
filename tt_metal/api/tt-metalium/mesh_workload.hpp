@@ -32,22 +32,13 @@ class MeshWorkload {
 private:
     std::unique_ptr<MeshWorkloadImpl> impl_;
 
-    /*
-    template <typename T>
-    friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
-    template <typename WorkloadType, typename DeviceType>
-    friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
-    friend MeshCommandQueue;
-    friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
-    */
-
 public:
     // Main User-Facing API building blocks
     MeshWorkload();
     ~MeshWorkload();
     MeshWorkload(MeshWorkload&& other) noexcept;
     MeshWorkload& operator=(MeshWorkload&& other) noexcept;
-    
+
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs();
 
