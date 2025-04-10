@@ -32,6 +32,7 @@ void kernel_main() {
     constexpr uint32_t num_output_cores = get_compile_time_arg_val(18);
     constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(19);
     constexpr bool is_causal = get_compile_time_arg_val(20) == 1;
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(21);
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -70,9 +71,17 @@ void kernel_main() {
             return;
         }
     }
+
+    auto Sk_chunk_t_dynamic = get_dynamic_Sk_chunk_t<Sk_chunk_t, max_dynamic_chunk_size>(cur_pos);
+    auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
+
     // Sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
-        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
+        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size_dynamic);
+
+    if (k_chunk_start == k_chunk_end) {
+        return;  // early exit because no computes needs to be done
+    }
 
     tt_l1_ptr uint32_t* all_reducer_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_reducer_cores;
@@ -88,10 +97,6 @@ void kernel_main() {
 
     const uint64_t in0_sender_semaphore_noc_addr =
         get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, reducer_semaphore_addr);
-
-    if (k_chunk_start == k_chunk_end) {
-        return;  // early exit because no computes needs to be done
-    }
 
     constexpr uint32_t out_chunk_tiles = PNHt * DHt;
     uint32_t num_cores_to_wait = num_cores_per_head - 1;
@@ -145,7 +150,7 @@ void kernel_main() {
 
     // generate and send mask to compute if causal
     if constexpr (is_causal) {
-        generate_mask<cb_mask_in, PNHt, Sk_chunk_t>(k_num_chunks, cur_pos);
+        generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
     }
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
