@@ -25,8 +25,8 @@
 #include "jit_build_options.hpp"
 #include "llrt.hpp"
 #include "logger.hpp"
-#include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
@@ -485,7 +485,8 @@ void EthernetKernel::read_binaries(IDevice* device) {
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         load_type);
-    if (tt::llrt::RunTimeOptions::get_instance().get_erisc_iram_enabled() && this->config_.eth_mode != Eth::IDLE) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_erisc_iram_enabled() &&
+        this->config_.eth_mode != Eth::IDLE) {
         // text_addr and some of span's addr point to IRAM base address.
         // However it need to be placed L1 kernel base address for FW to copy it to IRAM then kick off
         // The kernel can run with IRAM base address once it started.

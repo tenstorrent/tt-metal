@@ -62,7 +62,6 @@
 #include "profiler_types.hpp"
 #include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"
-#include "rtoptions.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "trace_buffer.hpp"
@@ -323,7 +322,7 @@ void Device::get_associated_dispatch_virtual_cores(
 
 void Device::initialize_cluster() {
     ZoneScoped;
-    if (llrt::RunTimeOptions::get_instance().get_clear_l1()) {
+    if (tt_metal::MetalContext::instance().rtoptions().get_clear_l1()) {
         this->clear_l1_state();
     }
     int ai_clk = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->id_);
@@ -489,7 +488,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                     }
                     log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
 
-                    if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw())  {
+                    if (not tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
                         llrt::test_load_write_read_risc_binary(
                             binary_mem, this->id(), virtual_core, core_type_idx, processor_class, riscv_id);
                     }
@@ -530,7 +529,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                 tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                     tt_cxy_pair(this->id(), virtual_core), reset_val);
             }
-            if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
+            if (not tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_ref.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
@@ -1049,7 +1048,7 @@ void Device::init_command_queue_host() {
 }
 
 void Device::init_command_queue_device() {
-    if (llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
+    if (tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
         detail::EnablePersistentKernelCache();
         this->compile_command_queue_programs();
         detail::DisablePersistentKernelCache();

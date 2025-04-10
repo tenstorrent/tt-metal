@@ -32,7 +32,6 @@
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include "program_device_map.hpp"
-#include "rtoptions.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -329,7 +328,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     program.set_last_used_command_queue_for_testing(this);
 
 #ifdef DEBUG
-    if (tt::llrt::RunTimeOptions::get_instance().get_validate_kernel_binaries()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager_.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
         if (const auto buffer = program.get_kernels_buffer(device_)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
@@ -394,7 +393,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     this->enqueue_command(command, blocking, sub_device_ids);
 
 #ifdef DEBUG
-    if (tt::llrt::RunTimeOptions::get_instance().get_validate_kernel_binaries()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager_.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
         if (const auto buffer = program.get_kernels_buffer(device_)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
@@ -552,7 +551,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event, sub_device_ids);
-    if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
             if (DPrintServerHangDetected()) {
                 // DPrint Server hang, early exit. We're in test mode, so main thread will assert.

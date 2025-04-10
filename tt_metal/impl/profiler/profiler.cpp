@@ -7,7 +7,6 @@
 #include <host_api.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <nlohmann/json.hpp>
-#include <rtoptions.hpp>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -739,7 +738,7 @@ void DeviceProfiler::dumpResults(
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+                if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
                     tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
                 }
             } else {
@@ -751,7 +750,7 @@ void DeviceProfiler::dumpResults(
             }
         }
 
-        if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
             log_warning("Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
         }
 
@@ -778,12 +777,12 @@ void DeviceProfiler::dumpResults(
             }
 
             // if defined, used profiler_noc_events_report_path to write json log. otherwise use output_dir
-            auto rpt_path = tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_report_path();
+            auto rpt_path = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
             if (rpt_path.empty()) {
                 rpt_path = output_dir;
             }
 
-            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
                 serializeJsonNocTraces(noc_trace_json_log, rpt_path, device_id);
             }
         }
@@ -868,7 +867,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
 #endif
 }
 
-bool getDeviceProfilerState() { return tt::llrt::RunTimeOptions::get_instance().get_profiler_enabled(); }
+bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled(); }
 
 }  // namespace tt_metal
 

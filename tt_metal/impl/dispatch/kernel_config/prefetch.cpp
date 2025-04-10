@@ -24,7 +24,6 @@
 #include "eth_router.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "rtoptions.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
@@ -432,8 +431,8 @@ void PrefetchKernel::CreateKernel() {
         true,
         // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
         // respect code space
-        tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled() &&
-            (not tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline()),
+        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
+            (not tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_noinline()),
         optimization_level);
 }
 

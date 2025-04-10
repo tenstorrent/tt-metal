@@ -5,7 +5,6 @@
 #include <logger.hpp>
 #include <math.h>
 #include <pthread.h>
-#include <rtoptions.hpp>
 #include <tt-metalium/blockfloat_common.hpp>
 #include <algorithm>
 #include <atomic>
@@ -103,7 +102,7 @@ static void AssertSize(uint8_t sz, uint8_t expected_sz) {
 
 inline bool RiscEnabled(const CoreDescriptor& core, int risc_index) {
     uint32_t risc_mask =
-        tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
+        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
     if (core.type == CoreType::ETH) {
         // For ethernet cores, need to adjust the index up since the mask flags are successive. TODO(#17275): move this
         // logic into HAL?
@@ -515,11 +514,12 @@ DebugPrintServerContext::DebugPrintServerContext() {
 
     // Read risc mask + log file from rtoptions
     string file_name =
-        tt::llrt::RunTimeOptions::get_instance().get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
-    bool one_file_per_risc =
-        tt::llrt::RunTimeOptions::get_instance().get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint);
+        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
+    bool one_file_per_risc = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_one_file_per_risc(
+        tt::llrt::RunTimeDebugFeatureDprint);
     bool prepend_device_core_risc =
-        tt::llrt::RunTimeOptions::get_instance().get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
+        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_prepend_device_core_risc(
+            tt::llrt::RunTimeDebugFeatureDprint);
 
     // One file per risc auto-generates the output files and ignores the env var for it. Print a warning if both are
     // specified just in case.
@@ -533,11 +533,12 @@ DebugPrintServerContext::DebugPrintServerContext() {
         log_warning(
             "Both TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC and TT_METAL_DPRINT_ONE_FILE_PER_RISC are specified. "
             "TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC will be disabled.");
-        tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
+            tt::llrt::RunTimeDebugFeatureDprint, false);
     }
 
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
-    std::filesystem::path output_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + logfile_path);
+    std::filesystem::path output_dir(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
     if (file_name != "" && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
@@ -624,8 +625,9 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
     // If RTOptions doesn't enable DPRINT on this device, return here and don't actually attach it
     // to the server.
     std::vector<chip_id_t> chip_ids =
-        tt::llrt::RunTimeOptions::get_instance().get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
-    if (!tt::llrt::RunTimeOptions::get_instance().get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
+        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_feature_all_chips(
+            tt::llrt::RunTimeDebugFeatureDprint)) {
         if (std::find(chip_ids.begin(), chip_ids.end(), device_id) == chip_ids.end()) {
             return;
         }
@@ -634,7 +636,7 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
     // Core range depends on whether dprint_all_cores flag is set.
     std::vector<CoreDescriptor> print_cores_sanitized;
     for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
-        if (tt::llrt::RunTimeOptions::get_instance().get_feature_all_cores(
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_feature_all_cores(
                 tt::llrt::RunTimeDebugFeatureDprint, core_type) == tt::llrt::RunTimeDebugClassAll) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.
             for (CoreDescriptor logical_core : all_cores) {
@@ -648,7 +650,7 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
                 device_id,
                 tt::tt_metal::get_core_type_name(core_type));
         } else if (
-            tt::llrt::RunTimeOptions::get_instance().get_feature_all_cores(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_all_cores(
                 tt::llrt::RunTimeDebugFeatureDprint, core_type) == tt::llrt::RunTimeDebugClassDispatch) {
             for (CoreDescriptor logical_core : dispatch_cores) {
                 if (logical_core.type == core_type) {
@@ -661,7 +663,7 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
                 device_id,
                 tt::tt_metal::get_core_type_name(core_type));
         } else if (
-            tt::llrt::RunTimeOptions::get_instance().get_feature_all_cores(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_all_cores(
                 tt::llrt::RunTimeDebugFeatureDprint, core_type) == tt::llrt::RunTimeDebugClassWorker) {
             // For worker cores, take all cores and remove dispatch cores.
             for (CoreDescriptor logical_core : all_cores) {
@@ -678,7 +680,7 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
                 tt::tt_metal::get_core_type_name(core_type));
         } else {
             // No "all cores" option provided, which means print from the cores specified by the user
-            std::vector<CoreCoord>& print_cores = tt::llrt::RunTimeOptions::get_instance().get_feature_cores(
+            std::vector<CoreCoord>& print_cores = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_cores(
                 tt::llrt::RunTimeDebugFeatureDprint)[core_type];
 
             // We should also validate that the cores the user specified are valid worker cores.
@@ -753,8 +755,9 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
 void DebugPrintServerContext::DetachDevice(chip_id_t device_id) {
     // Don't detach the device if it's disabled by env vars - in this case it wasn't attached.
     std::vector<chip_id_t> chip_ids =
-        tt::llrt::RunTimeOptions::get_instance().get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
-    if (!tt::llrt::RunTimeOptions::get_instance().get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
+        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_feature_all_chips(
+            tt::llrt::RunTimeDebugFeatureDprint)) {
         if (std::find(chip_ids.begin(), chip_ids.end(), device_id) == chip_ids.end()) {
             return;
         }
@@ -850,8 +853,8 @@ void DebugPrintServerContext::ClearLogFile() {
         outfile_->close();
         delete outfile_;
 
-        string file_name =
-            tt::llrt::RunTimeOptions::get_instance().get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
+        string file_name = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_file_name(
+            tt::llrt::RunTimeDebugFeatureDprint);
         outfile_ = new ofstream(file_name);
         stream_ = outfile_ ? outfile_ : &cout;
     }
@@ -1213,7 +1216,7 @@ void DebugPrintServerContext::PollPrintData() {
                         } catch (std::runtime_error& e) {
                             // Depending on if test mode is enabled, catch and stop server, or
                             // re-throw the exception.
-                            if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled()) {
+                            if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
                                 server_killed_due_to_hang_ = true;
                                 device_to_core_range_lock_.unlock();
                                 return;  // Stop the print loop
@@ -1264,7 +1267,8 @@ void DebugPrintServerContext::TransferToAndFlushOutputStream(
 string DebugPrintServerContext::GetDataToOutput(const HartKey& risc_key, const ostringstream* stream) {
     string output;
     const bool prepend_device_core_risc =
-        tt::llrt::RunTimeOptions::get_instance().get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
+        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_prepend_device_core_risc(
+            tt::llrt::RunTimeDebugFeatureDprint);
     if (prepend_device_core_risc) {
         const chip_id_t device_id = get<0>(risc_key);
         const CoreDescriptor& core_desc = get<1>(risc_key);
@@ -1287,12 +1291,13 @@ string DebugPrintServerContext::GetDataToOutput(const HartKey& risc_key, const o
 
 ostream* DebugPrintServerContext::GetOutputStream(const HartKey& risc_key) {
     ostream* output_stream = stream_;
-    if (tt::llrt::RunTimeOptions::get_instance().get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_feature_one_file_per_risc(
+            tt::llrt::RunTimeDebugFeatureDprint)) {
         if (!risc_to_file_stream_[risc_key]) {
             const chip_id_t chip_id = get<0>(risc_key);
             const CoreDescriptor& logical_core = get<1>(risc_key);
             const int risc_id = get<2>(risc_key);
-            string filename = tt::llrt::RunTimeOptions::get_instance().get_root_dir() + logfile_path;
+            string filename = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + logfile_path;
             filename += fmt::format(
                 "device-{}_{}-core-{}-{}_{}.txt",
                 chip_id,
@@ -1322,7 +1327,7 @@ namespace tt::tt_metal {
 
 void DprintServerAttach(chip_id_t device_id) {
     // Skip if DPRINT not enabled, and make sure profiler is not running.
-    if (!tt::llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         return;
     }
     TT_FATAL(

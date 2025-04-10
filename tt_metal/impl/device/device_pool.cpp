@@ -29,7 +29,6 @@
 #include "host_api.hpp"
 #include "logger.hpp"
 #include "profiler_types.hpp"
-#include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
@@ -289,7 +288,7 @@ void DevicePool::initialize_host(IDevice* dev) const {
     watcher_init(dev->id());
 
     // TODO: as optimization, investigate removing all this call for already initialized devivces
-    if (!llrt::RunTimeOptions::get_instance().get_skip_reset_cores_on_init()) {
+    if (!tt_metal::MetalContext::instance().rtoptions().get_skip_reset_cores_on_init()) {
         dev->reset_cores();
     }
     dev->initialize_and_launch_firmware();

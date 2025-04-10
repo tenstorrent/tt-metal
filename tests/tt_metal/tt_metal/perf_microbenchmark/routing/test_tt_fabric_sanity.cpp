@@ -45,7 +45,6 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
-#include "rtoptions.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
@@ -227,7 +226,7 @@ typedef struct test_board {
     void _init_control_plane(const std::string& mesh_graph_descriptor) {
         try {
             const std::filesystem::path mesh_graph_desc_path =
-                std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+                std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
                 "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
             cp_owning_ptr = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
             control_plane = cp_owning_ptr.get();
@@ -1852,7 +1851,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

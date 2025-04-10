@@ -8,7 +8,6 @@
 #include <dev_msgs.h>
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
-#include <rtoptions.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -31,6 +30,7 @@
 #include "fabric_types.hpp"
 #include "fmt/base.h"
 #include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"

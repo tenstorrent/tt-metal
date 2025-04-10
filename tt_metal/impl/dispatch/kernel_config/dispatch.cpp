@@ -161,7 +161,7 @@ void DispatchKernel::GenerateStaticConfigs() {
             my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs()),
             GetCoreType());  // Apparently unused
 
-        if (tt::llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+        if (MetalContext::instance().rtoptions().get_fd_fabric()) {
             static_config_.split_dispatch_page_preamble_size = 0;
         } else {
             static_config_.split_dispatch_page_preamble_size = sizeof(tt::packet_queue::dispatch_packet_header_t);
