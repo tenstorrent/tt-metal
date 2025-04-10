@@ -30,6 +30,8 @@
 #include "rtoptions.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include "impl/context/metal_context.hpp"
+#include "control_plane.hpp"
 #include <umd/device/types/arch.h>
 
 namespace fs = std::filesystem;
@@ -697,6 +699,9 @@ void JitBuildState::compile_one(
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    auto mode = control_plane->get_routing_mode();
+    defines += "-DFABRIC_CONFIG=" + to_string(static_cast<int>(mode)) + " ";
 
     if (settings) {
         // Append user args

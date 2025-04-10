@@ -22,6 +22,8 @@
 #include <variant>
 #include <vector>
 
+#include "tt_metal/api/tt-metalium/fabric_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "fabric_edm_types.hpp"
 #include "logger.hpp"
@@ -120,10 +122,17 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
     this->num_used_sender_channels = FabricEriscDatamoverConfig::num_sender_channels;
     this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
     this->topology = topology;
-    if (topology != Topology::Ring) {
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    if (topology == Topology::Ring) {
+        control_plane->set_routing_mode(tt::tt_metal::FabricConfig::FABRIC_1D_RING);
+    } else {
         this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
+        control_plane->set_routing_mode(
+            topology == Topology::Linear ? tt::tt_metal::FabricConfig::FABRIC_1D
+                                         : tt::tt_metal::FabricConfig::FABRIC_1D);  // TODO FABRIC_1D_MESH
     }
+
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         TT_FATAL(
             (receivers_completed_packet_header_cb_address[i] % eth_word_l1_alignment == 0),

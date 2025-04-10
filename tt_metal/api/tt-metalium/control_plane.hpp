@@ -9,6 +9,7 @@
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/fabric_types.hpp>
 
 namespace tt::tt_fabric {
 
@@ -63,7 +64,11 @@ public:
 
     eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, int chan) const;
 
+    void set_routing_mode(tt::tt_metal::FabricConfig mode);
+    tt::tt_metal::FabricConfig get_routing_mode() const;
+
 private:
+    tt::tt_metal::FabricConfig routing_mode_;
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
     std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     // map[mesh_id][chip_id][direction] has a list of ethernet channels in that direction

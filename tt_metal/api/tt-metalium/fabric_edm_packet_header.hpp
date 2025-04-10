@@ -12,6 +12,7 @@
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+#include "tt_metal/api/tt-metalium/fabric_types.hpp"
 #else
 #include <tt-metalium/assert.hpp>
 #endif
@@ -521,15 +522,20 @@ static_assert(
 
 static constexpr size_t header_size_bytes = sizeof(PacketHeader);
 
-// TODO: Should be piped from host to determine which packet header to use
-#define FABRIC_LOW_LATENCY_MODE 1
-
-#if defined FABRIC_LOW_LATENCY_MODE and FABRIC_LOW_LATENCY_MODE == 1
+#ifndef FABRIC_CONFIG
+#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
+#elif FABRIC_CONFIG == 1 || FABRIC_CONFIG == 2 || FABRIC_CONFIG == 3 || \
+    FABRIC_CONFIG == 4  // 1D linear, ring, 2D, 2D push
+#if FABRIC_CONFIG == 1  // NOTE: experimentally switching header by 1
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
 #define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields
+#endif
+#else
+static_assert(false, "Fabric config is not supported");
 #endif
 
 }  // namespace tt::tt_fabric
