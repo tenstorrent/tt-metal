@@ -236,6 +236,13 @@ public:
     void setSyncInfo(std::tuple<double, double, double> sync_info);
 };
 
+void write_control_buffer_to_core(
+    IDevice* device,
+    const CoreCoord& core,
+    const profiler_msg_t* profiler_msg,
+    const ProfilerDumpState state,
+    const std::vector<uint32_t>& control_buffer);
+
 }  // namespace tt_metal
 
 }  // namespace tt
