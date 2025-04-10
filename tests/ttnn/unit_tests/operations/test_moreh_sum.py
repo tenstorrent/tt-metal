@@ -496,7 +496,6 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
     assert passing
 
 
-@skip_for_blackhole("Fails on BH. Issue #19911")
 @pytest.mark.parametrize(
     "input_shape",
     [
