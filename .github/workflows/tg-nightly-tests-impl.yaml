@@ -34,7 +34,7 @@ jobs:
           {
             name: "Llama TG Demo Long Generation Test",
             arch: wormhole_b0,
-            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ FAKE_DEVICE=TG TT_METAL_WORKER_RINGBUFFER_SIZE=122880 TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/demo/demo_decode.py  -k mini-stress-test",
+            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/demo/demo_decode.py  -k mini-stress-test",
             timeout: 40,
             owner_id: U044T8U8DEF
           }, # Johanna Rock
