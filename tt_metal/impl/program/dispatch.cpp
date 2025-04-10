@@ -991,6 +991,115 @@ BatchedTransfers assemble_runtime_args_commands(
     return transfers;
 }
 
+struct UnicastSemaphoreData {
+    std::vector<CQDispatchWritePackedUnicastSubCmd> sub_cmds;
+    // 1 per sub_cmd.
+    std::vector<std::pair<const void*, uint32_t>> data;
+    // Regions of sub_cmds that each fit in a single command.
+    std::vector<std::pair<uint32_t, uint32_t>> payload;
+    uint32_t dst;
+    uint32_t size;
+};
+
+static void size_semaphore_commands(
+    Program& program,
+    IDevice* device,
+    DeviceCommandCalculator& calculator,
+    uint32_t max_prefetch_command_size,
+    uint32_t packed_write_max_unicast_sub_cmds,
+    std::vector<uint32_t>& semaphore_data,
+    std::vector<UnicastSemaphoreData>& unicast_semaphore_cmds,
+    BatchedTransfers& batched_transfers) {
+    NOC noc_index = k_dispatch_downstream_noc;
+    auto extract_dst_noc_unicast_info =
+        [&device](
+            const auto& ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
+        // This API extracts all the pairs of noc multicast encodings given a set of core ranges
+        std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
+        for (const CoreRange& core_range : ranges) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                    CoreCoord virtual_coord = device->virtual_core_from_logical_core(CoreCoord({x, y}), core_type);
+                    dst_noc_unicast_info.push_back(std::make_pair(virtual_coord, /*num_mcast_dests=*/0));
+                }
+            }
+        }
+        return dst_noc_unicast_info;
+    };
+    // Prevent reallocation of semaphore_data to ensure pointers remain valid.
+    semaphore_data.reserve(program.semaphores().size());
+
+    // Unicast/Multicast Semaphores
+    for (const Semaphore& semaphore : program.semaphores()) {
+        semaphore_data.push_back(semaphore.initial_value());
+
+        if (semaphore.core_type() == CoreType::WORKER) {
+            uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+            std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
+                device->extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), CoreType::WORKER);
+            for (const auto& dst_noc_info : dst_noc_multicast_info) {
+                auto& [range, dests] = dst_noc_info;
+                auto noc_xy_addr = device->get_noc_multicast_encoding(noc_index, std::get<CoreRange>(range));
+                uint32_t start_addr = semaphore.offset() + program.get_program_config(index).sem_offset;
+                RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, sizeof(uint32_t));
+                batched_transfers[std::make_pair(noc_xy_addr, dests)][start_addr] = std::vector<Transfer>{
+                    {{.start = start_addr,
+                      .data =
+                          tt::stl::Span(reinterpret_cast<const uint8_t*>(&semaphore_data.back()), sizeof(uint32_t))}}};
+            }
+        } else if (semaphore.core_type() == CoreType::ETH) {
+            unicast_semaphore_cmds.push_back({.dst = semaphore.offset(), .size = sizeof(uint32_t)});
+            auto& unicast_cmds = unicast_semaphore_cmds.back();
+            // TODO: we only fast dispatch to active eth...
+            uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+            std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
+                extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
+            for (const auto& dst_noc_info : dst_noc_unicast_info) {
+                unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
+                    .noc_xy_addr =
+                        device->get_noc_unicast_encoding(noc_index, std::get<CoreCoord>(dst_noc_info.first))});
+                unicast_cmds.data.emplace_back(&semaphore_data.back(), sizeof(uint32_t));
+            }
+            calculator.insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
+                unicast_cmds.sub_cmds.size(),
+                unicast_cmds.size,
+                max_prefetch_command_size,
+                packed_write_max_unicast_sub_cmds,
+                unicast_cmds.payload);
+        }
+    }
+}
+
+static void assemble_unicast_semaphore_commands(
+    HostMemDeviceCommand& device_command_sequence,
+    Program& program,
+    const std::vector<UnicastSemaphoreData>& unicast_semaphore_cmds,
+    uint32_t packed_write_max_unicast_sub_cmds) {
+    // Unicast Semaphore Cmd
+    uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+    for (auto& cmds : unicast_semaphore_cmds) {
+        uint32_t curr_sub_cmd_idx = 0;
+        for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : cmds.payload) {
+            device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
+                CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS,
+                num_sub_cmds_in_cmd,
+                cmds.dst + program.get_program_config(index).sem_offset,
+                cmds.size,
+                unicast_sem_payload_sizeB,
+                cmds.sub_cmds,
+                cmds.data,
+                packed_write_max_unicast_sub_cmds,
+                curr_sub_cmd_idx,
+                false,
+                DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+            curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+            for (auto& data_and_size : cmds.data) {
+                RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
+            }
+        }
+    }
+}
+
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id) {
     BatchedTransfers batched_transfers = assemble_runtime_args_commands(program_command_sequence, program, device);
@@ -1001,63 +1110,19 @@ void assemble_device_commands(
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     const auto& program_transfer_info = program.get_program_transfer_info();
-    // Multicast Semaphore Cmd
-    uint32_t num_multicast_semaphores = program_transfer_info.multicast_semaphores.size();
 
-    if (num_multicast_semaphores > 0) {
-        uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-        for (const auto& [dst, transfer_info_vec] : program_transfer_info.multicast_semaphores) {
-            for (const auto& transfer_info : transfer_info_vec) {
-                for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
-                    auto& [range, dests] = dst_noc_info;
-                    auto noc_xy_addr = device->get_noc_multicast_encoding(noc_index, std::get<CoreRange>(range));
-                    uint32_t start_addr = transfer_info.dst_base_addr + program.get_program_config(index).sem_offset;
-                    RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, transfer_info.data.size() * sizeof(uint32_t));
-                    batched_transfers[std::make_pair(noc_xy_addr, dests)][start_addr] = std::vector<Transfer>{
-                        {{.start = start_addr,
-                          .data = tt::stl::Span(
-                              reinterpret_cast<const uint8_t*>(transfer_info.data.data()),
-                              transfer_info.data.size() * sizeof(uint32_t))}}};
-                }
-            }
-        }
-    }
+    std::vector<uint32_t> semaphore_data;
+    std::vector<UnicastSemaphoreData> unicast_semaphore_cmds;
 
-    // Unicast Semaphore Cmd
-    uint32_t num_unicast_semaphores = program_transfer_info.unicast_semaphores.size();
-    std::vector<std::vector<CQDispatchWritePackedUnicastSubCmd>> unicast_sem_sub_cmds(num_unicast_semaphores);
-    std::vector<std::vector<std::pair<const void*, uint32_t>>> unicast_sem_data(num_unicast_semaphores);
-    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> unicast_sem_payload(num_unicast_semaphores);
-    std::vector<std::pair<uint32_t, uint32_t>> unicast_sem_dst_size;
-    unicast_sem_dst_size.reserve(num_unicast_semaphores);
-    if (num_unicast_semaphores > 0) {
-        uint32_t i = 0;
-        for (const auto& [dst, transfer_info_vec] : program_transfer_info.unicast_semaphores) {
-            // TODO: loop over things inside transfer_info[i]
-            uint32_t write_packed_len = transfer_info_vec[0].data.size();
-            unicast_sem_dst_size.emplace_back(std::make_pair(dst, write_packed_len * sizeof(uint32_t)));
-
-            for (const auto& transfer_info : transfer_info_vec) {
-                for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
-                    TT_ASSERT(
-                        transfer_info.data.size() == write_packed_len,
-                        "Not all data std::vectors in write packed semaphore cmd equal in len");
-                    unicast_sem_sub_cmds[i].emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                        .noc_xy_addr =
-                            device->get_noc_unicast_encoding(noc_index, std::get<CoreCoord>(dst_noc_info.first))});
-                    unicast_sem_data[i].emplace_back(
-                        transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
-                }
-            }
-            calculator.insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
-                unicast_sem_sub_cmds[i].size(),
-                unicast_sem_dst_size.back().second,
-                max_prefetch_command_size,
-                packed_write_max_unicast_sub_cmds,
-                unicast_sem_payload[i]);
-            i++;
-        }
-    }
+    size_semaphore_commands(
+        program,
+        device,
+        calculator,
+        max_prefetch_command_size,
+        packed_write_max_unicast_sub_cmds,
+        semaphore_data,
+        unicast_semaphore_cmds,
+        batched_transfers);
 
     uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
@@ -1497,29 +1562,9 @@ void assemble_device_commands(
         }
     }
 
-    // Unicast Semaphore Cmd
-    index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-    for (uint32_t i = 0; i < num_unicast_semaphores; ++i) {
-        uint32_t curr_sub_cmd_idx = 0;
-        for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : unicast_sem_payload[i]) {
-            device_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
-                CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_SEMS,
-                num_sub_cmds_in_cmd,
-                unicast_sem_dst_size[i].first + program.get_program_config(index).sem_offset,
-                unicast_sem_dst_size[i].second,
-                unicast_sem_payload_sizeB,
-                unicast_sem_sub_cmds[i],
-                unicast_sem_data[i],
-                packed_write_max_unicast_sub_cmds,
-                curr_sub_cmd_idx,
-                false,
-                DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
-            curr_sub_cmd_idx += num_sub_cmds_in_cmd;
-            for (auto& data_and_size : unicast_sem_data[i]) {
-                RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
-            }
-        }
-    }
+    // Write semaphore unicast transfers.
+    assemble_unicast_semaphore_commands(
+        device_command_sequence, program, unicast_semaphore_cmds, packed_write_max_unicast_sub_cmds);
 
     // All Previous Cmds Up to This Point Go Into the Kernel Config Buffer
     program_command_sequence.program_config_buffer_data_size_bytes = device_command_sequence.write_offset_bytes();
