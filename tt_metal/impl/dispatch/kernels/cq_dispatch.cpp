@@ -867,27 +867,6 @@ void process_write_packed_large(
 
 static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
-    uint32_t checksum = 0;
-#if 0
-    // Ugh, we are out of code memory for dispatcher+watcher
-    // Hack this off for now, have to revisit soon
-    uint32_t *data = (uint32_t *)((uint32_t)cmd + (uint32_t)sizeof(CQDispatchCmd));
-    uint32_t size = cmd->debug.size;
-    //    DPRINT << "checksum: " << cmd->debug.size << ENDL();
-
-    // Dispatch checksum only handles running checksum on a single page
-    // Host code prevents larger from flowing through
-    // This way this code doesn't have to fetch multiple pages and then run
-    // a cmd within those pages (messing up the implementation of that command)
-    for (uint32_t i = 0; i < size / sizeof(uint32_t); i++) {
-        checksum += *data++;
-    }
-    if (checksum != cmd->debug.checksum) {
-        WAYPOINT("!CHK");
-        ASSERT(0);
-    }
-#endif
-
     return cmd_ptr + cmd->debug.stride;
 }
 

@@ -79,12 +79,12 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        # True,
-        False,
+        True,
+        # False,
     ),
     ids=(
-        # "paged_attention",
-        "default_attention",
+        "paged_attention",
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(

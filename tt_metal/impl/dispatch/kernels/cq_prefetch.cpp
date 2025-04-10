@@ -373,31 +373,6 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
 
 uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
-#if 0
-    // Out of code memory for prefetcher + DPRINT
-    // Hack this off for now, have to revisit soon
-    uint32_t checksum = 0;
-    uint32_t data_start = (uint32_t)cmd + sizeof(CQPrefetchCmd);
-    uint32_t *data = (uint32_t *)data_start;
-    uint32_t size = cmd->debug.size;
-
-    uint32_t front_size = (size <= cmddat_q_end - data_start) ? size : cmddat_q_end - data_start;
-    for (uint32_t i = 0; i < front_size / sizeof(uint32_t); i++) {
-        checksum += *data++;
-    }
-    uint32_t back_size = size - front_size;
-    if (back_size > 0) {
-        data = (uint32_t *)cmddat_q_base;
-        for (uint32_t i = 0; i < back_size / sizeof(uint32_t); i++) {
-            checksum += *data++;
-        }
-    }
-
-    if (checksum != cmd->debug.checksum) {
-        WAYPOINT("!CHK");
-        ASSERT(0);
-    }
-#endif
     return cmd->debug.stride;
 }
 

@@ -278,12 +278,11 @@ Tensor all_gather(
                 input_tensor.get_logical_shape()[-3],
                 input_tensor.get_logical_shape()[-2],
                 input_tensor.get_logical_shape()[-1]};
-
-            const uint32_t w_pad = input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH;
-            const uint32_t h_pad = input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT;
-            bool needs_padding = input_tensor.get_layout() == Layout::TILE && (h_pad != 0 || w_pad != 0);
+            bool needs_padding = input_tensor.get_layout() == Layout::TILE &&
+                                 (input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+                                  input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
             if (needs_padding) {
-                ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, h_pad}, {0, w_pad}};
+                ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
                 DataType original_dtype = input_tensor.get_dtype();
                 if (input_tensor.get_dtype() != DataType::BFLOAT16 && input_tensor.get_dtype() != DataType::FLOAT32) {
                     input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);

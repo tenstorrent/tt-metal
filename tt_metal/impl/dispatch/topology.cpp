@@ -1176,9 +1176,8 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
 
     // TODO: this will not be needed once tests are migrated and should be the default behavior
     std::map<string, string> defines = {};
-    defines["WAIT_FOR_HOST_SIGNAL"] = "";
-
-    for (const auto& [eth_chan, edm_builder] : edm_builders) {
+    for (auto& [eth_chan, edm_builder] : edm_builders) {
+        edm_builder.set_wait_for_host_signal(true);
         const std::vector<uint32_t> edm_kernel_rt_args = edm_builder.get_runtime_args();
         std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args();
         uint32_t is_local_handshake_master = eth_chan == master_edm_chan;

@@ -421,16 +421,19 @@ void PrefetchKernel::CreateKernel() {
         {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
         {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
     };
+    // Compile at Os on IERISC to fit in code region.
+    auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
     configure_kernel_variant(
         dispatch_kernel_file_names[PREFETCH],
         compile_args,
         defines,
         false,
-        false,
+        true,
         // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
         // respect code space
         tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled() &&
-            (not tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline()));
+            (not tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline()),
+        optimization_level);
 }
 
 void PrefetchKernel::ConfigureCore() {

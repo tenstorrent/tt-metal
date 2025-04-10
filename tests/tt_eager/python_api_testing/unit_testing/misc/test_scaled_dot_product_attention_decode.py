@@ -853,6 +853,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     start_core=ttnn.CoreCoord(0, 0),
     sub_core_grids=None,
 ):
+    torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
     if sub_core_grids is None:
         if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -909,7 +910,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     assert torch.allclose(V, V_back)
 
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
-    torch.manual_seed(1234)
 
     min_pcc = 0.99
 
@@ -945,9 +945,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     scale = d**-0.5
     start_indices = [cur_pos] * b
 
-    # Test when page_table does not contain blocks for full sequence length
-    padded_layer_len = nearest_n(cur_pos + 1, n=k_chunk_size)
-
     tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
     program_config = ttnn.SDPAProgramConfig(
@@ -957,11 +954,6 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
     )
-
-    attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
-    for i in range(b):
-        start_idx = start_indices[i]
-        attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
     Q = fa_rand(1, b, nh, d)
 
@@ -988,8 +980,13 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     )
 
     tt_back = ttnn.to_torch(tt_back)
-
     tt_back = tt_back[:, :, :nh, :]
+
+    # PyTorch reference
+    # Test when page_table does not contain blocks for full sequence length
+    padded_layer_len = cur_pos
+    if k_chunk_size > 0:
+        padded_layer_len = nearest_n(cur_pos + 1, k_chunk_size)
 
     Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
     K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
@@ -1000,6 +997,12 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     V_slice = torch.cat(
         [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
     )  # b, nh, d, S
+
+    attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
+    for i in range(b):
+        start_idx = start_indices[i]
+        attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+
     attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
     expect = torch.nn.functional.scaled_dot_product_attention(

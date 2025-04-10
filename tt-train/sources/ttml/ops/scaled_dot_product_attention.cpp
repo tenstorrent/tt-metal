@@ -149,7 +149,9 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto groups = value->get_value().get_logical_shape().to_array_4D()[1];
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
-    auto q_scaled = ttnn::experimental::mul(query->get_value(), scale);
+    constexpr auto none = tt::stl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+    auto q_scaled =
+        ttnn::multiply(query->get_value(), scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
     auto key_tensor = key->get_value();
 
     // σQ @ K
@@ -158,9 +160,25 @@ autograd::TensorPtr scaled_dot_product_attention(
     if (mask.has_value()) {
         auto mask_tensor = mask.value()->get_value();
         // ttnn::where when mask is not of the same shape as qk_scaled
-        qk_scaled = ttnn::experimental::add(
-            ttnn::experimental::mul(mask_tensor, qk_scaled),
-            ttnn::experimental::mul(ttnn::experimental::sub(mask_tensor, 1.F), 1e9F));
+        qk_scaled = ttnn::add(
+            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+            ttnn::multiply(
+                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                1e9F,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                none,
+                none,
+                none,
+                false),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            none,
+            none,
+            none,
+            false);
     }
     // (B, H, S, S)
     auto attention_weights = ttnn_fixed::softmax(qk_scaled, /* axis */ 3);
@@ -171,60 +189,52 @@ autograd::TensorPtr scaled_dot_product_attention(
         group_shared_matmul(attention_weights, value->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
     auto out = ttml::autograd::create_tensor(attention_qkv);
 
-    ttml::autograd::GradFunction grad = [scale,
-                                         query,
-                                         key,
-                                         value,
-                                         attention_weights,
-                                         out,
-                                         mask,
-                                         batch_num,
-                                         heads,
-                                         seq_len,
-                                         embedding_dim,
-                                         groups]() {
-        auto dL_dout = out->get_grad();  // (B, H, S, embedding_dim)
-        // dL_d(softmax(σQK+mask)) = dL_dout @ value^T
-        ttnn::Tensor dL_dattention_weights =
-            group_shared_matmul(dL_dout, value->get_value(), /*transpose_a=*/false, /*transpose_b=*/true);
+    ttml::autograd::GradFunction grad =
+        [scale, query, key, value, attention_weights, out, mask, batch_num, heads, seq_len, embedding_dim, groups]() {
+            constexpr auto none = tt::stl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+            auto dL_dout = out->get_grad();  // (B, H, S, embedding_dim)
+            // dL_d(softmax(σQK+mask)) = dL_dout @ value^T
+            ttnn::Tensor dL_dattention_weights =
+                group_shared_matmul(dL_dout, value->get_value(), /*transpose_a=*/false, /*transpose_b=*/true);
 
-        auto dL_dscaled_dot = ttnn::moreh_softmax_backward(
-            attention_weights,
-            dL_dattention_weights,
-            /* axis */ 3,
-            /* output */ std::nullopt,
-            ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp::SOFTMAX,
-            ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
-            /* output_mem_config */ std::nullopt,
-            /* compute_kernel_config */ core::ComputeKernelConfig::precise());
-        dL_dattention_weights.deallocate();
+            auto dL_dscaled_dot = ttnn::moreh_softmax_backward(
+                attention_weights,
+                dL_dattention_weights,
+                /* axis */ 3,
+                /* output */ std::nullopt,
+                ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp::SOFTMAX,
+                ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
+                /* output_mem_config */ std::nullopt,
+                /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+            dL_dattention_weights.deallocate();
 
-        dL_dscaled_dot = ttnn::experimental::mul(dL_dscaled_dot, scale);  // [B,H,S,S]
+            dL_dscaled_dot = ttnn::multiply(
+                dL_dscaled_dot, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,H,S,S]
 
-        // dL_dQ = dL_dscaled_dot @ key
-        ttnn::Tensor dL_dQ =
-            group_shared_matmul(dL_dscaled_dot, key->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
+            // dL_dQ = dL_dscaled_dot @ key
+            ttnn::Tensor dL_dQ =
+                group_shared_matmul(dL_dscaled_dot, key->get_value(), /*transpose_a=*/false, /*transpose_b=*/false);
 
-        // dL_dK = Σ_g [dL_dscaled_dot^T @ query]
-        ttnn::Tensor dL_dK = ttnn_fixed::matmul(
-            dL_dscaled_dot,
-            query->get_value(),
-            /*transpose_a=*/true,
-            /*transpose_b=*/false);
-        dL_dK = sum_over_groups(dL_dK, groups);  // no-op when groups == heads
+            // dL_dK = Σ_g [dL_dscaled_dot^T @ query]
+            ttnn::Tensor dL_dK = ttnn_fixed::matmul(
+                dL_dscaled_dot,
+                query->get_value(),
+                /*transpose_a=*/true,
+                /*transpose_b=*/false);
+            dL_dK = sum_over_groups(dL_dK, groups);  // no-op when groups == heads
 
-        // dL_dV = Σ_g [attention_weights^T @ dL_dout]
-        ttnn::Tensor dL_dV = ttnn_fixed::matmul(
-            attention_weights,
-            dL_dout,
-            /*transpose_a=*/true,
-            /*transpose_b=*/false);
-        dL_dV = sum_over_groups(dL_dV, groups);  // no-op when groups == heads
+            // dL_dV = Σ_g [attention_weights^T @ dL_dout]
+            ttnn::Tensor dL_dV = ttnn_fixed::matmul(
+                attention_weights,
+                dL_dout,
+                /*transpose_a=*/true,
+                /*transpose_b=*/false);
+            dL_dV = sum_over_groups(dL_dV, groups);  // no-op when groups == heads
 
-        query->add_grad(dL_dQ);
-        key->add_grad(dL_dK);
-        value->add_grad(dL_dV);
-    };
+            query->add_grad(dL_dQ);
+            key->add_grad(dL_dK);
+            value->add_grad(dL_dV);
+        };
 
     auto links = autograd::get_links(query, key, value);
     out->set_node(ttml::autograd::ctx().add_backward_node(std::move(grad), links));

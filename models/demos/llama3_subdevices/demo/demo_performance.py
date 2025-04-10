@@ -3,29 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from time import time, perf_counter
+from time import perf_counter
 from datetime import datetime
 from loguru import logger
 import os
 import ttnn
 import pytest
-from pathlib import Path
 
-from models.utility_functions import nearest_32
 from models.demos.llama3_subdevices.tt.llama_common import (
-    HostEmbedding,
-    encode_prompt_llama_instruct,
     PagedAttentionConfig,
-    sample_host,
 )
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
-from models.demos.llama3_subdevices.tt.sampling import TTSampling
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 
 from .demo_decode import load_inputs
@@ -390,7 +383,7 @@ def run_llama3_decode_performance(
             (118, 128),
             10,
             10,
-            False,
+            True,
             None,
         ),
         (
@@ -402,7 +395,7 @@ def run_llama3_decode_performance(
             (127, 128),
             0,
             1,
-            False,
+            True,
             None,
         ),
     ],
