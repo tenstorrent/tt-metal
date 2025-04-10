@@ -45,6 +45,7 @@
 #include "kernel.hpp"
 #include "llrt/hal.hpp"
 #include "math.hpp"
+#include "distributed/mesh_workload_impl.hpp"
 #include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"
 #include "runtime_args_data.hpp"
@@ -353,7 +354,7 @@ uint32_t finalize_kernel_bins(
 // program data structures in L1. Will be used when assembling dispatch commands for this program
 template <typename T>
 void finalize_program_offsets(T& workload, IDevice* device) {
-    if (workload.is_finalized()) {
+    if (workload.get_impl()->is_finalized()) {
         return;
     }
     // TODO (AS): Enacapsulate the variables below in a struct to avoid implicit updates on references.

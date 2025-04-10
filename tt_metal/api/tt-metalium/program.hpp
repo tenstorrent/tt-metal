@@ -50,7 +50,7 @@ uint32_t program_base_addr_on_core(
 }  // namespace program_dispatch
 
 namespace distributed {
-class MeshWorkload;
+class MeshWorkloadImpl;
 }  // namespace distributed
 
 class JitBuildOptions;
@@ -190,6 +190,10 @@ public:
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;
 
+    // For internal use
+    detail::Program_* get_impl() { return pimpl_.get(); }
+    const detail::Program_* get_impl() const { return pimpl_.get(); }
+
 private:
     std::unique_ptr<detail::Program_> pimpl_;
 
@@ -241,7 +245,8 @@ private:
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
-    friend distributed::MeshWorkload;
+    //friend distributed::MeshWorkload;
+    friend distributed::MeshWorkloadImpl;
     friend detail::Internal_;
 };
 
