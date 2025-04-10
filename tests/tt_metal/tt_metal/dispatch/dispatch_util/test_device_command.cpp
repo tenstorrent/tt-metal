@@ -151,7 +151,7 @@ TEST(DeviceCommandTest, AddDispatchWritePaged) {
         calculator.add_dispatch_write_paged<false>(1, 5);
 
         HostMemDeviceCommand command(calculator.write_offset_bytes());
-        command.add_dispatch_write_paged<false>(0, 0, 0, 0, 1, 5);
+        command.add_dispatch_write_paged<false>(false, 0, 0, 0, 1, 5);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
     }
     {
@@ -160,7 +160,7 @@ TEST(DeviceCommandTest, AddDispatchWritePaged) {
 
         HostMemDeviceCommand command(calculator.write_offset_bytes());
         uint32_t data[2] = {};
-        command.add_dispatch_write_paged<true>(0, 0, 0, 0, 1, 5, data);
+        command.add_dispatch_write_paged<true>(false, 0, 0, 0, 1, 5, data);
         EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
     }
 }
