@@ -12,7 +12,7 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision
 from models.tt_transformers.tt.generator import Generator
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer as ReferenceTransformer
 from models.utility_functions import (
@@ -73,10 +73,10 @@ def test_chunked_prefill_single_user(
 
     # This sets the minimum PCC for each iteration based on optimization mode
     test_id = request.node.callspec.id
-    if test_id == "accuracy":
+    if "accuracy" in test_id:
         pcc = 0.91  # TODO Look on improving PCC
     else:  # performance mode
-        assert test_id == "performance"
+        assert "performance" in test_id
         pcc = 0.869  # TODO Look on improving PCC
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)

@@ -90,7 +90,7 @@ def test_model_inference(
     dtype = ttnn.bfloat8_b
     mesh_device.enable_async(True)
     test_id = request.node.callspec.id
-    mode_accuracy = test_id == "accuracy"
+    mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
     model_args = ModelArgs(
