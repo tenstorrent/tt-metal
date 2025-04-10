@@ -6,87 +6,15 @@ import ttnn
 import math
 import torch
 from torch import nn
-from models.experimental.functional_yolov8s_world.tt.ttnn_yolov8s_world_utils import ttnn_decode_bboxes
+from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
+    ttnn_decode_bboxes,
+    concat,
+    determine_num_cores_for_upsample,
+    get_core_grid_from_num_cores,
+)
 
 
-def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
-    gcd_nhw_width = math.gcd(nhw, width)
-    cores = nhw // gcd_nhw_width
-    if cores > max_cores:
-        for divisor in range(max_cores, 0, -1):
-            if nhw % divisor == 0 and (nhw // divisor) % width == 0:
-                cores = divisor
-                break
-    return cores
-
-
-def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: int = 8):
-    rows = num_cores // grid_cols
-    assert rows <= grid_rows, "Not enough cores for specified core grid"
-    ranges = []
-    if rows != 0:
-        ranges.append(
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(grid_rows - 1, rows - 1),
-            )
-        )
-    remainder = num_cores % grid_rows
-    if remainder != 0:
-        assert rows + 1 <= grid_rows, "Not enough cores for specified core grid"
-        ranges.append(
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, rows),
-                ttnn.CoreCoord(remainder - 1, rows),
-            )
-        )
-    return ttnn.CoreRangeSet({*ranges})
-
-
-def to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT):
-    if x.get_layout() != layout:
-        x = ttnn.to_layout(x, layout)
-    return x
-
-
-def sharded_concat(input_tensors, num_cores=56, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
-    shard_grid = get_core_grid_from_num_cores(num_cores=num_cores)
-    in_shard_width = input_tensors[0].shape[-1]
-    shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
-    input_sharded_memory_config = ttnn.create_sharded_memory_config_(
-        (shard_height, in_shard_width),
-        core_grid=shard_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    out_shard_width = 0
-    for i in range(len(input_tensors)):
-        out_shard_width += input_tensors[i].shape[-1]
-        input_tensors[i] = ttnn.to_memory_config(input_tensors[i], input_sharded_memory_config)
-
-    output_sharded_memory_config = ttnn.create_sharded_memory_config_(
-        (shard_height, out_shard_width),
-        core_grid=shard_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    output = ttnn.concat(input_tensors, dim, memory_config=output_sharded_memory_config)
-    return output
-
-
-def concat(tensors, dim=-1, use_sharded_concat=True):
-    if use_sharded_concat:
-        processed_tensors = [
-            ttnn.to_dtype(to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT), ttnn.bfloat16) for tensor in tensors
-        ]
-        return sharded_concat(processed_tensors)
-    else:
-        return ttnn.concat([*tensors], dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-
-class ttnn_Conv:
+class TtConv:
     def __init__(
         self,
         device,
@@ -230,7 +158,7 @@ class ttnn_Conv:
         return x, out_height, out_width
 
 
-class ttnn_Bottleneck:
+class TtBottleneck:
     def __init__(
         self,
         device,
@@ -245,14 +173,14 @@ class ttnn_Bottleneck:
         self.device = device
         self.tilize = tilize
         self.shortcut = shortcut
-        self.cv1 = ttnn_Conv(
+        self.cv1 = TtConv(
             device,
             parameters["cv1"],
             input_params,
             deallocate_activation=deallocate_activation,
             output_layout=output_layout,
         )
-        self.cv2 = ttnn_Conv(
+        self.cv2 = TtConv(
             device,
             parameters["cv2"],
             input_params,
@@ -273,7 +201,7 @@ class ttnn_Bottleneck:
         return ttnn.add(x, cv2, memory_config=x.memory_config()) if self.shortcut else cv2
 
 
-class ttnn_C2f:
+class TtC2f:
     def __init__(
         self,
         device,
@@ -298,7 +226,7 @@ class ttnn_C2f:
         self.deallocate_activation = deallocate_activation
         self.output_layout = output_layout
 
-        self.cv1 = ttnn_Conv(
+        self.cv1 = TtConv(
             device,
             self.parameters["cv1"],
             input_params=self.input_params[0],
@@ -306,7 +234,7 @@ class ttnn_C2f:
             output_layout=self.output_layout,
             block_shard=True,
         )
-        self.cv2 = ttnn_Conv(
+        self.cv2 = TtConv(
             self.device,
             self.parameters["cv2"],
             input_params=self.input_params[1],
@@ -320,7 +248,7 @@ class ttnn_C2f:
             else:
                 self.tilize = False
             self.bottleneck_modules.append(
-                ttnn_Bottleneck(
+                TtBottleneck(
                     self.device,
                     self.parameters["m"][i],
                     self.shortcut,
@@ -372,14 +300,14 @@ class ttnn_C2f:
         return x, out_h, out_w
 
 
-class ttnn_SPPF:
+class TtSPPF:
     def __init__(self, device, parameters, input_params, batch_size):
         self.device = device
         self.parameters = parameters
         self.input_params = input_params
         self.batch_size = batch_size
-        self.cv1 = ttnn_Conv(device, parameters["cv1"], input_params=input_params[0], deallocate_activation=True)
-        self.cv2 = ttnn_Conv(
+        self.cv1 = TtConv(device, parameters["cv1"], input_params=input_params[0], deallocate_activation=True)
+        self.cv2 = TtConv(
             device, parameters["cv2"], input_params=input_params[1], change_shard=True, deallocate_activation=True
         )
 
@@ -417,7 +345,7 @@ class ttnn_SPPF:
         return x, out_h, out_w
 
 
-class ttnn_MaxSigmoidAttnBlock:
+class TtMaxSigmoidAttnBlock:
     """Max Sigmoid attention block."""
 
     def __init__(
@@ -443,7 +371,7 @@ class ttnn_MaxSigmoidAttnBlock:
         self.hc = c2 // nh
         self.deallocate = False
         self.ec = (
-            ttnn_Conv(
+            TtConv(
                 self.device,
                 self.parameters["ec"],
                 input_params=None,
@@ -456,7 +384,7 @@ class ttnn_MaxSigmoidAttnBlock:
         )
         self.gl = ttnn.linear
         self.bias = self.parameters["bias"]
-        self.proj_conv = ttnn_Conv(
+        self.proj_conv = TtConv(
             self.device,
             self.parameters["proj_conv"],
             input_params=input_params,
@@ -516,7 +444,7 @@ class ttnn_MaxSigmoidAttnBlock:
         return ttnn.reshape(x, (1, 1, x.shape[1] * x.shape[2], x.shape[3])), h, w
 
 
-class ttnn_C2fAttn:
+class TtC2fAttn:
     """C2f module with an additional attn module."""
 
     def __init__(
@@ -544,13 +472,13 @@ class ttnn_C2fAttn:
         self.input_params = input_params
         self.deallocate_activation = deallocate_activation
         self.c = int(c2 * e)  # hidden channels
-        self.cv1 = ttnn_Conv(
+        self.cv1 = TtConv(
             self.device,
             self.parameters["cv1"],
             input_params=input_params[0],
             deallocate_activation=self.deallocate_activation,
         )
-        self.cv2 = ttnn_Conv(
+        self.cv2 = TtConv(
             self.device,
             self.parameters["cv2"],
             input_params=input_params[1],
@@ -558,7 +486,7 @@ class ttnn_C2fAttn:
             deallocate_activation=self.deallocate_activation,
         )
         self.m = [
-            ttnn_Bottleneck(
+            TtBottleneck(
                 self.device,
                 self.parameters["m"][i],
                 self.shortcut,
@@ -568,7 +496,7 @@ class ttnn_C2fAttn:
             )
             for i in range(n)
         ]
-        self.attn = ttnn_MaxSigmoidAttnBlock(
+        self.attn = TtMaxSigmoidAttnBlock(
             self.device, self.parameters["attn"], self.input_params[2], c1=self.c, c2=self.c, gc=gc, ec=ec, nh=nh
         )
 
@@ -609,7 +537,7 @@ class ttnn_C2fAttn:
         return x, out_h, out_w
 
 
-class ttnn_ImagePoolingAttn:
+class TtImagePoolingAttn:
     """ImagePoolingAttn: Enhance the text embeddings with image-aware information."""
 
     def __init__(self, device, parameters, input_params, ec=256, ch=(), ct=512, nh=8, k=3, scale=False):
@@ -625,14 +553,13 @@ class ttnn_ImagePoolingAttn:
         self.proj = ttnn.linear
         self.scale = nn.Parameter(torch.tensor([0.0]), requires_grad=True) if scale else 1.0
         self.projections = [
-            ttnn_Conv(
+            TtConv(
                 self.device,
                 self.parameters["projections"][i],
                 input_params=input_params[i],
                 is_act_false=True,
                 conv_alone=True,
                 reshape_tensor=True,
-                # deallocate_activation=True,
             )
             for i, in_channels in enumerate(ch)
         ]
@@ -746,17 +673,16 @@ class ttnn_ImagePoolingAttn:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         x = x * self.scale + text
-        # ttnn.deallocate(text)
         # Note: The x value is not permuted, torch module return and ttnn module return is same
         return x
 
 
-class ttnn_DFL:
+class TtDFL:
     def __init__(self, device, parameters, input_params):
         self.device = device
         self.parameters = parameters
         self.input_params = input_params
-        self.conv = ttnn_Conv(device, parameters, input_params, is_act_false=True, deallocate_activation=True)
+        self.conv = TtConv(device, parameters, input_params, is_act_false=True, deallocate_activation=True)
 
     def __call__(self, x, c1=16):
         b, _, a = x.shape
@@ -773,7 +699,7 @@ class ttnn_DFL:
         return x
 
 
-class ttnn_ContrastiveHead:
+class TtContrastiveHead:
     """Implements contrastive learning head for region-text similarity in vision-language models."""
 
     def __init__(self, device, parameters):
@@ -818,7 +744,7 @@ class ttnn_ContrastiveHead:
         )  # ttnn.permute(x * ttnn.exp(self.logit_scale) + self.bias, (0, 2, 3, 1))
 
 
-class ttnn_WorldDetect:
+class TtWorldDetect:
     """Head for integrating YOLO detection models with semantic understanding from text embeddings."""
 
     dynamic = False
@@ -839,17 +765,17 @@ class ttnn_WorldDetect:
 
         self.cv2 = [
             [
-                ttnn_Conv(
+                TtConv(
                     self.device,
                     self.parameters["cv2"][i][0],
                     input_params=input_params["cv2_params"][i]["input_params"][0],
                 ),
-                ttnn_Conv(
+                TtConv(
                     self.device,
                     self.parameters["cv2"][i][1],
                     input_params=input_params["cv2_params"][i]["input_params"][1],
                 ),
-                ttnn_Conv(
+                TtConv(
                     self.device,
                     self.parameters["cv2"][i][2],
                     input_params=input_params["cv2_params"][i]["input_params"][2],
@@ -864,17 +790,17 @@ class ttnn_WorldDetect:
         c3 = max(ch[0], min(self.nc, 100))
         self.cv3 = [
             [
-                ttnn_Conv(
+                TtConv(
                     self.device,
                     self.parameters["cv3"][i][0],
                     input_params=input_params["cv3_params"][i]["input_params"][0],
                 ),
-                ttnn_Conv(
+                TtConv(
                     self.device,
                     self.parameters["cv3"][i][1],
                     input_params=input_params["cv3_params"][i]["input_params"][1],
                 ),
-                ttnn_Conv(
+                TtConv(
                     self.device,
                     self.parameters["cv3"][i][2],
                     input_params=input_params["cv3_params"][i]["input_params"][2],
@@ -886,7 +812,7 @@ class ttnn_WorldDetect:
             for i, x in enumerate(ch)
         ]
 
-        self.dfl = ttnn_DFL(
+        self.dfl = TtDFL(
             device=self.device,
             parameters=self.parameters["dfl"],
             input_params=input_params["dfl_params"]["input_params"],
@@ -895,7 +821,11 @@ class ttnn_WorldDetect:
         self.strides = None
         self.self_shape = None
         self.cv4 = [
-            BNContrastiveHead(embed) if with_bn else ttnn_ContrastiveHead(self.device, self.parameters["cv4"][i])
+            BNContrastiveHead(embed)
+            if with_bn
+            else TtContrastiveHead(
+                self.device, self.parameters["cv4"][i]
+            )  # BNContrastiveHead(embed) is not invoked So, Not defined.
             for i, _ in enumerate(ch)
         ]
 
@@ -934,7 +864,7 @@ class ttnn_WorldDetect:
         return [ttnn.concat((dbox, ttnn.sigmoid(cls)), dim=1), x]
 
 
-class ttnn_WorldModel:
+class TtWorldModel:
     def __init__(self, device, parameters, ch=3, nc=None, verbose=True):
         super().__init__()
         self.device = device
@@ -1009,52 +939,52 @@ class ttnn_WorldModel:
         }
 
         self.model = [
-            ttnn_Conv(
+            TtConv(
                 device,
                 parameters["model"][0],
                 input_params=[3, 2, 1, 32, 3],
                 deallocate_activation=True,
             ),
-            ttnn_Conv(
+            TtConv(
                 device,
                 parameters["model"][1],
                 input_params=[3, 2, 1, 64, 32],
                 deallocate_activation=True,
             ),
-            ttnn_C2f(
+            TtC2f(
                 device, parameters["model"][2], n=1, shortcut=True, input_params=c2f_configs["model.2"]["input_params"]
             ),
-            ttnn_Conv(
+            TtConv(
                 device,
                 parameters["model"][3],
                 input_params=[3, 2, 1, 128, 64],
                 deallocate_activation=True,
             ),
-            ttnn_C2f(
+            TtC2f(
                 device, parameters["model"][4], n=2, shortcut=True, input_params=c2f_configs["model.4"]["input_params"]
             ),
-            ttnn_Conv(
+            TtConv(
                 device,
                 parameters["model"][5],
                 input_params=[3, 2, 1, 256, 128],
                 # deallocate_activation=True,
             ),
-            ttnn_C2f(
+            TtC2f(
                 device, parameters["model"][6], n=2, shortcut=True, input_params=c2f_configs["model.6"]["input_params"]
             ),
-            ttnn_Conv(
+            TtConv(
                 device,
                 parameters["model"][7],
                 input_params=[3, 2, 1, 512, 256],
                 # deallocate_activation=True,
             ),
-            ttnn_C2f(
+            TtC2f(
                 device, parameters["model"][8], n=1, shortcut=True, input_params=c2f_configs["model.8"]["input_params"]
             ),
-            ttnn_SPPF(device, parameters["model"][9], input_params=sppf_configs["input_params"], batch_size=1),
+            TtSPPF(device, parameters["model"][9], input_params=sppf_configs["input_params"], batch_size=1),
             ttnn.upsample,
             ttnn.concat,
-            ttnn_C2fAttn(
+            TtC2fAttn(
                 device,
                 parameters["model"][12],
                 input_params=c2f_configs["model.12"]["input_params"],
@@ -1066,7 +996,7 @@ class ttnn_WorldModel:
             ),
             ttnn.upsample,
             ttnn.concat,
-            ttnn_C2fAttn(
+            TtC2fAttn(
                 device,
                 parameters["model"][15],
                 input_params=c2f_configs["model.15"]["input_params"],
@@ -1076,21 +1006,21 @@ class ttnn_WorldModel:
                 ec=64,
                 nh=2,
             ),
-            ttnn_ImagePoolingAttn(
+            TtImagePoolingAttn(
                 device,
                 parameters["model"][16],
                 input_params=ImagePoolingAttn_configs["input_params"],
                 ec=256,
                 ch=[128, 256, 512],
             ),
-            ttnn_Conv(
+            TtConv(
                 device,
                 parameters["model"][17],
                 input_params=[3, 2, 1, 128, 128],
                 # deallocate_activation=True,
             ),
             ttnn.concat,
-            ttnn_C2fAttn(
+            TtC2fAttn(
                 device,
                 parameters["model"][19],
                 input_params=c2f_configs["model.19"]["input_params"],
@@ -1100,14 +1030,14 @@ class ttnn_WorldModel:
                 ec=128,
                 nh=4,
             ),
-            ttnn_Conv(
+            TtConv(
                 device,
                 parameters["model"][20],
                 input_params=[3, 2, 1, 256, 256],
                 # deallocate_activation=True,
             ),
             ttnn.concat,
-            ttnn_C2fAttn(
+            TtC2fAttn(
                 device,
                 parameters["model"][22],
                 input_params=c2f_configs["model.22"]["input_params"],
@@ -1117,7 +1047,7 @@ class ttnn_WorldModel:
                 ec=256,
                 nh=8,
             ),
-            ttnn_WorldDetect(
+            TtWorldDetect(
                 device,
                 parameters["model"][23],
                 input_params=world_detect_configs,
@@ -1171,11 +1101,11 @@ class ttnn_WorldModel:
 
             if f != -1:  # if not from previous layer
                 x = y[f] if isinstance(f, int) else [x if j == -1 else y[j] for j in f]  # from earlier layers
-            if isinstance(m, ttnn_C2fAttn):
+            if isinstance(m, TtC2fAttn):
                 x, _, _ = m(x, ttnn.clone(txt_feats))
-            elif isinstance(m, ttnn_WorldDetect):
+            elif isinstance(m, TtWorldDetect):
                 x = m(x, ori_txt_feats)
-            elif isinstance(m, ttnn_ImagePoolingAttn):
+            elif isinstance(m, TtImagePoolingAttn):
                 txt_feats = m(x, txt_feats)
             else:
                 if m == ttnn.concat:
@@ -1214,10 +1144,10 @@ class ttnn_WorldModel:
         return x
 
 
-class ttnn_YOLOWorld:
+class TtYOLOWorld:
     def __init__(self, device=None, parameters=None):
         super().__init__()
-        self.model = ttnn_WorldModel(device=device, parameters=parameters)
+        self.model = TtWorldModel(device=device, parameters=parameters)
 
     def __call__(self, x):
         return self.model(x)
