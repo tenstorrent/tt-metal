@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import pathlib
 import sys
 import time
 import traceback
@@ -19,6 +18,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.database
+import ttnn._ttnn
 
 
 def compare_tensors_using_pcc(
