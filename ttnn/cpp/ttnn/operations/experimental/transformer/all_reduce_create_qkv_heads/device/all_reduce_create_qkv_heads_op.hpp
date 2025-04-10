@@ -43,7 +43,6 @@ struct AllReduceCreateQkvHeads {
     const uint32_t head_dim;
     const uint32_t num_heads;
     const uint32_t num_kv_heads;
-    const bool overlap_qk_coregrid;
     const bool input_on_subcoregrids;
     std::optional<const uint32_t> slice_size;
     const MemoryConfig final_mem_config;
@@ -62,7 +61,6 @@ struct AllReduceCreateQkvHeads {
         uint32_t head_dim,
         uint32_t num_heads,
         uint32_t num_kv_heads,
-        bool overlap_qk_coregrid,
         bool input_on_subcoregrids,
         std::optional<const uint32_t> slice_size,
         MemoryConfig final_mem_config) :
@@ -79,7 +77,6 @@ struct AllReduceCreateQkvHeads {
         head_dim(head_dim),
         num_heads(num_heads),
         num_kv_heads(num_kv_heads),
-        overlap_qk_coregrid(overlap_qk_coregrid),
         input_on_subcoregrids(input_on_subcoregrids),
         slice_size(slice_size),
         final_mem_config(final_mem_config) {}
@@ -127,7 +124,6 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
     bool enable_persistent_fabric_mode,
     uint32_t num_heads,
     uint32_t num_kv_heads,
-    bool overlap_qk_coregrid,
     bool input_on_subcoregrids,
     std::optional<const uint32_t> slice_size,
     MemoryConfig final_mem_config);
@@ -176,7 +172,6 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     uint32_t head_dim = 0,
     uint32_t num_heads = 8,
     uint32_t num_kv_heads = 1,
-    bool overlap_qk_coregrid = false,
     bool input_on_subcoregrids = false,
     std::optional<const uint32_t> slice_size = std::nullopt,
     const std::optional<MemoryConfig>& final_memory_config = std::nullopt);

@@ -26,7 +26,6 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
     uint32_t head_dim,
     uint32_t num_heads,
     uint32_t num_kv_heads,
-    bool overlap_qk_coregrid,
     bool input_on_subcoregrids,
     std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& final_memory_config) {
@@ -67,7 +66,6 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
         head_dim,
         num_heads,
         num_kv_heads,
-        overlap_qk_coregrid,
         input_on_subcoregrids,
         slice_size,
         final_memory_config.value_or(input_tensor.memory_config())};
@@ -165,12 +163,6 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
             input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
             "Shard orientation must be ROW_MAJOR");
 
-        if (!this->overlap_qk_coregrid) {
-            // Validate if each shard is a multiple of head_dim and doesn't contain partial heads
-            TT_FATAL(
-                this->head_dim % input_tensor.shard_spec().value().shape[1] == 0,
-                "We don't support partial heads in shards when q and k heads are not overlapping coregrid");
-        }
         /* Don't validate batch_offset and slice_size for now, as they will be provided by the user
         TT_FATAL(
             !(batch_offset.has_value() ^ this->slice_size.has_value()),
@@ -180,9 +172,6 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
             num_users = this->slice_size.value();
         }
         */
-
-    } else {
-        TT_FATAL(this->overlap_qk_coregrid, "Overlap_qk_coregrid must be true for non-sharded input");
     }
 
     // output
@@ -209,16 +198,13 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
         num_cores = core_grid_size.x * core_grid_size.y;
     }
     // 1 User Per Core Max and 32 users for now
-    if (this->overlap_qk_coregrid) {
-        TT_FATAL(num_cores >= num_users, "Grid Size is {}. Need at least 32 cores for decode", num_cores);
-    } else {
-        TT_FATAL(
-            num_cores >= 2 * num_users,
-            "Input coregrid size is {}. Need cores atleast double of num_users for decode when q and k heads are not "
-            "overlapping "
-            "coregrid",
-            num_cores);
-    }
+
+    TT_FATAL(
+        num_cores >= 2 * num_users,
+        "Input coregrid size is {}. Need cores atleast double of num_users for decode when q and k heads are not "
+        "overlapping "
+        "coregrid",
+        num_cores);
 }
 
 std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
@@ -371,7 +357,6 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     uint32_t head_dim,
     uint32_t num_heads,
     uint32_t num_kv_heads,
-    bool overlap_qk_coregrid,
     bool input_on_subcoregrids,
     std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& final_memory_config) {
@@ -399,7 +384,6 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
          head_dim,
          num_heads,
          num_kv_heads,
-         overlap_qk_coregrid,
          input_on_subcoregrids,
          slice_size,
          final_memory_config](
@@ -432,7 +416,6 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
                     head_dim,
                     num_heads,
                     num_kv_heads,
-                    overlap_qk_coregrid,
                     input_on_subcoregrids,
                     slice_size,
                     final_memory_config),

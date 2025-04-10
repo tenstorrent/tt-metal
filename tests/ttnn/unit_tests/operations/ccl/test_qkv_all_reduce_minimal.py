@@ -559,7 +559,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             multi_device_global_semaphore=ccl_semaphore_handles[0],
-            queue_id=0,
             num_heads=8,
             memory_config=output_mem_config,
             topology=ALL_GATHER_TOPOLOGY,
@@ -567,7 +566,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             subdevice_id=worker_sub_device_id,
             num_kv_heads=1,
             final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-            overlap_qk_coregrid=False,
             batch_offset=batch_offset_tt_tensor,
             slice_size=8,
         )
@@ -616,7 +614,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
                     multi_device_global_semaphore=ccl_semaphore_handles[0],
-                    queue_id=0,
                     num_heads=8,
                     memory_config=output_mem_config,
                     topology=ALL_GATHER_TOPOLOGY,
@@ -624,7 +621,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                     subdevice_id=worker_sub_device_id,
                     num_kv_heads=1,
                     final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-                    overlap_qk_coregrid=False,
                     batch_offset=batch_offset_tt_tensor,
                     slice_size=8,
                 )
@@ -641,7 +637,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
                 multi_device_global_semaphore=ccl_semaphore_handles[0],
-                queue_id=0,
                 num_heads=8,
                 memory_config=output_mem_config,
                 topology=ALL_GATHER_TOPOLOGY,
@@ -649,7 +644,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 subdevice_id=worker_sub_device_id,
                 num_kv_heads=1,
                 final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-                overlap_qk_coregrid=False,
                 batch_offset=batch_offset_tt_tensor,
                 slice_size=8,
             )
@@ -1113,7 +1107,6 @@ def run_all_reduce_qkv_heads_fuse_impl(
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             multi_device_global_semaphore=ccl_semaphore_handles[0],
-            queue_id=0,
             num_heads=8,
             memory_config=output_mem_config,
             topology=ALL_GATHER_TOPOLOGY,
@@ -1121,7 +1114,6 @@ def run_all_reduce_qkv_heads_fuse_impl(
             subdevice_id=worker_sub_device_id,
             num_kv_heads=1,
             final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-            overlap_qk_coregrid=False,
             batch_offset=batch_offset_tt_tensor,
             slice_size=8,
         )  # [1, 1, 32, 1280]
