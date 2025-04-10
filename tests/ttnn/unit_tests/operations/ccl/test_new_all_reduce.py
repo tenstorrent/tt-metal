@@ -323,6 +323,8 @@ def run_all_reduce_impl(
             or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters + reshard_op_cnt
         ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
 
+    mesh_device.reset_sub_device_stall_group()
+
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(1500)

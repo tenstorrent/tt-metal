@@ -66,7 +66,6 @@ def run_with_trace(
     dim,
     num_links,
     output_mem_config,
-    enable_persistent_fabric,
     multi_device_global_semaphore,
     num_iter=20,
     subdevice_id=None,
@@ -81,7 +80,6 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=all_gather_topology,
         subdevice_id=subdevice_id,
-        enable_persistent_fabric_mode=enable_persistent_fabric,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -97,7 +95,6 @@ def run_with_trace(
             memory_config=output_mem_config,
             topology=all_gather_topology,
             subdevice_id=subdevice_id,
-            enable_persistent_fabric_mode=enable_persistent_fabric,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -135,7 +132,6 @@ def run_all_gather_impl(
     use_cluster_axis_api=False,
     cluster_axis=None,
 ):
-    enable_persistent_fabric = True
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
     # Use Async mode based on test input config
@@ -155,7 +151,9 @@ def run_all_gather_impl(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
     ccl_semaphore_handles = [
         create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
@@ -251,7 +249,6 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
-            enable_persistent_fabric,
             multi_device_global_semaphore=ccl_semaphore_handles[0],
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
@@ -269,7 +266,6 @@ def run_all_gather_impl(
                     topology=all_gather_topology,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
                     subdevice_id=worker_sub_device_id,
-                    enable_persistent_fabric_mode=enable_persistent_fabric,
                     num_preferred_links=num_links,
                 )
 
@@ -282,7 +278,6 @@ def run_all_gather_impl(
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
                     subdevice_id=worker_sub_device_id,
-                    enable_persistent_fabric_mode=enable_persistent_fabric,
                 )
             tt_out_tensor_list.append(tt_out_tensor)
 
@@ -311,6 +306,8 @@ def run_all_gather_impl(
             mesh_device.get_devices()[i].num_program_cache_entries() == 1
             or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
         ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+
+    mesh_device.reset_sub_device_stall_group()
 
     if not passed:
         assert eq, f"{i} FAILED: {output}"
@@ -509,11 +506,11 @@ def test_all_gather_sharded(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
         (
-            4,
+            8,
             [1, 4, 32, 1280],
             3,
             ttnn.TILE_LAYOUT,
-            (32, 320),
+            (32, 160),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
             None,
             None,
@@ -531,9 +528,9 @@ def test_all_gather_sharded(
 )
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_all_gather_sharded_ring(
-    pcie_mesh_device,
+    t3k_mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -550,12 +547,11 @@ def test_all_gather_sharded_ring(
     output_shard_grid,
     tensor_mem_layout,
 ):
-    pytest.skip("Device Init Based 1D Fabric does not support a ring.")
     if num_links > 1:
-        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the pcie_mesh_device (and hence only has 1 link available for use)"
+        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the t3k_mesh_device (and hence only has 1 link available for use)"
 
     run_all_gather_impl(
-        pcie_mesh_device,
+        t3k_mesh_device,
         num_devices,
         output_shape,
         dim,
@@ -637,7 +633,6 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
         num_all_gather_instances=replication_factor,
         cluster_axis=0,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
     )
 
 
@@ -705,7 +700,6 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
         num_all_gather_instances=replication_factor,
         cluster_axis=1,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
     )
 
 
@@ -787,7 +781,6 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
         num_all_gather_instances=replication_factor1,
         cluster_axis=0,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
     )
 
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
@@ -807,5 +800,4 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
         num_all_gather_instances=replication_factor2,
         cluster_axis=1,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
     )

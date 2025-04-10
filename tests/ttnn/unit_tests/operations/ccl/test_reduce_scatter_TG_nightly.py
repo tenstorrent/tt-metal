@@ -121,24 +121,8 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     trace_mode=False,
     # New all-gather-async and persistent fabric params
     use_reduce_scatter_async=False,
-    enable_persistent_fabric=False,
-    create_persistent_fabric=False,
-    teardown_persistent_fabric=False,
     use_persistent_output=False,
 ):
-    if create_persistent_fabric:
-        assert use_reduce_scatter_async
-        assert enable_persistent_fabric
-    if teardown_persistent_fabric:
-        assert use_reduce_scatter_async
-        assert enable_persistent_fabric
-    if not use_reduce_scatter_async:
-        assert not create_persistent_fabric
-        assert not teardown_persistent_fabric
-        assert not enable_persistent_fabric
-    else:
-        assert enable_persistent_fabric, "Persistent fabric must be enabled for async reduce scatter"
-
     for d in mesh_device.get_devices():
         ttnn.enable_program_cache(d)
     mesh_device.enable_async(enable_async)
@@ -322,8 +306,8 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     memory_config=output_mem_config,
                     topology=ttnn.Topology.Linear,
                 )
-            if enable_persistent_fabric:
-                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
     mesh_device.reset_sub_device_stall_group()
@@ -429,7 +413,6 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=1,
         use_reduce_scatter_async=True,
-        enable_persistent_fabric=True,
     )
 
 
@@ -495,5 +478,4 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=0,
         use_reduce_scatter_async=True,
-        enable_persistent_fabric=True,
     )

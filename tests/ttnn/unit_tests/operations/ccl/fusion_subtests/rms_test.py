@@ -183,7 +183,6 @@ def run_rms_trace(
             ccl_semaphore_handles,
             num_links=num_links,
             topology=ttnn.Topology.Linear,
-            enable_persistent_fabric_mode=True,
             memory_config=ag_memory_config,
         )
 
@@ -211,7 +210,6 @@ def run_rms_trace(
                     ccl_semaphore_handles,
                     num_links=num_links,
                     topology=ttnn.Topology.Linear,
-                    enable_persistent_fabric_mode=True,
                     memory_config=ag_memory_config,
                 )
                 tt_out = ttnn.rms_norm_post_all_gather(
@@ -238,7 +236,6 @@ def run_rms_trace(
                 ccl_semaphore_handles,
                 num_links=num_links,
                 topology=ttnn.Topology.Linear,
-                enable_persistent_fabric_mode=True,
                 memory_config=ag_memory_config,
             )
             tt_out = ttnn.rms_norm_post_all_gather(

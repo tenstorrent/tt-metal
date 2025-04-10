@@ -192,9 +192,6 @@ def test_all_gather_tg_llama(
         profiler=profiler,
         trace_mode=True,
         use_all_gather_async=True,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
         use_persistent_output=True,
     )
 

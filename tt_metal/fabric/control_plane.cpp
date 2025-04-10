@@ -340,8 +340,8 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         // Add the N150 MMIO devices
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({0});
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({1});
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({3});
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({2});
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({3});
 
         nw_chip_physical_id = this->get_physical_chip_id_from_eth_coord({0, 3, 7, 0, 1});
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/4);

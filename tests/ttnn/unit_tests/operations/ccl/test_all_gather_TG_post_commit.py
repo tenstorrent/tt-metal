@@ -62,7 +62,6 @@ def run_with_trace(
     output_mem_config,
     ccl_semaphore_handles,
     worker_sub_device_id,
-    enable_persistent_fabric,
     n_worker=None,
     n_buffer=None,
     num_iter=20,
@@ -86,7 +85,6 @@ def run_with_trace(
             num_links=num_links,
             memory_config=output_mem_config,
             subdevice_id=worker_sub_device_id,
-            enable_persistent_fabric_mode=enable_persistent_fabric,
         )
     else:
         tt_out_tensor = ttnn.all_gather(
@@ -120,7 +118,6 @@ def run_with_trace(
                     num_links=num_links,
                     memory_config=output_mem_config,
                     subdevice_id=worker_sub_device_id,
-                    enable_persistent_fabric_mode=enable_persistent_fabric,
                 )
             else:
                 tt_out_tensor = ttnn.all_gather(
@@ -192,22 +189,8 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     profiler=BenchmarkProfiler(),
     # New all-gather-async and persistent fabric params
     use_all_gather_async=False,
-    enable_persistent_fabric=True,
-    create_persistent_fabric=False,
-    teardown_persistent_fabric=False,
     use_persistent_output=False,
 ):
-    if create_persistent_fabric:
-        assert use_all_gather_async
-        assert enable_persistent_fabric
-    if teardown_persistent_fabric:
-        assert use_all_gather_async
-        assert enable_persistent_fabric
-    if not use_all_gather_async:
-        assert not create_persistent_fabric
-        assert not teardown_persistent_fabric
-        assert not enable_persistent_fabric
-
     if use_persistent_output and not use_all_gather_async:
         pytest.skip("Persistent output tensor requires all-gather-async")
 
@@ -316,7 +299,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                 output_mem_config=output_mem_config,
                 ccl_semaphore_handles=ccl_semaphore_handles,
                 worker_sub_device_id=worker_sub_device_id,
-                enable_persistent_fabric=enable_persistent_fabric,
                 all_gather_topology=all_gather_topology,
                 num_iter=num_iters,
                 warmup_iters=warmup_iters,
@@ -340,7 +322,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         num_links=num_links,
                         memory_config=output_mem_config,
                         subdevice_id=worker_sub_device_id,
-                        enable_persistent_fabric_mode=enable_persistent_fabric,
                     )
                 else:
                     ttnn_tensor_out = ttnn.all_gather(
@@ -357,7 +338,9 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     except Exception as e:
         logger.error(f"Exception: {e}")
         raise e
-    mesh_device.reset_sub_device_stall_group()
+    finally:
+        mesh_device.reset_sub_device_stall_group()
+
     # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor_out)
     tt_output_tensor = ttnn.to_torch(
         ttnn_tensor_out, mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=concat_dims)

@@ -89,7 +89,6 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=1,
         use_reduce_scatter_async=True,
-        enable_persistent_fabric=True,
         use_persistent_output=use_persistent_output,
     )
 
@@ -164,6 +163,5 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=0,
         use_reduce_scatter_async=True,
-        enable_persistent_fabric=True,
         use_persistent_output=use_persistent_output,
     )
