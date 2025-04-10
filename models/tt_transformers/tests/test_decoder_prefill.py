@@ -51,6 +51,7 @@ from models.utility_functions import skip_for_grayskull
     "max_seq_len",
     (
         4096,
+        256,
         128,
     ),
 )
@@ -63,6 +64,12 @@ def test_decoder_inference(
     reset_seeds,
     ensure_gc,
 ):
+    mesh_device_env = os.getenv("MESH_DEVICE")
+    model_name_env = os.getenv("HF_MODEL")
+
+    if mesh_device_env == "N150" and max_seq_len > 256 and model_name_env and "mistral" in model_name_env.lower():
+        pytest.skip("N150 does not support seq_len > 256 for Mistral models")
+
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
 
