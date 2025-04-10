@@ -397,7 +397,15 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90000, "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}], indirect=True
+    "device_params",
+    [
+        {
+            "trace_region_size": 90000,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True, False])
 @pytest.mark.parametrize(
@@ -447,7 +455,15 @@ def test_fabric_reduce_scatter_regular_grid_2_dev(
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90000, "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}], indirect=True
+    "device_params",
+    [
+        {
+            "trace_region_size": 90000,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(

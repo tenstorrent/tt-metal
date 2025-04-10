@@ -242,7 +242,7 @@ def test_ring_all_reduce_post_commit(
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_ring_all_reduce_post_commit_2chip(
-    pcie_mesh_device,
+    t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
     num_links,
@@ -256,7 +256,7 @@ def test_ring_all_reduce_post_commit_2chip(
     num_iters=2,
 ):
     run_all_reduce_test(
-        pcie_mesh_device,
+        t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
         num_links,
