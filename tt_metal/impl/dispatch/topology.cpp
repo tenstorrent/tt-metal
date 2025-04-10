@@ -44,7 +44,8 @@
 #include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
 #include "span.hpp"
-#include <tt-metalium/fabric_host_utils.hpp>
+#include <tt-metalium/fabric.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
@@ -1063,20 +1064,15 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
         return nullptr;
     }
 
-    uint32_t corner_chip_connections = 0;
-    constexpr uint32_t corner_chip_id = 0;
     for (const auto& direction : routing_directions) {
-        auto active_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
-            mesh_chip_id.first, mesh_chip_id.second, direction);
-        if (!control_plane->get_intra_chip_neighbors(mesh_chip_id.first, 0, direction).empty()) {
-            corner_chip_connections++;
-        }
-        if (active_eth_chans.empty()) {
+        auto neighbors = control_plane->get_intra_chip_neighbors(mesh_chip_id.first, mesh_chip_id.second, direction);
+        if (neighbors.empty()) {
             continue;
         }
 
-        auto neighbors = control_plane->get_intra_chip_neighbors(mesh_chip_id.first, mesh_chip_id.second, direction);
-        if (neighbors.empty()) {
+        auto active_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
+            mesh_chip_id.first, mesh_chip_id.second, direction);
+        if (active_eth_chans.empty()) {
             continue;
         }
 
@@ -1087,8 +1083,8 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
         active_fabric_eth_channels.insert({direction, active_eth_chans});
     }
 
-    if (chip_neighbors.empty()) {
-        // 1D fabric needs atleast one neighbor on the same mesh (atleast for now)
+    if (active_fabric_eth_channels.empty()) {
+        // need atleast 1 active fabric eth channel in atleast 1 direction
         return nullptr;
     }
 
@@ -1097,8 +1093,8 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
 
     // Refactor this once mesh_id has row/col control
-    // This currently checks if chip 0 is a corner chip
-    bool wrap_around_mesh = corner_chip_connections == 2;
+    // This currently checks if a chip is a corner chip
+    bool wrap_around_mesh = chip_neighbors.size() == 2;
 
     for (const auto& [direction, remote_chip_id] : chip_neighbors) {
         bool is_dateline = check_dateline(
@@ -1133,30 +1129,12 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
         edm_channels_mask += 0x1 << (uint32_t)router_chan;
     }
 
-    auto get_ordered_eth_chans = [&](const std::set<chan_id_t>& eth_chans) -> std::vector<chan_id_t> {
-        std::vector<std::pair<chan_id_t, CoreCoord>> ordered_eth_chans_cores;
-        for (const auto& chan : eth_chans) {
-            ordered_eth_chans_cores.push_back(
-                std::make_pair(chan, soc_desc.get_eth_core_for_channel(chan, CoordSystem::VIRTUAL)));
-        }
-
-        std::sort(ordered_eth_chans_cores.begin(), ordered_eth_chans_cores.end(), [](const auto& a, const auto& b) {
-            return a.second.x < b.second.x;
-        });
-
-        std::vector<chan_id_t> ordered_eth_chans;
-        for (const auto& [chan, _] : ordered_eth_chans_cores) {
-            ordered_eth_chans.push_back(chan);
-        }
-        return ordered_eth_chans;
-    };
-
     auto connect_downstream_builders = [&](RoutingDirection dir1, RoutingDirection dir2) {
         bool can_connect =
             (chip_neighbors.find(dir1) != chip_neighbors.end()) && (chip_neighbors.find(dir2) != chip_neighbors.end());
         if (can_connect) {
-            auto eth_chans_dir1 = get_ordered_eth_chans(active_fabric_eth_channels.at(dir1));
-            auto eth_chans_dir2 = get_ordered_eth_chans(active_fabric_eth_channels.at(dir2));
+            auto eth_chans_dir1 = get_ordered_fabric_eth_chans(device->id(), active_fabric_eth_channels.at(dir1));
+            auto eth_chans_dir2 = get_ordered_fabric_eth_chans(device->id(), active_fabric_eth_channels.at(dir2));
 
             auto eth_chans_dir1_it = eth_chans_dir1.begin();
             auto eth_chans_dir2_it = eth_chans_dir2.begin();
@@ -1178,8 +1156,9 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
         }
     };
 
-    // if the wrap aroud mesh flag is set and corner chip, fold the internal connections
-    if (wrap_around_mesh && chip_neighbors.size() == 2) {
+    // Refactor this once mesh_id has row/col control
+    // for corner chip, fold the internal connections
+    if (wrap_around_mesh) {
         auto it = chip_neighbors.begin();
         auto dir1 = it->first;
         it++;
@@ -1190,8 +1169,6 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
         connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
     }
 
-    // TODO: this will not be needed once tests are migrated and should be the default behavior
-    std::map<string, string> defines = {};
     for (auto& [eth_chan, edm_builder] : edm_builders) {
         edm_builder.set_wait_for_host_signal(true);
         const std::vector<uint32_t> edm_kernel_rt_args = edm_builder.get_runtime_args();
@@ -1218,7 +1195,6 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
             tt::tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = eth_sender_ct_args,
-                .defines = defines,
                 .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
         tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, eth_sender_kernel, eth_logical_core, edm_kernel_rt_args);
