@@ -4,7 +4,7 @@
 
 import ttnn
 from models.experimental.ufld_v2.ttnn.common import TtnnUFLDV2Conv2D
-from models.experimental.ufld_v2.ttnn.ttnn_Resnet_34 import TtnnResnet34
+from models.experimental.ufld_v2.ttnn.ttnn_resnet_34 import TtnnResnet34
 
 
 class TtnnUFLDv2:

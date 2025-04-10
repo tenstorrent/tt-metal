@@ -11,7 +11,7 @@ Resource link - [source](https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2)
 
 ### Model Details
 
-- The entry point to the UFLD_v2 is located at:`models/experimental/ufld_v2/ttnn/ttnn_UFLD_v2.py`
+- The entry point to the UFLD_v2 is located at:`models/experimental/ufld_v2/ttnn/ttnn_ufld_v2.py`
 - The model picks up trained weights from the **tusimple_res34.pth** file located at:`models/experimental/ufld_v2/reference/tusimple_res34.pth`
 - Batch Size :1
 
@@ -21,12 +21,23 @@ Export the following command before running pytests on N300:
 
 Use the following command to run the model :
 
-`pytest tests/ttnn/integration_tests/ufld_v2/test_ttnn_UFLD_v2.py::test_UFD_V2_Model`
+`pytest tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py::test_ufld_v2_model`
 
 Use the following command to run the e2e perf:
 
-`pytest models/experimental/ufld_v2/tests/test_UFLD_v2_perf.py::test_ufld_v2_perf`
+`pytest models/experimental/ufld_v2/tests/test_ufld_v2_perf.py::test_ufld_v2_perf`
 
 Use the following command to run the e2e perf with trace:
 
-`pytest models/experimental/ufld_v2/tests/test_UFLD_v2_e2e_performant.py`
+`pytest models/experimental/ufld_v2/tests/test_ufld_v2_e2e_performant.py`
+
+### Demo
+
+Use the following command to run the demo :
+
+`pytest models/experimental/ufld_v2/demo/demo.py`
+
+To run the demo on your data:
+
+- Add your images to the 'images' directory and list their filenames in 'input_images.txt' under demo folder
+- Annotate the corresponding ground truth labels in 'ground_truth_labels.json' using the required format.

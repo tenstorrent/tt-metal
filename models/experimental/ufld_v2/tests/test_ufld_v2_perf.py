@@ -10,8 +10,8 @@ import pytest
 from loguru import logger
 from models.utility_functions import is_wormhole_b0
 from models.perf.perf_utils import prep_perf_report
-from models.experimental.ufld_v2.ttnn.ttnn_UFLD_v2 import TtnnUFLDv2
-from models.experimental.ufld_v2.reference.UFLD_v2_model import TuSimple34
+from models.experimental.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from models.experimental.ufld_v2.reference.ufld_v2_model import TuSimple34
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
@@ -19,7 +19,7 @@ from models.utility_functions import (
 )
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args
-from tests.ttnn.integration_tests.ufld_v2.test_ttnn_UFLD_v2 import custom_preprocessor_whole_model
+from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_preprocessor_whole_model
 
 
 def get_expected_times(name):
@@ -125,7 +125,7 @@ def test_perf_device_bare_metal_ufld_v2(batch_size, expected_perf, test):
     margin = 0.03
     expected_perf = expected_perf if is_wormhole_b0() else 0
 
-    command = f"pytest tests/ttnn/integration_tests/ufld_v2/test_ttnn_UFLD_v2.py::test_UFD_V2_Model"
+    command = f"pytest tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py::test_ufld_v2_model"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

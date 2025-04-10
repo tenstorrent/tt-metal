@@ -13,9 +13,9 @@ from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
-from models.experimental.ufld_v2.reference.UFLD_v2_model import TuSimple34, BasicBlock
-from models.experimental.ufld_v2.ttnn.ttnn_UFLD_v2 import TtnnUFLDv2
-from models.experimental.ufld_v2.ttnn.ttnn_Basic_block import TtnnBasicBlock
+from models.experimental.ufld_v2.reference.ufld_v2_model import TuSimple34, BasicBlock
+from models.experimental.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from models.experimental.ufld_v2.ttnn.ttnn_basic_block import TtnnBasicBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -360,7 +360,7 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_UFD_V2_Model(device, batch_size, input_channels, height, width, use_pretrained_weight):
+def test_ufld_v2_model(device, batch_size, input_channels, height, width, use_pretrained_weight):
     torch_model = TuSimple34(input_height=height, input_width=width)
     torch_model.to(torch.bfloat16)
     torch_model.eval()
