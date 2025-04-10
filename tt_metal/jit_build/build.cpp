@@ -134,7 +134,17 @@ void JitBuildEnv::init(
     }
 
     // Tools
-    this->gpp_ += this->root_ + "runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
+    std::string local_gpp_path = this->root_ + "runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++";
+    std::string system_gpp_path = "/opt/tenstorrent/sfpi/compiler/bin/riscv32-unknown-elf-g++";
+    if (std::filesystem::exists(local_gpp_path)) {
+        log_info(tt::LogBuildKernels, "Using local RISC-V g++ at {}", local_gpp_path);
+        this->gpp_ += local_gpp_path + " ";
+    } else if (std::filesystem::exists(system_gpp_path)) {
+        log_info(tt::LogBuildKernels, "Using system RISC-V g++ at {}", system_gpp_path);
+        this->gpp_ += system_gpp_path + " ";
+    } else {
+        TT_THROW("RISC-V g++ not found in {} or {}", local_gpp_path, system_gpp_path);
+    }
 
     // Flags
     string common_flags;
