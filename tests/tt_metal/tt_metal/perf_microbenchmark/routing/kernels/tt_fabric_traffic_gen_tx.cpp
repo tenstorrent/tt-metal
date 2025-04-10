@@ -73,18 +73,21 @@ auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
 
-using ClientInterfaceType = typename ClientInterfaceSelector<router_mode>::type;
-volatile tt_l1_ptr ClientInterfaceType client_interface = (volatile tt_l1_ptr ClientInterfaceType)client_interface_addr;
 #ifdef FVC_MODE_PULL
 fvc_inbound_pull_state_t test_producer __attribute__((aligned(16)));
+volatile fabric_pull_client_interface_t* client_interface =
+    (volatile fabric_pull_client_interface_t*)client_interface_addr;
 #else
 fvc_inbound_push_state_t test_producer __attribute__((aligned(16)));
+volatile fabric_push_client_interface_t* client_interface =
+    (volatile fabric_push_client_interface_t*)client_interface_addr;
 #endif
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
 
 uint64_t xy_local_addr;
 
 packet_header_t packet_header __attribute__((aligned(16)));
+low_latency_packet_header_t low_latency_packet_header __attribute__((aligned(16)));
 
 uint32_t target_address;
 uint32_t noc_offset;
@@ -346,6 +349,32 @@ inline bool test_buffer_handler_async_wr() {
             target_address = base_target_address;
         }
 
+#ifdef LOW_LATENCY_ROUTING
+        low_latency_packet_header.routing.packet_size_bytes =
+            input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
+        low_latency_packet_header.routing.target_offset_l = target_address;
+        low_latency_packet_header.routing.target_offset_h = noc_offset;
+        low_latency_packet_header.routing.command = ASYNC_WR;
+
+        if constexpr (test_command & ATOMIC_INC) {
+            low_latency_packet_header.routing.command |= ATOMIC_INC;
+            low_latency_packet_header.routing.atomic_offset_h = noc_offset;
+            low_latency_packet_header.routing.atomic_increment = atomic_increment;
+            low_latency_packet_header.routing.atomic_wrap = 31;
+            if constexpr (fixed_async_wr_notif_addr) {
+                low_latency_packet_header.routing.atomic_offset_l = base_target_address;
+            } else {
+                low_latency_packet_header.routing.atomic_offset_l = target_address;
+                reset_notif_addr = true;
+            }
+        }
+
+        target_address += low_latency_packet_header.routing.packet_size_bytes - PACKET_HEADER_SIZE_BYTES;
+        // low latency routing fields are alread in the cached header.
+        for (uint32_t i = 0; i < (PACKET_HEADER_SIZE_BYTES / 4); i++) {
+            header_ptr[i] = ((uint32_t*)&low_latency_packet_header)[i];
+        }
+#else
         packet_header.routing.flags = FORWARD | (mcast_data ? MCAST_DATA : 0);
         packet_header.routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
         packet_header.routing.dst_mesh_id = dest_device >> 16;
@@ -375,7 +404,7 @@ inline bool test_buffer_handler_async_wr() {
         for (uint32_t i = 0; i < (PACKET_HEADER_SIZE_BYTES / 4); i++) {
             header_ptr[i] = ((uint32_t*)&packet_header)[i];
         }
-
+#endif
         input_queue_state.curr_packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
         byte_wr_addr += PACKET_HEADER_SIZE_BYTES;
 
@@ -421,6 +450,20 @@ inline bool test_buffer_handler_atomic_inc() {
         uint32_t byte_wr_addr = test_producer.get_local_buffer_write_addr();
         input_queue_state.next_inline_packet(total_data_words);
         tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
+#ifdef LOW_LATENCY_ROUTING
+        low_latency_packet_header.routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
+        low_latency_packet_header.routing.target_offset_h = noc_offset;
+        low_latency_packet_header.routing.target_offset_l = target_address;
+        low_latency_packet_header.routing.atomic_offset_h = noc_offset;
+        low_latency_packet_header.routing.atomic_offset_l = target_address;
+        low_latency_packet_header.routing.atomic_increment = atomic_increment;
+        low_latency_packet_header.routing.atomic_wrap = 31;
+        low_latency_packet_header.routing.command = ATOMIC_INC;
+        // low latency routing fields are alread in the cached header.
+        for (uint32_t i = 0; i < (PACKET_HEADER_SIZE_BYTES / 4); i++) {
+            header_ptr[i] = ((uint32_t*)&low_latency_packet_header)[i];
+        }
+#else
         packet_header.routing.flags = INLINE_FORWARD;
         packet_header.routing.dst_mesh_id = dest_device >> 16;
         packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
@@ -434,6 +477,7 @@ inline bool test_buffer_handler_atomic_inc() {
         for (uint32_t i = 0; i < (PACKET_HEADER_SIZE_BYTES / 4); i++) {
             header_ptr[i] = ((uint32_t*)&packet_header)[i];
         }
+#endif
         slots_initialized += 1;
         input_queue_state.curr_packet_words_remaining = 0;
         test_producer.advance_local_wrptr(1);
@@ -606,6 +650,28 @@ void kernel_main() {
 
 #ifndef FVC_MODE_PULL
     test_producer.register_with_routers<FVC_MODE_ENDPOINT>(dest_device & 0xFFFF, dest_device >> 16);
+#ifdef LOW_LATENCY_ROUTING
+    // For low latency routing mode, calculate the unicast/multicast route once and put it in header.
+    // packet size and target address will get update for each packet.
+    // the destination devices remain the same for every packet so the routes can be populated in
+    // header once.
+    if constexpr (mcast_data) {
+        if constexpr (e_depth) {
+            fabric_set_mcast_route(&low_latency_packet_header, eth_chan_directions::EAST, e_depth);
+        } else if constexpr (w_depth) {
+            fabric_set_mcast_route(&low_latency_packet_header, eth_chan_directions::WEST, w_depth);
+        } else if constexpr (n_depth) {
+            fabric_set_mcast_route(&low_latency_packet_header, eth_chan_directions::NORTH, n_depth);
+        } else if constexpr (s_depth) {
+            fabric_set_mcast_route(&low_latency_packet_header, eth_chan_directions::SOUTH, s_depth);
+        }
+    } else {
+        uint32_t outgoing_direction =
+            get_next_hop_router_direction(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
+        fabric_set_unicast_route(
+            client_interface, &low_latency_packet_header, outgoing_direction, dest_device & 0xFFFF);
+    }
+#endif
 #endif
 
     while (true) {
@@ -631,7 +697,11 @@ void kernel_main() {
             curr_packet_size =
                 ((test_producer.packet_header->routing.packet_size_bytes & 0x3FFFFFFF) + PACKET_WORD_SIZE_BYTES - 1) >>
                 4;
+#ifdef LOW_LATENCY_ROUTING
+            uint32_t curr_data_words_sent = test_producer.push_data_to_eth_router<FVC_MODE_ENDPOINT>(dest_device);
+#else
             uint32_t curr_data_words_sent = test_producer.push_data_to_eth_router<FVC_MODE_ENDPOINT>();
+#endif
 #endif
             curr_packet_words_sent += curr_data_words_sent;
             data_words_sent += curr_data_words_sent;
@@ -647,10 +717,6 @@ void kernel_main() {
                 curr_packet_words_sent = 0;
                 packet_count++;
             }
-        } else if (test_producer.packet_corrupted) {
-            DPRINT << "Packet Header Corrupted: packet " << packet_count
-                   << " Addr: " << test_producer.get_local_buffer_read_addr() << ENDL();
-            break;
         } else if (fvcc_test_producer.get_curr_packet_valid()) {
             fvcc_test_producer.fvcc_handler<FVC_MODE_ENDPOINT>();
 #ifdef CHECK_TIMEOUT
@@ -678,10 +744,7 @@ void kernel_main() {
     set_64b_result(test_results, few_data_sent_iter, TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
     set_64b_result(test_results, many_data_sent_iter, TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
 
-    if (test_producer.packet_corrupted) {
-        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_BAD_HEADER;
-        test_results[TT_FABRIC_MISC_INDEX] = packet_count;
-    } else if (!timeout) {
+    if (!timeout) {
         test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
         test_results[TT_FABRIC_MISC_INDEX] = packet_count;
     } else {

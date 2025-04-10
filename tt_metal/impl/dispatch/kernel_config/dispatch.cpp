@@ -2,25 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch.hpp"
-#include "assert.hpp"
-#include "hal.hpp"
-#include "prefetch.hpp"
-#include "dispatch_s.hpp"
-#include "demux.hpp"
-#include "mux.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
-#include "rtoptions.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt_metal.hpp>
+#include <array>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "command_queue_common.hpp"
+#include "demux.hpp"
+#include "device.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch/kernels/packet_queue_ctrl.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "dispatch_s.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "mux.hpp"
+#include "prefetch.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
 void DispatchKernel::GenerateStaticConfigs() {
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
 
@@ -56,12 +70,13 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
         static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+            hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
         static_config_.unicast_go_signal_addr =
-            (hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
-                ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
+            (hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
+                ? hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
                 : 0;
-        static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
+        static_config_.distributed_dispatcher =
+            MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
 
         static_config_.host_completion_q_wr_ptr =
@@ -72,7 +87,8 @@ void DispatchKernel::GenerateStaticConfigs() {
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     } else if (static_config_.is_h_variant.value()) {
         // DISPATCH_H services a remote chip, and so has a different channel
-        channel = tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id_);
+        channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
@@ -96,7 +112,7 @@ void DispatchKernel::GenerateStaticConfigs() {
 
         static_config_.split_dispatch_page_preamble_size = 0;
         // TODO: why is this hard-coded to 1 CQ on Galaxy?
-        if (tt::Cluster::instance().is_galaxy_cluster()) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(1);
         } else {
             static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
@@ -154,12 +170,13 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
         static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+            hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
         static_config_.unicast_go_signal_addr =
-            (hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
-                ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
+            (hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
+                ? hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
                 : 0;
-        static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
+        static_config_.distributed_dispatcher =
+            MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
 
         static_config_.host_completion_q_wr_ptr =
@@ -190,14 +207,14 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_local_downstream_sem_addr = 0;
         } else {
             dependent_config_.split_prefetch = true;
-            dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal.noc_xy_encoding(
+            dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal_ref.noc_xy_encoding(
                 prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
                 prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
         }
 
         // Downstream
-        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+        if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
             TT_ASSERT(downstream_kernels_.size() == 1);
             auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
             TT_ASSERT(dispatch_s_kernel);
@@ -224,7 +241,8 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.upstream_sync_sem = 0;  // Unused
         } else if (auto dispatch_d = dynamic_cast<DispatchKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = dispatch_d->GetLogicalCore();
-            dependent_config_.upstream_dispatch_cb_sem_id = dispatch_d->GetStaticConfig().my_dispatch_cb_sem_id.value();
+            dependent_config_.upstream_dispatch_cb_sem_id =
+                dispatch_d->GetStaticConfig().my_downstream_cb_sem_id.value();
             dependent_config_.upstream_sync_sem = 0;  // Unused
         } else {
             TT_FATAL(false, "Unimplemented path");
@@ -238,7 +256,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.split_prefetch = true;
-        dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal.noc_xy_encoding(
+        dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal_ref.noc_xy_encoding(
             prefetch_h_kernel->GetVirtualCore().x, prefetch_h_kernel->GetVirtualCore().y);
         dependent_config_.prefetch_h_local_downstream_sem_addr =
             prefetch_h_kernel->GetStaticConfig().my_downstream_cb_sem_id;
@@ -261,7 +279,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_local_downstream_sem_addr = 0;
         } else {
             dependent_config_.split_prefetch = true;
-            dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal.noc_xy_encoding(
+            dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal_ref.noc_xy_encoding(
                 prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
                 prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
@@ -308,7 +326,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         }
 
         TT_FATAL(
-            !DispatchQueryManager::instance().dispatch_s_enabled() || found_dispatch_s,
+            !MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() || found_dispatch_s,
             "dispatch_d is missing dispatch_s downstream");
         TT_FATAL(
             found_mux || found_dispatch_h,
@@ -363,7 +381,7 @@ void DispatchKernel::CreateKernel() {
         dependent_config_.downstream_chip_id.value_or(0),
         dependent_config_.upstream_mesh_id.value_or(0),
         dependent_config_.upstream_chip_id.value_or(0),
-        dependent_config_.fabric_router_noc_xy.value_or(0xdeadbeef),
+        dependent_config_.fabric_router_noc_xy.value_or(0),
         static_config_.client_interface_addr.value_or(0),
 
         static_config_.first_stream_used.value(),
@@ -431,7 +449,7 @@ void DispatchKernel::UpdateArgsForFabric(
     tt::tt_fabric::mesh_id_t downstream_mesh_id,
     chip_id_t downstream_chip_id) {
     dependent_config_.fabric_router_noc_xy =
-        tt::tt_metal::hal.noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
+        tt::tt_metal::hal_ref.noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
     dependent_config_.upstream_mesh_id = upstream_mesh_id;
     dependent_config_.upstream_chip_id = upstream_chip_id;
     dependent_config_.downstream_mesh_id = downstream_mesh_id;

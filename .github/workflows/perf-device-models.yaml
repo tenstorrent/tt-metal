@@ -9,10 +9,11 @@ on:
 jobs:
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
       tracy: true
       build-wheel: true
-    secrets: inherit
+      version: 22.04
   device-perf:
     needs: build-artifact-profiler
     secrets: inherit

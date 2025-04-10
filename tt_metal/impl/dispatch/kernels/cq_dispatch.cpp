@@ -56,9 +56,9 @@ constexpr uint32_t dev_completion_q_rd_ptr = get_compile_time_arg_val(28);
 
 // used for fd on fabric
 constexpr uint32_t downstream_mesh_id = get_compile_time_arg_val(29);
-constexpr uint32_t downstream_chip_id = get_compile_time_arg_val(30);
+constexpr uint32_t downstream_dev_id = get_compile_time_arg_val(30);
 constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(31);
-constexpr uint32_t upstream_chip_id = get_compile_time_arg_val(32);
+constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(32);
 constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(33);
 constexpr uint32_t client_interface_addr = get_compile_time_arg_val(34);
 
@@ -614,6 +614,9 @@ void process_write_packed(
         mcasts = 0;
         // Workaround mcast path reservation hangs by always waiting for a write
         // barrier before doing an mcast that isn't linked to a previous mcast.
+#ifdef TRACE_WRITE_BARRIERS
+        DeviceZoneScopedN("noc_async_write_barrier");
+#endif
         noc_async_write_barrier();
     };
     WritePackedSubCmd* sub_cmd_ptr = (WritePackedSubCmd*)l1_cache;
@@ -748,6 +751,9 @@ void process_write_packed_large(
             writes = 0;
             // Workaround mcast path reservation hangs by always waiting for a write
             // barrier before doing an mcast that isn't linked to a previous mcast.
+#ifdef TRACE_WRITE_BARRIERS
+            DeviceZoneScopedN("noc_async_write_barrier");
+#endif
             noc_async_write_barrier();
         };
 
@@ -909,6 +915,9 @@ static void process_wait() {
 
     if (barrier) {
         // DPRINT << " DISPATCH BARRIER\n";
+#ifdef TRACE_WRITE_BARRIERS
+        DeviceZoneScopedN("noc_async_write_barrier");
+#endif
         noc_async_write_barrier();
     }
 
@@ -1012,6 +1021,9 @@ void process_notify_dispatch_s_go_signal_cmd() {
     // write barrier to wait before sending the go signal
     if (wait) {
         DPRINT << " DISPATCH_S_NOTIFY BARRIER\n";
+#ifdef TRACE_WRITE_BARRIERS
+        DeviceZoneScopedN("noc_async_write_barrier");
+#endif
         noc_async_write_barrier();
     }
     uint16_t index_bitmask = cmd->notify_dispatch_s_go_signal.index_bitmask;
@@ -1050,10 +1062,9 @@ void set_go_signal_noc_data() {
 static inline bool process_cmd_d(
     uint32_t& cmd_ptr, uint32_t* l1_cache, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     bool done = false;
-
 re_run_command:
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
-
+    DeviceTimestampedData("process_cmd_d_dispatch", (uint32_t)cmd->base.cmd_id);
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
             WAYPOINT("DWB");
@@ -1092,6 +1103,11 @@ re_run_command:
         case CQ_DISPATCH_CMD_WRITE_PACKED: {
             // DPRINT << "cmd_write_packed" << ENDL();
             uint32_t flags = cmd->write_packed.flags;
+            // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
+            uint32_t data = ((flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_MASK) >>
+                             (CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT - 1)) |
+                            bool(flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST);
+            DeviceTimestampedData("packed_data_dispatch", data);
             if (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST) {
                 process_write_packed<true, CQDispatchWritePackedMulticastSubCmd>(
                     flags, l1_cache, block_noc_writes_to_clear, block_next_start_addr);
@@ -1108,6 +1124,8 @@ re_run_command:
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
             // DPRINT << "cmd_write_packed_large" << ENDL();
+            // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
+            DeviceTimestampedData("packed_large_data_dispatch", cmd->write_packed_large.type);
             process_write_packed_large(l1_cache, block_noc_writes_to_clear, block_next_start_addr);
             break;
 
@@ -1155,7 +1173,8 @@ re_run_command:
         case CQ_DISPATCH_CMD_SET_WRITE_OFFSET:
             // DPRINT << "write offset: " << cmd->set_write_offset.offset0 << " " << cmd->set_write_offset.offset1 << "
             // "
-            //        << cmd->set_write_offset.offset2 << ENDL();
+            //        << cmd->set_write_offset.offset2 << " host id " << cmd->set_write_offset.program_host_id << ENDL();
+            DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
             write_offset[0] = cmd->set_write_offset.offset0;
             write_offset[1] = cmd->set_write_offset.offset1;
             write_offset[2] = cmd->set_write_offset.offset2;
@@ -1193,6 +1212,7 @@ static inline bool process_cmd_h(
 
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
 
+    DeviceTimestampedData("process_cmd_h_dispatch", (uint32_t)cmd->base.cmd_id);
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
             // DPRINT << "dispatch_h write_linear_h\n";
@@ -1231,6 +1251,10 @@ static inline bool process_cmd_h(
 
 void kernel_main() {
     // DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    if constexpr (use_fabric(fabric_router_noc_xy)) {
+        tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*unused*/);
+    }
+
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);
     if constexpr (my_noc_index != upstream_noc_index) {
@@ -1276,7 +1300,6 @@ void kernel_main() {
     bool done = false;
     uint32_t heartbeat = 0;
     while (!done) {
-        DeviceZoneScopedN("CQ-DISPATCH");
         if (cmd_ptr == cb_fence) {
             get_cb_page_and_release_pages<
                 dispatch_cb_base,
@@ -1295,6 +1318,7 @@ void kernel_main() {
                 upstream_total_acquired_page_count);
         }
 
+        DeviceZoneScopedN("CQ-DISPATCH");
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
 
         done = is_d_variant ? process_cmd_d(cmd_ptr, l1_cache, block_noc_writes_to_clear, block_next_start_addr)

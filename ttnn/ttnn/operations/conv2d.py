@@ -180,8 +180,6 @@ def conv2d(
     conv_config: Conv2dConfig = None,  # config overrides by user
     compute_config=None,  # compute config overrides by user
     memory_config: ttnn.MemoryConfig = None,  # memory config overrides by user
-    conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
-    debug=False,  # ignored
     return_output_dim=False,
     return_weights_and_bias=False,
 ) -> Tuple[ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]:

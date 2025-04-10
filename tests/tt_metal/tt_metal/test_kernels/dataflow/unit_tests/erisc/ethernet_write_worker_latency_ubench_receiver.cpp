@@ -9,6 +9,9 @@ void kernel_main() {
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_messages = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t message_size = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
 
     ASSERT(is_power_of_two(NUM_BUFFER_SLOTS));
 
@@ -104,4 +107,6 @@ void kernel_main() {
         asm volatile("nop");
     }
     ncrisc_noc_counters_init();
+
+    internal_::risc_context_switch();
 }

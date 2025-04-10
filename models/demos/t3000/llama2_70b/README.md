@@ -1,5 +1,8 @@
 # Llama2-70B Demo
 
+> [!NOTE]
+> This model is no longer supported on QuietBox/LoudBox (T3000) setups.
+
 ## How to Run
 
 1. **Download the Llama2-70B weights from Meta (https://llama.meta.com/):**

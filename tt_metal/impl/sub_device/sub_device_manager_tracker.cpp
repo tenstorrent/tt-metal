@@ -2,24 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-#include <memory>
-#include <unordered_set>
-#include <vector>
-
-#include <sub_device_manager_tracker.hpp>
-
-#include <device.hpp>
 #include <allocator.hpp>
 #include <buffer_constants.hpp>
 #include <command_queue.hpp>
-#include <command_queue.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <data_types.hpp>
+#include <device.hpp>
 #include <sub_device.hpp>
+#include <sub_device_manager_tracker.hpp>
 #include <sub_device_types.hpp>
 #include <tt_stl/span.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <tuple>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "assert.hpp"
+#include "core_coord.hpp"
+#include "hal_types.hpp"
+#include "mesh_command_queue.hpp"
+#include "mesh_device.hpp"
+#include "strong_type.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 
 namespace tt::tt_metal {
@@ -138,24 +147,36 @@ SubDeviceManagerId SubDeviceManagerTracker::get_default_sub_device_manager_id() 
 std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_address(
     tt::stl::Span<const SubDeviceId> sub_device_ids) const {
     constexpr uint32_t global_bank_id = 0;
-    if (sub_device_ids.empty()) {
-        // Global bank id needs to look up a bank from the compute grid (not the storage grid)
-        // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
-        const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
-        return default_allocator->get_lowest_occupied_l1_address(global_bank_id);
-    } else {
-        DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
-        for (const auto& sub_device_id : sub_device_ids) {
-            const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
-            if (allocator) {
-                auto found_addr = allocator->get_lowest_occupied_l1_address(global_bank_id);
-                if (found_addr.has_value()) {
-                    lowest_addr = std::min(lowest_addr, *found_addr);
-                }
+    DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
+    // Global bank id needs to look up a bank from the compute grid (not the storage grid)
+    // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
+    const auto& global_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
+    auto found_addr = global_allocator->get_lowest_occupied_l1_address(global_bank_id);
+    if (found_addr.has_value()) {
+        lowest_addr = std::min(lowest_addr, *found_addr);
+    }
+    // If no sub device ids are specified, check all sub_device ids
+    if (sub_device_ids.empty() && default_sub_device_manager_ != active_sub_device_manager_) {
+        static_assert(
+            std::is_reference_v<
+                std::invoke_result_t<decltype(&SubDeviceManager::get_sub_device_ids), SubDeviceManager>>,
+            "Getting a span from get_sub_device_ids requires it to be a reference");
+        sub_device_ids = tt::stl::Span<const SubDeviceId>(active_sub_device_manager_->get_sub_device_ids());
+    }
+    for (const auto& sub_device_id : sub_device_ids) {
+        const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
+        if (allocator) {
+            // Having an allocator means there are Tensix cores in this sub-device
+            const auto& cores =
+                this->get_active_sub_device_manager()->sub_device(sub_device_id).cores(HalProgrammableCoreType::TENSIX);
+            auto bank_id = allocator->get_bank_ids_from_logical_core(BufferType::L1, cores.ranges()[0].start_coord)[0];
+            found_addr = allocator->get_lowest_occupied_l1_address(bank_id);
+            if (found_addr.has_value()) {
+                lowest_addr = std::min(lowest_addr, *found_addr);
             }
         }
-        return lowest_addr;
     }
+    return lowest_addr == std::numeric_limits<DeviceAddr>::max() ? std::nullopt : std::make_optional(lowest_addr);
 }
 
 }  // namespace tt::tt_metal

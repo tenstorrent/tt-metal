@@ -2,16 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/dispatch_settings.hpp>
-#include <tt-metalium/dev_msgs.h>
-#include <cstdint>
-#include <hal.hpp>
-#include <tt_cluster.hpp>
-#include "magic_enum/magic_enum.hpp"
-#include "umd/device/tt_core_coordinates.h"
 #include <dispatch_settings.hpp>
+#include <limits.h>
+#include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/dispatch_settings.hpp>
+#include "impl/context/metal_context.hpp"
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <string_view>
+#include <unordered_map>
+
+#include "assert.hpp"
+#include "fmt/base.h"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "magic_enum/magic_enum.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt::tt_metal {
 
@@ -73,14 +83,14 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
         .dispatch_size(512_KB)
         .dispatch_s_buffer_size(32_KB)
 
-        .with_alignment(hal.get_alignment(HalMemType::L1))
+        .with_alignment(hal_ref.get_alignment(HalMemType::L1))
 
         .tunneling_buffer_size(256_KB)  // same as prefetch_d_buffer_size
 
         .build();
 }
 
-DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
+DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, const uint32_t num_hw_cqs) {
     return DispatchSettings()
         .num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::ETH)
@@ -95,7 +105,7 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& cluster, cons
 
         .tunneling_buffer_size(128_KB)  // same as prefetch_d_buffer_size
 
-        .with_alignment(hal.get_alignment(HalMemType::L1))
+        .with_alignment(hal_ref.get_alignment(HalMemType::L1))
 
         .build();
 }

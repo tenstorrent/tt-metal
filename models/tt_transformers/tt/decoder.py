@@ -7,6 +7,7 @@ from models.tt_transformers.tt.mlp import MLP
 from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
+from models.tt_transformers.tt.model_config import TensorGroup
 
 
 class TransformerBlock(LightweightModule):
@@ -140,12 +141,15 @@ class TransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in, mode)
         # ff_out and h are both fractured across devices
+        activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+            decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
+        )
         out = ttnn.add(
             h,
             ff_out,
             memory_config=skip_mem_cfg,
             dtype=self.args.ccl_dtype
             if TG and not self.args.is_distributed_norm(mode)
-            else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
+            else activation_dtype or ttnn.bfloat16,
         )
         return out  # fractured across devices

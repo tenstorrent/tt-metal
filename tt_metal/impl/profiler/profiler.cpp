@@ -2,24 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <iostream>
-#include <fstream>
-#include <iomanip>
-#include <filesystem>
-
-#include <host_api.hpp>
-#include <tt_metal.hpp>
-#include "profiler.hpp"
-#include "profiler_state.hpp"
-#include "profiler_paths.hpp"
-#include "hostdevcommon/profiler_common.h"
-#include <rtoptions.hpp>
 #include <dev_msgs.h>
-#include "tracy/Tracy.hpp"
 #include <device.hpp>
-#include "tools/profiler/event_metadata.hpp"
+#include <host_api.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <nlohmann/json.hpp>
+#include <rtoptions.hpp>
+#include <tracy/TracyTTDevice.hpp>
+#include <tt_metal.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <functional>
+#include <iostream>
 
+#include "assert.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "hostdevcommon/profiler_common.h"
 #include "llrt.hpp"
+#include "logger.hpp"
+#include "metal_soc_descriptor.h"
+#include "profiler.hpp"
+#include "profiler_paths.hpp"
+#include "profiler_state.hpp"
+#include "tools/profiler/event_metadata.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_backend_api_types.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/xy_pair.h>
 
 namespace tt {
 
@@ -41,22 +56,27 @@ void DeviceProfiler::readRiscProfilerResults(
     HalProgrammableCoreType CoreType;
     int riscCount;
 
-    if (tt::Cluster::instance().is_worker_core(worker_core, device_id)) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(worker_core, device_id)) {
         CoreType = HalProgrammableCoreType::TENSIX;
         riscCount = 5;
     } else {
-        auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
-        bool is_active_eth_core = active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
-                                      device_id, worker_core)) != active_eth_cores.end();
+        auto active_eth_cores =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+        bool is_active_eth_core =
+            active_eth_cores.find(
+                tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+                    device_id, worker_core)) != active_eth_cores.end();
 
         CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
                                       : tt_metal::HalProgrammableCoreType::IDLE_ETH;
 
         riscCount = 1;
     }
-    profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+    profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
-    uint32_t coreFlatID = tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id).at(worker_core);
+    uint32_t coreFlatID =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
+            worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
@@ -269,7 +289,7 @@ void DeviceProfiler::logPacketData(
     const std::string& opname,
     chip_id_t device_id,
     CoreCoord core,
-    int core_flat,
+    int /*core_flat*/,
     int risc_num,
     uint64_t data,
     uint32_t timer_id,
@@ -280,24 +300,33 @@ void DeviceProfiler::logPacketData(
     std::string source_file = "";
     uint64_t source_line = 0;
 
+    nlohmann::json metaData;
+
+    if (hash_to_zone_src_locations.find((uint16_t)timer_id) != hash_to_zone_src_locations.end()) {
+        std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
+        getline(source_info, zone_name, ',');
+        getline(source_info, source_file, ',');
+
+        std::string source_line_str;
+        getline(source_info, source_line_str, ',');
+        source_line = stoi(source_line_str);
+    }
+
     if ((packet_type == kernel_profiler::ZONE_START) || (packet_type == kernel_profiler::ZONE_END)) {
         tracy::TTDeviceEventPhase zone_phase = tracy::TTDeviceEventPhase::begin;
         if (packet_type == kernel_profiler::ZONE_END) {
             zone_phase = tracy::TTDeviceEventPhase::end;
         }
 
-        if (hash_to_zone_src_locations.find((uint16_t)timer_id) != hash_to_zone_src_locations.end()) {
-            std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
-            getline(source_info, zone_name, ',');
-            getline(source_info, source_file, ',');
-
-            std::string source_line_str;
-            getline(source_info, source_line_str, ',');
-            source_line = stoi(source_line_str);
+        // TODO(MO) Until #14847 avoid attaching opID as the zone function name except for B and E FW
+        // This is to avoid generating 5 to 10 times more source locations which is capped at 32K
+        uint32_t tracy_run_host_id = run_host_id;
+        if (zone_name.find("BRISC-FW") == std::string::npos && zone_name.find("ERISC-FW") == std::string::npos) {
+            tracy_run_host_id = 0;
         }
 
         tracy::TTDeviceEvent event = tracy::TTDeviceEvent(
-            run_host_id,
+            tracy_run_host_id,
             device_id,
             core.x,
             core.y,
@@ -310,9 +339,61 @@ void DeviceProfiler::logPacketData(
             zone_phase);
 
         auto ret = device_events.insert(event);
+        this->current_zone_it = ret.first;
+        event.run_num = 1;
 
         if (!ret.second) {
             return;
+        }
+        // Reset the command subtype, in case it isn't set during the command.
+        this->current_dispatch_meta_data.cmd_subtype = "";
+    }
+
+    if (packet_type == kernel_profiler::TS_DATA) {
+        if (this->current_zone_it != device_events.end()) {
+            // Check if we are in NCRISC Dispatch zone. If so, we could have gotten dispatch meta data packets
+            // These packets can amend parent zone's info
+            if (tracy::riscName[risc_num] == "NCRISC" &&
+                this->current_zone_it->zone_phase == tracy::TTDeviceEventPhase::begin &&
+                this->current_zone_it->zone_name.find("DISPATCH") != std::string::npos) {
+                if (zone_name.find("process_cmd") != std::string::npos) {
+                    this->current_dispatch_meta_data.cmd_type =
+                        fmt::format("{}", magic_enum::enum_name((CQDispatchCmdId)data));
+                    metaData["dispatch_command_type"] = this->current_dispatch_meta_data.cmd_type;
+                } else if (zone_name.find("runtime_host_id_dispatch") != std::string::npos) {
+                    this->current_dispatch_meta_data.worker_runtime_id = (uint32_t)data;
+                    metaData["workers_runtime_id"] = this->current_dispatch_meta_data.worker_runtime_id;
+                } else if (zone_name.find("packed_data_dispatch") != std::string::npos) {
+                    this->current_dispatch_meta_data.cmd_subtype = fmt::format(
+                        "{}{}",
+                        data & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST ? "MCAST," : "",
+                        magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteType>(
+                            (data >> 1) << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT)));
+                    metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
+                } else if (zone_name.find("packed_large_data_dispatch") != std::string::npos) {
+                    this->current_dispatch_meta_data.cmd_subtype =
+                        fmt::format("{}", magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteLargeType>(data)));
+                    metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
+                }
+                std::string cmd_name = this->current_dispatch_meta_data.cmd_subtype != ""
+                                           ? this->current_dispatch_meta_data.cmd_subtype
+                                           : this->current_dispatch_meta_data.cmd_type;
+                tracy::TTDeviceEvent event = tracy::TTDeviceEvent(
+                    this->current_dispatch_meta_data.worker_runtime_id,
+                    this->current_zone_it->chip_id,
+                    this->current_zone_it->core_x,
+                    this->current_zone_it->core_y,
+                    this->current_zone_it->risc,
+                    this->current_zone_it->marker,
+                    this->current_zone_it->timestamp,
+                    this->current_zone_it->line,
+                    this->current_zone_it->file,
+                    fmt::format("{}:{}", this->current_dispatch_meta_data.worker_runtime_id, cmd_name),
+                    this->current_zone_it->zone_phase);
+                device_events.erase(this->current_zone_it);
+                auto ret = device_events.insert(event);
+                this->current_zone_it = ret.first;
+            }
         }
     }
 
@@ -333,7 +414,8 @@ void DeviceProfiler::logPacketData(
         zone_name,
         packet_type,
         source_line,
-        source_file);
+        source_file,
+        metaData);
 
     logNocTracePacketDataToJson(
         noc_trace_json_log,
@@ -364,13 +446,20 @@ void DeviceProfiler::logPacketDataToCSV(
     uint64_t data,
     uint32_t run_id,
     uint32_t run_host_id,
-    const std::string_view opname,
+    const std::string_view /*opname*/,
     const std::string_view zone_name,
     kernel_profiler::PacketTypes packet_type,
     uint64_t source_line,
-    const std::string_view source_file) {
+    const std::string_view source_file,
+    const nlohmann::json& metaData) {
+    std::string metaDataStr = "";
+    if (!metaData.is_null()) {
+        metaDataStr = metaData.dump();
+        std::replace(metaDataStr.begin(), metaDataStr.end(), ',', ';');
+    }
+
     log_file_ofs << fmt::format(
-                        "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                        "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                         device_id,
                         core_x,
                         core_y,
@@ -383,7 +472,8 @@ void DeviceProfiler::logPacketDataToCSV(
                         zone_name,
                         magic_enum::enum_name(packet_type),
                         source_line,
-                        source_file)
+                        source_file,
+                        metaDataStr)
                  << std::endl;
 }
 
@@ -393,7 +483,7 @@ void DeviceProfiler::logNocTracePacketDataToJson(
     int core_x,
     int core_y,
     const std::string_view risc_name,
-    uint32_t timer_id,
+    uint32_t /*timer_id*/,
     uint64_t timestamp,
     uint64_t data,
     uint32_t run_id,
@@ -401,8 +491,8 @@ void DeviceProfiler::logNocTracePacketDataToJson(
     const std::string_view opname,
     const std::string_view zone_name,
     kernel_profiler::PacketTypes packet_type,
-    uint64_t source_line,
-    const std::string_view source_file) {
+    uint64_t /*source_line*/,
+    const std::string_view /*source_file*/) {
     if (packet_type == kernel_profiler::ZONE_START || packet_type == kernel_profiler::ZONE_END) {
         if ((risc_name == "NCRISC" || risc_name == "BRISC") &&
             (zone_name.starts_with("TRUE-KERNEL-END") || zone_name.ends_with("-KERNEL"))) {
@@ -468,7 +558,7 @@ void DeviceProfiler::emitCSVHeader(
     log_file_ofs << "ARCH: " << get_string_lowercase(device_architecture)
                  << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
     log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run ID, "
-                    "run host ID,  zone name, type, source line, source file"
+                    "run host ID,  zone name, type, source line, source file, meta data"
                  << std::endl;
 }
 
@@ -545,9 +635,11 @@ void DeviceProfiler::serializeJsonNocTraces(
 }
 
 CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const {
-    bool coord_is_translated = c.x >= hal.get_virtual_worker_start_x() && c.y >= hal.get_virtual_worker_start_y();
+    bool coord_is_translated =
+        c.x >= hal_ref.get_virtual_worker_start_x() && c.y >= hal_ref.get_virtual_worker_start_y();
     if (device_architecture == tt::ARCH::WORMHOLE_B0 && coord_is_translated) {
-        const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
+        const metal_SocDescriptor& soc_desc =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
         // disable linting here; slicing is __intended__
         // NOLINTBEGIN
         return soc_desc.translate_coord_to(c, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
@@ -568,6 +660,8 @@ DeviceProfiler::DeviceProfiler(const bool new_logs) {
     if (new_logs) {
         std::filesystem::remove(log_path);
     }
+
+    this->current_zone_it = device_events.begin();
 #endif
 }
 
@@ -637,7 +731,7 @@ void DeviceProfiler::dumpResults(
     ZoneScoped;
 
     auto device_id = device->id();
-    device_core_frequency = tt::Cluster::instance().get_device_aiclk(device_id);
+    device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
 
     generateZoneSourceLocationsHashes();
 
@@ -655,6 +749,10 @@ void DeviceProfiler::dumpResults(
             if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
             }
+        }
+
+        if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+            log_warning("Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
         }
 
         // open CSV log file

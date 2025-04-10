@@ -4,9 +4,20 @@
 
 #pragma once
 
-#include "core_coord.hpp"
-#include "tt_backend_api_types.hpp"
-#include "circular_buffer_types.hpp"
+#include <stdint.h>
+#include <optional>
+#include <unordered_set>
+
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+
+namespace tt {
+namespace tt_metal {
+struct Tile;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

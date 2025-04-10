@@ -6,13 +6,12 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 
 #include "transpose_program_factory.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 

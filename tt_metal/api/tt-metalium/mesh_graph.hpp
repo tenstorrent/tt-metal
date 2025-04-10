@@ -4,17 +4,22 @@
 
 #pragma once
 
-#include <cstdint>
-#include <string>
-#include <unordered_map>
-#include <vector>
 #include <magic_enum/magic_enum.hpp>
-
 #include <tt-metalium/assert.hpp>
 #include <tt_stl/reflection.hpp>
-
 #include <umd/device/types/arch.h>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace tt {
+enum class ARCH;
+}  // namespace tt
 
 namespace tt::tt_fabric {
 struct ChipSpec {

@@ -4,9 +4,17 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <optional>
+
+#include "core_coord.hpp"
+#include "impl/context/metal_context.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include "system_memory_manager.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 typedef struct prefetch_static_config {
     std::optional<uint32_t> my_downstream_cb_sem_id;
@@ -78,15 +86,17 @@ public:
         bool h_variant,
         bool d_variant) :
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
-        auto& core_manager = tt::tt_metal::dispatch_core_manager::instance();  // Not thread safe
+        auto& core_manager = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager();  // Not thread safe
         static_config_.is_h_variant = h_variant;
         static_config_.is_d_variant = d_variant;
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
 
         if (h_variant && d_variant) {
             this->logical_core_ = core_manager.prefetcher_core(device_id, channel, cq_id);
         } else if (h_variant) {
-            channel = tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id);
+            channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
+                servicing_device_id);
             this->logical_core_ = core_manager.prefetcher_core(servicing_device_id, channel, cq_id);
         } else if (d_variant) {
             this->logical_core_ = core_manager.prefetcher_d_core(device_id, channel, cq_id);

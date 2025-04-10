@@ -4,10 +4,15 @@
 
 #pragma once
 
-#include <cstdint>
 #include <magic_enum/magic_enum.hpp>
-#include <unordered_map>
 #include <umd/device/tt_core_coordinates.h>
+#include <array>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+enum class CoreType;
 
 namespace tt {
 class Cluster;

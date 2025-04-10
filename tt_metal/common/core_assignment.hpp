@@ -2,11 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
+#include <umd/device/types/arch.h>  // tt::ARCH
+#include <vector>
+
 #include "core_coord.hpp"
 
-#include <umd/device/types/arch.h>  // tt::ARCH
-
 namespace tt {
+enum class ARCH;
+
 namespace tt_metal {
 // Returns an ordered list of DRAM Bank ID to optimally placed worker cores. Placing DRAM reader or writer
 // kernels on these worker cores will minimize NOC congestion and the number of NOC hops required to complete

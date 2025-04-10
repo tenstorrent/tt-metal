@@ -87,6 +87,7 @@ OPS_CSV_HEADER = [
     "PM FPU UTIL (%)",
     "NOC UTIL (%)",
     "DRAM BW UTIL (%)",
+    "NPE CONG IMPACT (%)",
 ]
 
 
@@ -388,6 +389,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
                     ops_found += 1
                     ops[op_id]["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
                     ops[op_id]["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
+                    ops[op_id]["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
 
     return devicesOps, traceOps
@@ -658,8 +660,12 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                 )
                 rowDict["HOST DURATION [ns]"] = int(opData["host_time"]["exec_time_ns"])
 
-                rowDict["NOC UTIL (%)"] = opData.get("NOC UTIL (%)", "")
-                rowDict["DRAM BW UTIL (%)"] = opData.get("DRAM BW UTIL (%)", "")
+                if "NOC UTIL (%)" in opData:
+                    rowDict["NOC UTIL (%)"] = opData.get("NOC UTIL (%)")
+                if "DRAM BW UTIL (%)" in opData:
+                    rowDict["DRAM BW UTIL (%)"] = opData.get("DRAM BW UTIL (%)")
+                if "NPE CONG IMPACT (%)" in opData:
+                    rowDict["NPE CONG IMPACT (%)"] = opData.get("NPE CONG IMPACT (%)")
 
                 if "kernel_info" in opData.keys():
                     rowDict["COMPUTE KERNEL SOURCE"] = []

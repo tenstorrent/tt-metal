@@ -41,10 +41,7 @@ constexpr MeasurementType measurement_type = static_cast<MeasurementType>(get_co
 constexpr uint32_t NUM_BUFFER_SLOTS = get_compile_time_arg_val(2);
 constexpr uint32_t MAX_NUM_TRANSACTION_ID =
     NUM_BUFFER_SLOTS / 2;  // the algorithm only works for NUM_BUFFER_SLOTS divisible by MAX_NUM_TRANSACTION_ID
-constexpr uint32_t worker_noc_x = get_compile_time_arg_val(3);
-constexpr uint32_t worker_noc_y = get_compile_time_arg_val(4);
-constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(5);
-constexpr uint32_t disable_trid = get_compile_time_arg_val(6);
+constexpr uint32_t disable_trid = get_compile_time_arg_val(3);
 
 // ******************************* Sender APIs ***************************************************
 

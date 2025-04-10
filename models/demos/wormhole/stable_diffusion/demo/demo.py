@@ -145,8 +145,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     )
     input_height = 64
     input_width = 64
-    reader_patterns_cache = {} if height == 512 and width == 512 else None
-    model = UNet2D(device, parameters, 2, input_height, input_width, reader_patterns_cache)
+    model = UNet2D(device, parameters, 2, input_height, input_width)
 
     guidance_scale = 7.5  # Scale for classifier-free guidance
     generator = torch.manual_seed(174)  # 10233 Seed generator to create the inital latent noise
@@ -302,8 +301,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
     )
     input_height = 64
     input_width = 64
-    reader_patterns_cache = {} if height == 512 and width == 512 else None
-    model = UNet2D(device, parameters, 2, input_height, input_width, reader_patterns_cache)
+    model = UNet2D(device, parameters, 2, input_height, input_width)
 
     guidance_scale = 7.5  # Scale for classifier-free guidance
     generator = torch.manual_seed(174)  # 10233 Seed generator to create the inital latent noise
@@ -467,8 +465,7 @@ def run_demo_inference_diffusiondb(
     )
     input_height = 64
     input_width = 64
-    reader_patterns_cache = {} if height == 512 and width == 512 else None
-    model = UNet2D(device, parameters, 2, input_height, input_width, reader_patterns_cache)
+    model = UNet2D(device, parameters, 2, input_height, input_width)
 
     guidance_scale = 7.5  # Scale for classifier-free guidance
     generator = torch.manual_seed(174)  # 10233 Seed generator to create the inital latent noise

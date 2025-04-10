@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
 #include <tt-metalium/core_coord.hpp>
+#include <memory>
+#include <optional>
+
 #include "core_coord_fixture.hpp"
+#include "gtest/gtest.h"
 
 namespace basic_tests::CoreRange {
 

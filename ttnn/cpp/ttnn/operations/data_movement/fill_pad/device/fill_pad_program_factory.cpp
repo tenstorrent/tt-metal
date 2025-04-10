@@ -125,10 +125,12 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     }
 
     auto override_runtime_args_callback = [writer_kernel_id, cores](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto tens_buffer = input_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto tens_buffer = input_tensors.at(0).buffer();
 
         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
 

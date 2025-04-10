@@ -76,6 +76,8 @@ enum SfpuType {
     unary_ne,
     unary_gt,
     unary_lt,
+    unary_max,
+    unary_min,
     softplus,
     tiled_prod,
     bitwise_xor,
@@ -93,4 +95,5 @@ enum SfpuType {
     cumsum,
     fill,
     round,
+    cpy_values,
 };

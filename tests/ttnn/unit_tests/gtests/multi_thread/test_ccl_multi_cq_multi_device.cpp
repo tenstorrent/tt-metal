@@ -107,8 +107,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     const ttnn::Shape input_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
-    auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-    auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
 
     uint8_t op_cq_id = 0;  // operation command queue id
     boost::asio::thread_pool pool(devices.size());
@@ -126,6 +124,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
                 // Generate input data for each device
+                auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
                 for (int j = 0; j < num_elems; j++) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
@@ -145,8 +144,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 
                 promise->set_value();
             });
-            // If you remove below comment (perform sleep), the final output value will be correct.
-            // std::this_thread::sleep_for(std::chrono::seconds(1));
             dev_idx++;
         }
 
@@ -261,8 +258,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     const ttnn::Shape input_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
-    auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-    auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
 
     uint8_t ccl_cq_id = 0;  // ccl operation command queue id
     uint8_t op_cq_id = 1;   // device operation, read/write command queue id
@@ -282,6 +277,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
                 // Generate input data for each device
+                auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
                 for (int j = 0; j < num_elems; j++) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }

@@ -1,5 +1,6 @@
 training_config:
   project_name: "tt_train_nano_gpt"
+  model_type: "gpt2"
   seed: 5489
   model_save_interval: 500
   batch_size: 1

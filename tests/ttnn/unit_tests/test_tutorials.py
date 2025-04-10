@@ -9,7 +9,7 @@ import os
 from loguru import logger
 from nbconvert.preprocessors import ExecutePreprocessor, CellExecutionError
 
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
 import ttnn
 
@@ -35,6 +35,7 @@ def collect_tutorials():
             yield file_name
 
 
+@skip_for_blackhole("Fails on BH. Issue #19644")
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("notebook_path", collect_tutorials())
 def test_tutorials(notebook_path, clear_wh_arch_yaml_var):

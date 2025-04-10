@@ -9,9 +9,9 @@
 #include "tt_backend_api_types.hpp"
 #include "assert.hpp"
 #include "rtoptions.hpp"
-#include "umd/device/pci_device.hpp"
-#include "umd/device/tt_soc_descriptor.h"
-#include "umd/device/tt_simulation_device.h"
+#include <umd/device/pci_device.hpp>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/tt_simulation_device.h>
 
 namespace tt::tt_metal {
 

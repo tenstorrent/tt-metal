@@ -399,6 +399,7 @@ Reduction
    :nosignatures:
    :template: function.rst
 
+   ttnn.experimental.cumprod
    ttnn.max
    ttnn.mean
    ttnn.min
@@ -408,6 +409,7 @@ Reduction
    ttnn.argmax
    ttnn.prod
    ttnn.topk
+   ttnn.experimental.sort
 
 Data Movement
 =============

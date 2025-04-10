@@ -2,22 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <numeric>
-
 #include <benchmark/benchmark.h>
-
-#include <tt_cluster.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal_exp.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "impl/context/metal_context.hpp"
+#include <iostream>
+#include <map>
+#include <numeric>
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
 
 #include "assert.hpp"
 #include "context.hpp"
-#include "host_utils.hpp"
+#include "device.hpp"
 #include "device_utils.hpp"
-#include "work_thread.hpp"
+#include "host_utils.hpp"
+#include "tt-metalium/program.hpp"
+#include "system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
+#include "vector_aligned.hpp"
+#include "work_thread.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -28,7 +37,7 @@ void read_inc_data_from_cores(const Context& ctx, IDevice* device, const CoreRan
     auto dev_cycles = read_cores(device, cores, ctx.device_address.cycles);
     auto dev_bytes_read = read_cores(device, cores, ctx.device_address.rd_bytes);
     auto dev_bytes_written = read_cores(device, cores, ctx.device_address.wr_bytes);
-    auto dev_clk = tt::Cluster::instance().get_device_aiclk(device->id()) * 1e6;  // Hz
+    auto dev_clk = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id()) * 1e6;  // Hz
 
     double total_cycles = std::reduce(dev_cycles.begin(), dev_cycles.end(), 0ULL);
 
@@ -182,7 +191,7 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int thread_idx) {
+            [device, &pgm](int /*thread_idx*/) {
                 // Program
                 tt::tt_metal::detail::LaunchProgram(device, pgm, true);
             },
@@ -245,7 +254,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int thread_idx) {
+            [device, &pgm](int /*thread_idx*/) {
                 // Program
                 tt::tt_metal::detail::LaunchProgram(device, pgm, true);
             },
@@ -296,7 +305,7 @@ TestResult mem_bench_multi_mmio_devices(
         double host_copy_time = 0;
         execute_work_synced_start(
             1,
-            [devices, &programs](int thread_idx) {
+            [devices, &programs](int /*thread_idx*/) {
                 // Program
                 for (auto& [device_id, pgm] : programs) {
                     tt::tt_metal::detail::LaunchProgram(devices.at(device_id), pgm, false);
@@ -408,7 +417,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
 
         double wait_for_kernel_time = execute_work_synced_start(
             1,
-            [device, &pgm](int thread_idx) {
+            [device, &pgm](int /*thread_idx*/) {
                 // Program
                 tt::tt_metal::detail::LaunchProgram(device, pgm, true);
             },

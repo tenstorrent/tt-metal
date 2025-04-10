@@ -3,23 +3,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <atomic>
+#include <cstddef>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <thread>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
+#include "fmt/base.h"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
+#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-
-#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace tt::tt_metal {
 namespace {

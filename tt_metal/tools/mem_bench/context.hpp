@@ -6,8 +6,9 @@
 
 #include <string>
 #include <map>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_metal::tools::mem_bench {
@@ -58,8 +59,8 @@ struct Context {
         int writers_,
         bool enable_host_copy_with_kernels_,
         int iterations_) {
-        auto l1_alignment = experimental::hal::get_l1_alignment();
-        auto l1_base = experimental::hal::get_tensix_l1_unreserved_base();
+        auto l1_alignment = hal::get_l1_alignment();
+        auto l1_base = devices_.begin()->second->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
         device_address.cycles = l1_base;
         device_address.rd_bytes = align(device_address.cycles + sizeof(uint32_t), l1_alignment);
         device_address.wr_bytes = align(device_address.rd_bytes + sizeof(uint32_t), l1_alignment);

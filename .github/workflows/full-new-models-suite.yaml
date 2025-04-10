@@ -30,11 +30,15 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: 22.04
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
       build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: 22.04
     secrets: inherit
   device-perf-single-card:
     needs: build-artifact-profiler
@@ -64,3 +68,7 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

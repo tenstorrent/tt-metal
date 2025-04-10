@@ -53,6 +53,14 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct LogSigmoid {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Sigmoid_accurate {
     static Tensor invoke(
         QueueId queue_id,
@@ -184,6 +192,15 @@ struct Mish {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Tanh {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        bool accuracy = false);
+};
+
 }  // namespace unary
 }  // namespace operations
 
@@ -238,7 +255,6 @@ REGISTER_UNARY_OPERATION(nez, NEZ);
 REGISTER_UNARY_OPERATION(reciprocal, RECIP);
 REGISTER_UNARY_OPERATION(relu, RELU);
 REGISTER_UNARY_OPERATION(relu6, RELU6);
-REGISTER_UNARY_OPERATION(sigmoid, SIGMOID);
 REGISTER_UNARY_OPERATION(sign, SIGN);
 REGISTER_UNARY_OPERATION(signbit, SIGNBIT);
 REGISTER_UNARY_OPERATION(silu, SILU);
@@ -246,14 +262,8 @@ REGISTER_UNARY_OPERATION(sin, SIN);
 REGISTER_UNARY_OPERATION(sqrt, SQRT);
 REGISTER_UNARY_OPERATION(square, SQUARE);
 REGISTER_UNARY_OPERATION(tan, TAN);
-REGISTER_UNARY_OPERATION(tanh, TANH);
 REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
 REGISTER_UNARY_OPERATION(bitwise_not, BITWISE_NOT);
-
-constexpr auto log_sigmoid = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::log_sigmoid",
-    ttnn::operations::unary::
-        ExecuteUnary<ttnn::operations::unary::UnaryOpType::SIGMOID, ttnn::operations::unary::UnaryOpType::LOG>>();
 
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
@@ -261,6 +271,7 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erfc, ERFC);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
 
 // Unaries with float parameter
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(elu, ELU);
@@ -289,11 +300,14 @@ constexpr auto ceil = ttnn::register_operation_with_auto_launch_op<"ttnn::ceil",
 constexpr auto mish = ttnn::register_operation_with_auto_launch_op<"ttnn::mish", ttnn::operations::unary::Mish>();
 constexpr auto softplus =
     ttnn::register_operation_with_auto_launch_op<"ttnn::softplus", ttnn::operations::unary::Softplus>();
+constexpr auto tanh = ttnn::register_operation_with_auto_launch_op<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto prelu_sfpu =
     ttnn::register_operation_with_auto_launch_op<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
 
 constexpr auto sigmoid_accurate =
     ttnn::register_operation_with_auto_launch_op<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
+constexpr auto log_sigmoid =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::log_sigmoid", ttnn::operations::unary::LogSigmoid>();
 constexpr auto unary_chain =
     ttnn::register_operation_with_auto_launch_op<"ttnn::unary_chain", ttnn::operations::unary::Unary_chain>();
 

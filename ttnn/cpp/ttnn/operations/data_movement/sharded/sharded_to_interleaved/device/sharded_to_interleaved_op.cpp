@@ -5,10 +5,9 @@
 #include "sharded_to_interleaved_op.hpp"
 
 #include "sharded_to_interleaved_program_factory.hpp"
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 

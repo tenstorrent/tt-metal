@@ -5,6 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::transformer::detail {
 
@@ -176,14 +177,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
 
     auto override_runtime_args_callback =
         [reader_kernel_id, writer_kernel_id, num_cores_r, num_cores_c, start_core_x, start_core_y](
+            const void* operation,
             const Program& program,
-            const std::vector<Buffer*>& input_buffers,
-            const std::vector<Buffer*>& output_buffers) {
-            auto src_dram_buffer = input_buffers.at(0);
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>&,
+            const std::vector<Tensor>& output_tensors) {
+            auto src_dram_buffer = input_tensors.at(0).buffer();
 
-            auto dst_dram_buffer_query = output_buffers.at(0);
-            auto dst_dram_buffer_key = output_buffers.at(1);
-            auto dst_dram_buffer_value = output_buffers.at(2);
+            auto dst_dram_buffer_query = output_tensors.at(0).buffer();
+            auto dst_dram_buffer_key = output_tensors.at(1).buffer();
+            auto dst_dram_buffer_value = output_tensors.at(2).buffer();
 
             for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
                 for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {

@@ -11,29 +11,28 @@ void kernel_main() {
     constexpr uint32_t LOCAL_PACKED_READER_INDICES_MAX_SIZE = 128;
     uint32_t local_packed_reader_indices[LOCAL_PACKED_READER_INDICES_MAX_SIZE];
 
-    constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(2);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(3);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(4);
-    constexpr uint32_t conv_act_size_w_ = get_compile_time_arg_val(5);
-    constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(6) - 1;
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(0);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(1);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(2);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(3);
+    constexpr uint32_t conv_act_size_w_ = get_compile_time_arg_val(4);
+    constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(5) - 1;
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(6);
     // need to have these as compile-time, they are inner loop bouds / unroll loops / constexpr conditionals based on
     // them
-    constexpr uint32_t window_outer = get_compile_time_arg_val(8);
-    constexpr uint32_t window_inner = get_compile_time_arg_val(9);
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(10);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(11);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(12);
-    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(13);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(14);
-    constexpr uint32_t weight_size_h = get_compile_time_arg_val(15);
-    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(16);
+    constexpr uint32_t window_outer = get_compile_time_arg_val(7);
+    constexpr uint32_t window_inner = get_compile_time_arg_val(8);
+    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(9);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(11);
+    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(12);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(13);
+    constexpr uint32_t weight_size_h = get_compile_time_arg_val(14);
+    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(17);
 
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(27);
-    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(28);
-    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(29);
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(27);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(28);
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i);

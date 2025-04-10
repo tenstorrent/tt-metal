@@ -344,7 +344,6 @@ Result conv_transpose2d(
         conv_out_memory_config,
         conv_config.dtype,
         {batch_size, input_height, input_width, in_channels},
-        conv_config.input_channels_alignment == 16,
         compute_config,
         conv_config.enable_act_double_buffer,
         conv_config.enable_split_reader,

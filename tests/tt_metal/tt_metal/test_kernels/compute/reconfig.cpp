@@ -22,7 +22,7 @@ void MAIN {
     constexpr auto cb_out1 = tt::CBIndex::c_17;  // Bfp8_b
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    add_tiles_init_nof();
+    binary_tiles_init<false, ELWADD>(cb_in0, cb_in1);
     for (uint32_t block = 0; block < num_tiles; ++block) {
         cb_wait_front(cb_in0, ublock_size_tiles);
         cb_wait_front(cb_in1, ublock_size_tiles);

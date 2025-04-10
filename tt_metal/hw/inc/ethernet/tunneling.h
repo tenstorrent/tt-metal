@@ -83,7 +83,7 @@ FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32
 FORCE_INLINE
 void eth_send_packet_byte_addr(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_words) {
     while (eth_txq_is_busy(q_num));
-    volatile uint32_t* ptr = (volatile uint32_t*)ETH_TXQ0_REGS_START;
+    volatile uint32_t* ptr = (volatile uint32_t*)(ETH_TXQ0_REGS_START + (q_num * ETH_TXQ_REGS_SIZE));
     ptr[ETH_TXQ_TRANSFER_START_ADDR >> 2] = src_addr;
     ptr[ETH_TXQ_DEST_ADDR >> 2] = dest_addr;
     ptr[ETH_TXQ_TRANSFER_SIZE_BYTES >> 2] = num_words << 4;

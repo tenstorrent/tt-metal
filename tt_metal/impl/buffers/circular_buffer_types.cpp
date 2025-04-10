@@ -3,7 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "circular_buffer_types.hpp"
-#include <global_circular_buffer_impl.hpp>
+
+#include <unordered_map>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "logger.hpp"
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 namespace tt::tt_metal {
 

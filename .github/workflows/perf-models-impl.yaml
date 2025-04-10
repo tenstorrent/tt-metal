@@ -66,7 +66,7 @@ jobs:
           install_wheel: true
           run_args: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.test-info.arch }} --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
       # TODO: Fix the pipeline before enabling notifications.
-      #- uses: ./.github/actions/slack-report
+      #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
       #  with:
       #    slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -89,8 +89,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
+          path: generated/test_reports/
           prefix: "test_reports_"
       - name: Disable Performance mode
         if: always()

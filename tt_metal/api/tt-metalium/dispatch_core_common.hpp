@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "assert.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include <umd/device/tt_core_coordinates.h>  // CoreType

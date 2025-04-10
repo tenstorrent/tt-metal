@@ -7,9 +7,9 @@
 #include <cstdint>
 #include <memory>
 
-#include "core_coord.hpp"
-#include "buffer_constants.hpp"
-#include "distributed.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/distributed.hpp>
 
 namespace tt::tt_metal {
 

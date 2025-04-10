@@ -11,7 +11,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include "erisc_datamover_builder_helper.hpp"
@@ -676,6 +676,8 @@ private:
     uint32_t partition_index;
     uint32_t partition_size;
 };
+
+std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);
 
 }  // namespace ccl
 }  // namespace ttnn

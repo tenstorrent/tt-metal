@@ -4,6 +4,7 @@
 
 #include "cpu_initializers.hpp"
 
+#include <cmath>
 #include <random>
 
 #include "autograd/auto_context.hpp"
@@ -62,7 +63,7 @@ void xavier_uniform_init(std::vector<float>& vec, FanParams params) {
 
 void xavier_normal_init(std::vector<float>& vec, FanParams params) {
     auto& [fan_in, fan_out] = params;
-    float stddev = std::sqrtf(2.0F / (float)(fan_in + fan_out));
+    float stddev = std::sqrt(2.0F / (float)(fan_in + fan_out));
 
     // Random number generator with a seed
     // Mersenne Twister generator

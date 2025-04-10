@@ -11,6 +11,7 @@ class InfraErrorV1(enum.Enum):
     RUNNER_SHUTDOWN_FAILURE = enum.auto()
     API_RATE_LIMIT_FAILURE = enum.auto()
     RUNNER_CARD_IN_USE_FAILURE = enum.auto()
+    JOB_HANG = enum.auto()
 
 
 class TestErrorV1(enum.Enum):

@@ -20,31 +20,33 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - version: "20.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-            build-type: "Debug"
-            publish-artifact: false
-          - version: "20.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-            build-type: "RelWithDebInfo"
-            publish-artifact: false
           - version: "22.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-            build-type: "Release"
-            publish-artifact: false
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            build-type: "Debug"
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            build-type: "RelWithDebInfo"
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Release"
-            publish-artifact: false
-            skip-tt-train: true
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            build-type: "Release"
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
-            publish-artifact: false
-            skip-tt-train: true
+          - version: "24.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "Release"
+          - version: "24.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            build-type: "Release"
+          - version: "24.04"
+            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+            build-type: "Release"
     with:
       version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
-      publish-artifact: ${{ matrix.config.publish-artifact }}
-      skip-tt-train: ${{ matrix.config.skip-tt-train || false }}
+      publish-artifact: false
+      skip-tt-train: true

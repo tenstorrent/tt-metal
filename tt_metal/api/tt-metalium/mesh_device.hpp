@@ -4,22 +4,53 @@
 
 #pragma once
 
+#include <tt_stl/span.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <ostream>
+#include <set>
+#include <string>
+#include <tuple>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include "device.hpp"
-#include "dispatch_core_common.hpp"
+#include <hostdevcommon/common_values.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/program_device_map.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/trace_buffer.hpp>
+#include <umd/device/types/arch.h>
+#include <tt-metalium/work_executor_types.hpp>
 
-#include "mesh_config.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device_view.hpp"
-#include "mesh_trace_id.hpp"
-#include "small_vector.hpp"
-#include "sub_device_types.hpp"
-#include <tt_stl/span.hpp>
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class Allocator;
+class CommandQueue;
+class SubDevice;
+class SystemMemoryManager;
+namespace program_cache {
+namespace detail {
+struct ProgramCache;
+}  // namespace detail
+}  // namespace program_cache
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -49,6 +80,7 @@ private:
             size_t l1_small_size,
             size_t trace_region_size,
             size_t num_command_queues,
+            size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config);
         ScopedDevices(
@@ -56,6 +88,7 @@ private:
             size_t l1_small_size,
             size_t trace_region_size,
             size_t num_command_queues,
+            size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config);
 
         // Destructor releases physical resources
@@ -186,6 +219,7 @@ public:
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
+        size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
     void reset_cores() override;
@@ -297,21 +331,24 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::shared_ptr<MeshDevice> create_unit_mesh(
         int device_id,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
         const std::vector<int>& device_ids,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);

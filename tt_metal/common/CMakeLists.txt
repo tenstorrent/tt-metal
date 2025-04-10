@@ -35,6 +35,7 @@ target_link_libraries(
         TT:STL
         umd::Firmware
         umd::device
+        simde::simde
     PRIVATE
         Tracy::TracyClient
         TT::Metalium::HostDevCommon

@@ -2,20 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <cmath>
-#include <sstream>
-
+#include <chrono>
+#include <ctype.h>
+#include <errno.h>
+#include <fmt/base.h>
 #include <magic_enum/magic_enum.hpp>
-
+#include <stdlib.h>
+#include <sys/types.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "span.hpp"
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 // #include "tt_gdb/tt_gdb.hpp"
 
 using std::vector;
@@ -58,7 +89,7 @@ void update_sfpu_op_to_hlk_op() {
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool run_sfpu_test(const string& sfpu_name, int tile_factor = 1, bool use_DRAM = true) {
+bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_DRAM = true) {
     bool multibank = true;
     bool pass = true;
     try {
@@ -131,15 +162,15 @@ bool run_sfpu_test(const string& sfpu_name, int tile_factor = 1, bool use_DRAM =
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-        vector<uint32_t> compute_kernel_args = {
+        std::vector<uint32_t> compute_kernel_args = {
             (uint)num_tiles,
             1,
             (uint)tile_factor,
         };
-        string hlk_kernel_name = "tests/tt_eager/ops/kernel/eltwise_sfpu.cpp";
+        std::string hlk_kernel_name = "tests/tt_eager/ops/kernel/eltwise_sfpu.cpp";
 
         // defines macro expands per SFPU ops
-        std::map<string, string> hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
+        std::map<std::string, std::string> hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
         auto eltwise_unary_kernel = tt_metal::CreateKernel(
             program,
             hlk_kernel_name,

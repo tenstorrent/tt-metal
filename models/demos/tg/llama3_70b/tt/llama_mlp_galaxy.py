@@ -155,7 +155,7 @@ class TtLlamaMLP_galaxy:
             w1_out,
             w3_out,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat16,
         )
         w1_out.deallocate(True)
@@ -225,7 +225,7 @@ class TtLlamaMLP_galaxy:
         hidden_states = ttnn.mul(
             w1_out,
             w3_out,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

@@ -28,9 +28,9 @@ inline vFloat round_even(vFloat v) {
     v_if(sfpi::abs(v) < 0x1p30f) {
         result = int32_to_float(float_to_int31(v), 0);
         v_if(sfpi::abs(v - result) == 0.5F) {
-            vInt res = float_to_int16(result);
+            vInt res = float_to_int16(result, 0);
             res = res & 0x7FFE;
-            result = int32_to_float(res);
+            result = int32_to_float(res, 0);
         }
         v_endif;
     }

@@ -1,13 +1,20 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <iostream>
-#include <filesystem>
 #include <host_api.hpp>
-#include "impl/debug/watcher_server.hpp"
+#include <filesystem>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "device.hpp"
+#include "dispatch_core_common.hpp"
 #include "impl/debug/noc_logging.hpp"
+#include "impl/debug/watcher_server.hpp"
 #include "impl/dispatch/debug_tools.hpp"
 #include "rtoptions.hpp"
+#include "system_memory_manager.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

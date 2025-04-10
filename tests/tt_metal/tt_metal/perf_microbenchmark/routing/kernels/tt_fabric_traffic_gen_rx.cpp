@@ -43,7 +43,22 @@ constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(9);
 
 constexpr bool fixed_async_wr_notif_addr = get_compile_time_arg_val(10);
 
+constexpr uint32_t timeout_cycles = get_compile_time_arg_val(11);
+
 #define PAYLOAD_MASK (0xFFFF0000)
+
+// return true if timed-out
+inline bool poll_for_value(volatile tt_l1_ptr uint32_t* poll_addr, uint32_t expected_val) {
+    uint32_t idle_itr_cnt = 0;
+    while (expected_val != *poll_addr) {
+#ifdef CHECK_TIMEOUT
+        if (++idle_itr_cnt >= timeout_cycles) {
+            return true;
+        }
+#endif
+    }
+    return false;
+}
 
 void kernel_main() {
     uint64_t processed_packet_words = 0, num_packets = 0;
@@ -53,6 +68,7 @@ void kernel_main() {
     uint32_t num_producers = 0;
     uint32_t rx_buf_size;
     uint32_t time_seed;
+    bool timed_out = false;
 
     // parse runtime args
     uint32_t rt_args_idx = 0;
@@ -124,7 +140,10 @@ void kernel_main() {
 
                 temp_poll_val = time_seed + packet_index + (temp_packets * atomic_increment);
                 poll_addr = base_target_addr;
-                while (temp_poll_val != *poll_addr);
+                timed_out = poll_for_value(poll_addr, temp_poll_val);
+                if (timed_out) {
+                    break;
+                }
             }
 
             // read out the data
@@ -167,7 +186,10 @@ void kernel_main() {
                         poll_addr = read_addr + (curr_payload_words * PACKET_WORD_SIZE_BYTES / 4) - 1;
                     }
 
-                    while (poll_val != *poll_addr);
+                    timed_out = poll_for_value(poll_addr, poll_val);
+                    if (timed_out) {
+                        break;
+                    }
 
                     // check correctness
                     match = check_packet_data(
@@ -186,6 +208,10 @@ void kernel_main() {
                 processed_packet_words_src += curr_packet_words;
                 num_packets++;
             }
+
+            if (timed_out) {
+                break;
+            }
         }
     } else if constexpr (ATOMIC_INC == test_command) {
         poll_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
@@ -194,9 +220,11 @@ void kernel_main() {
         poll_val = atomic_increment * num_packets;
 
         // poll for the final value
-        while (poll_val != *poll_addr);
-
         processed_packet_words = num_packets * PACKET_HEADER_SIZE_WORDS;
+        timed_out = poll_for_value(poll_addr, poll_val);
+        if (timed_out) {
+            processed_packet_words = 0;
+        }
     }
 
     // write out results
@@ -205,6 +233,8 @@ void kernel_main() {
 
     if (async_wr_check_failed) {
         test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_DATA_MISMATCH;
+    } else if (timed_out) {
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_TIMEOUT;
     } else {
         test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
         test_results[TT_FABRIC_MISC_INDEX] = 0xff000005;

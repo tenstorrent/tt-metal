@@ -33,7 +33,7 @@ except ModuleNotFoundError:
 
 def get_expected_times(functional_vit):
     return {
-        ttnn_optimized_sharded_vit: (11, 0.02),
+        ttnn_optimized_sharded_vit_gs: (11, 0.02),
     }[functional_vit]
 
 

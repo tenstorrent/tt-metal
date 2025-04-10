@@ -1,18 +1,39 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common_tensor_test_utils.hpp"
-#include "gtest/gtest.h"
-#include "gmock/gmock.h"
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/logger.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <stddef.h>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/async_runtime.hpp"
+#include <algorithm>
+#include <functional>
+#include <iostream>
+#include <iterator>
+#include <optional>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include "common_tensor_test_utils.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 

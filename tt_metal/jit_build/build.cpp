@@ -4,21 +4,33 @@
 
 #include "build.hpp"
 
+#include <taskflow/core/async.hpp>
+#include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <span>
 #include <string>
+#include <string_view>
 
+#include "assert.hpp"
 #include "common/executor.hpp"
-#include "jit_build/genfiles.hpp"
+#include "env_lib.hpp"
+#include "fmt/base.h"
+#include "hal_types.hpp"
 #include "jit_build/kernel_args.hpp"
+#include "jit_build_settings.hpp"
+#include "llrt/hal.hpp"
+#include "logger.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
-#include <command_queue_interface.hpp>
-#include <kernel.hpp>
+#include "rtoptions.hpp"
+#include "tt_backend_api_types.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
-#include "env_lib.hpp"
-#include "hal.hpp"
+#include <umd/device/types/arch.h>
 
 namespace fs = std::filesystem;
 
@@ -55,6 +67,12 @@ static void build_failure(const string& target_name, const string& op, const str
     } else {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
     }
+}
+
+static void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
+    const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
+                                                 : build.get_out_path() + settings->get_full_kernel_name() + "/";
+    std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
 static void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
@@ -180,9 +198,7 @@ void JitBuildEnv::init(
     }
 
     if (tt::llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        this->defines_ += "-DDEBUG_PRINT_ENABLED -DL1_UNRESERVED_BASE=" +
-                          to_string(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED)) +
-                          " ";
+        this->defines_ += "-DDEBUG_PRINT_ENABLED ";
     }
 
     if (tt::llrt::RunTimeOptions::get_instance().get_record_noc_transfers()) {
@@ -688,8 +704,18 @@ void JitBuildState::compile_one(
             });
         }
 
-        settings->process_compile_time_args([&defines](int i, uint32_t value) {
-            defines += "-DKERNEL_COMPILE_TIME_ARG_" + to_string(i) + "=" + to_string(value) + " ";
+        settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
+            if (values.empty()) {
+                return;
+            }
+            std::ostringstream ss;
+            ss << "-DKERNEL_COMPILE_TIME_ARGS=";
+            for (uint32_t i = 0; i < values.size(); ++i) {
+                ss << values[i] << ",";
+            }
+            std::string args = ss.str();
+            args.pop_back();  // Remove the trailing comma
+            defines += args + " ";
         });
 
         cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
@@ -763,7 +789,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
 // weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propogate link addresses
-void JitBuildState::weaken(const string& log_file, const string& out_dir) const {
+void JitBuildState::weaken(const string& /*log_file*/, const string& out_dir) const {
     // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
@@ -818,6 +844,7 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
 
     build.build(settings);
+    write_successful_jit_build_marker(build, settings);
 }
 
 void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings) {
@@ -830,6 +857,10 @@ void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* se
     }
 
     sync_events(events);
+    for (size_t i = 0; i < build_set.size(); ++i) {
+        auto& build = build_set[i];
+        write_successful_jit_build_marker(*build, settings);
+    }
 }
 
 void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings) {
@@ -841,6 +872,10 @@ void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSet
     }
 
     sync_events(events);
+    for (size_t i = 0; i < build_subset.size; ++i) {
+        auto& build = build_subset.build_ptr[i];
+        write_successful_jit_build_marker(*build, settings);
+    }
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {

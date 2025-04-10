@@ -179,6 +179,8 @@ def test_llama_attention_inference(
             mesh_shape=model_args.cluster_shape,
         ),
     )
+    # Explicitly allocate global CB to avoid memory fragmentation
+    prefetcher_setup.create_global_cb()
 
     for i in range(generation_length):
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1

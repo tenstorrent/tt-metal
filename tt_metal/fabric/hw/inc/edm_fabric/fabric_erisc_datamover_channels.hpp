@@ -35,9 +35,8 @@ public:
     //                         |                |
     //                         |    payload     |
     //                         |                |
-    //        &channel_sync->  |----------------|
-    //                         |  channel_sync  |
-    //                         ------------------
+    //                         |----------------|
+
     EthChannelBuffer() : buffer_size_in_bytes(0), max_eth_payload_size_in_bytes(0) {}
 
     /*
@@ -51,7 +50,7 @@ public:
                                                // that can fit 2 eth_channel_syncs cfor ack
         uint8_t channel_id) :
         buffer_size_in_bytes(buffer_size_bytes),
-        max_eth_payload_size_in_bytes(buffer_size_in_bytes + sizeof(eth_channel_sync_t)),
+        max_eth_payload_size_in_bytes(buffer_size_in_bytes),
         channel_id(channel_id) {
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
@@ -151,16 +150,12 @@ struct EdmChannelWorkerInterface {
 
     template <bool enable_ring_support>
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
-        if constexpr (enable_ring_support) {
-            noc_inline_dw_write_with_state<true, false, false>(
-                new_ptr_val, this->cached_worker_semaphore_address, this->sender_sync_noc_cmd_buf);
-        } else {
-            noc_inline_dw_write_with_state<false, false, false>(new_ptr_val, 0, this->sender_sync_noc_cmd_buf);
-        }
+        noc_inline_dw_write<false, true>(this->cached_worker_semaphore_address, new_ptr_val);
     }
 
     // Connection management methods
     //
+    template <bool posted = false>
     FORCE_INLINE void teardown_connection(uint32_t last_edm_rdptr_value) const {
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
@@ -173,7 +168,7 @@ struct EdmChannelWorkerInterface {
 
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_rdptr)) = last_edm_rdptr_value;
 
-        noc_semaphore_inc(worker_semaphore_address, 1);
+        noc_semaphore_inc<posted>(worker_semaphore_address, 1);
     }
 
     FORCE_INLINE void cache_producer_noc_addr() {
@@ -181,7 +176,6 @@ struct EdmChannelWorkerInterface {
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
         this->cached_worker_semaphore_address = worker_semaphore_address;
-        noc_inline_dw_write_set_state(worker_semaphore_address, 0xF, this->sender_sync_noc_cmd_buf);
     }
 
     FORCE_INLINE bool all_eth_packets_acked() const { return this->local_ackptr.is_caught_up_to(this->local_wrptr); }

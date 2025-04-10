@@ -10,7 +10,7 @@ from typing import Union, Tuple
 import torch
 import torch.nn as nn
 import ttnn
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole, is_grayskull
+from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 
@@ -127,8 +127,6 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
 def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strategy, shard_orientation):
     if (shard_strategy == ttnn.ShardStrategy.BLOCK) and (shard_orientation == ttnn.ShardOrientation.COL_MAJOR):
         pytest.skip("Disabled until illegal shard configs are fixed (#17795)")
-    if is_grayskull() and (scale_h > 2 or scale_w > 2):
-        pytest.skip("Skipping test because it won't fit in L1!")
 
     ## input shape is N C H W
     batch_size, num_channels, height, width = input_shape
@@ -238,8 +236,7 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
     assert isequal
 
 
-@skip_for_grayskull()
-@skip_for_blackhole()
+@skip_for_blackhole("Temporary skip until #18200 is not closed")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, num_channels, height, width, scale_h, scale_w",

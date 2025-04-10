@@ -12,7 +12,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "cpp/ttnn/operations/copy.hpp"
 
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::data_movement {
 

@@ -4,18 +4,27 @@
 
 #pragma once
 
+#include <allocator_types.hpp>
+#include <buffer_constants.hpp>
+#include <stdint.h>
+#include <fstream>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include <allocator_types.hpp>
 #include "algorithms/allocator_algorithm.hpp"
-#include <buffer_constants.hpp>
+#include "core_coord.hpp"
+#include "hal_types.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+enum class BufferType;
+namespace allocator {
+class Algorithm;
+}  // namespace allocator
 
 class BankManager {
 public:

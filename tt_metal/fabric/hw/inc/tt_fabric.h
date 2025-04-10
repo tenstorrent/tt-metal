@@ -15,6 +15,12 @@
 
 using namespace tt::tt_fabric;
 
+#ifndef DISABLE_LOW_LATENCY_ROUTING
+#ifndef LOW_LATENCY_ROUTING
+#define LOW_LATENCY_ROUTING
+#endif
+#endif
+
 #define FVC_MODE_ROUTER 1
 #define FVC_MODE_ENDPOINT 2
 
@@ -50,7 +56,6 @@ inline uint64_t get_timestamp() {
 }
 
 typedef struct fvc_outbound_push_state {
-    uint32_t slots_to_forward;
     uint32_t local_rdptr;
     uint32_t buffer_size;
     uint32_t buffer_slot_start[FABRIC_ROUTER_OUTBOUND_BUF_SLOTS];
@@ -113,6 +118,20 @@ typedef struct fvc_outbound_push_state {
         *(uint32_t*)(STREAM_REG_ADDR(STREAM_ID_ETH_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) =
             remote_buffer_size;
         *(uint32_t*)(STREAM_REG_ADDR(sender_noc_credits_reg, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) = 0;
+
+        if (buffer_id == 0) {
+            // set the address where credits are returned to noc senders.
+            // don't need to set the upper 32-bits since those will be updated on every write.
+            // using noc 1 for stateful operation.
+            // noc 0 is used for inline dword writes that go in different directions, so we cannot really
+            // cache the dest address and other fields.
+            noc_inline_dw_write_set_state<true>(
+                STREAM_REG_ADDR(
+                    STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX),
+                0xF,
+                write_at_cmd_buf,
+                1);
+        }
     }
 
     FORCE_INLINE uint32_t get_num_slots_cleared() { return *sender_slots_cleared; }
@@ -152,7 +171,8 @@ typedef struct fvc_outbound_push_state {
             return;
         } else {
             // relay the credits to noc data sender to replenish buffer space in noc sender
-            noc_inline_dw_write(*slots_cleared_ack_addr, slots_cleared << REMOTE_DEST_BUF_WORDS_FREE_INC);
+            noc_inline_dw_write_with_state<false, true, true, true>(
+                slots_cleared << REMOTE_DEST_BUF_WORDS_FREE_INC, *slots_cleared_ack_addr >> 32, write_at_cmd_buf, 1);
             // clear the credits receied from ethernet receiver.
             *update_sender_slots_cleared = (-slots_cleared) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         }
@@ -161,18 +181,14 @@ typedef struct fvc_outbound_push_state {
     inline bool forward_data_from_fvc_buffer(uint32_t& remote_wrptr) {
         relay_slots_cleared();
 
-        uint32_t new_slots = *slot_credits;
+        uint32_t slots_to_forward = *slot_credits;
         // new_slots can be 0 here when idle
         // We will still do all the operations since having a branch here hurts perf.
-        *update_slot_credits = (-new_slots) << REMOTE_DEST_BUF_WORDS_FREE_INC;
-        slots_to_forward += new_slots;
-#ifdef EAGER_FORWARD
-    send_next_slot:
-#endif
+
         uint32_t remote_fvc_buffer_space = get_remote_num_slots_free();
         bool nothing_to_do = (slots_to_forward == 0) || (remote_fvc_buffer_space == 0);
 
-        // if either words to forward or remote buffer space is 0
+        // if either slots to forward or remote buffer space is 0
         // there is nothing to forward
         if (nothing_to_do == true) {
             return false;
@@ -182,9 +198,7 @@ typedef struct fvc_outbound_push_state {
         uint32_t temp = *packet_start << 2;
         // uint32_t words_to_forward = ((temp + ((PACKET_WORD_SIZE_BYTES << 2) - 1)) >> 6);
         *packet_start = (temp >> 2) | buffer_id_patch;
-
         uint32_t dest_addr = remote_buffer_slot_start[remote_wrptr];
-
         internal_::eth_send_packet_byte_addr(
             0, (uint32_t)packet_start, dest_addr, FABRIC_ROUTER_BUF_SLOT_SIZE / PACKET_WORD_SIZE_BYTES);
         // send word credits to receiver
@@ -192,14 +206,8 @@ typedef struct fvc_outbound_push_state {
             0, (uint32_t)slots_sent_remote_update, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
         advance_local_rdptr(1);
         advance_remote_wrptr(remote_wrptr, 1);
-        // decrement total number of words that need to be sent over ethernet
-        // by the amount we are sending in this iteration.
-        slots_to_forward -= 1;
-#ifdef EAGER_FORWARD
-        if (slots_to_forward) {
-            goto send_next_slot;
-        }
-#endif
+        // decrement slots to be forwarded by 1.
+        *update_slot_credits = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         return true;
     }
 
@@ -209,11 +217,6 @@ static_assert(sizeof(fvc_outbound_push_state_t) % 4 == 0);
 
 typedef struct fvc_inbound_push_state {
     chan_payload_ptr inbound_wrptr;
-    uint32_t my_id;
-    uint32_t last_dest_id;
-    uint32_t dest_addr;
-    uint32_t command;
-    uint32_t for_local_chip;
     uint32_t slots_inbound;
     uint32_t slots_cleared;
     uint32_t packet_words_remaining;
@@ -225,9 +228,18 @@ typedef struct fvc_inbound_push_state {
     uint32_t remote_buffer_slot_start[FABRIC_ROUTER_OUTBOUND_BUF_SLOTS];
     uint32_t remote_wrptr[4];
     uint32_t remote_wrptr_direction;
+    uint32_t mcast_router_noc_xy[4];
     uint32_t router_push_addr;
-    bool packet_corrupted;
+#ifdef LOW_LATENCY_ROUTING
+    volatile low_latency_packet_header_t* packet_header;
+#else
+    uint32_t my_id;
+    uint32_t last_dest_id;
+    uint32_t dest_addr;
+    uint32_t command;
+    uint32_t for_local_chip;
     volatile packet_header_t* packet_header;
+#endif
     volatile uint32_t* slots_received;
     uint32_t* slots_received_local_update;
     uint32_t update_sender_buffer_space[4];
@@ -235,7 +247,9 @@ typedef struct fvc_inbound_push_state {
     uint32_t sender_buffer_index;
     volatile uint32_t* next_router_space;  // need 3 for 3 forwarding directions
     volatile uint32_t* update_router_space;
+#ifndef LOW_LATENCY_ROUTING
     uint8_t port_direction_table[16];
+#endif
 
     inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words) {
         uint32_t words = sizeof(fvc_inbound_push_state) / 4;
@@ -243,8 +257,10 @@ typedef struct fvc_inbound_push_state {
         for (uint32_t i = 0; i < words; i++) {
             ptr[i] = 0;
         }
+#ifndef LOW_LATENCY_ROUTING
         my_id = routing_table->my_device_id << 16 | routing_table->my_mesh_id;
         last_dest_id = 0xFFFFFFFF;  // initialize to an invalid mesh/device.
+#endif
         uint32_t buffer_start = data_buf_start;
         for (uint32_t i = 0; i < FABRIC_ROUTER_INBOUND_BUF_SLOTS; i++) {
             buffer_slot_start[i] = buffer_start + i * FABRIC_ROUTER_BUF_SLOT_SIZE;
@@ -280,15 +296,41 @@ typedef struct fvc_inbound_push_state {
         if constexpr (fvc_mode == FVC_MODE_ROUTER) {
             tt::tt_fabric::chan_id_t my_chan = routing_table->intra_mesh_table.dest_entry[device_id];
             uint32_t my_direction;
+
             if (routing_table->port_direction.directions[eth_chan_directions::EAST] == my_chan) {
                 my_direction = eth_chan_directions::EAST;
+                mcast_router_noc_xy[eth_chan_directions::WEST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::WEST]];
+                mcast_router_noc_xy[eth_chan_directions::NORTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::NORTH]];
+                mcast_router_noc_xy[eth_chan_directions::SOUTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::SOUTH]];
             } else if (routing_table->port_direction.directions[eth_chan_directions::WEST] == my_chan) {
                 my_direction = eth_chan_directions::WEST;
+                mcast_router_noc_xy[eth_chan_directions::EAST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::EAST]];
+                mcast_router_noc_xy[eth_chan_directions::NORTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::NORTH]];
+                mcast_router_noc_xy[eth_chan_directions::SOUTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::SOUTH]];
             } else if (routing_table->port_direction.directions[eth_chan_directions::NORTH] == my_chan) {
                 my_direction = eth_chan_directions::NORTH;
+                mcast_router_noc_xy[eth_chan_directions::EAST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::EAST]];
+                mcast_router_noc_xy[eth_chan_directions::WEST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::WEST]];
+                mcast_router_noc_xy[eth_chan_directions::SOUTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::SOUTH]];
             } else if (routing_table->port_direction.directions[eth_chan_directions::SOUTH] == my_chan) {
                 my_direction = eth_chan_directions::SOUTH;
+                mcast_router_noc_xy[eth_chan_directions::EAST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::EAST]];
+                mcast_router_noc_xy[eth_chan_directions::WEST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::WEST]];
+                mcast_router_noc_xy[eth_chan_directions::NORTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::NORTH]];
             }
+
             // set the stream auto increment to use on remote router according to
             // this router's direction.
             router_push_addr = (STREAM_REG_ADDR(
@@ -308,7 +350,9 @@ typedef struct fvc_inbound_push_state {
                     // No channel in this forwarding direction
                     continue;
                 }
+#ifndef LOW_LATENCY_ROUTING
                 port_direction_table[forwarding_channel] = i;
+#endif
                 // register the stream_reg to receive word credit updates from
                 // the 3 routers that this router forwards traffic to.
                 // Every outbound router has 4 data pushers. 3 are directional routers and
@@ -344,6 +388,7 @@ typedef struct fvc_inbound_push_state {
             for (uint32_t i = 0; i < FABRIC_ROUTER_OUTBOUND_BUF_SLOTS; i++) {
                 remote_buffer_slot_start[i] = remote_buffer_start + i * FABRIC_ROUTER_BUF_SLOT_SIZE;
             }
+            remote_wrptr_direction = router_direction;
         }
     }
 
@@ -372,7 +417,7 @@ typedef struct fvc_inbound_push_state {
                 }
                 fvc_out_rdptr = temp;
             }
-            slots_inbound -= num_slots;
+            *slots_received_local_update = (-num_slots) << REMOTE_DEST_BUF_WORDS_FREE_INC;
         } else {
             uint32_t temp = fvc_out_rdptr + num_slots;
             if (temp >= buffer_size) {
@@ -382,6 +427,19 @@ typedef struct fvc_inbound_push_state {
         }
     }
 
+#ifdef LOW_LATENCY_ROUTING
+    FORCE_INLINE void advance_remote_wrptr(uint32_t num_slots, uint32_t direction) {
+        if constexpr (is_power_of_2(FABRIC_ROUTER_OUTBOUND_BUF_SLOTS)) {
+            remote_wrptr[direction] = (remote_wrptr[direction] + num_slots) & (FABRIC_ROUTER_OUTBOUND_BUF_SLOTS - 1);
+        } else {
+            uint32_t temp = remote_wrptr[direction] + num_slots;
+            if (temp >= remote_buffer_size) {
+                temp -= remote_buffer_size;
+            }
+            remote_wrptr[direction] = temp;
+        }
+    }
+#else
     FORCE_INLINE void advance_remote_wrptr(uint32_t num_slots) {
         if constexpr (is_power_of_2(FABRIC_ROUTER_OUTBOUND_BUF_SLOTS)) {
             remote_wrptr[remote_wrptr_direction] =
@@ -394,17 +452,12 @@ typedef struct fvc_inbound_push_state {
             remote_wrptr[remote_wrptr_direction] = temp;
         }
     }
+#endif
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     FORCE_INLINE uint32_t get_num_slots_available() {
         if constexpr (fvc_mode == FVC_MODE_ROUTER) {
-            uint32_t new_slots = *slots_received;
-            // new_words can be 0 here, but we will still do all the operations.
-            // Adding a special case to skip the following lines when new_words == 00
-            // hurts perf when there is actual work to do.
-            *slots_received_local_update = (-new_slots) << REMOTE_DEST_BUF_WORDS_FREE_INC;
-            slots_inbound += new_slots;
-            return slots_inbound;
+            return *slots_received;
         } else {
             return slots_inbound - slots_cleared;
         }
@@ -450,8 +503,11 @@ typedef struct fvc_inbound_push_state {
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     FORCE_INLINE bool advance_next_packet() {
+#ifdef LOW_LATENCY_ROUTING
+        packet_header = (volatile low_latency_packet_header_t*)get_local_buffer_read_addr();
+#else
         packet_header = (volatile packet_header_t*)get_local_buffer_read_addr();
-
+#endif
         uint32_t packet_size = packet_header->routing.packet_size_bytes;
         sender_buffer_index = packet_size >> 30;
         packet_size &= 0x3FFFFFFF;
@@ -460,11 +516,14 @@ typedef struct fvc_inbound_push_state {
         if constexpr (fvc_mode == FVC_MODE_ROUTER) {
             free_sender_buffer_space(1);
         }
+#ifndef LOW_LATENCY_ROUTING
         for_local_chip = ((volatile uint32_t*)packet_header)[1] == my_id;
+#endif
         packet_words_remaining = (packet_size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
         return true;
     }
 
+#ifndef LOW_LATENCY_ROUTING
     uint32_t get_next_hop_router_noc_xy() {
         uint32_t dst_mesh_id = packet_header->routing.dst_mesh_id;
         if (dst_mesh_id != routing_table->my_mesh_id) {
@@ -478,6 +537,7 @@ typedef struct fvc_inbound_push_state {
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }
+#endif
 
     uint32_t get_next_hop_router_noc_xy(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
         if (dst_mesh_id != routing_table->my_mesh_id) {
@@ -510,6 +570,167 @@ typedef struct fvc_inbound_push_state {
         return direction;
     }
 
+#ifdef LOW_LATENCY_ROUTING
+    template <uint8_t fvc_mode = FVC_MODE_ENDPOINT>
+    inline uint32_t push_data_to_eth_router(uint32_t dest_id) {
+        if constexpr (fvc_mode == FVC_MODE_ENDPOINT) {
+            if (*next_router_space < 1) {
+                return 0;
+            }
+            if (slots_cleared) {
+                flush_async_writes<fvc_mode, true>();
+            }
+
+            uint32_t dest_addr = get_next_hop_router_noc_xy(dest_id >> 16, dest_id & 0xFFFF);
+            uint64_t buffer_wr_addr =
+                get_noc_addr_helper(dest_addr, remote_buffer_slot_start[remote_wrptr[remote_wrptr_direction]]);
+            // Instead of sending the packet size (packet_words_remaining * PACKET_WORD_SIZE_BYTES) which
+            // may be less than the full slot, send the full slot.
+            noc_async_write_one_packet(
+                get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE, noc_index);
+            advance_remote_wrptr(1, remote_wrptr_direction);
+            advance_out_rdptr<fvc_mode>(1);
+            uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
+            noc_inline_dw_write<false, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+
+            *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+            uint32_t words_available = packet_words_remaining;
+            slots_cleared += 1;
+            packet_words_remaining = 0;
+            return words_available;
+        }
+        return 0;
+    }
+
+    FORCE_INLINE void issue_local_write() {
+        uint32_t addr_l = packet_header->routing.target_offset_l;
+        uint32_t addr_h = packet_header->routing.target_offset_h;
+        uint32_t command = packet_header->routing.command;
+        if (command & ASYNC_WR) {
+            noc_async_write_one_packet(
+                get_local_buffer_read_addr() + PACKET_HEADER_SIZE_BYTES,
+                get_noc_addr_helper(addr_h, addr_l),
+                packet_size_bytes - PACKET_HEADER_SIZE_BYTES);
+        }
+        if (command & ATOMIC_INC) {
+            uint64_t noc_addr =
+                get_noc_addr_helper(packet_header->routing.atomic_offset_h, packet_header->routing.atomic_offset_l);
+            noc_fast_atomic_increment(
+                noc_index,
+                NCRISC_AT_CMD_BUF,
+                noc_addr,
+                NOC_UNICAST_WRITE_VC,
+                packet_header->routing.atomic_increment,
+                packet_header->routing.atomic_wrap,
+                false);
+        }
+    }
+
+    FORCE_INLINE void issue_forward(uint32_t route_value, uint32_t direction) {
+        packet_header->routing.route_vector.hop_index = route_value + 1;
+        uint64_t buffer_wr_addr =
+            get_noc_addr_helper(mcast_router_noc_xy[direction], remote_buffer_slot_start[remote_wrptr[direction]]);
+        noc_async_write_one_packet(get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE);
+        advance_remote_wrptr(1, direction);
+        uint64_t push_addr = get_noc_addr_helper(mcast_router_noc_xy[direction], router_push_addr);
+        noc_inline_dw_write<false, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+    }
+
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER, uint32_t router_direction = 0>
+    FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_inbound_packet() {
+        tt_l1_ptr uint8_t* route_vector = (uint8_t*)packet_header->routing.route_vector.value;
+        uint32_t hop_index = packet_header->routing.route_vector.hop_index;
+        uint32_t hop_cmd = route_vector[hop_index];
+
+        if (slots_cleared) {
+            flush_async_writes<fvc_mode, true>();
+        }
+
+        switch (hop_cmd) {
+            case 0x0: break;
+            case tt_low_latency_routing_vector::FORWARD_EAST:
+                if constexpr (router_direction == eth_chan_directions::EAST) {
+                    issue_local_write();
+                } else {
+                    if (*next_router_space < 1) {
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::EAST);
+                }
+                break;
+            case tt_low_latency_routing_vector::FORWARD_WEST:
+                if constexpr (router_direction == eth_chan_directions::WEST) {
+                    issue_local_write();
+                } else {
+                    if (*next_router_space < 1) {
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::WEST);
+                }
+                break;
+            case tt_low_latency_routing_vector::FORWARD_EAST | tt_low_latency_routing_vector::FORWARD_WEST:
+                if constexpr (router_direction == eth_chan_directions::WEST) {
+                    issue_local_write();
+                    if (*next_router_space < 1) {
+                        route_vector[hop_index] = hop_cmd & ~tt_low_latency_routing_vector::FORWARD_WEST;
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::EAST);
+                } else {
+                    issue_local_write();
+                    if (*next_router_space < 1) {
+                        route_vector[hop_index] = hop_cmd & ~tt_low_latency_routing_vector::FORWARD_EAST;
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::WEST);
+                }
+                break;
+            case tt_low_latency_routing_vector::FORWARD_NORTH:
+                if constexpr (router_direction == eth_chan_directions::NORTH) {
+                    issue_local_write();
+                } else {
+                    if (*next_router_space < 1) {
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::NORTH);
+                }
+                break;
+            case tt_low_latency_routing_vector::FORWARD_SOUTH:
+                if constexpr (router_direction == eth_chan_directions::SOUTH) {
+                    issue_local_write();
+                } else {
+                    if (*next_router_space < 1) {
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::SOUTH);
+                }
+                break;
+            case tt_low_latency_routing_vector::FORWARD_NORTH | tt_low_latency_routing_vector::FORWARD_SOUTH:
+                if constexpr (router_direction == eth_chan_directions::SOUTH) {
+                    issue_local_write();
+                    if (*next_router_space < 1) {
+                        route_vector[hop_index] = hop_cmd & ~tt_low_latency_routing_vector::FORWARD_SOUTH;
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::NORTH);
+                } else {
+                    issue_local_write();
+                    if (*next_router_space < 1) {
+                        route_vector[hop_index] = hop_cmd & ~tt_low_latency_routing_vector::FORWARD_NORTH;
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::SOUTH);
+                }
+                break;
+            default: __builtin_unreachable();
+        }
+
+        advance_out_rdptr<fvc_mode>(1);
+        slots_cleared = 1;
+        packet_words_remaining = 0;
+    }
+#else
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     inline uint32_t push_data_to_eth_router() {
         if (*next_router_space < 1) {
@@ -562,7 +783,7 @@ typedef struct fvc_inbound_push_state {
         packet_words_remaining = 0;
     }
 
-    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER, uint32_t router_direction = 0>
     FORCE_INLINE void process_inbound_packet() {
         if (for_local_chip) {
             if (slots_cleared) {
@@ -606,7 +827,7 @@ typedef struct fvc_inbound_push_state {
             push_data_to_eth_router<fvc_mode>();
         }
     }
-
+#endif
     template <uint8_t fvc_mode = FVC_MODE_ROUTER, bool noc_flush = true>
     FORCE_INLINE void flush_async_writes() {
         if constexpr (noc_flush == true) {
@@ -1445,7 +1666,7 @@ typedef struct fvc_inbound_pull_state {
         return words_processed;
     }
 
-    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER, uint32_t router_direction = 0>
     inline uint32_t process_inbound_packet() {
         uint32_t words_processed = 0;
         if (packet_processing_flags == ProcessingFlags::UCAST_DEST) {

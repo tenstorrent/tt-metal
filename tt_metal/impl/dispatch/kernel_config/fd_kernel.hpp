@@ -4,12 +4,31 @@
 #pragma once
 
 #include <device_impl.hpp>
-#include <program_impl.hpp>
+#include <tt-metalium/program.hpp>
+#include <stdint.h>
+#include <map>
+#include <string>
+#include <vector>
+
+#include "assert.hpp"
 #include "core_coord.hpp"
 #include "mesh_graph.hpp"
-#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include "system_memory_manager.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "tt_cluster.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include "utils.hpp"
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Program;
+enum DispatchWorkerType : uint32_t;
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
 #define UNUSED_SEM_ID 0
@@ -92,10 +111,13 @@ public:
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
     void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
 
-    virtual CoreType GetCoreType() { return tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(); }
+    virtual CoreType GetCoreType() {
+        return tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    }
     tt_cxy_pair GetLogicalCore() { return logical_core_; }
     tt_cxy_pair GetVirtualCore() {
-        return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(logical_core_, GetCoreType());
+        return tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            logical_core_, GetCoreType());
     }
     chip_id_t GetDeviceId() { return device_id_; }  // Since this->device may not exist yet
 
@@ -112,7 +134,8 @@ protected:
         std::map<string, string> defines_in,
         bool is_active_eth_core,
         bool send_to_brisc,
-        bool force_watcher_no_inline);
+        bool force_watcher_no_inline,
+        tt::tt_metal::KernelBuildOptLevel opt_level = tt::tt_metal::KernelBuildOptLevel::Os);
     int GetPort(FDKernel* other, std::vector<FDKernel*>& kernels) {
         for (int idx = 0; idx < kernels.size(); idx++) {
             if (kernels[idx] == other) {

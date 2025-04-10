@@ -15,7 +15,7 @@ import ttnn
 
 
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import ModelOptimizations
+from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
@@ -409,9 +409,10 @@ def prepare_generator_args(
 @pytest.mark.parametrize(
     "optimizations",
     [
-        ModelOptimizations.performance,
-        ModelOptimizations.accuracy,
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers),
     ],
+    ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
@@ -446,8 +447,8 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
-
-    if is_ci_env and (optimizations == ModelOptimizations.accuracy or not ci_only):
+    test_id = request.node.callspec.id
+    if is_ci_env and (test_id == "accuracy" or not ci_only):
         pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG
@@ -472,7 +473,13 @@ def test_demo_text(
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
-    optimizations = request.config.getoption("--optimizations") or optimizations
+    json_config_file = request.config.getoption("--decoder_config_file")
+
+    if json_config_file:
+        optimizations = parse_decoder_json(json_config_file)
+    else:
+        optimizations = request.config.getoption("--optimizations") or optimizations
+
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,

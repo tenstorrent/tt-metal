@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <cstddef>
+#include <initializer_list>
+#include <memory>
+
+#include <tt-metalium/buffer_constants.hpp>
 #include "gtest/gtest.h"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 

@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
-    scaler = sqrt(scaler);
+    scaler = std::sqrt(scaler);
 
     uint32_t num_tensor_tiles = NC * H * W / TILE_HW;
 
@@ -121,12 +121,14 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
         program, writer_kernel_id, core, {output.buffer()->address(), num_tensor_tiles / out_dim_divider, 0});
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
+                                              const void* operation,
                                               const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_dram_buffer = input_buffers.at(0);
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_dram_buffer = input_tensors.at(0).buffer();
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 

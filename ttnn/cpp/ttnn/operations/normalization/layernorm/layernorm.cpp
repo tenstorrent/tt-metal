@@ -5,6 +5,10 @@
 #include "layernorm.hpp"
 #include <optional>
 
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/layernorm_op.hpp"
 
 namespace ttnn::operations::normalization {
@@ -18,6 +22,17 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
+    auto rank = input_tensor.get_logical_shape().rank();
+
+    // For 0D tensors
+    TT_FATAL(rank > 0, "LayerNorm operation not supported for 0D tensors. (rank={})", rank);
+
+    // For 0V tensors
+    if (input_tensor.get_logical_volume() == 0) [[unlikely]] {
+        return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, output_memory_config, compute_kernel_config);
+    }
+
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
@@ -30,7 +45,7 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
                    .norm_type = LayerNormType::LAYERNORM,
                    .distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED,
                    .eps = epsilon,
-                   .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+                   .output_mem_config = output_memory_config,
                    .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
                    .compute_kernel_config = kernel_config_val},
                {input_tensor},

@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_backend_api_types.hpp"
+
+#include <fmt/base.h>
 #include <magic_enum/magic_enum.hpp>
+#include <string_view>
 
 std::string tt::get_string(tt::ARCH arch) {
     switch (arch) {

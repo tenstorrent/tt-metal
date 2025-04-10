@@ -4,11 +4,28 @@
 
 #pragma once
 
-#include <command_queue_interface.hpp>
-#include <sub_device_types.hpp>
 #include <command_queue.hpp>
+#include <command_queue_interface.hpp>
+#include <stdint.h>
+#include <sub_device_types.hpp>
+#include <atomic>
+#include <memory>
+#include <variant>
+#include <vector>
+
 #include "buffer.hpp"
+#include "core_coord.hpp"
+#include "span.hpp"
+#include "system_memory_manager.hpp"
 #include "tt_metal/impl/event/dispatch.hpp"
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class IDevice;
+enum class TensorMemoryLayout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

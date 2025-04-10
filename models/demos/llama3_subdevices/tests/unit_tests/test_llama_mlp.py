@@ -91,6 +91,8 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
     prev_pcc = None
 
     logger.info("Run Llama_MLP_PF")
+    # Explicitly allocate global CB to avoid memory fragmentation
+    prefetcher_setup.create_global_cb()
     for i in range(20):
         ttnn.dram_prefetcher(
             prefetcher_setup.get_input_tensors(),

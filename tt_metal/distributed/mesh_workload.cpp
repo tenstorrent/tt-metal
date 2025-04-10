@@ -5,11 +5,41 @@
 #include <mesh_buffer.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
-#include <tt_metal.hpp>
-
+#include <stdint.h>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
+#include <algorithm>
+#include <cstddef>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "hal.hpp"
+#include "kernel_types.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_device.hpp"
+#include "program_device_map.hpp"
+#include "tt-metalium/program.hpp"
+#include "semaphore.hpp"
+#include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/distributed/mesh_workload_utils.hpp"
+#include "util.hpp"
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Kernel;
+enum class HalProgrammableCoreType;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -30,8 +60,8 @@ std::optional<MeshCoordinateRange> find_intersection(
 MeshWorkload::MeshWorkload() {
     // A MeshWorkload tracks maintains its own handles to kernels across all
     // encapsulated programs
-    kernel_groups_.resize(hal.get_programmable_core_type_count());
-    kernels_.resize(hal.get_programmable_core_type_count());
+    kernel_groups_.resize(hal_ref.get_programmable_core_type_count());
+    kernels_.resize(hal_ref.get_programmable_core_type_count());
 }
 
 void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&& program) {
@@ -246,9 +276,9 @@ std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevic
     return sub_devices_;
 }
 
-ProgramCommandSequence& MeshWorkload::get_dispatch_cmds_for_program(Program& program) {
+ProgramCommandSequence& MeshWorkload::get_dispatch_cmds_for_program(Program& program, uint64_t command_hash) {
     // Get the dispatch commands associated with this program
-    return program.get_cached_program_command_sequences().begin()->second;
+    return program.get_cached_program_command_sequences().at(command_hash);
 }
 
 // The functions below are for testing purposes only
@@ -266,11 +296,11 @@ ProgramConfig& MeshWorkload::get_program_config(uint32_t index) {
 }
 
 uint32_t MeshWorkload::get_sem_base_addr(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    return base_addr + get_program_config(hal.get_programmable_core_type_index(programmable_core_type)).sem_offset;
+    return base_addr + get_program_config(hal_ref.get_programmable_core_type_index(programmable_core_type)).sem_offset;
 }
 
 uint32_t MeshWorkload::get_sem_size(
@@ -289,11 +319,11 @@ uint32_t MeshWorkload::get_sem_size(
 }
 
 uint32_t MeshWorkload::get_cb_base_addr(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
+    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    return base_addr + get_program_config(hal.get_programmable_core_type_index(programmable_core_type)).cb_offset;
+    return base_addr + get_program_config(hal_ref.get_programmable_core_type_index(programmable_core_type)).cb_offset;
 }
 
 uint32_t MeshWorkload::get_cb_size(

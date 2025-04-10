@@ -118,6 +118,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
     p = None
     timeout = get_timeout(test_module)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
+    reset_util = tt_smi_util.ResetUtil(ARCH)
     for test_vector in test_vectors:
         if DRY_RUN:
             print(f"Would have executed test for vector {test_vector}")
@@ -185,7 +186,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                 logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
                 p.terminate()
                 p = None
-                tt_smi_util.run_tt_smi(ARCH)
+                reset_util.reset()
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
         result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

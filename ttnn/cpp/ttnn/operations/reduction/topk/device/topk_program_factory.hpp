@@ -5,6 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::tt_metal;
 namespace ttnn::operations::reduction::detail {
@@ -146,12 +147,15 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, binary_writer_kernel_id](
+                                              const void* operation,
                                               const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto input_buffer = input_buffers.at(0);
-        auto values_buffer = output_buffers.at(0);
-        auto index_buffer = output_buffers.at(1);
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto input_buffer = input_tensors.at(0).buffer();
+
+        auto values_buffer = output_tensors.at(0).buffer();
+        auto index_buffer = output_tensors.at(1).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -496,12 +500,14 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     }
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, binary_writer_final_kernel_id, num_cores](
+                                              const void* operation,
                                               const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto input_buffer = input_buffers.at(0);
-        auto values_buffer = output_buffers.at(0);
-        auto index_buffer = output_buffers.at(1);
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto input_buffer = input_tensors.at(0).buffer();
+        auto values_buffer = output_tensors.at(0).buffer();
+        auto index_buffer = output_tensors.at(1).buffer();
 
         for (uint32_t core_h = 0; core_h < 1; core_h++) {
             for (uint32_t core_w = 0; core_w < num_cores - 1; core_w++) {

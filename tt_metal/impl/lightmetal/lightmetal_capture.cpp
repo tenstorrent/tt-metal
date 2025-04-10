@@ -10,7 +10,7 @@
 #include "light_metal_binary_generated.h"
 #include <trace_buffer.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/kernel.hpp>
 
 namespace tt::tt_metal {

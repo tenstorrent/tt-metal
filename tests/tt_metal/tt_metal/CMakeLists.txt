@@ -130,6 +130,7 @@ target_sources(
             test_kernels/misc/print_tile_trisc.cpp
             test_kernels/misc/print_with_wait.cpp
             test_kernels/misc/runtime_args_kernel.cpp
+            test_kernels/misc/sub_device/add_common_and_unique_rta.cpp
             test_kernels/misc/sub_device/incrementer.cpp
             test_kernels/misc/sub_device/persistent_remote_waiter.cpp
             test_kernels/misc/sub_device/persistent_waiter.cpp
