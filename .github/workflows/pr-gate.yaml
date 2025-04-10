@@ -29,6 +29,7 @@ on:
       - reopened
       - synchronize
       - ready_for_review
+  merge_group:
   push:
     branches:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
