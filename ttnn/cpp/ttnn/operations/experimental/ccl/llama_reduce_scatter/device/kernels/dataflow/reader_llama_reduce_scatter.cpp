@@ -49,7 +49,6 @@ void kernel_main() {
     constexpr uint32_t packet_worker_end_x = get_compile_time_arg_val(16);
     constexpr uint32_t packet_worker_end_y = get_compile_time_arg_val(17);
     constexpr uint32_t num_sender_cores = get_compile_time_arg_val(18);
-    constexpr uint32_t total_num_read_txns = get_compile_time_arg_val(19);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -67,7 +66,7 @@ void kernel_main() {
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
     constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
-    constexpr uint8_t schedule[total_num_read_txns][3] = SCHEDULE;
+    constexpr uint8_t schedule[num_packets_total_per_device][3] = SCHEDULE;
     constexpr uint32_t total_senders = num_sender_cores * other_devices;
 
     // Runtime arguments
@@ -77,30 +76,20 @@ void kernel_main() {
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t linear_input_packet_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     bool receiver_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t sender_shard_start = get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t sender_shard_end = get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
 
     // Bank base addresses (compute once)
     const uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);
-
-    uint32_t sender_read_addr = get_write_ptr(fabric_sender_cb_id);
 
     if (sender_core) {
         for (uint32_t target_device_id : device_order) {
             const uint32_t base_core = target_device_id * input_shard_cores_per_device;
 
-            uint32_t num_pages_read = 0;
-            uint32_t num_pages_reserve_push = 0;
-            uint32_t shard_idx = sender_shard_start;
-            while (num_pages_read < sender_total_num_pages) {
-                const uint8_t curr_core = base_core + schedule[shard_idx][0];
-                const uint32_t read_offset = schedule[shard_idx][1];
-                const uint32_t read_size = schedule[shard_idx][2];
-                num_pages_reserve_push += read_size;
-
-                auto num_pages_left = sender_total_num_pages - num_pages_read;
-                const uint32_t curr_packet_num_pages = std::min(num_pages_per_packet, num_pages_left);
+            for (uint32_t packet_idx = sender_packet_start; packet_idx < sender_packet_end; packet_idx++) {
+                const uint8_t curr_core = base_core + schedule[packet_idx][0];
+                const uint32_t read_offset = schedule[packet_idx][1];
+                const uint32_t read_size = schedule[packet_idx][2];
 
                 const uint32_t x = input_core_xy[curr_core][x_index];
                 const uint32_t y = input_core_xy[curr_core][y_index];
@@ -108,18 +97,12 @@ void kernel_main() {
                 const uint64_t shard_noc_addr = get_noc_addr(x, y, offset_address);
                 const uint32_t transfer_size = read_size * page_size_bytes;
 
-                cb_reserve_back(fabric_sender_cb_id, num_pages_reserve_push);
+                cb_reserve_back(fabric_sender_cb_id, read_size);
+                const uint32_t sender_read_addr = get_write_ptr(fabric_sender_cb_id);
+
                 noc_async_read(shard_noc_addr, sender_read_addr, transfer_size);
-
-                if (num_pages_reserve_push >= curr_packet_num_pages) {
-                    noc_async_read_barrier();
-                    cb_push_back(fabric_sender_cb_id, num_pages_reserve_push);
-                    num_pages_reserve_push = 0;
-                }
-
-                sender_read_addr += transfer_size;
-                num_pages_read += read_size;
-                shard_idx++;
+                noc_async_read_barrier();
+                cb_push_back(fabric_sender_cb_id, read_size);
             }
         }
     } else if (worker_core) {
@@ -132,10 +115,6 @@ void kernel_main() {
             const uint32_t linear_input_core_idcs = rem / tiles_per_core_width;
             const uint32_t linear_input_tile_offsets = rem % tiles_per_core_width;
 
-            if (linear_input_core_idcs >= input_tensor_cores) {
-                break;
-            }
-
             const uint32_t core_x = input_core_xy[linear_input_core_idcs][x_index];
             const uint32_t core_y = input_core_xy[linear_input_core_idcs][y_index];
             const uint32_t tile_offset = linear_input_tile_offsets * page_size_bytes;
@@ -147,7 +126,6 @@ void kernel_main() {
         }
         if (receiver_core) {
             // Precompute multicast semaphore address once
-#ifndef SKIP_MCAST
             const uint64_t multicast_semaphore_addr = static_noc_multicast_addr(
                 packet_worker_start_x,
                 packet_worker_start_y,
@@ -159,10 +137,7 @@ void kernel_main() {
             noc_semaphore_set_multicast(
                 receiver_semaphore_address,
                 multicast_semaphore_addr,
-                num_dests - 1);  // could do different mcast for each device by having num_devices - 1 receiver cores
-#else
-            noc_semaphore_wait((uint32_t*)receiver_semaphore_address, total_senders);
-#endif
+                num_dests);  // could do different mcast for each device by having num_devices - 1 receiver cores
         } else {
             noc_semaphore_wait((uint32_t*)local_semaphore_address, total_senders);
         }
@@ -172,5 +147,4 @@ void kernel_main() {
     }
     noc_semaphore_set((uint32_t*)local_semaphore_address, INVALID);
     noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);
-    noc_async_write_barrier();
 }
