@@ -380,11 +380,6 @@ void add_prefetcher_debug_epilogue(vector<uint32_t>& cmds, size_t prior_end) {
         debug_cmd_ptr = (CQPrefetchCmd*)&cmds[prior_end];
         debug_cmd_ptr->debug.size = (cmds.size() - prior_end) * sizeof(uint32_t) - sizeof(CQPrefetchCmd);
         debug_cmd_ptr->debug.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-        uint32_t checksum = 0;
-        for (uint32_t i = prior_end + sizeof(CQPrefetchCmd) / sizeof(uint32_t); i < cmds.size(); i++) {
-            checksum += cmds[i];
-        }
-        debug_cmd_ptr->debug.checksum = checksum;
     }
 }
 
@@ -452,11 +447,6 @@ void add_prefetcher_cmd(
             cmd.debug.key = ++key;
             cmd.debug.size = payload_length_bytes;
             cmd.debug.stride = round_cmd_size_up(payload_length_bytes + sizeof(CQPrefetchCmd));
-            uint32_t checksum = 0;
-            for (uint32_t i = 0; i < payload.size(); i++) {
-                checksum += payload[i];
-            }
-            cmd.debug.checksum = checksum;
         } break;
 
         case CQ_PREFETCH_CMD_TERMINATE: break;

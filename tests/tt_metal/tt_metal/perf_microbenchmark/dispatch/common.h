@@ -771,7 +771,6 @@ inline size_t debug_prologue(std::vector<uint32_t>& cmds) {
         debug_cmd.base.cmd_id = CQ_DISPATCH_CMD_DEBUG;
         // compiler compains w/o these filled in later fields
         debug_cmd.debug.key = 0;
-        debug_cmd.debug.checksum = 0;
         debug_cmd.debug.size = 0;
         debug_cmd.debug.stride = 0;
         add_bare_dispatcher_cmd(cmds, debug_cmd);
@@ -794,12 +793,6 @@ inline void debug_epilogue(std::vector<uint32_t>& cmds, size_t prior_end) {
         uint32_t size = (full_size > max_size) ? max_size : full_size;
         debug_cmd_ptr->debug.size = size;
         debug_cmd_ptr->debug.stride = sizeof(CQDispatchCmd);
-        uint32_t checksum = 0;
-        uint32_t start = prior_end + sizeof(CQDispatchCmd) / sizeof(uint32_t);
-        for (uint32_t i = start; i < start + size / sizeof(uint32_t); i++) {
-            checksum += cmds[i];
-        }
-        debug_cmd_ptr->debug.checksum = checksum;
     }
 }
 
