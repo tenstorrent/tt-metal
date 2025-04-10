@@ -30,11 +30,17 @@ namespace tt {
 namespace tt_metal {
 class IDevice;
 class Program;
+class ProgramImpl;
 class Semaphore;
 class SystemMemoryManager;
 enum class ProgramBinaryStatus : uint8_t;
 struct KernelGroup;
 struct ProgramCommandSequence;
+
+namespace distributed {
+class MeshWorkload;
+class MeshWorkloadImpl;
+}
 
 namespace program_dispatch {
 
@@ -91,6 +97,11 @@ uint32_t finalize_kernel_bins(
     uint32_t base_offset,
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size);
+
+void finalize_program_offsets(Program& program, IDevice* device);
+void finalize_program_offsets(ProgramImpl& program, IDevice* device);
+void finalize_program_offsets(distributed::MeshWorkload& workload, IDevice* device);
+void finalize_program_offsets(distributed::MeshWorkloadImpl& workload, IDevice* device);
 
 void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence);
 

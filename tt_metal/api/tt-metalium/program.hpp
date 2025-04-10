@@ -40,6 +40,9 @@ CBHandle CreateCircularBuffer(
 }  // namespace experimental
 
 namespace program_dispatch {
+
+struct ProgramOffsetsState;
+
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
 template <typename T>
