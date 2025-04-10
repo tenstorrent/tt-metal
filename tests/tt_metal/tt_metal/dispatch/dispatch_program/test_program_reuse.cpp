@@ -96,7 +96,8 @@ std::shared_ptr<Program> create_program_multi_core_rta(
     uint32_t rta_base_dm1 = rta_base_dm0 + 1024 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + 2048 * sizeof(uint32_t);
 
-    uint32_t coord_base_dm0 = tt::align(base_addr + 4096 * sizeof(uint32_t), hal_ref.get_alignment(HalMemType::L1));
+    uint32_t coord_base_dm0 =
+        tt::align(base_addr + 4096 * sizeof(uint32_t), MetalContext::instance().hal().get_alignment(HalMemType::L1));
     uint32_t coord_base_dm1 = coord_base_dm0 + 1024 * sizeof(uint32_t);
 
     std::map<string, string> dm_defines0 = {
@@ -221,9 +222,10 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
     uint32_t rta_base_compute = rta_base_dm1 + 2048 * sizeof(uint32_t);
 
     // Put the coordinates way above the maximum RTAs
-    uint32_t coord_base_dm0 = tt::align(rta_base_addr + 4096 * sizeof(uint32_t), hal_ref.get_alignment(HalMemType::L1));
+    uint32_t coord_base_dm0 = tt::align(
+        rta_base_addr + 4096 * sizeof(uint32_t), MetalContext::instance().hal().get_alignment(HalMemType::L1));
     uint32_t coord_base_dm1 = coord_base_dm0 + 1024 * sizeof(uint32_t);
-    uint32_t semaphore_buffer_size = dummy_sems.size() * hal_ref.get_alignment(HalMemType::L1);
+    uint32_t semaphore_buffer_size = dummy_sems.size() * MetalContext::instance().hal().get_alignment(HalMemType::L1);
     uint32_t cb_config_buffer_size =
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     for (auto device : devices_) {
@@ -308,7 +310,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
             uint32_t sem_base_addr = program->get_sem_base_addr(devices_[0], core_coord, CoreType::WORKER);
             detail::ReadFromDeviceL1(device, core_coord, sem_base_addr, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size();
-                 i += (hal_ref.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
+                 i += (MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
                 EXPECT_EQ(semaphore_vals[i], dummy_sems[expected_sem_idx]) << expected_sem_idx;
                 expected_sem_idx++;
             }

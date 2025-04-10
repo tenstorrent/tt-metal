@@ -8,7 +8,6 @@
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/device_impl.hpp>
-#include "llrt/hal.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>

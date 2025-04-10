@@ -377,7 +377,8 @@ int main(int argc, char** argv) {
             device_router_map[device.first] = device_router_phys_cores;
 
             gk_phys_core = (device.second->worker_core_from_logical_core(gk_core));
-            uint32_t gk_noc_offset = tt_metal::hal_ref.noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
+            uint32_t gk_noc_offset =
+                tt_metal::MetalContext::instance().hal().noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
 
             std::vector<uint32_t> router_compile_args = {
                 (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
@@ -476,7 +477,8 @@ int main(int argc, char** argv) {
             };
 
             // setup runtime args
-            uint32_t tx_gk_noc_offset = tt_metal::hal_ref.noc_xy_encoding(tx_gk_phys_core.x, tx_gk_phys_core.y);
+            uint32_t tx_gk_noc_offset =
+                tt_metal::MetalContext::instance().hal().noc_xy_encoding(tx_gk_phys_core.x, tx_gk_phys_core.y);
             std::vector<uint32_t> runtime_args = {
                 time_seed,                                                              // 0: time based seed
                 (device_map[test_device_id_l]->id() << 8) + src_endpoint_start_id + i,  // 1: src_endpoint_id
