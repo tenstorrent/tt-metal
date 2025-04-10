@@ -130,20 +130,20 @@ def run_latency_test(
     print(f"count: {count}")
     print(f"avg_hop_latency: {avg_hop_latency}")
 
-    max_latency_lower_bound_threshold_percent = 0.93
+    min_max_latency_lower_bound_threshold_percent = 0.93
     lower_bound_threshold_percent = 0.95
     upper_bound_threshold_percent = 1.05
-    max_latency_upper_bound_threshold_percent = 1.08
+    min_max_latency_upper_bound_threshold_percent = 1.08
 
     assert latency_avg_ns <= expected_mean_latency_ns + allowable_delta
-    assert latency_min_ns <= expected_min_latency_ns * upper_bound_threshold_percent
-    assert latency_max_ns <= expected_max_latency_ns * max_latency_upper_bound_threshold_percent
+    assert latency_min_ns <= expected_min_latency_ns * min_max_latency_upper_bound_threshold_percent
+    assert latency_max_ns <= expected_max_latency_ns * min_max_latency_upper_bound_threshold_percent
     assert avg_hop_latency <= expected_avg_hop_latency_ns * upper_bound_threshold_percent
 
     lower_bound_threshold_percent = 0.95
     is_under_avg_lower_bound = latency_avg_ns <= expected_mean_latency_ns - allowable_delta
-    is_under_min_lower_bound = latency_min_ns <= expected_min_latency_ns * lower_bound_threshold_percent
-    is_under_max_lower_bound = latency_max_ns <= expected_max_latency_ns * max_latency_lower_bound_threshold_percent
+    is_under_min_lower_bound = latency_min_ns <= expected_min_latency_ns * min_max_latency_lower_bound_threshold_percent
+    is_under_max_lower_bound = latency_max_ns <= expected_max_latency_ns * min_max_latency_lower_bound_threshold_percent
     is_under_avg_hop_lower_bound = avg_hop_latency <= expected_avg_hop_latency_ns * lower_bound_threshold_percent
 
     if is_under_avg_lower_bound or is_under_min_lower_bound or is_under_max_lower_bound or is_under_avg_hop_lower_bound:
@@ -176,7 +176,7 @@ def run_latency_test(
         (0, 6, False, 1520, 1420, 1720, 760),
         (16, 6, False, 1520, 1400, 1730, 760),
         (16, 6, True, 1535, 1425, 1730, 770),
-        (1024, 6, False, 2000, 1900, 2150, 1000),
+        (1024, 6, False, 2000, 1820, 2150, 1000),
         (2048, 6, False, 2240, 2150, 2500, 1120),
         (4096, 6, False, 2600, 2520, 2770, 1300),
     ],

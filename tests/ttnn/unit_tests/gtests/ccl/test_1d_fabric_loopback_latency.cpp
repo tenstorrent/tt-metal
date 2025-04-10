@@ -38,10 +38,6 @@ inline void RunPersistent1dFabricLatencyTest(
         log_info("This test can only be run on T3000 devices");
         return;
     }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
-        return;
-    }
 
     TT_FATAL(writer_specs.size() < line_size, "num_devices_with_workers must be less than or equal to num_links");
     using namespace ttnn::ccl;
