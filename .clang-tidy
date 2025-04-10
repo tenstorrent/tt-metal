@@ -166,7 +166,6 @@ Checks: >
   -readability-isolate-declaration,
   -readability-magic-numbers,
   -readability-make-member-function-const,
-  -readability-misleading-indentation,
   -readability-named-parameter,
   -readability-non-const-parameter,
   -readability-qualified-auto,
