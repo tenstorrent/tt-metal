@@ -11,6 +11,44 @@ namespace tt {
 namespace tt_metal {
 namespace device_dispatch {
 
+void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_params) {
+    const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
+    DeviceCommandCalculator calculator;
+    calculator.add_dispatch_write_linear<true, true>(dispatch_params.size_bytes);
+
+    for (uint32_t i = 0; i < num_worker_counters; ++i) {
+        calculator.add_dispatch_wait();
+    }
+
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+
+    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
+    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
+
+    for (uint32_t i = 0; i < num_worker_counters; ++i) {
+        const uint8_t offset_index = *dispatch_params.sub_device_ids[i];
+        command_sequence.add_dispatch_wait(
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+            0,
+            DispatchMemMap::get(dispatch_params.dispatch_core_type, dispatch_params.device->num_hw_cqs())
+                .get_dispatch_stream_index(offset_index),
+            dispatch_params.expected_num_workers_completed[offset_index]);
+    }
+
+    command_sequence.add_dispatch_write_linear(
+        0,
+        dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, dispatch_params.virtual_core),
+        dispatch_params.address,
+        dispatch_params.size_bytes);
+
+    command_sequence.add_data((uint8_t*)dispatch_params.src, dispatch_params.size_bytes, dispatch_params.size_bytes);
+
+    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
+    sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
+    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+}
+
 void issue_l1_read_command_sequence(const L1ReadDispatchParams& dispatch_params) {
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
     DeviceCommandCalculator calculator;

@@ -298,8 +298,29 @@ void DeviceProfiler::readRiscProfilerResults(
     control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
     control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
 
-    tt::llrt::write_hex_vec_to_core(
-        device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+    if (USE_FAST_DISPATCH) {
+        if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
+            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+                tt::llrt::write_hex_vec_to_core(
+                    device_id,
+                    worker_core,
+                    control_buffer_reset,
+                    reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+            }
+        } else {
+            device->command_queue().enqueue_write_to_core_l1(
+                worker_core,
+                control_buffer_reset.data(),
+                reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+                true);
+        }
+    } else {
+        if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
+            tt::llrt::write_hex_vec_to_core(
+                device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+        }
+    }
 }
 
 void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
