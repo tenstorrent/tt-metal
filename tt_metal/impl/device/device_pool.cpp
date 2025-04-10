@@ -32,7 +32,8 @@
 #include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/fabric_host_utils.hpp>
+#include <tt-metalium/fabric.hpp>
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
@@ -303,7 +304,6 @@ void DevicePool::initialize_active_devices() const {
     // Activate fabric (must be before FD)
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_1d_fabric_config(fabric_config) || tt_fabric::is_2d_fabric_config(fabric_config)) {
-        std::cout << "Activate Fabric" << std::endl;
         if (tt_fabric::is_2d_fabric_config(fabric_config)) {
             // write routing tables to all ethernet cores
             tt::tt_metal::MetalContext::instance()

@@ -7,10 +7,9 @@
 #include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include <tt-metalium/fabric_host_interface.h>
-#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <vector>
 
 namespace tt {
@@ -20,11 +19,6 @@ class Program;
 }  // namespace tt
 
 namespace tt::tt_fabric {
-
-bool is_1d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config);
-bool is_2d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config);
-
-Topology get_1d_topology(const tt::tt_metal::FabricConfig& fabric_config);
 
 tt::tt_fabric::FabricEriscDatamoverConfig get_1d_fabric_config();
 

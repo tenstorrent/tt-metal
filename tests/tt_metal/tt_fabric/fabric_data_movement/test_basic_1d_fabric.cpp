@@ -30,7 +30,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/fabric_host_utils.hpp>
+#include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "umd/device/tt_core_coordinates.h"
 
