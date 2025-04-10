@@ -126,7 +126,6 @@ SortProgramFactory::cached_program_t SortProgramFactory::create(
         index_tensor_output_cb_index,
         Ht,
         Wt,
-        static_cast<uint32_t>(std::log2(Wt)),
         static_cast<uint32_t>(attributes.descending),
         static_cast<uint32_t>(attributes.stable)};
     const std::string compute_kernel_path =

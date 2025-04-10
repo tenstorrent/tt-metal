@@ -28,8 +28,10 @@ void kernel_main() {
         .page_size = value_tensor_tile_size_bytes,
         .data_format = value_tensor_data_format};
 
+    // Index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_output_cb_index);
     const DataFormat index_tensor_output_data_format = get_dataformat(index_tensor_output_cb_index);
+
     const InterleavedAddrGenFast<index_tensor_is_dram> interleaved_accessor1 = {
         .bank_base_address = index_tensor_buffer_addr,
         .page_size = index_tensor_output_tile_size_bytes,
@@ -39,8 +41,8 @@ void kernel_main() {
         // Value tensor
         for (uint32_t w = 0; w < Wt; w++) {
             cb_wait_front(value_tensor_cb_index, one_tile);
-            const uint32_t l1_write_addr = get_read_ptr(value_tensor_cb_index);
-            noc_async_write_tile(h * Wt + w, interleaved_accessor0, l1_write_addr);
+            const uint32_t l1_write_addr_val = get_read_ptr(value_tensor_cb_index);
+            noc_async_write_tile(h * Wt + w, interleaved_accessor0, l1_write_addr_val);
             noc_async_write_barrier();
             cb_pop_front(value_tensor_cb_index, one_tile);
         }
@@ -48,10 +50,11 @@ void kernel_main() {
         // Index tensor
         for (uint32_t w = 0; w < Wt; w++) {
             cb_wait_front(index_tensor_output_cb_index, one_tile);
-            const uint32_t l1_write_addr_2 = get_read_ptr(index_tensor_output_cb_index);
-            noc_async_write_tile(h * Wt + w, interleaved_accessor1, l1_write_addr_2);
+            const uint32_t l1_write_addr_index = get_read_ptr(index_tensor_output_cb_index);
+            noc_async_write_tile(h * Wt + w, interleaved_accessor1, l1_write_addr_index);
             noc_async_write_barrier();
             cb_pop_front(index_tensor_output_cb_index, one_tile);
         }
+
     }  // Ht loop
 }
