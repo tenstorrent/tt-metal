@@ -318,9 +318,10 @@ def test_llama_model_inference(
                 )
                 tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
                 tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-                    tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
+                    tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids
                 )
-
+                logger.info(f"TT input token shape: {tt_out_rm.shape}")
+                logger.info(f"TT output token shape: {tt_out_tok.shape}")
                 tt_out_tok = ttnn.to_torch(
                     tt_out_tok,
                     mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -328,7 +329,7 @@ def test_llama_model_inference(
                         dims=(3, 1) if model_args.is_galaxy else (1, 3),
                         mesh_shape=model_args.cluster_shape,
                     ),
-                )[0, 0, 0, :32].view(32, 1)
+                )[0, 0, :32, 0].view(32, 1)
                 for tttt in range(1, 32):
                     tt_out_tok[tttt][0] = 0
                 # print(tt_out_tok.shape, tt_out_tok_host.shape)
