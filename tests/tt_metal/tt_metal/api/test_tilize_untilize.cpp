@@ -429,10 +429,10 @@ TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
         const auto& data = get_test_data<Type>();
         tt::stl::Span<const Type> input(data.data(), n_elements);
 
-        auto converted = reference::convert_layout(
+        auto converted = convert_layout(
             input, shape, from_layout, to_layout, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
 
-        auto converted_back = reference::convert_layout(
+        auto converted_back = convert_layout(
             tt::stl::MakeConstSpan(converted),
             shape,
             to_layout,
@@ -464,10 +464,11 @@ INSTANTIATE_TEST_SUITE_P(
             TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
         ::testing::Values(
             TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
-        ::testing::Values(std::nullopt),  // tile_shape
-        ::testing::Values(std::nullopt),  // face_shape
-        ::testing::Values(false),         // transpose_within_face  true doesn't work even in reference
-        ::testing::Values(false)          // transpose_of_faces     true doesn't work even in reference
+        ::testing::Values(
+            std::nullopt, PhysicalSize{16, 16}),  // tile_shape. Sometimes tile shape == face shape in real scenarios
+        ::testing::Values(std::nullopt),          // face_shape
+        ::testing::Values(false),                 // transpose_within_face  true doesn't work even in reference
+        ::testing::Values(false)                  // transpose_of_faces     true doesn't work even in reference
         ));
 
 // Test that tilize and then untilize give the same result as the original data

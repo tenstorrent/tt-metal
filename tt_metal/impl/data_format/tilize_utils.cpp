@@ -135,14 +135,27 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
         return result;
     }
 
-    result.reserve(in_tile_swizzled.size());
     auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
     auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
     auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
+
+    // No conversion is required is tile shape is the same as face shape
+    if (tile_H == face_H && tile_W == face_W) {
+        return std::vector<T>(in_tile_swizzled.begin(), in_tile_swizzled.end());
+    }
+
     TT_FATAL(in_tile_swizzled.size() % tile_HW == 0, "Input size must be divisible by tile size");
+    TT_FATAL(
+        tile_H == face_H * 2 && tile_W == face_W * 2,
+        "Tile shape must be twice the face shape. Tile: {}x{}, Face: {}x{}",
+        tile_H,
+        tile_W,
+        face_H,
+        face_W);  // Check if we actually might need tile_H > face_H * 2
+    result.reserve(in_tile_swizzled.size());
     int num_tiles = in_tile_swizzled.size() / tile_HW;
     for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         std::vector<T> top_left, top_right, bottom_left, bottom_right;
@@ -324,15 +337,12 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
         for (uint32_t row_tile = 0; row_tile < row_tiles; row_tile++) {
             uint32_t row_tile_start = tile_start;
             for (uint32_t col_tile = 0; col_tile < col_tiles; col_tile++) {
-                uint32_t face0_id = row_tile_start;
-                uint32_t face1_id = face0_id + face_W;
-                uint32_t face2_id = face0_id + W * face_H;
-                uint32_t face3_id = face2_id + face_W;
-
-                write_face(face0_id, face_H, face_W, W);
-                write_face(face1_id, face_H, face_W, W);
-                write_face(face2_id, face_H, face_W, W);
-                write_face(face3_id, face_H, face_W, W);
+                for (int face_h_index = 0; face_h_index < tile_H / face_H; face_h_index++) {
+                    for (int face_w_index = 0; face_w_index < tile_W / face_W; face_w_index++) {
+                        uint32_t src_idx = row_tile_start + face_w_index * face_W + face_h_index * face_H * W;
+                        write_face(src_idx, face_H, face_W, W);
+                    }
+                }
                 row_tile_start += tile_W;
             }
             tile_start += row_of_tiles_num_elements;
