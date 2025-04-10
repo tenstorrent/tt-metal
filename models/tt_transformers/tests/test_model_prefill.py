@@ -12,7 +12,7 @@ from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -97,6 +97,17 @@ def test_model_inference(
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
     tokenizer = model_args.tokenizer
+
+    perf_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.73}
+    acc_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.75}
+    # This sets the minimum PCC for each iteration based on optimization mode
+    if optimizations == ModelOptimizations.accuracy:
+        default_pcc = 0.91  # TODO Look on improving PCC
+        pcc = acc_pcc_map.get(model_args.model_name, default_pcc)
+    else:  # performance mode
+        assert optimizations == ModelOptimizations.performance
+        default_pcc = 0.869  # TODO Look on improving PCC
+        pcc = perf_pcc_map.get(model_args.model_name, default_pcc)
 
     logger.info("Loading weights...")
     state_dict_prefix = model_args.get_state_dict_prefix("", None)

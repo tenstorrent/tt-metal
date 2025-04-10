@@ -15,7 +15,7 @@ import ttnn
 
 
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
+from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json, CheckpointType
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
@@ -262,11 +262,25 @@ def prepare_generator_args(
             False,  # ci_only
             1,  # data_parallel
         ),
-        (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
+        (  # Long-context 64k run - Single user, long prompt (adapted to the model being used and architecture)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+        ),
+        (  # Long-context 16k run - Single user, long prompt (adapted to the model being used and architecture)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
@@ -395,7 +409,8 @@ def prepare_generator_args(
     ids=[
         "batch-1",  # latency
         "batch-32",  # throughput
-        "long-context",  # max-length
+        "long-context-64k",  # 64k context, max_seq_len=128k
+        "long-context-16k",  # 32k context, max_seq_len=32k
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
         "ci-32",  # CI batch 32
@@ -494,12 +509,22 @@ def test_demo_text(
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
     llama_dir = os.getenv("LLAMA_DIR")
-    if is_ci_env and num_devices == 32 and (data_parallel > 4 or (data_parallel == 4 and "3.1-70B" not in llama_dir)):
-        pytest.skip("CI runs only Llama3 70b DP = 4, TP = 8 on TG")
-    if is_ci_env and num_devices == 8 and data_parallel > 1 and not ("3.2-1B" in llama_dir or "3.1-8B" in llama_dir):
-        pytest.skip("CI runs only hybrid Llama3 1b and 8b on T3K")
-    if is_ci_env and data_parallel > 1 and batch_size > 1:
-        pytest.skip("CI runs only hybrid with batch 1 per submesh")
+    if llama_dir:
+        if (
+            is_ci_env
+            and num_devices == 32
+            and (data_parallel > 4 or (data_parallel == 4 and "3.1-70B" not in llama_dir))
+        ):
+            pytest.skip("CI runs only Llama3 70b DP = 4, TP = 8 on TG")
+        if (
+            is_ci_env
+            and num_devices == 8
+            and data_parallel > 1
+            and not ("3.2-1B" in llama_dir or "3.1-8B" in llama_dir)
+        ):
+            pytest.skip("CI runs only hybrid Llama3 1b and 8b on T3K")
+        if is_ci_env and data_parallel > 1 and batch_size > 1:
+            pytest.skip("CI runs only hybrid with batch 1 per submesh")
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
@@ -543,6 +568,11 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
     )
+
+    if (model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (max_seq_len > model_args[0].max_context_len):
+        logger.info(f"Override max_seq_len to {model_args[0].max_context_len} for HuggingFace checkpoint")
+        max_seq_len = model_args[0].max_context_len
+
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
