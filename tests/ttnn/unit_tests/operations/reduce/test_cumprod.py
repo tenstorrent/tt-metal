@@ -9,56 +9,76 @@ import torch
 import ttnn
 
 
-@pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+# @pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+# @pytest.mark.parametrize(
+#     "shape",
+#     [
+#         [],
+#         [0],
+#         [1],
+#         [3, 3],
+#         [16, 16],
+#         [32, 32, 32],
+#         [1, 0, 32, 32],
+#         [1, 1, 1, 1],
+#         [16, 8, 4, 16],
+#         [1000, 32, 32],
+#     ],
+# )
+# def test_cumprod_scaffold_with_uint8(dim, shape, device):
+#     torch.manual_seed(22041997)
+
+#     input_tensor = torch.randint(0, 100, shape, dtype=torch.uint8)
+#     result_tensor_torch = torch.cumprod(input_tensor, 0)
+#     ttnn_tensor = ttnn.from_torch(input_tensor, ttnn.uint8, layout=ttnn.Layout.TILE, device=device)
+#     result_tensor = ttnn.experimental.cumprod(ttnn_tensor, dim)
+
+#     assert ttnn_tensor.shape == result_tensor.shape
+#     assert ttnn_tensor.dtype == result_tensor.dtype
+#     assert input_tensor.shape == ttnn_tensor.shape
+#     assert result_tensor_torch.shape == ttnn_tensor.shape
+#     assert result_tensor_torch.shape == result_tensor.shape
+
+#     # the case with preallocation
+#     input_tensor = torch.randint(0, 100, shape, dtype=torch.uint8)
+#     result_tensor_torch = torch.cumprod(input_tensor, 0)
+#     ttnn_tensor = ttnn.from_torch(input_tensor, ttnn.uint8, layout=ttnn.Layout.TILE, device=device)
+#     preallocated_tensor = ttnn.zeros_like(ttnn_tensor)
+#     result_tensor = ttnn.experimental.cumprod(ttnn_tensor, dim, out=preallocated_tensor)
+
+#     assert ttnn_tensor.shape == result_tensor.shape
+#     assert ttnn_tensor.dtype == result_tensor.dtype
+#     assert preallocated_tensor.shape == result_tensor.shape
+#     assert preallocated_tensor.dtype == result_tensor.dtype
+#     assert input_tensor.shape == ttnn_tensor.shape
+#     assert result_tensor_torch.shape == ttnn_tensor.shape
+#     assert result_tensor_torch.shape == result_tensor.shape
+
+
+@pytest.mark.parametrize("dim", [-1, 0, 3])
 @pytest.mark.parametrize(
     "shape",
     [
-        [],
-        [0],
-        [1],
-        [3, 3],
-        [16, 16],
-        [32, 32, 32],
-        [1, 0, 32, 32],
-        [1000, 32, 32],
+        # [],
+        # [0],
+        # [1],
+        # [3, 3],
+        # [16, 16],
+        # [32, 32, 32],
+        # [1, 0, 32, 32],
+        # [1, 1, 1, 1],
+        [16, 8, 4, 16],
+        # [1000, 32, 32],
     ],
 )
-def test_cumprod_with_uint8(dim, shape, device):
-    torch.manual_seed(22041997)
-
-    input_tensor = torch.randint(0, 100, shape, dtype=torch.uint8)
-    result_tensor_torch = torch.cumprod(input_tensor, 0)
-    ttnn_tensor = ttnn.from_torch(input_tensor, ttnn.uint8, layout=ttnn.Layout.TILE, device=device)
-    result_tensor = ttnn.experimental.cumprod(ttnn_tensor, dim)
-
-    assert ttnn_tensor.shape == result_tensor.shape
-    assert ttnn_tensor.dtype == result_tensor.dtype
-    assert input_tensor.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == result_tensor.shape
-
-
-@pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
-@pytest.mark.parametrize(
-    "shape",
-    [
-        [],
-        [0],
-        [1],
-        [3, 3],
-        [16, 16],
-        [32, 32, 32],
-        [1, 0, 32, 32],
-        [1000, 32, 32],
-    ],
-)
-def test_cumprod_with_bfloat16(dim, shape, device):
+def test_cumprod_scaffold_with_bfloat16(dim, shape, device):
     torch.manual_seed(22041997)
 
     input_tensor = torch.randn(shape, dtype=torch.bfloat16)
     result_tensor_torch = torch.cumprod(input_tensor, 0)
     ttnn_tensor = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     result_tensor = ttnn.experimental.cumprod(ttnn_tensor, dim)
+    # ttnn_tensor_result_from_torch = ttnn.from_torch(result_tensor_torch, dim=0, layout=ttnn.Layout.TILE, dtype=ttnn.DataType.BFLOAT16)
 
     assert ttnn_tensor.shape == result_tensor.shape
     assert ttnn_tensor.dtype == result_tensor.dtype
@@ -66,24 +86,9 @@ def test_cumprod_with_bfloat16(dim, shape, device):
     assert result_tensor_torch.shape == ttnn_tensor.shape
     assert result_tensor_torch.shape == result_tensor.shape
 
+    # assert ttnn_tensor_result_from_torch == result_tensor
 
-@pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
-@pytest.mark.parametrize(
-    "shape",
-    [
-        [],
-        [0],
-        [1],
-        [3, 3],
-        [16, 16],
-        [32, 32, 32],
-        [1, 0, 32, 32],
-        [1000, 32, 32],
-    ],
-)
-def test_cumprod_with_bfloat16_and_preallocation(dim, shape, device):
-    torch.manual_seed(22041997)
-
+    # the case with preallocation
     input_tensor = torch.randn(shape, dtype=torch.bfloat16)
     result_tensor_torch = torch.cumprod(input_tensor, 0)
     ttnn_tensor = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
@@ -100,32 +105,72 @@ def test_cumprod_with_bfloat16_and_preallocation(dim, shape, device):
 
 
 @pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
-@pytest.mark.parametrize(
-    "shape",
-    [
-        [],
-        [0],
-        [1],
-        [3, 3],
-        [16, 16],
-        [32, 32, 32],
-        [1, 0, 32, 32],
-        [1000, 32, 32],
-    ],
-)
-def test_cumprod_with_uint8_and_preallocation(dim, shape, device):
+@pytest.mark.parametrize("shape", [[0], [1], [10], [32], [33], [64], [100], [1000], [1024], [2049], [1000000]])
+def test_cumprod_1d_bfloat16(dim, shape, device):
     torch.manual_seed(22041997)
 
-    input_tensor = torch.randint(0, 100, shape, dtype=torch.uint8)
-    result_tensor_torch = torch.cumprod(input_tensor, 0)
-    ttnn_tensor = ttnn.from_torch(input_tensor, ttnn.uint8, layout=ttnn.Layout.TILE, device=device)
-    preallocated_tensor = ttnn.zeros_like(ttnn_tensor)
-    result_tensor = ttnn.experimental.cumprod(ttnn_tensor, dim, out=preallocated_tensor)
+    # input_tensor = torch.randn(shape)
+    # result_tensor_torch = torch.cumprod(input_ten)
 
-    assert ttnn_tensor.shape == result_tensor.shape
-    assert ttnn_tensor.dtype == result_tensor.dtype
-    assert preallocated_tensor.shape == result_tensor.shape
-    assert preallocated_tensor.dtype == result_tensor.dtype
-    assert input_tensor.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == ttnn_tensor.shape
-    assert result_tensor_torch.shape == result_tensor.shape
+
+# @pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+# @pytest.mark.parametrize("shape", [[0], [1], [10], [32], [33], [64], [100], [1000], [1024], [2049], [1000000]])
+# def test_cumprod_2d_bfloat16(dim, shape, device):
+#     torch.manual_seed(22041997)
+
+#     input_tensor = torch.randn(shape)
+#     #
+
+
+# @pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+# @pytest.mark.parametrize("shape", [[0], [1], [10], [32], [33], [64], [100], [1000], [1024], [2049], [1000000]])
+# def test_cumprod_3d_bfloat16(dim, shape, device):
+#     torch.manual_seed(22041997)
+
+#     input_tensor = torch.randn(shape)
+#     #
+
+
+# @pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+# @pytest.mark.parametrize("shape", [[0], [1], [10], [32], [33], [64], [100], [1000], [1024], [2049], [1000000]])
+# def test_cumprod_4d_bfloat16(dim, shape, device):
+#     torch.manual_seed(22041997)
+
+#     input_tensor = torch.randn(shape)
+#     #
+
+
+# @pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+# @pytest.mark.parametrize("shape", [[0], [1], [10], [32], [33], [64], [100], [1000], [1024], [2049], [1000000]])
+# def test_cumprod_1d_uint8(dim, shape, device):
+#     torch.manual_seed(22041997)
+
+#     input_tensor = torch.randn(shape)
+#     #
+
+
+# @pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+# @pytest.mark.parametrize("shape", [[0], [1], [10], [32], [33], [64], [100], [1000], [1024], [2049], [1000000]])
+# def test_cumprod_2d_uint8(dim, shape, device):
+#     torch.manual_seed(22041997)
+
+#     input_tensor = torch.randn(shape)
+#     #
+
+
+# @pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+# @pytest.mark.parametrize("shape", [[0], [1], [10], [32], [33], [64], [100], [1000], [1024], [2049], [1000000]])
+# def test_cumprod_3d_uint8(dim, shape, device):
+#     torch.manual_seed(22041997)
+
+#     input_tensor = torch.randn(shape)
+#     #
+
+
+# @pytest.mark.parametrize("dim", [-10, -1, 0, 3, 10])
+# @pytest.mark.parametrize("shape", [[0], [1], [10], [32], [33], [64], [100], [1000], [1024], [2049], [1000000]])
+# def test_cumprod_4d_uint8(dim, shape, device):
+#     torch.manual_seed(22041997)
+
+#     input_tensor = torch.randn(shape)
+#

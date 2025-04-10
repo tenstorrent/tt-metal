@@ -4,15 +4,10 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include "pybind11/pybind_fwd.hpp"
 
-#include "cpp/pybind11/decorators.hpp"
-
-#include "ttnn/operations/experimental/reduction/cumprod/cumprod.hpp"
-#include "ttnn/types.hpp"
 namespace ttnn::operations::experimental::reduction::cumprod::detail {
-
+namespace py = pybind11;
 void bind_cumprod_operation(py::module& module);
 
 }  // namespace ttnn::operations::experimental::reduction::cumprod::detail

@@ -5,25 +5,25 @@
 #pragma once
 
 #include <optional>
+#include <type_traits>
 #include <variant>
 
+#include "hostdevcommon/kernel_structs.h"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
-using tt::tt_metal::MemoryConfig;
-using tt::tt_metal::Tensor;
-using tt::tt_metal::TensorLayout;
-using tt::tt_metal::TensorSpec;
+using namespace tt::tt_metal;
+using namespace tt::stl;
 
 struct CumprodDeviceOperation {
     struct operation_attributes_t {
         const int32_t dim;
-        const tt::tt_metal::MemoryConfig output_memory_config;
+        const DataType dtype;
+        const MemoryConfig output_memory_config;
     };
 
     struct tensor_args_t {
@@ -32,15 +32,22 @@ struct CumprodDeviceOperation {
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
-
     using tensor_return_value_t = Tensor;
-    struct CumprodProgramFactory {
+
+    struct SingleCoreCumprodProgramFactory {
+        static constexpr uint32_t CB_NUM_TILES{2};
+        enum class CumprodCB : std::underlying_type_t<tt::CBIndex> { SRC, ACC, DST, CB_COUNT };
+
+        static constexpr std::array<const char*, static_cast<uint32_t>(CumprodCB::CB_COUNT)> KERNEL_PATHS{
+            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/dataflow/cumprod_sc_reader.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/compute/cumprod_single_core.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/dataflow/cumprod_sc_writer.cpp"};
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            std::size_t num_cores;
-            std::size_t num_cores_y;
+            KernelHandle cumprod_reader_kernel_id;
+            KernelHandle cumprod_compute_kernel_id;
+            KernelHandle cumprod_writer_kernel_id;
         };
+
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
@@ -53,37 +60,44 @@ struct CumprodDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+
+        static CBHandle create_cb(
+            Program& program, const DataType& dtype, const CumprodCB& cumprod_cb, const CoreCoord& core);
+
+        static KernelHandle create_kernel(
+            Program& program,
+            const CoreCoord& core,
+            const CumprodCB& cumprod_cb,
+            const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+            const std::vector<uint32_t>& runtime_args = {});
     };
 
-    using program_factory_t = std::variant<CumprodProgramFactory>;
-
+    using program_factory_t = std::variant<SingleCoreCumprodProgramFactory>;
     using invocation_result_t = std::tuple<operation_attributes_t, tensor_args_t>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    // Validate the operation when it creates a program. Usually will have more checks
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    // Validate the operation when it reuses a program. Usually will have less checks
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
-    // Compute the output specs based on the operation attributes and tensor args
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    static hash::hash_t compute_program_hash(const operation_attributes_t& args, const tensor_args_t& tensor_args);
 
     static invocation_result_t invoke(
         const Tensor& input_tensor,
         const int32_t dim,
-        std::optional<Tensor> optional_out,
-        const MemoryConfig& memory_confi,
+        const std::optional<DataType>& dtype,
+        const std::optional<Tensor>& optional_out,
+        const MemoryConfig& memory_config,
         const QueueId& queue_id = DefaultQueueId);
 };
 
 }  // namespace ttnn::operations::experimental::reduction
 
-// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::cumprod
 namespace ttnn::prim {
 constexpr auto cumprod = ttnn::
     register_operation<"ttnn::prim::cumprod", ttnn::operations::experimental::reduction::CumprodDeviceOperation>();

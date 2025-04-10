@@ -3,159 +3,134 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cumprod_device_operation.hpp"
+#include "tt-metalium/base_types.hpp"
+#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/constants.hpp"
+#include "tt-metalium/host_api.hpp"
+#include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/util.hpp"
+#include "ttnn/tensor/types.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::reduction {
-CumprodDeviceOperation::CumprodProgramFactory::cached_program_t CumprodDeviceOperation::CumprodProgramFactory::create(
+CumprodDeviceOperation::SingleCoreCumprodProgramFactory::cached_program_t
+CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
+    using namespace tt::constants;
     using namespace tt::tt_metal;
+    using namespace tt::tt_metal::detail;
 
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto& output_tensor = tensor_return_value;
+    const auto& input_tensor{tensor_args.input_tensor};
+    auto& output_tensor{tensor_return_value};
+    const auto& input_shape{input_tensor.get_padded_shape()};
+    const auto& dim{operation_attributes.dim};
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    Program program{};
 
-    tt::tt_metal::Program program{};
+    IDevice* device{input_tensor.device()};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
-    uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
+    auto src_buffer{input_tensor.buffer()};
+    auto dst_buffer{output_tensor.buffer()};
 
-    uint32_t num_tiles = input_tensor.volume() / tt::constants::TILE_HW;
+    constexpr CoreCoord core{1, 1};
 
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    auto cb_src{create_cb(program, input_tensor.get_dtype(), CumprodCB::SRC, core)};
+    auto cb_acc{create_cb(program, output_tensor.get_dtype(), CumprodCB::ACC, core)};
+    auto cb_dst{create_cb(program, output_tensor.get_dtype(), CumprodCB::DST, core)};
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    const uint32_t src_is_dram{src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
+    const uint32_t dst_is_dram{dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_tiles = 2;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.get_dtype())};
+    const bool fp32_dest_acc_en{
+        (dst_cb_data_format == tt::DataFormat::Float32) || (dst_cb_data_format == tt::DataFormat::Int32) ||
+        (dst_cb_data_format == tt::DataFormat::UInt32)};
+    const uint32_t height_tiles{input_shape[2] / constants::TILE_HEIGHT};
+    const uint32_t width_tiles{input_shape[3] / constants::TILE_WIDTH};
 
-    uint32_t output_cb_index = tt::CBIndex::c_2;
-    uint32_t num_output_tiles = 2;
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
-            .set_page_size(output_cb_index, single_tile_size_output);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    const std::vector<uint32_t> compile_args{
+        src_is_dram,
+        dst_is_dram,
+        static_cast<uint32_t>(CumprodCB::SRC),
+        static_cast<uint32_t>(CumprodCB::ACC),
+        static_cast<uint32_t>(CumprodCB::DST),
+        input_shape[0],
+        input_shape[1],
+        height_tiles,
+        width_tiles};
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    const ReaderDataMovementConfig reader_config{compile_args};
+    const ComputeConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = false,
+        .compile_args = compile_args};
+    const WriterDataMovementConfig writer_config{compile_args};
 
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        num_tiles_per_core_group_1,  // per_core_block_cnt
-        1                            // per_core_block_size
-    };
-
-    bool math_approx_mode = false;
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-        core_group_1,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args_group_1});
-
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_tiles_per_core_group_2,  // per_core_block_cnt
-            1                            // per_core_block_size
-        };
-
-        auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-            core_group_2,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args_group_2});
-    }
-
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
-        } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
-        }
-
-        tt::tt_metal::SetRuntimeArgs(
-            program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
-
-        tt::tt_metal::SetRuntimeArgs(
-            program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
-        num_tiles_written += num_tiles_per_core;
-    }
+    auto cumprod_reader_kernel_id{create_kernel(program, core, CumprodCB::SRC, reader_config)};
+    auto cumprod_compute_sc_kernel_id{create_kernel(program, core, CumprodCB::ACC, compute_config)};
+    auto cumprod_writer_kernel_id{create_kernel(program, core, CumprodCB::DST, writer_config)};
 
     return {
         std::move(program),
-        {.unary_reader_kernel_id = unary_reader_kernel_id,
-         .unary_writer_kernel_id = unary_writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = num_cores_y}};
+        {.cumprod_reader_kernel_id = cumprod_reader_kernel_id,
+         .cumprod_compute_kernel_id = cumprod_compute_sc_kernel_id,
+         .cumprod_writer_kernel_id = cumprod_writer_kernel_id}};
 }
 
-// TODO(jbbieniek): inspect (and refine?)
-void CumprodDeviceOperation::CumprodProgramFactory::override_runtime_arguments(
+void CumprodDeviceOperation::SingleCoreCumprodProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
+    auto& program{cached_program.program};
+    const auto& cumprod_reader_kernel_id{cached_program.shared_variables.cumprod_reader_kernel_id};
+    const auto& cumprod_compute_kernel_id{cached_program.shared_variables.cumprod_compute_kernel_id};
+    const auto& cumprod_writer_kernel_id{cached_program.shared_variables.cumprod_writer_kernel_id};
 
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto& output_tensor = tensor_return_value;
+    auto src_buffer{tensor_args.input_tensor.buffer()};
+    auto dst_buffer{tensor_return_value.buffer()};
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
-
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-        }
-    }
+    constexpr CoreCoord core{1, 1};
+    auto& reader_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
+    reader_runtime_args[0] = src_buffer->address();
+    reader_runtime_args[1] = dst_buffer->address();
+    auto& compute_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
+    compute_runtime_args[0] = src_buffer->address();
+    compute_runtime_args[1] = dst_buffer->address();
+    auto& writer_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
+    writer_runtime_args[0] = src_buffer->address();
+    writer_runtime_args[1] = dst_buffer->address();
 }
+
+CBHandle CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create_cb(
+    Program& program, const DataType& dtype, const CumprodCB& cumprod_cb, const CoreCoord& core) {
+    using tt::tt_metal::detail::TileSize;
+    const uint32_t cb_id{static_cast<uint32_t>(cumprod_cb)};
+    const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
+    const uint32_t single_tile_size{TileSize(cb_data_format)};
+    const auto cb_config{CircularBufferConfig{CB_NUM_TILES * single_tile_size, {{cb_id, cb_data_format}}}.set_page_size(
+        cb_id, single_tile_size)};
+    return CreateCircularBuffer(program, core, cb_config);
+}
+
+KernelHandle CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create_kernel(
+    Program& program,
+    const CoreCoord& core,
+    const CumprodCB& cumprod_cb,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+    const std::vector<uint32_t>& runtime_args) {
+    const uint32_t cb_id{static_cast<uint32_t>(cumprod_cb)};
+    const auto& path_to_kernel{KERNEL_PATHS[cb_id]};
+
+    auto kernel_id{CreateKernel(program, path_to_kernel, core, config)};
+    // TODO(jbbieniekTT): make sure about this
+    // SetRuntimeArgs(program, kernel_id, core, runtime_args);
+
+    return kernel_id;
+}
+
 }  // namespace ttnn::operations::experimental::reduction
