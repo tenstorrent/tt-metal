@@ -155,8 +155,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
 
     // Tensor Info
-    // const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const uint32_t input_tensor_num_pages = 1;
     const auto input_tensor_cores = a.memory_config().shard_spec->grid;
     const auto output_tensor_cores = output.memory_config().shard_spec->grid;
     const auto output_tensor_shard_shape = output.memory_config().shard_spec->shape;
@@ -167,7 +165,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     uint32_t l1_scratch_cb_page_size_bytes = output_page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
-        input_tensor_num_pages / num_links +
+        1 / num_links +
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -839,7 +837,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         // Set all gather runtime args
 
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
-
+        // all_gather_rts Start at RT index 3 of writer
         std::vector<uint32_t> all_gather_rts = {
             semaphore.address(),        // out_ready_sem_bank_addr (absolute address)
             out_ready_sem_wait_value,   // out_ready_sem_wait_value
@@ -849,13 +847,13 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         if (i < num_links) {
             // Add RT values for the all gather core to all_gather_rts
             // Will be appended to the end of writer rt args
-            uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
-            uint32_t remainder = input_tensor_num_pages % num_links;
+            uint32_t base_pages_per_worker = 1 / num_links;
+            uint32_t remainder = 1 % num_links;
             uint32_t input_tile_id_start = i * base_pages_per_worker + std::min(i, remainder);
             uint32_t input_tile_id_end = (i + 1) * base_pages_per_worker + std::min(i + 1, remainder);
             uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
             uint32_t output_first_core_tile_start_offset =
-                (input_tensor_num_pages * ring_index + input_tile_id_start) % output_tensor_shard_num_pages;
+                (ring_index + input_tile_id_start) % output_tensor_shard_num_pages;
             std::vector<uint32_t> output_tensor_cores_x;
             std::vector<uint32_t> output_tensor_cores_y;
             for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
