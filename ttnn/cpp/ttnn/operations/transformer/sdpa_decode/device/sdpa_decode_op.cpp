@@ -72,6 +72,8 @@ void ScaledDotProductAttentionDecode::validate(
                     mask_shape[3],
                     k_shape[2]);
             }
+
+            TT_FATAL(k_chunk_size > 0, "Must provide k_chunk_size if using attention mask!");
             TT_FATAL(
                 mask_shape[3] % k_chunk_size == 0,
                 "Mask sequence length must be multiple of chunk size, got: {} and {}",
@@ -128,8 +130,10 @@ void ScaledDotProductAttentionDecode::validate(
         TT_FATAL(k_shape[3] == v_shape[3] && k_shape[3] == q_shape[3], "Q, K, V must have same hidden size");
 
         // Validate chunk size for paged version
+        // k_chunk_size can also be zero; if k_chunk_size = 0, figure it out in kernels
         TT_FATAL(k_chunk_size % 32 == 0, "Chunk size must be multiple of 32, got: {}", k_chunk_size);
         if (!this->is_causal) {
+            TT_FATAL(k_chunk_size > 0, "Must provide k_chunk_size if paged and non-causal!");
             TT_FATAL(
                 (page_table_shape[1] * k_shape[2]) % k_chunk_size == 0,
                 "K sequence length must be multiple of chunk size, got: {} and {}",
@@ -162,6 +166,7 @@ void ScaledDotProductAttentionDecode::validate(
         TT_FATAL(k_shape[-2] == v_shape[-2], "Error");
 
         // Validate chunk size for unpaged version
+        TT_FATAL(k_chunk_size > 0, "Must provide k_chunk_size if non-causal!");
         TT_FATAL(k_chunk_size % 32 == 0, "Chunk size must be multiple of 32, got: {}", k_chunk_size);
         TT_FATAL(
             k_shape[2] % k_chunk_size == 0,
