@@ -11,6 +11,7 @@
 #include <tt-metalium/dev_msgs.h>
 #include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <llrt/hal.hpp>
 #include <llrt/rtoptions.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
@@ -35,6 +36,7 @@ public:
 
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
+    Hal& hal();
     dispatch_core_manager& get_dispatch_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
 
@@ -54,6 +56,7 @@ private:
 
     llrt::RunTimeOptions rtoptions_;
     std::unique_ptr<Cluster> cluster_;
+    std::unique_ptr<Hal> hal_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
 };

@@ -151,7 +151,7 @@ private:
     StackSizeFunc stack_size_func_;
 
 public:
-    Hal();
+    Hal(tt::ARCH arch);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -351,25 +351,6 @@ inline const HalJitBuildConfig& Hal::get_jit_build_config(
     TT_ASSERT(programmable_core_type_index < this->core_info_.size());
     return this->core_info_[programmable_core_type_index].get_jit_build_config(processor_class_idx, processor_type_idx);
 }
-
-class HalSingleton : public Hal {
-private:
-    HalSingleton() = default;
-    HalSingleton(const HalSingleton&) = delete;
-    HalSingleton(HalSingleton&&) = delete;
-    ~HalSingleton() = default;
-
-    HalSingleton& operator=(const HalSingleton&) = delete;
-    HalSingleton& operator=(HalSingleton&&) = delete;
-
-public:
-    static inline HalSingleton& getInstance() {
-        static HalSingleton instance;
-        return instance;
-    }
-};
-
-inline auto& hal_ref = HalSingleton::getInstance();  // inline variable requires C++17
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig
 

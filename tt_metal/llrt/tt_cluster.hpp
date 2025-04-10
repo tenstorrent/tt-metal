@@ -87,7 +87,7 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    Cluster(llrt::RunTimeOptions& rtoptions);
+    Cluster(llrt::RunTimeOptions& rtoptions, tt_metal::Hal& hal);
     ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
@@ -398,8 +398,10 @@ private:
 
     uint32_t routing_info_addr_ = 0;
 
-    llrt::RunTimeOptions& rtoptions_;  // Cluster depends on RunTimeOptions to set up, but they're both
-                                       // initialized/accessed by MetalContext, so keep a local reference for init.
+    // Cluster depends on RunTimeOptions and Hal to set up, but they're all initialized/accessed by MetalContext, so
+    // keep a local reference for init.
+    llrt::RunTimeOptions& rtoptions_;
+    tt_metal::Hal& hal_;
 };
 
 }  // namespace tt

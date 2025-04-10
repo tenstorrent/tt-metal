@@ -13,6 +13,7 @@
 #include "tt_metal/impl/debug/debug_helpers.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/llrt/llrt.hpp"
+#include "tt_metal/llrt/get_platform_architecture.hpp"
 
 namespace tt::tt_metal {
 
@@ -46,13 +47,21 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
-MetalContext::MetalContext() { cluster_ = std::make_unique<Cluster>(rtoptions_); }
+MetalContext::MetalContext() {
+    hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_));
+    cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
+}
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 
 Cluster& MetalContext::get_cluster() {
     TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
     return *cluster_;
+}
+
+Hal& MetalContext::hal() {
+    TT_FATAL(hal_, "Trying to get hal before intializing it.");
+    return *hal_;
 }
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
