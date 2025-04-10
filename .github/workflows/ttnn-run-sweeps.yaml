@@ -325,6 +325,7 @@ on:
           - eltwise.binary.add.add_different_memory_configs
           - eltwise.binary.add.add_forge
           - eltwise.binary.add.add_llama
+          - eltwise.binary.add.add_ng_survey
           - eltwise.binary.atan2.atan2
           - eltwise.binary.atan2.atan2_sharded
           - eltwise.unary.gtz.gtz
@@ -347,6 +348,7 @@ on:
           - eltwise.unary_complex.angle_bw.angle_bw
           - eltwise.unary_complex.conj_bw
           - eltwise.binary.subtract.subtract
+          - eltwise.binary.subtract.subtract_ng_survey
           - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.subtract.subtract_forge
           - eltwise.binary.multiply.multiply
@@ -432,6 +434,17 @@ on:
           - eltwise.binary_backward.remainder_bw.remainder_bw
           - eltwise.binary_backward.rsub_bw.rsub_bw
           - eltwise.binary_backward.squared_difference_bw.squared_difference_bw
+          - eltwise.binary_ng.binary_ng
+          - eltwise.binary_ng.binary_ng_sub
+          - eltwise.binary_ng.binary_ng_mul
+          - eltwise.binary_ng.binary_ng_div
+          - eltwise.binary_ng.binary_ng_rsub
+          - eltwise.binary_ng.binary_ng_pow
+          - eltwise.binary_ng.binary_ng_activ
+          - eltwise.binary_ng.binary_ng_exp_ops
+          - eltwise.binary_ng.binary_ng_relational
+          - eltwise.binary_ng.binary_ng_logical
+          - eltwise.binary_ng.binary_ng_bitwise
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
@@ -447,6 +460,7 @@ on:
           - eltwise.composite.binary.maximum.maximum_pytorch2
           - eltwise.composite.binary.maximum.maximum_forge
           - eltwise.composite.binary.pow.pow_pytorch2
+          - eltwise.composite.binary.pow.pow_ng_survey
           - eltwise.composite.binary.pow.pow_scalar_pytorch2
           - eltwise.composite.binary.pow.pow_tensor_pytorch2
           - eltwise.ternary.addcmul.addcmul

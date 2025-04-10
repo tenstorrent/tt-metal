@@ -207,3 +207,60 @@ def test_binary_sfpu_pow_bug(device, input_shapes, dtype):
 
     pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
     assert pcc >= 0.999
+
+
+@skip_for_grayskull("Unsupported dtype for Grayskull")
+@pytest.mark.parametrize(
+    "dtype_a",
+    [
+        "bfloat8_b",
+        "bfloat4_b",
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype_b",
+    [
+        "bfloat8_b",
+        "bfloat4_b",
+    ],
+)
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.pow,
+        ttnn.experimental.pow,
+    ],
+)
+def test_binary_pow_block(device, dtype_a, dtype_b, ttnn_function):
+    if dtype_a != dtype_b:
+        pytest.skip("Mixed datatypes not supported in ttnn.pow")
+    torch_dtype_a = getattr(torch, "bfloat16")
+    ttnn_dtype_a = getattr(ttnn, dtype_a)
+    torch_dtype_b = getattr(torch, "bfloat16")
+    ttnn_dtype_b = getattr(ttnn, dtype_b)
+    x_torch = torch.tensor([[0.98828125, 0.47851562, 1.1875, -1.59375]], dtype=torch.bfloat16)
+    y_torch = torch.tensor([[0.0751953125, 0.53125, -0.6640625, 0.1533203125]], dtype=torch.bfloat16)
+    # torch_input_tensor_a = generate_torch_tensor(input_shapes, -30, 0, step=0.0111)
+    # torch_input_tensor_b = generate_torch_tensor(input_shapes, 0, 10)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype_a, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype_b, layout=ttnn.TILE_LAYOUT, device=device)
+    x_torch = ttnn.to_torch(x_tt)
+    y_torch = ttnn.to_torch(y_tt)
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, y_torch)
+    z_tt_pow = ttnn_function(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt_pow)
+
+    print("tt_out", tt_out)
+    print("z_torch", z_torch)
+
+    # output - bfloat8_b
+    # tt_out TorchTensor([[0., 0., 0., inf]])
+    # z_torch TorchTensor([[0.9988, 0.6804, 0.8922,    nan]])
+    # output - bfloat4_b
+    # tt_out TorchTensor([[0., 0., 0., inf]])
+    # z_torch TorchTensor([[1.0000, 0.7071, 0.8698,    nan]])
+
+    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.99
+    assert status
