@@ -105,11 +105,28 @@ void append_fabric_connection_rt_args(
     TT_FATAL(
         candidate_ethernet_cores.has_value(), "Could not find any fabric ethernet cores between src and dst chips");
 
-    TT_FATAL((link_idx + 1) <= candidate_ethernet_cores.value().size(), "link idx out of bounds");
+    TT_FATAL(link_idx < candidate_ethernet_cores.value().size(), "link idx out of bounds");
 
-    auto it = candidate_ethernet_cores.value().begin();
-    std::advance(it, link_idx);
-    auto fabric_router_channel = *it;
+    auto get_ordered_eth_chans = [&](const std::set<chan_id_t>& eth_chans) -> std::vector<chan_id_t> {
+        std::vector<std::pair<chan_id_t, CoreCoord>> ordered_eth_chans_cores;
+        auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(src_chip_id);
+        for (const auto& chan : eth_chans) {
+            ordered_eth_chans_cores.push_back(
+                std::make_pair(chan, soc_desc.get_eth_core_for_channel(chan, CoordSystem::VIRTUAL)));
+        }
+
+        std::sort(ordered_eth_chans_cores.begin(), ordered_eth_chans_cores.end(), [](const auto& a, const auto& b) {
+            return a.second.x < b.second.x;
+        });
+
+        std::vector<chan_id_t> ordered_eth_chans;
+        for (const auto& [chan, _] : ordered_eth_chans_cores) {
+            ordered_eth_chans.push_back(chan);
+        }
+        return ordered_eth_chans;
+    };
+
+    auto fabric_router_channel = get_ordered_eth_chans(candidate_ethernet_cores.value())[link_idx];
 
     const auto& edm_config = get_1d_fabric_config();
     CoreCoord fabric_router_virtual_core =

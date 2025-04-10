@@ -9,6 +9,7 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -43,7 +44,7 @@
 #include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
-#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include <tt-metalium/fabric_host_utils.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
@@ -1100,6 +1101,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
 
     fabric_program_ptr = std::make_unique<Program>();
     const auto edm_config = get_1d_fabric_config();
+    auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
 
     // Refactor this once mesh_id has row/col control
     // This currently checks if chip 0 is a corner chip
@@ -1115,10 +1117,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
             wrap_around_mesh);
 
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
-            auto eth_logical_core = tt::tt_metal::MetalContext::instance()
-                                        .get_cluster()
-                                        .get_soc_desc(device->id())
-                                        .get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+            auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 device,
                 *fabric_program_ptr,
@@ -1142,18 +1141,36 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
         edm_channels_mask += 0x1 << (uint32_t)router_chan;
     }
 
+    auto get_ordered_eth_chans = [&](const std::set<chan_id_t>& eth_chans) -> std::vector<chan_id_t> {
+        std::vector<std::pair<chan_id_t, CoreCoord>> ordered_eth_chans_cores;
+        for (const auto& chan : eth_chans) {
+            ordered_eth_chans_cores.push_back(
+                std::make_pair(chan, soc_desc.get_eth_core_for_channel(chan, CoordSystem::VIRTUAL)));
+        }
+
+        std::sort(ordered_eth_chans_cores.begin(), ordered_eth_chans_cores.end(), [](const auto& a, const auto& b) {
+            return a.second.x < b.second.x;
+        });
+
+        std::vector<chan_id_t> ordered_eth_chans;
+        for (const auto& [chan, _] : ordered_eth_chans_cores) {
+            ordered_eth_chans.push_back(chan);
+        }
+        return ordered_eth_chans;
+    };
+
     auto connect_downstream_builders = [&](RoutingDirection dir1, RoutingDirection dir2) {
         bool can_connect =
             (chip_neighbors.find(dir1) != chip_neighbors.end()) && (chip_neighbors.find(dir2) != chip_neighbors.end());
         if (can_connect) {
-            auto& eth_chans_dir1 = active_fabric_eth_channels.at(dir1);
-            auto& eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
+            auto eth_chans_dir1 = get_ordered_eth_chans(active_fabric_eth_channels.at(dir1));
+            auto eth_chans_dir2 = get_ordered_eth_chans(active_fabric_eth_channels.at(dir2));
 
             auto eth_chans_dir1_it = eth_chans_dir1.begin();
             auto eth_chans_dir2_it = eth_chans_dir2.begin();
 
             // since tunneling cores are not guaraneteed to be reserved on the same routing plane, iterate through
-            // the sorted eth channels in both directions
+            // the ordered eth channels in both directions
             while (eth_chans_dir1_it != eth_chans_dir1.end() && eth_chans_dir2_it != eth_chans_dir2.end()) {
                 auto eth_chan_dir1 = *eth_chans_dir1_it;
                 auto eth_chan_dir2 = *eth_chans_dir2_it;
@@ -1194,10 +1211,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
         eth_sender_ct_args.push_back(num_edm_chans);
         eth_sender_ct_args.push_back(edm_channels_mask);
 
-        auto eth_logical_core = tt::tt_metal::MetalContext::instance()
-                                    .get_cluster()
-                                    .get_soc_desc(device->id())
-                                    .get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+        auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
 
         if (is_local_handshake_master) {
             std::vector<uint32_t> router_zero_buf(1, 0);
@@ -1210,7 +1224,10 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
             "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
             eth_logical_core,
             tt::tt_metal::EthernetConfig{
-                .noc = tt_metal::NOC::NOC_0, .compile_args = eth_sender_ct_args, .defines = defines});
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = eth_sender_ct_args,
+                .defines = defines,
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
         tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, eth_sender_kernel, eth_logical_core, edm_kernel_rt_args);
     }

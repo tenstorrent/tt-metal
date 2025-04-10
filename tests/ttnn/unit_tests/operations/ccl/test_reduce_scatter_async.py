@@ -109,7 +109,6 @@ def run_reduce_scatter_test(
     trace_mode=False,
 ):
     assert num_iters > 0
-    enable_persistent_fabric = True
     if len(mesh_device.get_device_ids()) < num_devices:
         pytest.skip(
             f"Not enough devices on machine to implement test case. Wanted {num_devices} but found {len(mesh_device.get_device_ids())}"
@@ -159,7 +158,8 @@ def run_reduce_scatter_test(
     worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
     # create global semaphore handles
     from_remote_semaphore_handles = [
         create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
@@ -446,7 +446,6 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=0,
         use_reduce_scatter_async=True,
-        enable_persistent_fabric=True,
     )
 
 
@@ -514,7 +513,6 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=1,
         use_reduce_scatter_async=True,
-        enable_persistent_fabric=True,
     )
 
 
@@ -649,5 +647,4 @@ def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_po
         cluster_axis=1,
         trace_mode=trace_mode,
         use_reduce_scatter_async=True,
-        enable_persistent_fabric=True,
     )

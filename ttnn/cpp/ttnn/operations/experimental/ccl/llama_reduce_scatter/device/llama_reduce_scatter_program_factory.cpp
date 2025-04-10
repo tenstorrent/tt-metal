@@ -314,8 +314,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     tt::tt_metal::Program program{};
 
-    const auto& edm_config = tt::tt_fabric::get_default_fabric_config();
-    auto fabric_max_packet_size = edm_config.channel_buffer_size_bytes;
+    auto fabric_max_packet_size = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
     size_t packet_size_bytes = input_tensor.get_dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size)
                                                                               : fabric_max_packet_size;
     uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;
