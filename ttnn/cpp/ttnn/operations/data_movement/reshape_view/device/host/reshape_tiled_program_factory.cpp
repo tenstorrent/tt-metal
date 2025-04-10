@@ -381,6 +381,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     uint32_t page_idx_start = 0, page_idx_end = 0, total_pages = 0;
+    std::vector<CoreCoord> utilized_cores;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
@@ -402,9 +403,33 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
 
         page_idx_start += increment;
+        utilized_cores.push_back(c);
     }
 
-    return {.program = std::move(program)};
+    auto override_runtime_arguments_callback =
+        [reader_kernel_id,
+         writer_kernel_id,
+         utilized_cores,
+         // cache this tensor
+         mapping_tensor_device_buffer = mapping_tensor.device_buffer()](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            const auto input_buffer_addr = input_tensors.at(0).buffer()->address();
+            const auto output_buffer_addr = output_tensors.at(0).buffer()->address();
+
+            for (const auto& core : utilized_cores) {
+                auto& reader_runtime_args_core = GetRuntimeArgs(program, reader_kernel_id, core);
+                reader_runtime_args_core.at(0) = input_buffer_addr;
+
+                auto& writer_runtime_args_core = GetRuntimeArgs(program, writer_kernel_id, core);
+                writer_runtime_args_core.at(0) = output_buffer_addr;
+            }
+        };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 };  // namespace ttnn::operations::data_movement::reshape
