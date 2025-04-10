@@ -2063,7 +2063,7 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        position_embeddings = self.rotary_emb(x, position_ids)
+        position_embeddings = self.rotary_emb(x, x.shape[1])
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
