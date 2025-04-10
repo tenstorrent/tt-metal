@@ -51,6 +51,7 @@ def run_all_reduce_qkv_heads_perf_impl(
     output_shape,
     cluster_axis,
     input_dtype,
+    output_dtype,
     num_links,
     input_num_cores,
     output_num_cores,
@@ -217,6 +218,7 @@ def run_all_reduce_qkv_heads_perf_impl(
             topology=ALL_GATHER_TOPOLOGY,
             num_links=num_links,
             subdevice_id=worker_sub_device_id,
+            dtype=output_dtype,
         )  # [1, 1, 32, 1280]
 
         # Batch Slicing
@@ -285,6 +287,7 @@ def run_all_reduce_qkv_heads_perf_impl(
                     topology=ALL_GATHER_TOPOLOGY,
                     num_links=num_links,
                     subdevice_id=worker_sub_device_id,
+                    dtype=output_dtype,
                 )  # [1, 1, 32, 1280]
 
                 # Batch Slicing
@@ -321,6 +324,7 @@ def run_all_reduce_qkv_heads_perf_impl(
                 topology=ALL_GATHER_TOPOLOGY,
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
+                dtype=output_dtype,
             )  # [1, 1, 32, 1280]
 
             # Batch Slicing
@@ -709,6 +713,7 @@ def run_all_reduce_qkv_heads_impl(
     output_shape,
     cluster_axis,
     input_dtype,
+    output_dtype,
     num_links,
     input_num_cores,
     output_num_cores,
@@ -859,6 +864,7 @@ def run_all_reduce_qkv_heads_impl(
             topology=ALL_GATHER_TOPOLOGY,
             num_links=num_links,
             subdevice_id=worker_sub_device_id,
+            dtype=output_dtype,
         )  # [1, 1, 32, 1280]
 
         # Batch Slicing
@@ -1194,6 +1200,12 @@ def run_all_reduce_qkv_heads_fuse_impl(
 @pytest.mark.parametrize(
     "input_dtype",
     [
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_dtype",
+    [
         ttnn.bfloat16,
     ],
 )
@@ -1210,6 +1222,7 @@ def test_all_reduce_qkv_heads(
     output_shape,
     cluster_axis,
     input_dtype,
+    output_dtype,
     num_links,
     input_num_cores,
     output_num_cores,
@@ -1224,6 +1237,7 @@ def test_all_reduce_qkv_heads(
         output_shape,
         cluster_axis,
         input_dtype,
+        output_dtype,
         num_links,
         input_num_cores,
         output_num_cores,
@@ -1295,6 +1309,12 @@ def test_all_reduce_qkv_heads_fuse(
 @pytest.mark.parametrize(
     "input_dtype",
     [
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_dtype",
+    [
         ttnn.bfloat16,
     ],
 )
@@ -1315,6 +1335,7 @@ def test_all_reduce_qkv_heads_perf(
     output_shape,
     cluster_axis,
     input_dtype,
+    output_dtype,
     num_links,
     input_num_cores,
     output_num_cores,
@@ -1332,6 +1353,7 @@ def test_all_reduce_qkv_heads_perf(
         output_shape,
         cluster_axis,
         input_dtype,
+        output_dtype,
         num_links,
         input_num_cores,
         output_num_cores,
