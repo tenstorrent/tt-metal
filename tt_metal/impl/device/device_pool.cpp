@@ -737,6 +737,14 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
         Synchronize(dev);    // Synchronize device
     }
 
+    for (const auto& dev_id : devices_to_close) {
+        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        dev->close();
+        // When a device is closed, its worker thread is joined. Stop tracking this
+        // worker thread.
+        this->unregister_worker_thread_for_device(dev);
+    }
+
     // Terminate fabric routers
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_1d_fabric_config(fabric_config)) {
@@ -790,13 +798,6 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     }
 
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
-    for (const auto& dev_id : devices_to_close) {
-        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        dev->close();
-        // When a device is closed, its worker thread is joined. Stop tracking this
-        // worker thread.
-        this->unregister_worker_thread_for_device(dev);
-    }
 }
 
 DevicePool::~DevicePool() {
