@@ -137,11 +137,13 @@ void JitBuildEnv::init(
     std::string local_gpp_path = this->root_ + "runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++";
     std::string system_gpp_path = "/opt/tenstorrent/sfpi/compiler/bin/riscv32-unknown-elf-g++";
     if (std::filesystem::exists(local_gpp_path)) {
-        log_info(tt::LogBuildKernels, "Using local RISC-V g++ at {}", local_gpp_path);
         this->gpp_ += local_gpp_path + " ";
+        this->gpp_include_dir_ = this->root_ + "runtime/sfpi/include";
+        log_info(tt::LogBuildKernels, "Using local RISC-V g++ at {}", this->gpp_);
     } else if (std::filesystem::exists(system_gpp_path)) {
-        log_info(tt::LogBuildKernels, "Using system RISC-V g++ at {}", system_gpp_path);
         this->gpp_ += system_gpp_path + " ";
+        this->gpp_include_dir_ = "/opt/tenstorrent/sfpi/include";
+        log_info(tt::LogBuildKernels, "Using system RISC-V g++ at {}", this->gpp_);
     } else {
         TT_THROW("RISC-V g++ not found in {} or {}", local_gpp_path, system_gpp_path);
     }
@@ -435,7 +437,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " +
-        "-I" + env_.root_ + "runtime/sfpi/include " +
+        "-I" + env_.gpp_include_dir_ + " " +
         "-I" + env_.root_ + "tt_metal/hw/firmware/src " +
         "-I" + env_.root_ + "tt_metal/third_party/tt_llk/tt_llk_" + env.arch_name_ + "/llk_lib ";
     // clang-format on
