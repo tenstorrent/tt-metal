@@ -130,7 +130,10 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
                     ? input_tensor_q.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     uint32_t s = input_tensor_k.get_logical_shape()[-2];
-    uint32_t k_chunk_size = get_chunk_size(s);
+
+    // Use k_chunk_size as override; if k_chunk_size == 0, figure it out in kernels
+    // uint32_t k_chunk_size = get_chunk_size(s);
+    uint32_t k_chunk_size = 0;
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
         k_chunk_size = program_config.value().k_chunk_size;
         // assert chunk size must be power of 2 and multiple of 32
@@ -139,11 +142,6 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
             "User provided k_chunk_size must be power of 2, got: {}",
             k_chunk_size);
         TT_FATAL(k_chunk_size % 32 == 0, "User provided k_chunk_size must be multiple of 32, got: {}", k_chunk_size);
-    } else {
-        TT_FATAL(
-            k_chunk_size % 32 == 0,
-            "Chunk size must be multiple of 32, but the maximum calculated k_chunk_size is: {}",
-            k_chunk_size);
     }
 
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache

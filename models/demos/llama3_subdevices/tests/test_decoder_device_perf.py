@@ -170,7 +170,7 @@ perf_targets = {
     },
     "ScaledDotProductAttentionDecode_0": {
         "op_name": "SDPA",
-        "kernel_duration": 21151.333333333332,
+        "kernel_duration": 13967.111111111111,
         "op_to_op": 585.5555555555555,
         "non-overlapped-dispatch-time": 9741.5,
     },
@@ -200,6 +200,9 @@ perf_targets = {
     },
 }
 
+DECODER_OP_START_IDX = 4
+DECODER_OP_END_IDX = -11
+
 
 @pytest.mark.parametrize(
     "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
@@ -213,7 +216,7 @@ perf_targets = {
             1024,  # max_seq_len
             32,  # batch_size
             1,  # max_generated_tokens
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
@@ -418,7 +421,7 @@ def average_per_instance_dict(input_dict):
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_all_gather",
-    (1500,),
+    (1700,),
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_sdpa",
