@@ -71,3 +71,4 @@ runs:
         echo "TT_METAL_WATCHER=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+      shell: bash
