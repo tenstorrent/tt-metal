@@ -17,6 +17,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([(8732,), (8732,), (8732,)], 0, ttnn.ROW_MAJOR_LAYOUT),
         ([(123, 259), (123, 259), (123, 259)], -1, ttnn.TILE_LAYOUT),
         ([(1, 1, 253), (1, 1, 253), (1, 1, 253)], -3, ttnn.ROW_MAJOR_LAYOUT),
+        ([(120, 1, 253, 3), (120, 1, 253, 3), (120, 1, 253, 3), (120, 1, 253, 3)], 3, ttnn.ROW_MAJOR_LAYOUT),
+        ([(57, 83), (57, 83), (57, 83), (57, 83), (57, 83), (57, 83), (57, 83)], -1, ttnn.TILE_LAYOUT),
+        ([(24, 50, 83), (24, 50, 83), (24, 50, 83), (24, 50, 83), (24, 50, 83), (24, 50, 83)], 2, ttnn.TILE_LAYOUT),
     ],
 )
 def test_stack(device, input_shapes, dim, layout):
