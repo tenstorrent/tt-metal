@@ -83,7 +83,7 @@ void DeviceProfiler::readRiscProfilerResults(
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     std::vector<std::uint32_t> control_buffer;
-    const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+    const bool USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
     if (USE_FAST_DISPATCH) {
         if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
             if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
@@ -95,7 +95,12 @@ void DeviceProfiler::readRiscProfilerResults(
             }
         } else {
             control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
-            device->command_queue().enqueue_read_profiler_control_vector(worker_core, control_buffer.data(), true);
+            device->command_queue().enqueue_read_from_core_l1(
+                worker_core,
+                control_buffer.data(),
+                reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+                true);
         }
     } else {
         if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
