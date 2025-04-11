@@ -3,59 +3,62 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import tracemalloc
+import ttnn
 from models.utility_functions import (
     run_for_wormhole_b0,
 )
 import time
 from loguru import logger
-from models.demos.ttnn_resnet.demo.demo import run_resnet_imagenet_inference
+from models.demos.wormhole.resnet50.demo.demo import test_demo_trace_with_imagenet
+
+test_demo_trace_with_imagenet.__test__ = False
 
 # Define the duration for the test in seconds (24 hours)
 TEST_DURATION_SECONDS = 60 * 60 * 24
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, iterations",
-    ((16, 100),),
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
 )
-def test_resnet_stability(batch_size, iterations, imagenet_label_dict, model_location_generator, mesh_device):
+@pytest.mark.parametrize(
+    "batch_size, iterations, act_dtype, weight_dtype",
+    ((16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
+def test_resnet_stability(
+    mesh_device,
+    use_program_cache,
+    batch_size,
+    iterations,
+    imagenet_label_dict,
+    act_dtype,
+    weight_dtype,
+    model_location_generator,
+    enable_async_mode=True,
+):
     logger.info(f"Running ResNet stability test for {TEST_DURATION_SECONDS} seconds")
 
     start = time.time()
     iter = 0
-    tracemalloc.start()
-    with open("memory_leak_log.txt", "w") as f:
-        f.write(f"ResNet Stability Test Memory Stats\n\n")
 
-        while True:
-            snapshot1 = tracemalloc.take_snapshot()
-            iter += 1
+    while True:
+        iter += 1
 
-            run_resnet_imagenet_inference(
-                batch_size, iterations, imagenet_label_dict, model_location_generator, mesh_device
-            )
+        test_demo_trace_with_imagenet(
+            mesh_device,
+            use_program_cache,
+            batch_size,
+            iterations,
+            imagenet_label_dict,
+            act_dtype,
+            weight_dtype,
+            model_location_generator,
+            enable_async_mode=True,
+        )
 
-            snapshot2 = tracemalloc.take_snapshot()
-            stats = snapshot2.compare_to(snapshot1, "lineno")
+        if time.time() - start > TEST_DURATION_SECONDS:
+            break
 
-            f.write(f"Iteration {iter}\n")
-            for stat in stats[:10]:
-                f.write(str(stat) + "\n")
+        print(f"Completed iteration {iter}")
 
-            f.write("\n")
-
-            if time.time() - start > TEST_DURATION_SECONDS:
-                break
-
-            print(f"Completed iteration {iter}")
-
-            if iter == 1:
-                break
-
-        f.write(f"ResNet stability test completed after {iter} iterations\n")
-
-    logger.info(f"ResNet stability test completed after {iter} iterations")
-    print(time.time() - start)
+    logger.info(f"ResNet stability test completed after {iter} iterations and {time.time() - start} seconds")
