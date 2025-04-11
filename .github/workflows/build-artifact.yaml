@@ -52,6 +52,11 @@ on:
         type: boolean
         default: false
         description: "Profile the compilation"
+      build-umd-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "Build UMD tests"
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
