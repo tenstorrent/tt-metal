@@ -435,10 +435,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             .set_page_size(ex2_cb_index, single_tile_size);
     auto cb_ex2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_config);
 
-    uint32_t add_out_cb_index = tt::CBIndex::c_4;
-
     // ex_external2
-    uint32_t ex_cb_external2_index = tt::CBIndex::c_5;
+    uint32_t ex_cb_external2_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig ex_cb_external2_config =
         tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external2_index, cb_data_format}})
             .set_page_size(ex_cb_external2_index, single_tile_size);
@@ -447,7 +445,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     CBHandle cb_stats = 0;
 
     // in0 sharded
-    uint32_t in0_cb_index = tt::CBIndex::c_6;
+    uint32_t in0_cb_index = tt::CBIndex::c_5;
     tt::tt_metal::CircularBufferConfig in0_cb_config =
         tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
             .set_page_size(in0_cb_index, in_single_tile_size)
@@ -455,16 +453,14 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     auto cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
 
     // x
-    uint32_t x_cb_index = tt::CBIndex::c_7;
+    uint32_t x_cb_index = tt::CBIndex::c_6;
     tt::tt_metal::CircularBufferConfig x_cb_config =
         tt::tt_metal::CircularBufferConfig(x_CB_size, {{x_cb_index, cb_data_format}})
             .set_page_size(x_cb_index, single_tile_size);
     auto cb_x = tt::tt_metal::CreateCircularBuffer(program, all_cores, x_cb_config);
 
-    uint32_t in1_cb_index = tt::CBIndex::c_8;
-
     // out
-    uint32_t cb_to_allgather_writer = tt::CBIndex::c_9;
+    uint32_t cb_to_allgather_writer = tt::CBIndex::c_7;
     tt::tt_metal::CircularBufferConfig output_cb_config =
         tt::tt_metal::CircularBufferConfig(out_CB_size, {{cb_to_allgather_writer, out_data_format}})
             .set_page_size(cb_to_allgather_writer, out_single_tile_size);
@@ -472,7 +468,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CBIndex::c_10;
+    const auto reserved_packet_header_CB_index = tt::CBIndex::c_8;
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
@@ -481,6 +477,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, all_cores, cb_reserved_packet_header_config);
+
+    uint32_t add_out_cb_index = tt::CBIndex::c_9;
+    uint32_t in1_cb_index = tt::CBIndex::c_10;
 
     if (b) {
         tt::tt_metal::CircularBufferConfig add_out_cb_config =
@@ -851,7 +850,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             uint32_t remainder = 1 % num_links;
             uint32_t input_tile_id_start = i * base_pages_per_worker + std::min(i, remainder);
             uint32_t input_tile_id_end = (i + 1) * base_pages_per_worker + std::min(i + 1, remainder);
-            uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
             uint32_t output_first_core_tile_start_offset =
                 (ring_index + input_tile_id_start) % output_tensor_shard_num_pages;
             std::vector<uint32_t> output_tensor_cores_x;
@@ -878,8 +876,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
                                                    local_fabric_handle->uniquely_connect_worker(
                                                        device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
             std::vector<uint32_t> base_rt_args = {
-                output_tensor_shard_num_pages,        // num_tiles_per_core
-                worker_num_tiles_to_read,             // num_tiles_to_read
                 output_first_core_tile_start_offset,  // first_core_tile_start_offset
                 output_tensor_cores_x.size(),         // num_cores
                 drain_sync_core.x,                    // out_ready_sem_noc0_x
@@ -980,7 +976,10 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
     uint32_t block_wt,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel_config,
+    const GlobalSemaphore& semaphore,
+    const uint32_t ring_size,
+    const uint32_t num_links) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;

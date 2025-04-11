@@ -57,19 +57,16 @@ FORCE_INLINE void semaphore_and_write_and_advance_local_read_address_for_fabric_
     uint64_t semaphore_noc_addr,
     uint16_t val,
     uint16_t wrap,
-    bool flush = true) {
+    bool flush) {
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr;
 
-    pkt_hdr_forward->to_noc_fused_unicast_write_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc0_dest_noc_addr, semaphore_noc_addr, val, wrap, flush},
-        payload_size_bytes);
-    pkt_hdr_backward->to_noc_fused_unicast_write_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc0_dest_noc_addr, semaphore_noc_addr, val, wrap, flush},
-        payload_size_bytes);
-
     noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
     if (fabric_connection.has_forward_connection()) {
+        pkt_hdr_forward->to_noc_fused_unicast_write_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                noc0_dest_noc_addr, semaphore_noc_addr, val, wrap, flush},
+            payload_size_bytes);
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
@@ -78,6 +75,10 @@ FORCE_INLINE void semaphore_and_write_and_advance_local_read_address_for_fabric_
     }
 
     if (fabric_connection.has_backward_connection()) {
+        pkt_hdr_backward->to_noc_fused_unicast_write_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                noc0_dest_noc_addr, semaphore_noc_addr, val, wrap, flush},
+            payload_size_bytes);
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);

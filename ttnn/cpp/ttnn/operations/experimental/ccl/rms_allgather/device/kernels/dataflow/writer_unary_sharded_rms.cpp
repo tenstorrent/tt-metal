@@ -45,8 +45,6 @@ void kernel_main() {
         // Do this only on one of the cores
 
         // To do add these to Program Factory on i=0 case
-        uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
-        uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
         uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
         uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
         const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
@@ -104,9 +102,8 @@ void kernel_main() {
             static_cast<uint16_t>(1),  // increment 1
             32,
             false);
-        noc_async_writes_flushed();
-        cb_pop_front(cb_to_allgather_writer, num_tiles_to_read_this_core);
         fabric_connection.close_start();
+        cb_pop_front(cb_to_allgather_writer, num_tiles_to_read_this_core);
         // increment locally
         uint64_t out_ready_sem_noc_addr =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
