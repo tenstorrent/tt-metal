@@ -54,5 +54,4 @@ def test_upsample(
     ttnn_output = ttnn_output.reshape([batch_size, in_channels, height, width])
 
     ttnn_output = ttnn.to_torch(ttnn_output)
-    breakpoint()
-    assert_with_pcc(torch_output, ttnn_output, 0.977)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)

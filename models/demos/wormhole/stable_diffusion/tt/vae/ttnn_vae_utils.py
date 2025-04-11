@@ -57,7 +57,7 @@ def prepare_split_conv_weights_bias(
     ]
 
     # Split bias
-    if conv_in_channel_split_factor > 1:
+    if conv_out_channel_split_factor > 1:
         split_bias_tensors = list(torch.split(torch_bias_tensor, split_output_channels, 3))
     else:
         split_bias_tensors = [torch_bias_tensor]

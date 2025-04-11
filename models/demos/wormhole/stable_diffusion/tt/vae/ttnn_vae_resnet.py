@@ -173,9 +173,6 @@ class ResnetBlock:
             self.conv_config,
         )
 
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        hidden_states = ttnn.reshape(hidden_states, [1, self.input_height, self.input_width, self.out_channels])
-
         if self.conv_shortcut:
             input_tensor = split_conv_and_run(
                 input_tensor,
@@ -194,8 +191,8 @@ class ResnetBlock:
                 padding=0,
             )
 
-            input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-            input_tensor = ttnn.reshape(input_tensor, [1, self.input_height, self.input_width, self.out_channels])
+        if hidden_states.shape != input_tensor.shape:
+            hidden_states = ttnn.reshape(hidden_states, input_tensor.shape)
 
         hidden_states = ttnn.add(hidden_states, input_tensor, output_tensor=hidden_states)
         input_tensor.deallocate(True)
