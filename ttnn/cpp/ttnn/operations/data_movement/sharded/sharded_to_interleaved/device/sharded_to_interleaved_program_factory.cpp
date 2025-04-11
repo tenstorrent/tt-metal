@@ -116,7 +116,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     tt_metal::KernelHandle unary_writer_kernel_id;

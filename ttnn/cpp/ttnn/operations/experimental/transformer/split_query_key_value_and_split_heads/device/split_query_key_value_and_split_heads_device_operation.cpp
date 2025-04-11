@@ -21,7 +21,7 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(
             input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
 
-    if (input_tensor.is_sharded() == false) {
+    if (!input_tensor.is_sharded()) {
         TT_FATAL(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 2 to 9 for bert large TM ops!");
     } else {
         auto bbox = input_tensor.shard_spec().value().grid.bounding_box();

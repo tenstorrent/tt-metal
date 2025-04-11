@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
 
     // Determine if it passes performance goal
     auto avg_measured_bandwidth = calculate_average(measured_bandwidth);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // goal is 95% of theoretical peak using a single NOC channel
         // theoretical peak: 32bytes per clock cycle
         double target_bandwidth = 32.0 * 0.9;

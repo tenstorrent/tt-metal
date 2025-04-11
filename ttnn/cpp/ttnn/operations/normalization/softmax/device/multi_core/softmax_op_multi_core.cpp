@@ -155,12 +155,12 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
-    bool out0_is_dram = out0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool out0_is_dram = out0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       src0_is_dram};
     if (mask.has_value()) {
-        bool mask_is_dram = mask.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+        bool mask_is_dram = mask.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
         reader_compile_time_args.push_back(mask_is_dram);
     }
     if (causal_mask) {
@@ -681,7 +681,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     // reader compile arg
     bool is_dram_mask = false;
     if (mask.has_value()) {
-        is_dram_mask = mask->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+        is_dram_mask = mask->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
     }
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_wt, (std::uint32_t)is_dram_mask};
     std::map<string, string> softmax_defines;

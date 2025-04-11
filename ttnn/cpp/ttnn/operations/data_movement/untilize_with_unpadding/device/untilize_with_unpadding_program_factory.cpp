@@ -132,10 +132,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         block_row_size,
         block_row_leftover_size};
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};
 
-    bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t stick_size = unpadded_stick_size;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
@@ -996,7 +996,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
-        bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? true : false;
+        bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
         std::vector<uint32_t> writer_ct_args = {
             (uint32_t)out_is_dram,
             (uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or

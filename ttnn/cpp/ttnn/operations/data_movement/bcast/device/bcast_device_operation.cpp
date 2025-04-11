@@ -95,7 +95,7 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
     auto width_a = input_shape_a[-1];
     auto height_b = input_shape_b[-2];
     auto width_b = input_shape_b[-1];
-    if ((input_tensor_a.is_sharded() && this->dim == BcastOpDim::H) == false) {
+    if (!(input_tensor_a.is_sharded() && this->dim == BcastOpDim::H)) {
         uint32_t batch_size_b = get_batch_size(input_shape_b);
         if (batch_size_b != 1) {
             TT_FATAL(

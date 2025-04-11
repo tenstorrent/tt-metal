@@ -154,10 +154,10 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     auto trans_mat_buffer = trans_mat.buffer();
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool cos_is_dram = cos_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool sin_is_dram = sin_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool trans_mat_is_dram = trans_mat_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool cos_is_dram = cos_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool sin_is_dram = sin_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool trans_mat_is_dram = trans_mat_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_cb_index,
@@ -172,7 +172,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
         (std::uint32_t)seq_len_t,
         (std::uint32_t)head_dim_t,
     };
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
         (std::uint32_t)dst_is_dram,
