@@ -18,9 +18,13 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "bitwise_and_test": {
+    "tt_test_00": {
         "binary_op": [
             {"tt_op": "bitwise_and", "a_high": 1000, "b_high": 900, "a_low": -1000, "b_low": -900},
+            {"tt_op": "bitwise_or", "a_high": 1000, "b_high": 900, "a_low": -1000, "b_low": -900},
+            {"tt_op": "bitwise_xor", "a_high": 1000, "b_high": 900, "a_low": -1000, "b_low": -900},
+            {"tt_op": "bitwise_left_shift", "a_high": 1000, "b_high": 31, "a_low": -1000, "b_low": 0},
+            {"tt_op": "bitwise_right_shift", "a_high": 1000, "b_high": 31, "a_low": -1000, "b_low": 0},
         ],
         "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # for float32 and int32 dtypes
         "input_dtype": [
@@ -151,7 +155,7 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    ttnn_fn = ttnn.bitwise_and
+    ttnn_fn = getattr(ttnn, binary_op["tt_op"])
     a_high = binary_op["a_high"]
     b_high = binary_op["b_high"]
     a_low = binary_op["a_low"]
