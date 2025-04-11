@@ -109,6 +109,8 @@ public:
     CommandQueue* get_last_used_command_queue() const;
     void populate_dispatch_data(IDevice* device);
 
+    void update_runtime_info_from_descriptor(ProgramDescriptor&& descriptor);
+
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -200,6 +202,7 @@ private:
         const CoreRangeSet& core_range_set,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
+    CBHandle add_circular_buffer(const CBDescriptor& descriptor);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);

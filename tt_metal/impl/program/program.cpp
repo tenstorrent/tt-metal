@@ -628,6 +628,11 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     return add_circular_buffer_(circular_buffer);
 }
 
+CBHandle detail::ProgramImpl::add_circular_buffer(const CBDescriptor& descriptor) {
+    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(descriptor);
+    return add_circular_buffer_(circular_buffer);
+}
+
 CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
     return pimpl_->add_circular_buffer(core_range_set, config);
 }
@@ -637,6 +642,10 @@ CBHandle Program::add_circular_buffer(
     const CircularBufferConfig& config,
     const experimental::GlobalCircularBuffer& global_circular_buffer) {
     return pimpl_->add_circular_buffer(core_range_set, config, global_circular_buffer);
+}
+
+CBHandle Program::add_circular_buffer(const CBDescriptor& descriptor) {
+    return pimpl_->add_circular_buffer(descriptor);
 }
 
 std::shared_ptr<CircularBuffer> detail::ProgramImpl::get_circular_buffer(CBHandle cb_id) const {
@@ -1186,6 +1195,10 @@ void Program::generate_dispatch_commands(IDevice* device) {
 
 void Program::allocate_kernel_bin_buf_on_device(IDevice* device) { pimpl_->allocate_kernel_bin_buf_on_device(device); }
 
+void Program::update_runtime_info_from_descriptor(ProgramDescriptor&& descriptor) {
+    pimpl_->update_runtime_info_from_descriptor(std::move(descriptor));
+}
+
 void detail::ProgramImpl::compile(IDevice* device, bool fd_bootloader_mode) {
     //ZoneScoped;
     if (compiled_.contains(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
@@ -1474,6 +1487,46 @@ std::vector<uint32_t> &Program::get_program_config_sizes() const noexcept { retu
 
 std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_program_command_sequences() noexcept {
     return pimpl_->cached_program_command_sequences_;
+}
+
+void detail::ProgramImpl::update_runtime_info_from_descriptor(ProgramDescriptor&& descriptor) {
+    auto copy_runtime_args = [](Kernel& kernel_to, KernelDescriptor&& kernel_from) {
+        for (size_t i = 0; i < kernel_from.runtime_args.size(); i++) {
+            for (size_t j = 0; j < kernel_from.runtime_args[i].size(); j++) {
+                kernel_to.set_runtime_args(CoreCoord(i, j), kernel_from.runtime_args[i][j]);
+            }
+        }
+        auto common_to = kernel_to.common_runtime_args_data();
+        std::memcpy(
+            common_to.data(),
+            kernel_from.common_runtime_args.data(),
+            kernel_from.common_runtime_args.size() * sizeof(uint32_t));
+    };
+
+    for (size_t kernels_idx = 0, descriptor_kernels_idx = 0; kernels_idx < kernels_.size(); ++kernels_idx) {
+        auto& kernels = kernels_[kernels_idx];
+        for (auto& [id, kernel] : kernels) {
+            copy_runtime_args(*kernel, std::move(descriptor.kernels[descriptor_kernels_idx]));
+            descriptor_kernels_idx++;
+        }
+    }
+
+    bool should_invalidate_cb_allocation = false;
+    for (size_t circular_buffers_idx = 0; circular_buffers_idx < circular_buffers_.size(); ++circular_buffers_idx) {
+        auto& circular_buffer = circular_buffers_[circular_buffers_idx];
+        auto& descriptor_cb = descriptor.cbs.at(circular_buffers_idx);
+        if (!circular_buffer->globally_allocated()) {
+            should_invalidate_cb_allocation |= circular_buffer->config().total_size() != descriptor_cb.total_size;
+        }
+        circular_buffer->config() = CircularBufferConfig(descriptor_cb);
+        if (circular_buffer->globally_allocated()) {
+            circular_buffer->assign_global_address();
+        }
+    }
+
+    if (should_invalidate_cb_allocation) {
+        invalidate_circular_buffer_allocation();
+    }
 }
 
 }  // namespace tt::tt_metal
