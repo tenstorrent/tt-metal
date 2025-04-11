@@ -49,7 +49,7 @@ using namespace tt;
 
 struct BinaryOpType {
     enum Enum { ADD = 0, SUB = 1, MUL = 2 };
-    static const vector<Enum> all() { return {ADD, SUB, MUL}; }
+    static vector<Enum> all() { return {ADD, SUB, MUL}; }
 };
 
 std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {

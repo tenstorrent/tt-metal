@@ -125,7 +125,7 @@ std::vector<DataFormat> get_unpack_src_formats(DataFormat data_formats[NUM_CIRCU
     return unpack_src_format;
 }
 
-const DataFormat get_single_unpack_dst_format(
+DataFormat get_single_unpack_dst_format(
     const DataFormat src_format, const DataFormat /*pack_format*/, const DataFormat unpack_conditional_dst_format) {
     DataFormat dst_format = src_format;
     if (src_format == DataFormat::Float32) {
@@ -191,7 +191,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
     return unpack_dst_format;
 }
 
-const DataFormat get_single_pack_src_format(
+DataFormat get_single_pack_src_format(
     DataFormat data_format,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,

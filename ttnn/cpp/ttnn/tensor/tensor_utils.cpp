@@ -14,7 +14,7 @@ namespace tt {
 
 namespace tt_metal {
 
-const ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
+ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
     int64_t old_volume = tensor.get_logical_volume();
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;

@@ -323,8 +323,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program(
     }
 }
 
-const tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(
-    const std::vector<Tensor>& input_tensors) const {
+tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));

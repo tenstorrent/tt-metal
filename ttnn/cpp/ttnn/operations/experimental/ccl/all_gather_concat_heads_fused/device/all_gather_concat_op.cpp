@@ -166,8 +166,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
         this->num_heads);
 }
 
-const tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(
-    const std::vector<Tensor>& input_tensors) const {
+tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
     auto input_shape = input_tensors[0].get_padded_shape();
     auto input_memory_layout = input_tensors[0].get_layout();
