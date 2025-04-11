@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pad.hpp"
-#include <algorithm>  // for std::copy
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
