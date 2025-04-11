@@ -7,7 +7,6 @@
 #include <tt-metalium/dispatch_settings.hpp>
 
 #include "impl/context/metal_context.hpp"
-#include "impl/context/metal_context.hpp"
 
 enum class CoreType;
 

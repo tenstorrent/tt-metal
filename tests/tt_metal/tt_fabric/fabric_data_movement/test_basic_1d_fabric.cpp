@@ -33,7 +33,6 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "impl/context/metal_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {

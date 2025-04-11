@@ -11,7 +11,6 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include "ttnn/operations/functions.hpp"

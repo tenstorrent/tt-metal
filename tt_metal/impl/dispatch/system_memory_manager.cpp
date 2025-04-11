@@ -16,7 +16,6 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "impl/context/metal_context.hpp"
 #include "dispatch_settings.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"

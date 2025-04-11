@@ -23,7 +23,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <algorithm>
 #include "umd/device/types/xy_pair.h"
 
 using namespace tt::tt_metal;
