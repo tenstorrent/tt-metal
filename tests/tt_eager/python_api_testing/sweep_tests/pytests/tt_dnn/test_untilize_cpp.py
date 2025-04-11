@@ -80,7 +80,7 @@ def test_tilize(device):
     if perf_scope == "block":
         os.environ["TT_LLK_PERF_BLOCK"] = "1"
 
-    for perf in ["op", "op_no_dm"]:
+    for perf in ["op", "op_no_dm", "unpack", "pack"]:
         # Set log csv file name, file will be used to store perf data
         ENVS = dict(os.environ)
         TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
@@ -114,20 +114,27 @@ def test_tilize(device):
             writer.writerow(csv_header)
 
             # Run tilize test for different rt and ct dims
-            for rt_dim in [1, 2, 4, 7, 8]:
-                for ct_dim in [1, 2, 4, 7, 8]:
+            for rt_dim in range(1, 21, 1):
+                for ct_dim in range(1, 21, 1):
                     os.environ["RT_DIM"] = str(rt_dim)
                     os.environ["CT_DIM"] = str(ct_dim)
 
                     # Clean profiler log file
-                    ttnn.DumpDeviceProfiler(device)
+                    # ttnn.DumpDeviceProfiler(device)
                     rm(profiler_log_path)
 
                     # Put os system call to execute cpp test
-                    os.system("./build/test/tt_metal/unit_tests_llk --gtest_filter=*TensixComputePackUntilizePerf")
+                    if ct_dim < 9:
+                        # Run pack untilize for ct_dim up to 8
+                        os.system("./build/test/tt_metal/unit_tests_llk --gtest_filter=*TensixComputePackUntilizePerf")
+                    else:
+                        # Run unpack untilize for ct_dim greater then 8
+                        os.system(
+                            "./build/test/tt_metal/unit_tests_llk --gtest_filter=*TensixComputeUnpackUntilizePerf"
+                        )
 
                     # Process profiler log file and extract tilize data
-                    ttnn.DumpDeviceProfiler(device)
+                    # ttnn.DumpDeviceProfiler(device)
                     rt_div = rt_dim if perf_scope == "op" else 1
                     profiler_data = get_profiler_data(perf_scope, "untilize", get_op_duration)
                     csv_data = [

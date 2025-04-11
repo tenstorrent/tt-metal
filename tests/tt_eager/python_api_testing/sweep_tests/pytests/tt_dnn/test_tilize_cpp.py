@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import csv
 import ttnn
+import numpy as np
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
@@ -79,7 +80,7 @@ def test_tilize(device):
     if perf_scope == "block":
         os.environ["TT_LLK_PERF_BLOCK"] = "1"
 
-    for perf in ["op", "op_no_dm", "unpack", "math", "pack"]:
+    for perf in ["op", "op_no_dm", "unpack", "pack"]:
         # Set log csv file name, file will be used to store perf data
         ENVS = dict(os.environ)
         TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
@@ -113,20 +114,20 @@ def test_tilize(device):
             writer.writerow(csv_header)
 
             # Run tilize test for different rt and ct dims
-            for rt_dim in [5, 10, 16]:
-                for ct_dim in [5, 10, 16, 20]:
+            for rt_dim in range(1, 21, 1):
+                for ct_dim in range(1, 21, 1):
                     os.environ["RT_DIM"] = str(rt_dim)
                     os.environ["CT_DIM"] = str(ct_dim)
 
                     # Clean profiler log file
-                    ttnn.DumpDeviceProfiler(device)
+                    # ttnn.DumpDeviceProfiler(device)
                     rm(profiler_log_path)
 
                     # Put os system call to execute cpp test
                     os.system("./build/test/tt_metal/unit_tests_llk --gtest_filter=*TensixComputeUnpackTilizePerf")
 
                     # Process profiler log file and extract tilize data
-                    ttnn.DumpDeviceProfiler(device)
+                    # ttnn.DumpDeviceProfiler(device)
                     rt_div = rt_dim if perf_scope == "op" else 1
                     profiler_data = get_profiler_data(perf_scope, "tilize", get_op_duration)
                     csv_data = [
@@ -139,10 +140,10 @@ def test_tilize(device):
                         f"{profiler_data[1] / ct_dim / rt_div:.2f}",
                         f"{profiler_data[2] / ct_dim / rt_div:.2f}",
                     ]
-                    writer.writerow(csv_data)
                     if get_op_duration:
                         csv_data.append(f"{profiler_data[3]:.2f}")
                         csv_data.append(f"{profiler_data[3] / ct_dim / rt_div:.2f}")
+                    writer.writerow(csv_data)
 
         # Unset env variable used to select perf measurement thread target(unpack, math, pack)
         if perf in ["unpack", "pack", "math"]:
