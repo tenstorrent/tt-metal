@@ -25,6 +25,8 @@ from models.tt_transformers.tt.common import (
     get_max_prefill_chunk_size,
 )
 
+from models.tt_transformers.tt.generator import SamplingParams
+
 
 class Generator:
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
@@ -185,8 +187,13 @@ class Generator:
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
-        argmax_on_device=False,
+        sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
     ):
+        assert (
+            sampling_params is None or sampling_params.temperature == 0
+        ), "Currently only supporting greedy decoding (temperature=0) on device"
+        argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
+
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
         kv_cache = kv_cache[0]
@@ -203,7 +210,7 @@ class Generator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            return self.read_decode_output(tt_logits, tokens.shape[0], argmax_on_device)
+            return self.read_decode_output(tt_logits, tokens.shape[0], is_tokens=(sampling_params is not None))
         else:
             return tt_logits
 
@@ -482,8 +489,8 @@ class Generator:
         else:
             return tt_logits
 
-    def read_decode_output(self, tt_logits, unpadded_batch, argmax_on_device=False):
-        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1, argmax_on_device=argmax_on_device)
+    def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=False):
+        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1, is_tokens=is_tokens)
         return logits
 
     def _decode_forward_no_trace(
