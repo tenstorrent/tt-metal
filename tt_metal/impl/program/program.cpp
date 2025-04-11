@@ -1476,4 +1476,33 @@ std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_progra
     return pimpl_->cached_program_command_sequences_;
 }
 
+
+void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, ProgramOffsetsState& state) {
+    auto& program_config = get_program_config(index);
+    program_config.rta_offset = state.rta_offset;
+    program_config.crta_offsets = state.crta_offsets;
+    program_config.crta_sizes = state.crta_sizes;
+    program_config.sem_offset = state.sem_offset;
+    program_config.sem_size = state.sem_size;
+    program_config.cb_offset = state.cb_offset;
+    program_config.cb_size = state.cb_size;
+    program_config.local_cb_size = state.local_cb_size;
+    program_config.kernel_text_offset = state.kernel_text_offset;
+    program_config.kernel_text_size = state.kernel_text_size;
+    program_config_sizes_[index] = state.offset;
+}
+
+void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
+    program_config_sizes_[hal_ref.get_programmable_core_type_count()] =
+        runs_on_noc_multicast_only_cores();
+    program_config_sizes_[hal_ref.get_programmable_core_type_count() + 1] =
+        runs_on_noc_unicast_only_cores();
+    set_launch_msg_sem_offsets();
+    // TODO: This check is wrong - it populates dispatch data for dispatch kernels
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+        populate_dispatch_data(device);  // TODO: maybe rename
+    }
+}
+
+
 }  // namespace tt::tt_metal

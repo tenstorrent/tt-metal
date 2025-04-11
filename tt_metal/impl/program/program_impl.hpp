@@ -10,6 +10,7 @@
 #include "tt-metalium/circular_buffer_types.hpp"
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
+#include "tt-metalium/dev_msgs.h"
 #include "tt-metalium/hal_types.hpp"           // HalProgrammableCoreType
 #include "tt-metalium/kernel.hpp"              // Kernel
 #include "tt-metalium/kernel_types.hpp"        // KernelHandle
@@ -45,6 +46,34 @@ class GlobalCircularBuffer;
 }
 
 namespace detail {
+
+struct ProgramOffsetsState {
+    // TODO (AS): Enacapsulate the variables below in a struct to avoid implicit updates on references.
+    // TODO (AS): Rather than in-place updating atrtibutes in the program, update them explicitly through a
+    // returned set of offsets.
+    // Base offset for Program Configs across all core types, wrt kernel config slot start address
+    uint32_t config_base_offset = 0;
+    // Incremental offset. Will correspond to the size of the program config per core, once the
+    // program is finalized.
+    uint32_t offset = 0;
+    // Unique RTA offset.
+    uint32_t rta_offset = 0;
+    // Common RTA offsets and sizes.
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
+    // Semaphore offsets and sizes.
+    uint32_t sem_offset = 0;
+    uint32_t sem_size = 0;
+    // CB offsets and sizes.
+    uint32_t cb_offset = 0;
+    uint32_t cb_size = 0;
+    uint32_t local_cb_size = 0;
+    // Kernel binary offsets and sizes.
+    uint32_t kernel_text_offset = 0;
+    uint32_t kernel_text_size = 0;
+};
+
+
 
 class ProgramImpl {
 public:
@@ -223,10 +252,17 @@ private:
     bool runs_on_noc_multicast_only_cores();
     bool kernel_binary_always_stored_in_ringbuffer();
 
+    void set_program_offsets_and_sizes(uint32_t index, ProgramOffsetsState& state);
+    void set_program_attrs_across_core_types(IDevice* device);
+
     friend EnqueueProgramCommand;
     friend Program;
     friend Internal_;
+
+    template <typename T>
+    friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
 };
+
 
 }  // namespace detail
 }  // namespace tt_metal

@@ -40,6 +40,9 @@ CBHandle CreateCircularBuffer(
 }  // namespace experimental
 
 namespace program_dispatch {
+
+struct ProgramOffsetsState;
+
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
 template <typename T>
@@ -50,7 +53,7 @@ uint32_t program_base_addr_on_core(
 }  // namespace program_dispatch
 
 namespace distributed {
-class MeshWorkload;
+class MeshWorkloadImpl;
 }  // namespace distributed
 
 class JitBuildOptions;
@@ -190,6 +193,10 @@ public:
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;
 
+    // For internal use
+    detail::ProgramImpl* get_impl() { return pimpl_.get(); }
+    const detail::ProgramImpl* get_impl() const { return pimpl_.get(); }
+
 private:
     std::unique_ptr<detail::ProgramImpl> pimpl_;
 
@@ -241,7 +248,8 @@ private:
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
-    friend distributed::MeshWorkload;
+    //friend distributed::MeshWorkload;
+    friend distributed::MeshWorkloadImpl;
     friend detail::Internal_;
 };
 
