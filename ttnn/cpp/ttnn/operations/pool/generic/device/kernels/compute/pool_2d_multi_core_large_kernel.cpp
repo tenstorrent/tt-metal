@@ -130,8 +130,8 @@ void MAIN {
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, interm_cb_id, num_faces_in_input_tile, max_rows_for_reduction);
 
-    uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
-    uint32_t interm_reduction_chunks =
+    constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
+    constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
     cb_wait_front(in_scalar_cb_id, 1);
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
