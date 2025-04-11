@@ -25,9 +25,9 @@ inline void send_packet(
     uint64_t dst_addr,
     uint32_t size) {
 #ifdef FVC_MODE_PULL
-    fabric_async_write<T, ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL, RoutingType::ROUTING_TABLE>(
+    fabric_async_write<ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL, RoutingType::ROUTING_TABLE>(
 #else
-    fabric_async_write<T, ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL>(
+    fabric_async_write<ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL>(
 #endif
         client_interface, routing_plane, src_addr, dst_mesh_id, dst_dev_id, dst_addr, size);
 
@@ -84,8 +84,7 @@ void kernel_main() {
             reinterpret_cast<volatile fabric_push_client_interface_t*>(client_interface_addr);
 #endif
 
-        fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(
-            client_interface, outbound_eth_chan);
+        fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
 
 #ifndef FVC_MODE_PULL
         fabric_client_connect(client_interface, routing_plane, dest_mesh_id, dest_dev_id);
@@ -94,7 +93,7 @@ void kernel_main() {
         uint64_t dst_noc_addr = get_noc_addr_helper(remote_controller_noc_encoding, remote_notification_address);
 
         data_buf[0] = CONTROLLER_HANDSHAKE_START;
-        send_packet<decltype(client_interface)>(
+        send_packet(
             client_interface,
             routing_plane,
             pkt_hdr_address,
@@ -106,7 +105,7 @@ void kernel_main() {
         while (*poll_addr != CONTROLLER_HANDSHAKE_START);
 
         data_buf[0] = CONTROLLER_HANDSHAKE_END;
-        send_packet<decltype(client_interface)>(
+        send_packet(
             client_interface,
             routing_plane,
             pkt_hdr_address,

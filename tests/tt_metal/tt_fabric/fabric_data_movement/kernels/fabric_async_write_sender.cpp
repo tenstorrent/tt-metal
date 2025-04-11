@@ -33,11 +33,7 @@ void kernel_main() {
         volatile fabric_pull_client_interface_t* client_interface =
             (volatile fabric_pull_client_interface_t*)client_interface_addr;
 
-        fabric_async_write<
-            decltype(client_interface),
-            (ClientDataMode)data_mode,
-            AsyncWriteMode::ALL,
-            RoutingType::ROUTER_XY>(
+        fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::ALL, RoutingType::ROUTER_XY>(
             client_interface,
             router_noc_xy,
             src_addr,  // source address in sender’s memory
@@ -51,11 +47,9 @@ void kernel_main() {
         volatile fabric_push_client_interface_t* client_interface =
             (volatile fabric_push_client_interface_t*)client_interface_addr;
 
-        fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(
-            client_interface, outbound_eth_chan);
+        fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
         fabric_client_connect(client_interface, 0, dst_mesh_id, dst_device_id);
         fabric_async_write<
-            decltype(client_interface),
             (ClientDataMode)data_mode,
             (AsyncWriteMode)(AsyncWriteMode::PUSH | AsyncWriteMode::ADD_HEADER),
             RoutingType::ROUTER_XY>(

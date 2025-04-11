@@ -243,7 +243,7 @@ static inline void fabric_async_write_add_header_impl(
     }
 }
 
-template <typename T, ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
+template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, typename T>
 inline void fabric_async_write_add_header(
     tt_l1_ptr T client_interface,
     uint32_t src_addr,  // source address in sender’s memory
@@ -486,10 +486,10 @@ inline void fabric_async_write_push_data(
 }
 
 template <
-    typename T,
     ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA,
     AsyncWriteMode mode = AsyncWriteMode::ALL,
-    RoutingType routing_type = RoutingType::ROUTER_XY>
+    RoutingType routing_type = RoutingType::ROUTER_XY,
+    typename T>
 inline void fabric_async_write(
     tt_l1_ptr T client_interface,
     uint32_t routing,   // routing refers to router noc xy or routing plane
@@ -507,7 +507,7 @@ inline void fabric_async_write(
         "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
 
     if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
-        fabric_async_write_add_header<T, data_mode>(
+        fabric_async_write_add_header<data_mode, T>(
             client_interface, src_addr, dst_mesh_id, dst_dev_id, dst_addr, size, header_id);
 #if !defined(FVC_MODE_PULL) && defined(LOW_LATENCY_ROUTING)
         uint32_t outgoing_direction = get_next_hop_router_direction(client_interface, routing, dst_mesh_id, dst_dev_id);
@@ -543,7 +543,7 @@ inline void fabric_async_write(
     }
 }
 
-template <typename T, ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
+template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, typename T>
 inline void fabric_async_write_multicast_add_header(
     tt_l1_ptr T client_interface,
     uint32_t src_addr,  // source address in sender’s memory
@@ -605,10 +605,10 @@ inline void fabric_async_write_multicast_add_header(
 // Write packetized data over fabric to dst_mesh, dst_dev.
 // Packet is at src_addr in sender L1.
 template <
-    typename T,
     ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA,
     AsyncWriteMode mode = AsyncWriteMode::ALL,
-    RoutingType routing_type = RoutingType::ROUTER_XY>
+    RoutingType routing_type = RoutingType::ROUTER_XY,
+    typename T>
 inline void fabric_async_write_multicast(
     tt_l1_ptr T client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
@@ -629,7 +629,7 @@ inline void fabric_async_write_multicast(
         "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
 
     if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
-        fabric_async_write_multicast_add_header<T, data_mode>(
+        fabric_async_write_multicast_add_header<data_mode, T>(
             client_interface,
             src_addr,
             dst_mesh_id,
@@ -713,10 +713,10 @@ inline void fabric_atomic_inc_add_header(
 // Write packetized data over fabric to dst_mesh, dst_dev.
 // Packet is at src_addr in sender L1.
 template <
-    typename T,
     ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA,
     AsyncWriteMode mode = AsyncWriteMode::ALL,
-    RoutingType routing_type = RoutingType::ROUTER_XY>
+    RoutingType routing_type = RoutingType::ROUTER_XY,
+    typename T>
 inline void fabric_atomic_inc(
     tt_l1_ptr T client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
@@ -792,7 +792,7 @@ static inline void fabric_async_write_atomic_inc_add_header_impl(
     }
 }
 
-template <typename T, ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
+template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, typename T>
 inline void fabric_async_write_atomic_inc_add_header(
     tt_l1_ptr T client_interface,
     uint32_t src_addr,  // source address in sender’s memory
@@ -821,10 +821,10 @@ inline void fabric_async_write_atomic_inc_add_header(
 // Write packetized data over fabric to dst_mesh, dst_dev.
 // Packet is at src_addr in sender L1.
 template <
-    typename T,
     ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA,
     AsyncWriteMode mode = AsyncWriteMode::ALL,
-    RoutingType routing_type = RoutingType::ROUTER_XY>
+    RoutingType routing_type = RoutingType::ROUTER_XY,
+    typename T>
 inline void fabric_async_write_atomic_inc(
     tt_l1_ptr T client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
@@ -843,7 +843,7 @@ inline void fabric_async_write_atomic_inc(
         "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
 
     if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
-        fabric_async_write_atomic_inc_add_header<T, data_mode>(
+        fabric_async_write_atomic_inc_add_header<data_mode, T>(
             client_interface,
             src_addr,
             dst_mesh_id,
@@ -888,7 +888,7 @@ inline void fabric_async_write_atomic_inc(
     }
 }
 
-template <typename T = volatile fabric_pull_client_interface_t*, RoutingType routing_type = RoutingType::ROUTER_XY>
+template <RoutingType routing_type = RoutingType::ROUTER_XY, typename T>
 inline void fabric_endpoint_init(tt_l1_ptr T client_interface, uint32_t outbound_eth_chan) {
     static_assert(
         std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
