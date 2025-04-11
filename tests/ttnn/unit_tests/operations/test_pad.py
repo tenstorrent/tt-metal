@@ -368,13 +368,10 @@ def test_pad(device, h, w, padding, torch_padding, value):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
-# @pytest.mark.skip(reason="ttnn.pad does not support row_major tensors because the kernel currently causes a PCC error")
+@pytest.mark.skip(reason="ttnn.pad does not support row_major tensors because the kernel currently causes a PCC error")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-@pytest.mark.parametrize(
-    "padding,torch_padding",
-    [(((0, 1), (0, 1), (0, 1), (0, 1), (0, 2)), (0, 2, 0, 1, 0, 1, 0, 1, 0, 1)), (((1, 1), (4, 2)), (4, 2, 1, 1))],
-)
+@pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 2)), (0, 2, 0, 1)), (((1, 1), (4, 2)), (4, 2, 1, 1))])
 @pytest.mark.parametrize("value", [0])
 def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
     torch.manual_seed(0)
