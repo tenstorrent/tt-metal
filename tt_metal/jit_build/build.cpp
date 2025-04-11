@@ -6,6 +6,7 @@
 
 #include <taskflow/core/async.hpp>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -126,26 +127,32 @@ void JitBuildEnv::init(
     this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
+    // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
         this->gpp_ = "ccache ";
-    } else {
-        this->gpp_ = "";
     }
 
-    // Tools
-    std::string local_gpp_path = this->root_ + "runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++";
-    std::string system_gpp_path = "/opt/tenstorrent/sfpi/compiler/bin/riscv32-unknown-elf-g++";
-    if (std::filesystem::exists(local_gpp_path)) {
-        this->gpp_ += local_gpp_path + " ";
-        this->gpp_include_dir_ = this->root_ + "runtime/sfpi/include";
-        log_info(tt::LogBuildKernels, "Using local RISC-V g++ at {}", this->gpp_);
-    } else if (std::filesystem::exists(system_gpp_path)) {
-        this->gpp_ += system_gpp_path + " ";
-        this->gpp_include_dir_ = "/opt/tenstorrent/sfpi/include";
-        log_info(tt::LogBuildKernels, "Using system RISC-V g++ at {}", this->gpp_);
-    } else {
-        TT_THROW("RISC-V g++ not found in {} or {}", local_gpp_path, system_gpp_path);
+    // Use local sfpi for development
+    // Use system sfpi for production to avoid packaging it
+    // Ordered by precedence
+    const std::array<std::string, 2> sfpi_roots = {
+        this->root_ + "runtime/sfpi",
+        "/opt/tenstorrent/sfpi"
+    };
+
+    bool sfpi_found = false;
+    for (unsigned i = 0; i < 2; ++i) {
+        auto gxx = sfpi_roots[i] + "/compiler/bin/riscv32-unknown-elf-g++";
+        if (std::filesystem::exists(gxx)) {
+            this->gpp_ += gxx + " ";
+            this->gpp_include_dir_ = sfpi_roots[i] + "/include";
+            log_debug(tt::LogBuildKernels, "Using {} sfpi at {}", i ? "system" : "local", sfpi_roots[i]);
+            sfpi_found = true;
+            break;
+    }
+    if (!sfpi_found) {
+        TT_THROW("sfpi not found at {} or {}", sfpi_roots[0], sfpi_roots[1]);
     }
 
     // Flags
