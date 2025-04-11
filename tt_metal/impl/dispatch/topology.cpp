@@ -43,7 +43,6 @@
 #include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
 #include "span.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
