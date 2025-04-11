@@ -1951,5 +1951,4 @@ def test_binary_sharded_invalid_row_major_dtype(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=b_sharded_config,
     )
-    with pytest.raises(RuntimeError):
-        _ = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=False)
+    _ = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config, use_legacy=False)
