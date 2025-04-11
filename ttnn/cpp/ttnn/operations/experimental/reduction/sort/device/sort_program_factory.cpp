@@ -23,7 +23,7 @@ SortProgramFactory::cached_program_t SortProgramFactory::create(
     const tt::DataFormat value_tensor_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(0).get_dtype());
     const tt::DataFormat index_tensor_cb_data_format =
-        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(0).get_dtype());
+        tt::tt_metal::datatype_to_dataformat_converter(output_tensors.at(1).get_dtype());
 
     const uint32_t input_tensor_tile_size = tile_size(input_tensor_cb_data_format);
     const uint32_t value_tensor_tile_size = tile_size(value_tensor_cb_data_format);
