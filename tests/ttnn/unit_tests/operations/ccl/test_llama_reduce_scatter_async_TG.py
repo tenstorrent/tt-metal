@@ -73,7 +73,7 @@ def run_reduce_scatter_test(
     output_grid=None,
     dtype=ttnn.bfloat8_b,
 ):
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
     num_pages_per_packet = 4
 

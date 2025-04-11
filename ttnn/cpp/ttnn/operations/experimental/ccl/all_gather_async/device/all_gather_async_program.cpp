@@ -276,13 +276,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             "DEBUG: ring_index: {}, ring_size: {}, forward_fabric_connection: {}",
             ring_index,
             ring_size,
-            forward_fabric_connection.has_value());
+            forward_device.has_value());
         log_trace(
             tt::LogOp,
             "DEBUG: ring_index: {}, ring_size: {}, backward_fabric_connection: {}",
             ring_index,
             ring_size,
-            backward_fabric_connection.has_value());
+            backward_device.has_value());
 
         // READER COMMAND STREAM and RT ARGS
         std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> reader_cmd_stream;

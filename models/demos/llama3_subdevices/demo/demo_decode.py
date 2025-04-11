@@ -638,7 +638,7 @@ def run_llama3_demo(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
+@pytest.mark.parametrize(  # Worker size is selected to give 120kB ringbuffer size
     "device_params",
     [
         {
