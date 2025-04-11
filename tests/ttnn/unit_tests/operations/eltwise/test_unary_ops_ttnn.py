@@ -853,7 +853,9 @@ def test_unary_sigmoid_ttnn(input_shapes, device, approx_mode):
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    ttnn.sigmoid(input_tensor, fast_and_approximate_mode=approx_mode, output_tensor=output_tensor, queue_id=cq_id)
+    ttnn.sigmoid(
+        input_tensor, vector_mode=4, fast_and_approximate_mode=approx_mode, output_tensor=output_tensor, queue_id=cq_id
+    )
     golden_tensor = torch.sigmoid(in_data)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
