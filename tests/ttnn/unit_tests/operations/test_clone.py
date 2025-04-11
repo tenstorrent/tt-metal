@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
@@ -94,6 +94,7 @@ memory_config_list = [
 ]
 
 
+@skip_for_blackhole("Fails on BH. Issue #20576")
 @pytest.mark.parametrize(
     "shape",
     [
