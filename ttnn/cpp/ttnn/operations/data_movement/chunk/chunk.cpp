@@ -18,13 +18,7 @@ std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tenso
         dim += num_dims;
     }
     TT_FATAL(
-        num_dims > dim,
-        "Invalid dimension for chunk operation, the given dimension {} needs to be less than or equal to {} and the "
-        "the given dimension must be in the range of [{}, {}]",
-        dim,
-        num_dims - 1,
-        -num_dims,
-        num_dims - 1);
+        num_dims > dim, "... Invalid dimension for chunk operation, {} needs to be greater than {}", num_dims, dim);
 
     int size_along_dim = size[dim];
     int chunk_size = tt::div_up(size_along_dim, num_chunks);
