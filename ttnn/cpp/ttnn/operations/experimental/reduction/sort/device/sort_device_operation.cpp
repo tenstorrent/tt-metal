@@ -34,9 +34,9 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_shape.rank() == 4, "Input shape must be 4D, got {}", input_tensor_shape.rank());
 
     TT_FATAL(
-        input_tensor_shape[3] % 64 == 0,
+        input_tensor_shape[-1] % 64 == 0,
         "Input shape inner dim {} must be a multiple of 64, pad with +/-infinity if necessary",
-        input_tensor_shape[3]);
+        input_tensor_shape[-1]);
     TT_FATAL(
         (input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2]) % 32 == 0,
         "Input height (combined input_shape[0-3]) {} must be a multiple of 32",
