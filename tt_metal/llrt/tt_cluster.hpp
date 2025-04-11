@@ -302,6 +302,8 @@ public:
 
     tt_metal::FabricConfig get_fabric_config() const;
 
+    bool is_base_routing_fw_enabled() const;
+
     // Get all fabric ethernet cores
     std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const;
 

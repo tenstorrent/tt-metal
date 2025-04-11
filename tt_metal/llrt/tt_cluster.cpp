@@ -135,6 +135,16 @@ BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
 }
 
+bool Cluster::is_base_routing_fw_enabled() const {
+    // Ideally we should get the routing enabled/disabled from a config in L1
+    if (this->cluster_type_ == ClusterType::N150 || this->cluster_type_ == ClusterType::N300 ||
+        this->cluster_type_ == ClusterType::T3K || this->cluster_type_ == ClusterType::TG) {
+        return true;
+    } else {
+        return true;
+    }
+}
+
 void Cluster::generate_cluster_descriptor() {
     // Cluster descriptor yaml not available for Blackhole bring up
     if (this->target_type_ == TargetDevice::Simulator) {

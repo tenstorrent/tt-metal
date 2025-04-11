@@ -31,6 +31,7 @@
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include <umd/device/types/arch.h>
+#include "impl/context/metal_context.hpp"
 
 namespace fs = std::filesystem;
 
@@ -579,6 +580,9 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                 "-DERISC "
                 "-DRISC_B0_HW "
                 "-DCOOPERATIVE_ERISC ";
+            if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
+                this->defines_ += "-DROUTING_FW_ENABLED ";
+            }
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
 

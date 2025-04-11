@@ -47,7 +47,7 @@ using namespace tt::test_utils;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr std::int32_t MAX_BUFFER_SIZE =
-    (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+    (eth_l1_mem::address_map::MAX_L1_LOADING_ADDR - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
 
 struct BankedConfig {
     size_t num_pages = 1;
@@ -108,7 +108,7 @@ bool chip_to_chip_dram_buffer_transfer(
     fixture->WriteBuffer(sender_device, input_dram_buffer, inputs);
 
     const uint32_t MAX_BUFFER =
-        (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+        (eth_l1_mem::address_map::MAX_L1_LOADING_ADDR - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
     uint32_t num_loops = (uint32_t)(byte_size / MAX_BUFFER);
     uint32_t remaining_bytes = (uint32_t)(byte_size % MAX_BUFFER);
     // Clear expected value at ethernet L1 address

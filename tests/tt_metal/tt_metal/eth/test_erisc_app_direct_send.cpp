@@ -766,11 +766,11 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
         CoreCoord receiver_core = std::get<1>(it->second);
 
         const size_t src_eth_l1_byte_address = unit_tests::erisc::direct_send::get_rand_32_byte_aligned_address(
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, eth_l1_mem::address_map::MAX_L1_LOADING_SIZE);
+            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, eth_l1_mem::address_map::MAX_L1_LOADING_ADDR);
         const size_t dst_eth_l1_byte_address = unit_tests::erisc::direct_send::get_rand_32_byte_aligned_address(
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, eth_l1_mem::address_map::MAX_L1_LOADING_SIZE);
+            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, eth_l1_mem::address_map::MAX_L1_LOADING_ADDR);
 
-        int max_words = (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE -
+        int max_words = (eth_l1_mem::address_map::MAX_L1_LOADING_ADDR -
                          std::max(src_eth_l1_byte_address, dst_eth_l1_byte_address)) /
                         WORD_SIZE;
         int num_words = rand() % max_words + 1;
@@ -821,12 +821,12 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
 
             const size_t src_eth_l1_byte_address = unit_tests::erisc::direct_send::get_rand_32_byte_aligned_address(
                 eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-                eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - 65536);
+                eth_l1_mem::address_map::MAX_L1_LOADING_ADDR - 65536);
             const size_t dst_eth_l1_byte_address = unit_tests::erisc::direct_send::get_rand_32_byte_aligned_address(
                 eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-                eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - 65536);
+                eth_l1_mem::address_map::MAX_L1_LOADING_ADDR - 65536);
 
-            int max_words = (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE -
+            int max_words = (eth_l1_mem::address_map::MAX_L1_LOADING_ADDR -
                              std::max(src_eth_l1_byte_address, dst_eth_l1_byte_address)) /
                             num_bytes_per_send;
             int num_words = rand() % max_words + 1;
