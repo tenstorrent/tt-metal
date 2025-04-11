@@ -2374,18 +2374,20 @@ void Run1DFabricPacketSendTest(
     std::vector<IDevice*> devices_;
     if (use_galaxy) {
         if (line_size <= 4) {
-            if (topology == ttnn::ccl::Topology::Ring && use_tg) {
-                devices_ = {
-                    view.get_device(MeshCoordinate(0, 0)),
-                    view.get_device(MeshCoordinate(1, 0)),
-                    view.get_device(MeshCoordinate(1, 1)),
-                    view.get_device(MeshCoordinate(0, 1))};
-            } else if (topology == ttnn::ccl::Topology::Linear && use_tg) {
-                devices_ = {
-                    view.get_device(MeshCoordinate(0, 0)),
-                    view.get_device(MeshCoordinate(1, 0)),
-                    view.get_device(MeshCoordinate(2, 0)),
-                    view.get_device(MeshCoordinate(3, 0))};
+            if (use_tg) {
+                if (topology == ttnn::ccl::Topology::Ring) {
+                    devices_ = {
+                        view.get_device(MeshCoordinate(0, 0)),
+                        view.get_device(MeshCoordinate(1, 0)),
+                        view.get_device(MeshCoordinate(1, 1)),
+                        view.get_device(MeshCoordinate(0, 1))};
+                } else {
+                    devices_ = {
+                        view.get_device(MeshCoordinate(0, 0)),
+                        view.get_device(MeshCoordinate(1, 0)),
+                        view.get_device(MeshCoordinate(2, 0)),
+                        view.get_device(MeshCoordinate(3, 0))};
+                }
             } else {
                 devices_ = {
                     view.get_device(MeshCoordinate(0, 0)),
