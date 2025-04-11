@@ -702,7 +702,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     // Share buffer if same data format
     CBHandle cb_output = 0;
     CBHandle cb_matmul_partials = 0;
-    if (untilize_out == false && interm0_df == out_df) {
+    if (!untilize_out && interm0_df == out_df) {
         cb_indices.out0_cb = cb_indices.get_next_cb_index();
         auto cb_tuple = tt::tt_metal::create_cb(
             {cb_indices.matmul_partials_cb, cb_indices.out0_cb},

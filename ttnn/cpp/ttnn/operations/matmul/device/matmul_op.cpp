@@ -86,10 +86,7 @@ bool get_broadcast_batch(
     bool is_multi_core_reuse = std::visit(
         [](const auto& program_config) -> bool {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
-                return true;
-            }
-            return false;
+            return static_cast<bool>(std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>);
         },
         matmul_program_config.value());
     if (is_multi_core_reuse) {
