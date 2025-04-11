@@ -179,10 +179,19 @@ inline ttnn::Tensor full_impl(
         case DataType::UINT32: return concrete_full.template operator()<uint32_t>(fill_value);
         case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
-
         case DataType::BFLOAT8_B: {
-             TensorSpec tensor_spec(
-                shape_value, TensorLayout(DataType::BFLOAT8_B, PageConfig(layout_value), mem_cfg));
+            TensorSpec tensor_spec(
+                shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
+            std::vector<float> fill_value_vec(shape_value.volume(), static_cast<float>(fill_value));
+            auto output = tt::tt_metal::Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
+            if (!workers_to_use.empty()) {
+                output = output.to_device(workers_to_use, mem_cfg);
+            }
+            return output;
+        }
+        case DataType::BFLOAT4_B: {
+            TensorSpec tensor_spec(
+                shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
             std::vector<float> fill_value_vec(shape_value.volume(), static_cast<float>(fill_value));
             auto output = tt::tt_metal::Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
             if (!workers_to_use.empty()) {
