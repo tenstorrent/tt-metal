@@ -316,6 +316,3 @@ jobs:
           name: ${{ env.build_artifact_name }}
           path: /work/ttm_any.tar
           if-no-files-found: error
-
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
