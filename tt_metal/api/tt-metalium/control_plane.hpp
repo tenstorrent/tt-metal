@@ -63,11 +63,11 @@ public:
 
     eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, int chan) const;
 
-    void set_fabric_mode(tt::tt_fabric::fabric_mode mode);
-    tt::tt_fabric::fabric_mode get_fabric_mode() const;
+    void set_fabric_mode(uint16_t mode);
+    uint16_t get_fabric_mode() const;
 
 private:
-    tt::tt_fabric::fabric_mode fabric_mode_;
+    uint16_t fabric_mode_;
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
     std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     // map[mesh_id][chip_id][direction] has a list of ethernet channels in that direction

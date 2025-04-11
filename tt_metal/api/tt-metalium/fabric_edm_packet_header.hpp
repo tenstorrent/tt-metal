@@ -521,24 +521,24 @@ static_assert(
 
 static constexpr size_t header_size_bytes = sizeof(PacketHeader);
 
-#ifndef FABRIC_CONFIG
+#ifndef FABRIC_MODE
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
-#if FABRIC_CONFIG == 1 || FABRIC_CONFIG == 2  // FABRIC_1D_LINE/RING
+#if ((FABRIC_MODE == FABRIC_MODE_1D_LINE) || (FABRIC_MODE == FABRIC_MODE_1D_RING))
 #define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields
-#elif FABRIC_CONFIG == 3 || FABRIC_CONFIG == 4  // FABRIC_1D_LINE/RING_LOW_LATENCY
+#elif ((FABRIC_MODE == FABRIC_MODE_1D_LINE_LOW_LATENCY) || (FABRIC_MODE == FABRIC_MODE_1D_RING_LOW_LATENCY))
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
-#elif FABRIC_CONFIG == 5 || FABRIC_CONFIG == 6  // FABRIC_2D_MESH/TOURUS
+#elif ((FABRIC_MODE == FABRIC_MODE_2D_MESH) || (FABRIC_MODE == FABRIC_MODE_2D_TORUS))
 #define PACKET_HEADER_TYPE packet_header_t
-#elif FABRIC_CONFIG == 7 || FABRIC_CONFIG == 8  // FABRIC_2D_MESH/TOURUS_LOW_LATENCY
+#elif ((FABRIC_MODE == FABRIC_MODE_2D_MESH_LOW_LATENCY) || (FABRIC_MODE == FABRIC_MODE_2D_TORUS_LOW_LATENCY))
 #define PACKET_HEADER_TYPE low_latency_packet_header_t
-#elif FABRIC_CONFIG == 9 || FABRIC_CONFIG == 10  // FABRIC_2D_MESH/TOURUS_DYNAMIC
-static_assert(false, "Fabric config is not supported");
+#elif ((FABRIC_MODE == FABRIC_MODE_2D_MESH_DYNAMIC) || (FABRIC_MODE == FABRIC_MODE_2D_TORUS_DYNAMIC))
+#define PACKET_HEADER_TYPE dynamic_packet_header_t
 #else
-static_assert(false, "Fabric config is not supported");
+static_assert(false, "Invalid FABRIC_MODE");
 #endif
 #endif
 

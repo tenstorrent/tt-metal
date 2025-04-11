@@ -701,7 +701,7 @@ void JitBuildState::compile_one(
     string defines = this->defines_;
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     auto mode = control_plane->get_fabric_mode();
-    defines += "-DFABRIC_CONFIG=" + to_string(static_cast<int>(mode)) + " ";
+    defines += "-DFABRIC_MODE=" + to_string(static_cast<int>(mode)) + " ";
 
     if (settings) {
         // Append user args
