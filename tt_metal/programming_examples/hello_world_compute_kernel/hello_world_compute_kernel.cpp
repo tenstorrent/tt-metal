@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "tt-metalium/fabric_types.hpp"
 #include "tt-metalium/kernel_types.hpp"
 
 using namespace tt;
@@ -11,9 +14,10 @@ using namespace tt::tt_metal;
 
 int main() {
     // Initialize Program and Device
+    tt::tt_metal::detail::InitializeFabricConfig(FabricConfig::FABRIC_2D);
 
     constexpr CoreCoord core = {0, 0};
-    int device_id = 0;
+    int device_id = 1;
     IDevice* device = CreateDevice(device_id);
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
@@ -34,12 +38,14 @@ int main() {
 
     // Configure Program and Start Program Execution on Device
 
-    SetRuntimeArgs(program, void_compute_kernel_id, core, {});
-    EnqueueProgram(cq, program, false);
     printf("Hello, Core {0, 0} on Device 0, I am sending you a compute kernel. Standby awaiting communication.\n");
 
-    // Wait Until Program Finishes, Print "Hello World!", and Close Device
+    SetRuntimeArgs(program, void_compute_kernel_id, core, {});
+    for (int i = 0; i < 10; ++i) {
+        EnqueueProgram(cq, program, false);
+    }
 
+    // Wait Until Program Finishes, Print "Hello World!", and Close Device
     Finish(cq);
     printf("Thank you, Core {0, 0} on Device 0, for the completed task.\n");
     CloseDevice(device);

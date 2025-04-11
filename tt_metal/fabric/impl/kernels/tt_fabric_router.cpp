@@ -42,7 +42,7 @@ volatile tt_l1_ptr chan_req_buf* fvc_outbound_req_buf =
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 
-#define SWITCH_THRESHOLD 0x3FFF
+#define SWITCH_THRESHOLD 0x1000
 
 void kernel_main() {
     tt_fabric_init();
@@ -220,18 +220,18 @@ void kernel_main() {
         if ((loop_count & SWITCH_THRESHOLD) == SWITCH_THRESHOLD) {
             internal_::risc_context_switch();
 
-            if (*(volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM == 0) {
-                // terminate signal from host sw.
-                if constexpr (is_master) {
-                    if (!terminated_slave_routers) {
-                        notify_slave_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, 0);
-                        terminated_slave_routers = true;
-                    }
-                }
-                if (loop_count >= 0x1000) {
-                    break;
-                }
-            }
+            // if (*(volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM == 0) {
+            //     // terminate signal from host sw.
+            //     if constexpr (is_master) {
+            //         if (!terminated_slave_routers) {
+            //             notify_slave_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, 0);
+            //             terminated_slave_routers = true;
+            //         }
+            //     }
+            //     if (loop_count >= 0x1000) {
+            //         break;
+            //     }
+            // }
             if (launch_msg->kernel_config.exit_erisc_kernel) {
                 return;
             }

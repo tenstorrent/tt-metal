@@ -51,6 +51,7 @@ typedef struct dispatch_static_config {
 
     // Populated if fabric is being used to talk to downstream
     std::optional<uint32_t> client_interface_addr;
+    std::optional<uint32_t> header_rb_addr;
 } dispatch_static_config_t;
 
 typedef struct dispatch_dependent_config {

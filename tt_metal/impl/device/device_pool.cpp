@@ -268,7 +268,6 @@ void DevicePool::initialize(
 
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(
         true, target_mmio_ids);
-    _inst->wait_for_fabric_router_sync();
     _inst->init_profiler_devices();
 }
 
