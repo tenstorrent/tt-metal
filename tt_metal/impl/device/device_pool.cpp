@@ -12,6 +12,7 @@
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
 #include <algorithm>
 #include <cstdlib>
+#include <functional>
 #include <set>
 #include <utility>
 
@@ -267,7 +268,6 @@ void DevicePool::initialize(
 
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(
         true, target_mmio_ids);
-    _inst->wait_for_fabric_router_sync();
     _inst->init_profiler_devices();
 }
 
@@ -315,6 +315,7 @@ void DevicePool::initialize_active_devices() const {
         for (const auto& dev : active_devices) {
             dev->init_fabric();
         }
+        _inst->wait_for_fabric_router_sync();
     }
 
     // Activate FD kernels
@@ -323,29 +324,36 @@ void DevicePool::initialize_active_devices() const {
         return;
     }
 
-    for (auto dev : active_devices) {
-        // For Galaxy init, we only need to loop over mmio devices
-        const auto& mmio_device_id =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev->id());
-        if (mmio_device_id != dev->id()) {
-            continue;
-        }
+    // Call the func on devices to init, skipping remote devices if not needed
+    auto iterate_required_devices = [&](IDevice* mmio_device, const std::function<void(IDevice * device)>&& func) {
+        auto tunnels_from_mmio = tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device->id());
 
-        auto tunnels_from_mmio =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-        populate_cq_static_args(dev);
-        dev->init_command_queue_device();
-        if (not this->skip_remote_devices) {
-            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
-                // Need to create devices from farthest to the closest.
-                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
-                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
-                    auto device = get_device(mmio_controlled_device_id);
-                    populate_cq_static_args(device);
-                    device->init_command_queue_device();
+        for (uint32_t t = 0; t < tunnels_from_mmio.size(); ++t) {
+            // Need to create devices from farthest to the closest.
+            for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; --ts) {
+                uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                auto device = get_device(mmio_controlled_device_id);
+                if (!this->skip_remote_devices) {
+                    std::forward<const std::function<void(IDevice*)>>(func)(device);
                 }
             }
         }
+    };
+
+    for (auto device : active_devices) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+        if (mmio_device_id != device->id()) {
+            continue;
+        }
+
+        // 1. Generate static args
+        populate_cq_static_args(device);
+        iterate_required_devices(device, [](IDevice* remote_device) { populate_cq_static_args(remote_device); });
+
+        // 2. Init / compile programs
+        device->init_command_queue_device();
+        iterate_required_devices(device, [](IDevice* remote_device) { remote_device->init_command_queue_device(); });
     }
 }
 

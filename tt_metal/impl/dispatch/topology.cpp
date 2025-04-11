@@ -183,12 +183,12 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
-    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_prefetcher_noc},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_dispatcher_noc},
+    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_dispatcher_s_noc},
 
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, k_prefetcher_noc},
+    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, k_dispatcher_noc},
 
     // Sender path PREFETCH_H -> PREFETCH_D
     {5, 0, x, 0, FABRIC_ROUTER_VC, {3, x, x, x}, {7, x, x, x}},
@@ -196,9 +196,9 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
     // Return path DISPATCH_D -> DISPATCH_H
     {6, 0, x, 0, FABRIC_ROUTER_VC, {8, x, x, x}, {4, x, x, x}},
 
-    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, k_prefetcher_noc},
+    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, k_dispatcher_noc},
+    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, k_dispatcher_s_noc},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
@@ -596,13 +596,9 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                 "N300/T3K expects devices in mmio/remote pairs.");
             std::vector<DispatchKernelNode> nodes_for_one_mmio;
             // TODO: Put this in a better place
-            if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
-                TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
-                // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
-                nodes_for_one_mmio = two_chip_arch_1cq_fabric;
-            } else {
-                nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq : two_chip_arch_2cq;
-            }
+            TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
+            // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
+            nodes_for_one_mmio = two_chip_arch_1cq_fabric;
 
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
