@@ -220,7 +220,6 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
             noise_pred = tt_guide(ttnn_output, guidance_scale)
 
             ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
-            # _save_image_and_latents(ttnn_latents, iter, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
 
             iter += 1
 
@@ -548,7 +547,6 @@ def run_demo_inference_diffusiondb(
             # perform guidance
             noise_pred = tt_guide(ttnn_output, guidance_scale)
             ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
-            # _save_image_and_latents(ttnn_latents, iter, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
 
             iter += 1
 
