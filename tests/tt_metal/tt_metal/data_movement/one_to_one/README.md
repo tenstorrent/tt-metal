@@ -9,6 +9,8 @@ Test expectations are that pcc checks pass and sufficient test attribute data is
 
 ## Test Parameters
 | Parameter                 | Data Type             | Description |
+| ------------------------- | --------------------- | ----------- |
+
 TODO: Complete table
 
 ## Test Cases

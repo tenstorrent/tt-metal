@@ -11,6 +11,7 @@ Test expectations are that pcc checks pass and sufficient test attribute data is
 
 ## Test Parameters
 | Parameter                 | Data Type             | Description |
+| ------------------------- | --------------------- | ----------- |
 | test_id                   | uint32_t              | Test id for signifying different test cases. Can be used for grouping different tests. |
 | num_of_transactions       | uint32_t              | Number of noc transactions/calls that will be issued. |
 | transaction_size_pages    | uint32_t              | Size of the issued noc transactions in pages. |
