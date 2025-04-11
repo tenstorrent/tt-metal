@@ -131,6 +131,8 @@ void JitBuildEnv::init(
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
         this->gpp_ = "ccache ";
+    } else {
+        this->gpp_ = "";
     }
 
     // Use local sfpi for development
