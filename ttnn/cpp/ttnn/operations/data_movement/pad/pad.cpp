@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,19 @@
 namespace ttnn::operations::data_movement {
 
 namespace {
+
+static ttnn::SmallVector<std::pair<uint32_t, uint32_t>> create_padding_vector(
+    ttnn::Shape input_shape,
+    std::span<const uint32_t> output_padded_shape,
+    std::span<const uint32_t> input_tensor_start) {
+    ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding_vector;
+    for (int i = 0; i < input_shape.rank(); i++) {
+        padding_vector.emplace_back(
+            input_tensor_start[i], output_padded_shape[i] - input_shape[i] - input_tensor_start[i]);
+    }
+
+    return std::move(padding_vector);
+}
 
 bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
@@ -36,6 +49,7 @@ static ttnn::Tensor pad_impl(
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     auto input_logical_shape = input_tensor.logical_shape().view();
+
     // on host
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         if (eq_spans(input_logical_shape, output_padded_shape)) {
@@ -47,10 +61,14 @@ static ttnn::Tensor pad_impl(
 
     // on device
     else {
+        if (input_tensor.get_logical_shape().rank() < 4) {
+            ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding =
+                create_padding_vector(input_tensor.get_logical_shape(), output_padded_shape, input_tensor_start);
+            return ExecutePad::invoke(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+        }
+
         auto input_tensor_shape = input_tensor.get_logical_shape();
         const auto rank = input_tensor_shape.rank();
-
-        TT_FATAL(rank == 4, "ttnn.pad: input tensor passed to pad_impl must have rank == 4, but got rank {}.", rank);
         bool input_output_same = true;
         for (size_t i = 0; i < rank; i++) {
             if (input_tensor_shape[i] != output_padded_shape[i]) {
@@ -62,6 +80,7 @@ static ttnn::Tensor pad_impl(
             tt::log_debug("Pad Input and Output Shapes are the same. Skipping pad and returning input tensor.");
             return input_tensor;
         }
+
         using ShardStrategy = ttnn::operations::data_movement::ShardStrategy;
         using ShardOrientation = tt::tt_metal::ShardOrientation;
         using Layout = tt::tt_metal::Layout;
@@ -88,8 +107,8 @@ static ttnn::Tensor pad_impl(
                 auto width_pad_memory_config = create_sharded_memory_config(
                     ttnn::Shape{output_shape_width_padded},
                     input_tensor.shard_spec()->grid,  // reuse input cores for now: FIXME: can we do better?
-                                                      // it's complicated because we need the input shards to be local
-                                                      // to the core holding the output shard currently.
+                                                      // it's complicated because we need the input shards to be
+                                                      // local to the core holding the output shard currently.
                     ShardStrategy::HEIGHT,            // stay height sharded
                     ShardOrientation::ROW_MAJOR);
                 output_memory_config = width_pad_memory_config;
