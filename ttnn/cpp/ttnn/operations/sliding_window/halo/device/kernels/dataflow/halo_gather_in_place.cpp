@@ -211,7 +211,7 @@ void kernel_main() {
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
-    constexpr uint32_t TILE_SIZE_BYTES = 2048;
+    constexpr uint32_t TILE_SIZE_BYTES = get_tile_size(in_cb_id);
 
     const uint16_t my_noc_x = NOC_X(my_x[noc_index]);
     const uint16_t my_noc_y = NOC_Y(my_y[noc_index]);
