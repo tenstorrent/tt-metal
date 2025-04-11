@@ -1167,7 +1167,7 @@ static void create_final_reducer_worker_rt_args_not_end_of_line(
              all_program_tensors.local_output_partial[LineDirection::BACKWARD]},
             {builder_config.page_size, builder_config.page_size},
             builder_config.device,
-            0,
+            0,  // link = 0, don't care, since we aren't specifying connections
             builder_config.pages_per_cb_packet,
             {w_logical},
             worker_command_streams_out.reader_cmds0.at(w_logical),
@@ -1188,7 +1188,7 @@ static void create_final_reducer_worker_rt_args_not_end_of_line(
             {all_program_tensors.local_final_output_tensor, nullptr},
             {builder_config.page_size, builder_config.page_size},
             builder_config.device,
-            0,
+            0,  // link = 0, don't care, since we aren't specifying connections
             builder_config.pages_per_cb_packet,
             {w_logical},
             worker_command_streams_out.writer_cmds0.at(w_logical),
@@ -1288,7 +1288,7 @@ static void create_worker_runtime_args_for_inactive_workers(
         {nullptr, nullptr},
         {0, 0},
         builder_config.device,
-        0,
+        0,  // link = 0, don't care, since we aren't specifying connections
         0,  // TODO: get from fabric
         inactive_cores,
         ttnn::ccl::cmd::CclHostLowLevelCommandSequence{},
@@ -1311,7 +1311,7 @@ static void create_worker_runtime_args_for_inactive_workers(
         {nullptr, nullptr},
         {0, 0},
         builder_config.device,
-        0,
+        0,  // link = 0, don't care, since we aren't specifying connections
         0,  // TODO: get from fabric
         inactive_cores,
         ttnn::ccl::cmd::CclHostLowLevelCommandSequence{},
