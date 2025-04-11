@@ -110,67 +110,35 @@ void MAIN {
     constexpr int dst0 = 0;
     uint32_t ht = start_ht;
     bool wait_mask = true;
+    // Current kenrel restrictions, RM and needs to be disible by ndst and wt_block
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+#ifdef NUMERIC_STABLE
+        // finds the max, through a max redue
+        // packconfig
+        // unpackconfig
+        // reduce_init
+        // extra cb for holding partial reduces
         for (uint32_t wt_block = 0; wt_block < Wt_blocks; wt_block += blocks) {
-            // iterates through block and makes sure it doesnt overextend
             for (uint_32t b = 0; b < block and wt_block + b < Wt; b += ndst) {
-                tile_regs_acquire();
-                tile_regs_wait();
-                cb_wait_front(cb_in0, ndst);
-                cb_wait_front(cb_fused_scale, ndst);
-                for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                    mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, wt8, 0, wt8);  // mul bcast-HW -> DST[wt8]
+                // cb_wait_fronts
+                for (int dst_reg = 0; dst_reg < ndst; dst_reg++) {
+                    // reduced
                 }
-                cb_pop_front(cb_in0, ndst);
-                cb_pop_front(cb_fused_scale, ndst);
-                tile_regs_commit();
-                cb_reserve_back(cb_scale_mask, blk);
-                for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                    pack_tile(wt8, cb_scale_mask);  // reuse exps buffer
-                }
-                tile_regs_release();
-                // maybe move out of loop or make it account for perf, but account for cases where we process less than
-                // a block
-                cb_push_back(cb_scale_mask, ndst)
+                // cb_pop_front
             }
-#ifdef CAUSAL_MASK
-            add_tiles_init(cb_scale_mask, cb_fused_attn);
-#else
-            add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
+        }
+        // reduce_revert_delta
 #endif
+        // Finds the denominator
+        for (uint32_t wt_block = 0; wt_block < Wt_blocks; wt_block += blocks) {
             for (uint_32t b = 0; b < block and wt_block + b < Wt; b += ndst) {
-                tile_regs_acquire();
-                tile_regs_wait();
-                cb_wait_front(cb_scale_mask, ndst)
-                    cb_wait_front(cb_fused_attn, ndst) for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-#ifdef CAUSAL_MASK
-                    add_tiles(cb_scale_mask, cb_fused_attn, wt8, wt8, wt8);  // tile *= 1/(sum(exp(x)))
-#else
-                    add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, wt8, wt8, wt8);  // tile *= 1/(sum(exp(x)))
-#endif
+                for (int dst_reg = 0; dst_reg < ndst; dst_reg++) {
                 }
-                tile_regs_commit();
-                cb_reserve_back(cb_x, blk);
-                for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                    pack_tile(wt8, cb_x);
-                }
-                tile_regs_release();
-                cb_push_back(cb_x, ndst)
             }
-
-            // second loop for calculating the final value
-            reconfig_data_format(cb_in0);
-            copy_tile_init(cb_in0) for (uint_32t b = 0; b < block and wt_block + b < Wt; b += ndst) {
-                for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                    if (wt + b == (Wt - ndst) && (wt8 == ndst - 1)) {
-                        reconfig_data_format(cb_in0, cb_mask_padded);
-                        add_bcast_rows_init_short(cb_in0, cb_mask_padded);
-                        cb_wait_front(cb_mask_padded, 1);
-                        add_tiles_bcast_rows(cb_in0, cb_mask_padded, wt8, 0, wt8);
-                    } else {
-                        copy_tile(cb_in0, wt8, wt8);  // copy from c_in[0] to DST[0]
-                    }
-                }
+        }
+        // Finds the final value
+        for (uint32_t wt_block = 0; wt_block < Wt_blocks; wt_block += blocks) {
+            for (uint_32t b = 0; b < block and wt_block + b < Wt; b += ndst) {
             }
         }
     }
