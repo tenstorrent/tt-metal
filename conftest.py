@@ -666,6 +666,7 @@ def pytest_handlecrashitem(crashitem, report, sched):
 
 
 def reset_tensix(tt_open_devices=None):
+    import shutil
 
     # Check if tt-smi exists
     if not shutil.which("tt-smi"):
