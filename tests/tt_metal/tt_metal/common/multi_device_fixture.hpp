@@ -141,9 +141,13 @@ protected:
                 magic_enum::enum_name(*mesh_device_type),
                 boost::algorithm::join(requested_device_types, ", "));
         }
+
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
-        auto core_type = (config_.num_cqs >= 2 and *mesh_device_type != MeshDeviceType::TG) ? DispatchCoreType::ETH
-                                                                                            : DispatchCoreType::WORKER;
+        auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+        bool is_n300_or_t3k_cluster = cluster_type == tt::ClusterType::T3K or cluster_type == tt::ClusterType::N300;
+        auto core_type =
+            (config_.num_cqs >= 2 and is_n300_or_t3k_cluster) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+
         mesh_device_ = MeshDevice::create(
             MeshDeviceConfig(get_mesh_shape(*mesh_device_type)),
             0,
