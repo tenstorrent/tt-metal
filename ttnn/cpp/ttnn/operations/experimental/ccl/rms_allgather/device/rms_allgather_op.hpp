@@ -44,7 +44,10 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
     uint32_t block_wt,
-    DeviceComputeKernelConfig compute_kernel_config);
+    DeviceComputeKernelConfig compute_kernel_config,
+    const GlobalSemaphore& semaphore,
+    const uint32_t ring_size,
+    const uint32_t num_links);
 
 struct RMSAllGather {
     float eps;
