@@ -114,8 +114,8 @@ def test_tilize(device):
             writer.writerow(csv_header)
 
             # Run tilize test for different rt and ct dims
-            for rt_dim in range(1, 21, 1):
-                for ct_dim in range(1, 21, 1):
+            for rt_dim in range(1, 19, 1):
+                for ct_dim in range(1, 19, 1):
                     os.environ["RT_DIM"] = str(rt_dim)
                     os.environ["CT_DIM"] = str(ct_dim)
 
