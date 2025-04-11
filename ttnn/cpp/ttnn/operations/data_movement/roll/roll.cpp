@@ -12,7 +12,11 @@ namespace ttnn::operations::data_movement {
 
 ttnn::Tensor RollOperation::invoke(
     const ttnn::Tensor& input_tensor, const std::vector<int>& shifts, const std::vector<int>& dims) {
-    TT_FATAL(!shifts.empty() && shifts.size() == dims.size(), "Roll expects shifts and dims to have the same length");
+    TT_FATAL(
+        !shifts.empty() && shifts.size() == dims.size(),
+        "Roll expects shifts {} and dims {} to have the same length",
+        shifts.size(),
+        dims.size());
 
     std::vector<int> adjusted_shifts = shifts;
 
@@ -29,7 +33,12 @@ ttnn::Tensor RollOperation::invoke(
     int num_dims = size.rank();
 
     for (int dim : dims) {
-        TT_FATAL(dim >= -num_dims && dim < num_dims, "Invalid dimension index.");
+        TT_FATAL(
+            dim >= -num_dims && dim < num_dims,
+            "Invalid dimension index {}. The dimension must be within the range [{}, {}].",
+            dim,
+            -num_dims,
+            num_dims - 1);
     }
 
     for (size_t i = 0; i < adjusted_shifts.size(); ++i) {
