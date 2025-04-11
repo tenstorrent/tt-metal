@@ -62,6 +62,11 @@ class Conv1x1(LightweightModule):
         else:
             self.bias = None
 
+    def dealloc(self):
+        ttnn.deallocate(self.weight)
+        if self.bias is not None:
+            ttnn.deallocate(self.bias)
+
     def forward(self, x_NTHWC):
         """
         Forward pass for Conv1x1.

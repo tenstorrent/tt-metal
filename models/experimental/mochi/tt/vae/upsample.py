@@ -74,6 +74,11 @@ class CausalUpsampleBlock(LightweightModule):
             swizzle_weight=swizzle_weight,
         )
 
+    def dealloc(self):
+        self.proj.dealloc()
+        for block in self.blocks:
+            block.dealloc()
+
     def depth_to_spacetime(self, x_NTHWC):
         texp, sexp = self.temporal_expansion, self.spatial_expansion
         if self.mesh_device.get_num_devices() == 1:

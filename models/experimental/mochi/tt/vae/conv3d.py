@@ -81,6 +81,11 @@ class ContextParallelConv3d(LightweightModule):
             self.mesh_device, self.torch_weight, self.torch_bias, conv_config
         )
 
+    def dealloc(self):
+        ttnn.deallocate(self.weight)
+        if self.bias is not None:
+            ttnn.deallocate(self.bias)
+
     def _causal_pad_input(self, x_NTHWC, pad_front, pad_back=0):
         """
         Input is either a mult-device tensor (when num_devices == 1) or a single-device tensor (when num_devices > 1).

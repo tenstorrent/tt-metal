@@ -73,6 +73,14 @@ class GroupNorm(LightweightModule):
             )
         )
 
+    def dealloc(self):
+        for gt in self.gamma_t:
+            ttnn.deallocate(gt)
+        for bt in self.beta_t:
+            ttnn.deallocate(bt)
+        for im in self.input_mask:
+            ttnn.deallocate(im)
+
     def forward(self, x_tiled_NTHWC):
         # Determine proper num_out_blocks based on input dimensions
         # This is a simplified heuristic - adjust based on your model's specific needs

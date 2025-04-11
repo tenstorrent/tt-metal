@@ -124,8 +124,17 @@ class Decoder(LightweightModule):
             packer_l1_acc=False,
         )
 
+    def dealloc(self):
+        self.input_proj.dealloc()
+        for block in self.first_blocks:
+            block.dealloc()
+        for block in self.up_blocks:
+            block.dealloc()
+        for block in self.last_blocks:
+            block.dealloc()
+        self.output_proj.dealloc()
+
     def prepare_input(self, z_BCTHW):
-        T = z_BCTHW.shape[2]
         z_BTHWC = ttnn.from_torch(
             z_BCTHW.permute(0, 2, 3, 4, 1),
             device=self.mesh_device,
@@ -134,12 +143,10 @@ class Decoder(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
         )
-        return z_BTHWC, T
+        return z_BTHWC
 
-    def postprocess_output(self, x_NTHWC, T):
-        x_NTHWC = ttnn.all_gather(x_NTHWC, dim=1)
-        x_NTHWC = ttnn.to_torch(ttnn.get_device_tensors(x_NTHWC)[0])
-        x_NTHWC = x_NTHWC[:, :T]
+    def postprocess_output(self, x_NTHWC):
+        x_NTHWC = ttnn.to_torch(x_NTHWC, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1))
         x_NCTHW = x_NTHWC.permute(0, 4, 1, 2, 3)
         return x_NCTHW
 

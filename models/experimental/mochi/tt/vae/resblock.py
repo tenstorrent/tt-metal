@@ -71,6 +71,12 @@ class ResBlock(LightweightModule):
             causal=causal,
         )
 
+    def dealloc(self):
+        self.norm1.dealloc()
+        self.conv1.dealloc()
+        self.norm2.dealloc()
+        self.conv2.dealloc()
+
     def get_tensor_shapes(self, x):
         tensors = ttnn.get_device_tensors(x)
         return [t.shape for t in tensors]
