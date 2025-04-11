@@ -150,6 +150,7 @@ void JitBuildEnv::init(
             log_debug(tt::LogBuildKernels, "Using {} sfpi at {}", i ? "system" : "local", sfpi_roots[i]);
             sfpi_found = true;
             break;
+        }
     }
     if (!sfpi_found) {
         TT_THROW("sfpi not found at {} or {}", sfpi_roots[0], sfpi_roots[1]);
