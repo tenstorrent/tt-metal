@@ -74,7 +74,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    bool enable_persistent_fabric_mode = true;
     const uint32_t dim = 3;
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
