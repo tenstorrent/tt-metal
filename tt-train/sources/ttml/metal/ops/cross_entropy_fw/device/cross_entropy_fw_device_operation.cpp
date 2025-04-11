@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -79,7 +78,7 @@ CrossEntropyForwardDeviceOperation::spec_return_value_t CrossEntropyForwardDevic
         return tensor_args.preallocated_output->get_tensor_spec();
     }
 
-    // input_logical_shape[-1] = 1;
+    input_logical_shape[-1] = 1;
     return ttnn::TensorSpec(
         ttnn::Shape(input_logical_shape),  // <- shape of the output tensor (B, 1, S, D) todo: change
                                            // to (B, 1, S, 1)

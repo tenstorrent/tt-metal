@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -38,7 +37,8 @@ constexpr auto kMaxValueBeforeReductionCbIndex = tt::CBIndex::c_5;
 constexpr auto kMaxValueAfterReductionCbIndex = tt::CBIndex::c_6;
 constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_7;
 constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_8;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_9;
+constexpr auto kOutputBeforeReductionCbIndex = tt::CBIndex::c_9;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
 
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumMaxValueTiles = 1U;
@@ -48,6 +48,7 @@ constexpr uint32_t kNumMaxValueAfterReductionTiles = 1U;
 constexpr uint32_t kNumExpSumBeforeReductionTiles = 1U;
 constexpr uint32_t kNumExpSumAfterReductionTiles = 1U;
 constexpr uint32_t kNumScalerTiles = 1U;  // used it to reduction ???
+constexpr uint32_t kNumOutputBeforeReductionTiles = 1U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 
@@ -242,6 +243,14 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
+    // TODO: add calculation of required  memory and check if it fits in L1
+    // then add possibility to kernels to process data by blocks
+    const uint32_t available_L1_in_bytes =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+
+    const uint64_t mask_scaler_maxmask_memory =
+        (kNumMaskTiles + kNumScalerTiles + kNumMaskTiles) * bfloat16_single_tile_size_bytes;
+
     const uint32_t num_input_tiles = Wt;
     const uint32_t num_target_tiles = Wt;
 
@@ -294,6 +303,14 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         data_format,
         bfloat16_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
+
+    auto cb_output_before_refuction = create_circular_buffer(
+        program,
+        all_cores,
+        kOutputBeforeReductionCbIndex,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        kNumOutputBeforeReductionTiles);
 
     auto cb_output = create_circular_buffer(
         program,
