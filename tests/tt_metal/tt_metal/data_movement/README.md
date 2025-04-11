@@ -31,5 +31,7 @@ Follow these steps to add new tests to this test suite.
     1. What your test does,
     2. What the test parameters are,
     3. And what different test cases are implemented.
+5. In the `CMakeLists.txt` file, add your test path in the `set(UNIT_TESTS_DATA_MOVEMENT_SRC ... )` call.
+    - **Example:** `${CMAKE_CURRENT_SOURCE_DIR}/dram_unary/test_unary_dram.cpp`
 
 **Note:** Make sure the tests pass by building and running as above.
