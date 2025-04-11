@@ -394,7 +394,7 @@ void PrefetchKernel::CreateKernel() {
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 36);
+    TT_ASSERT(compile_args.size() == 35);
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
     auto upstream_virtual_core =
         device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
