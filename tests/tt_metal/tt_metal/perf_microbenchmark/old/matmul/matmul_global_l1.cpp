@@ -901,59 +901,6 @@ tt_metal::Program create_program_mcast_in0_in1(
     return std::move(program);
 }
 
-namespace test {
-// Given a tensor that is row-major datums, make it tilized
-// so that its row major within a tile, and each tile's data
-// is contiguous
-template <typename T>
-std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0, "Error");
-    TT_FATAL(cols % 32 == 0, "Error");
-    int num_tiles_r = rows / 32;
-    int num_tiles_c = cols / 32;
-    std::vector<T> result;
-    for (auto r = 0; r < num_tiles_r; r++) {
-        for (auto c = 0; c < num_tiles_c; c++) {
-            for (auto j = 0; j < 32; j++) {      // tile rows
-                for (auto i = 0; i < 32; i++) {  // tile cols
-                    // each row of tiles is 32x32 * num_tiles_c
-                    // each row within the row of tiles is cols
-                    // each col of tiles is 32
-                    // pick row of tiles, pick the row within the tile, pick col tile
-                    int index = r * 32 * 32 * num_tiles_c + j * cols + c * 32 + i;
-                    result.push_back(data.at(index));
-                }
-            }
-        }
-    }
-    return result;
-}
-
-// Given a tilized data (each tile's data is contiguous and row major within the
-// tile) transform it back to row major full tensor. (This function inverts the
-// tilize() function)
-template <typename T>
-std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0, "Error");
-    TT_FATAL(cols % 32 == 0, "Error");
-    int num_tiles_r = rows / 32;
-    int num_tiles_c = cols / 32;
-    std::vector<T> result;
-    for (auto r = 0; r < num_tiles_r; r++) {
-        for (auto i = 0; i < 32; i++) {
-            for (auto c = 0; c < num_tiles_c; c++) {
-                int offset = r * 32 * 32 * num_tiles_c + c * 32 * 32 + i * 32;
-                for (auto j = 0; j < 32; j++) {
-                    result.push_back(data.at(offset + j));
-                }
-            }
-        }
-    }
-
-    return result;
-}
-}  // namespace test
-
 std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, int N) {
     if (N == K) {
         return data;
@@ -1099,14 +1046,16 @@ int main(int argc, char** argv) {
             0,
             100,
             std::chrono::system_clock::now().time_since_epoch().count());
-        auto activations_tilized = test::tilize(tensor.get_values(), Mt * 32, Kt * 32);
-        auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
+        auto activations_tilized = tilize_swizzled(tensor.get_values(), Mt * 32, Kt * 32);
+        auto activations_tile_layout =
+            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         tt_metal::detail::WriteToBuffer(in0_buffer, activations);
 
         auto identity = create_identity_matrix(Kt * 32, Nt * 32, std::min(Kt, Nt) * 32);
-        auto identity_tilized = test::tilize(identity, Kt * 32, Nt * 32);
-        auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
+        auto identity_tilized = tilize_swizzled(identity, Kt * 32, Nt * 32);
+        auto weights_tile_layout =
+            convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::detail::WriteToBuffer(in1_buffer, weights);
 
@@ -1177,8 +1126,8 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(out_buffer, result_vec);
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-        auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
-        auto result_untilized = test::untilize(result_flat_layout, Mt * 32, Nt * 32);
+        auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+        auto result_untilized = untilize_swizzled(result_flat_layout, Mt * 32, Nt * 32);
 
         auto golden = select_columns(tensor.get_values(), Mt, Kt, Nt);
         pass &= (golden == result_untilized);

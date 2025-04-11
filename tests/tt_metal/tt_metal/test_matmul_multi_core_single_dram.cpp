@@ -18,58 +18,6 @@
 using std::vector;
 using namespace tt;
 
-namespace test {
-// Given a tensor that is row-major datums, make it tilized
-// so that its row major within a tile, and each tile's data
-// is contiguous
-template <typename T>
-std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0, "Error");
-    TT_FATAL(cols % 32 == 0, "Error");
-    int num_tiles_r = rows / 32;
-    int num_tiles_c = cols / 32;
-    std::vector<T> result;
-    for (auto r = 0; r < num_tiles_r; r++) {
-        for (auto c = 0; c < num_tiles_c; c++) {
-            for (auto j = 0; j < 32; j++) {      // tile rows
-                for (auto i = 0; i < 32; i++) {  // tile cols
-                    // each row of tiles is 32x32 * num_tiles_c
-                    // each row within the row of tiles is cols
-                    // each col of tiles is 32
-                    // pick row of tiles, pick the row within the tile, pick col tile
-                    int index = r * 32 * 32 * num_tiles_c + j * cols + c * 32 + i;
-                    result.push_back(data.at(index));
-                }
-            }
-        }
-    }
-    return result;
-}
-
-// Given a tilized data (each tile's data is contiguous and row major within the tile)
-// transform it back to row major full tensor. (This function inverts the tilize() function)
-template <typename T>
-std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    TT_FATAL(rows % 32 == 0, "Error");
-    TT_FATAL(cols % 32 == 0, "Error");
-    int num_tiles_r = rows / 32;
-    int num_tiles_c = cols / 32;
-    std::vector<T> result;
-    for (auto r = 0; r < num_tiles_r; r++) {
-        for (auto i = 0; i < 32; i++) {
-            for (auto c = 0; c < num_tiles_c; c++) {
-                int offset = r * 32 * 32 * num_tiles_c + c * 32 * 32 + i * 32;
-                for (auto j = 0; j < 32; j++) {
-                    result.push_back(data.at(offset + j));
-                }
-            }
-        }
-    }
-
-    return result;
-}
-}  // namespace test
-
 // Transpose 2D matrix of tiles so that its column major of tiles instead of row major.
 // this is usually used for activation so that blocks data is contiguous in memory
 // until we have a more generalized read kernel that can read tiles from different
@@ -385,14 +333,14 @@ int main(int argc, char** argv) {
                 TT_FATAL(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024, "Error");
                 TT_FATAL(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024, "Error");
 
-                auto activations_tilized = test::tilize(activation_slice, per_core_M * 32, K * 32);
+                auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
                 auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
                 auto activations_tile_transposed = transpose_tiles(activations, per_core_M, K, in0_block_w);
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                     device, dram_src0_channel_id, dram_buffer_src0_addr, activations_tile_transposed);
 
-                auto identity_tilized = test::tilize(weights_slice, K * 32, per_core_N * 32);
+                auto identity_tilized = tilize(weights_slice, K * 32, per_core_N * 32);
                 auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
@@ -451,7 +399,7 @@ int main(int argc, char** argv) {
                     result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
-                auto result_untilized = test::untilize(result_flat_layout, per_core_M * 32, per_core_N * 32);
+                auto result_untilized = untilize(result_flat_layout, per_core_M * 32, per_core_N * 32);
                 pass &= (per_core_golden == result_untilized);
             }
         }
