@@ -70,10 +70,11 @@ constexpr uint32_t downstream_dev_id = get_compile_time_arg_val(27);
 constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(28);
 constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(29);
 constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(30);
-constexpr uint32_t client_interface_addr = get_compile_time_arg_val(31);
+constexpr uint32_t outbound_eth_chan = get_compile_time_arg_val(31);
+constexpr uint32_t client_interface_addr = get_compile_time_arg_val(32);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(32);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(33);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(33);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(34);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;

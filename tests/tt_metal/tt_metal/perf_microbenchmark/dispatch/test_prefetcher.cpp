@@ -1903,6 +1903,7 @@ void configure_for_single_chip(
         0,
         0,
         0,
+        0,
     };
 
     constexpr NOC my_noc_index = NOC::NOC_0;
@@ -2185,6 +2186,7 @@ void configure_for_single_chip(
         host_completion_queue_wr_ptr,
         dev_completion_queue_wr_ptr,
         dev_completion_queue_rd_ptr,
+        0,
         0,
         0,
         0,
