@@ -2303,7 +2303,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     }
 
     populate_worker_runtime_args(
-        builder_config, // fabric used here
+        builder_config,
         fabric_mode,
         command_streams,
         math_page_counts,

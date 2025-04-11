@@ -411,7 +411,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        (1, 2),
+        (8, 4),  # TODO: Once fabric can be initialized on a SubMesh, revert to (1, 2)
     ],
     indirect=True,
 )
@@ -430,8 +430,8 @@ def test_fabric_reduce_scatter_regular_grid_2_dev(
         pytest.skip("Not TG!")
 
     dim = 3
-    num_devices_scatter = 2
-    num_devices_fracture = 1
+    num_devices_scatter = 4
+    num_devices_fracture = 8
     num_cores = input_grid[0] * input_grid[1]
     num_iters = 30
 
@@ -469,7 +469,7 @@ def test_fabric_reduce_scatter_regular_grid_2_dev(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        (1, 4),
+        (8, 4),  # TODO: Once fabric can be initialized on a SubMesh, revert to (1, 4)
     ],
     indirect=True,
 )
@@ -489,7 +489,7 @@ def test_fabric_reduce_scatter_regular_grid_4_dev(
 
     dim = 3
     num_devices_scatter = 4
-    num_devices_fracture = 1
+    num_devices_fracture = 8
     num_cores = input_grid[0] * input_grid[1] - 5  # test padding
     num_iters = 30
 
