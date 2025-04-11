@@ -1018,9 +1018,7 @@ def test_unary_bitwise_not(input_shapes, device):
     assert pcc == 1
 
 
-# Supported range: [-0.998, 1e7]
-# -0.998 is near negative boundary (log(-1+1) approaches infinity)
-# 1e7 is a large positive beyond which pcc drops below 0.999
+# Supported range: [-0.998, 1e7]. -0.998 is near negative boundary (log(-1+1) approaches infinity). Beyond 1e7 pcc drops below 0.999.
 @pytest.mark.parametrize(
     "input_shapes",
     (
