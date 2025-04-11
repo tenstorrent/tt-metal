@@ -57,6 +57,8 @@ parameters = {
             [1, 832, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, True],
             [1, 832, 7, 7, 3, 3, 1, 1, 1, 1, 1, 1, True],
             [1, 96, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            [1, 256, 20, 20, 8, 8, 6, 6, 0, 0, 1, 1, False],  # max rows per reduction multiple large kernel
+            [1, 512, 20, 20, 8, 8, 6, 6, 0, 0, 1, 1, False],  # max rows per reduction multiple large kernel wide
         ],
     },
     "test_run_max_pool": {
