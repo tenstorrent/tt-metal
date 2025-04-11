@@ -50,7 +50,9 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(lambda model_args: DecodersPrecision.accuracy(model_args.n_layers), id="accuracy"),
+        pytest.param(
+            lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name), id="accuracy"
+        ),
     ],
 )
 def test_chunked_prefill_single_user(

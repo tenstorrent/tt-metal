@@ -409,8 +409,8 @@ def prepare_generator_args(
 @pytest.mark.parametrize(
     "optimizations",
     [
-        lambda model_args: DecodersPrecision.performance(model_args.n_layers),
-        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers),
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
     ids=["performance", "accuracy"],
 )
