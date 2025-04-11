@@ -4,12 +4,10 @@
 
 // namespace ckernel{unsigned *instrn_buffer;}
 #include "ckernel.h"
-
+#include "compute_kernel_api.h"
 #include <sfpi.h>
 
 using namespace sfpi;
-
-#include "compute_kernel_api/common.h"
 namespace NAMESPACE {
 void MAIN {
 #if 0
@@ -28,13 +26,14 @@ void MAIN {
         vUInt c0edbabe = vUInt(0xc0ed) << 16 | vUInt(0xbabe);
 
         dst_reg[0] = c0ffee;
-        dst_reg[1] = deadbeed;
+        dst_reg[1] = deadbeef;
         dst_reg[2] = c0edbabe;
-        dbg_halt();
+        //        dbg_halt();
         auto* args = reinterpret_cast<tt_l1_ptr uint32_t*>(get_compile_time_arg_val(0));
         dbg_read_dest_acc_row(0, args);
+        dbg_read_dest_acc_row(8, args + 8);
         // maybe +8 needed and then merge?
-        dbg_unhalt();
+        ..dbg_unhalt();
     }
 #endif
 #if 0
