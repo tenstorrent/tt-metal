@@ -676,16 +676,22 @@ void pytensor_module(py::module& m_tensor) {
             return py::cpp_function(std::function([function, function_name](
                                                       const py::args& args, const py::kwargs& kwargs) {
                 ZoneScopedN("TT_DNN_FALLBACK_OP");
-                uint32_t device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
+                // This op runs entirely on host, but its ID must be generated using the same data-path as device-side
+                // ops, for accurate reporting by the performance post-processor.
+                uint32_t host_operation_id = tt::tt_metal::detail::GeneratePerDeviceProgramID(
+                    ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id(), /* user assigned op id */
+                    0,   /* the op does not run on a device - this value is unused */
+                    true /* is_host_fallback_op */
+                );
                 auto [operation, input_tensors] =
                     detail::parse_external_operation(function, args, kwargs, function_name);
                 GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
                 detail::log_external_operation(
-                    ttnn::CoreIDs::instance().get_python_operation_id(), device_operation_id, operation, input_tensors);
+                    ttnn::CoreIDs::instance().get_python_operation_id(), host_operation_id, operation, input_tensors);
 
                 auto output = function(*args, **kwargs);
 
-                TracyOpTTNNExternal(device_operation_id, operation, input_tensors);
+                TracyOpTTNNExternal(host_operation_id, operation, input_tensors);
                 GraphTracker::instance().track_function_end(output);
                 return output;
             }));

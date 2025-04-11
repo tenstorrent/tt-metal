@@ -494,9 +494,14 @@ inline std::string op_meta_data_serialized_json(
 #define TracyOpMeshWorkload(                                                                                   \
     mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)             \
     for (const auto& [range, program] : mesh_workload.get_programs()) {                                        \
+        auto base_program_id = program.get_runtime_id();                                                       \
         for (auto coord : range) {                                                                             \
+            /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */ \
+            /* regression tests well-formed data. */                                                           \
+            /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                       \
+            ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
             auto device_id = mesh_device->get_device(coord)->id();                                             \
-            auto op_id = program.get_runtime_id();                                                             \
+            auto op_id = tt::tt_metal::detail::GeneratePerDeviceProgramID(base_program_id, device_id);         \
             std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                  \
                 operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
             std::string op_text = fmt::format("id:{}", op_id);                                                 \
