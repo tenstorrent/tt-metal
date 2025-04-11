@@ -9,6 +9,7 @@ jobs:
     secrets: inherit
     with:
       version: 22.04
+      build-umd-tests: true
   umd-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -24,3 +25,4 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
