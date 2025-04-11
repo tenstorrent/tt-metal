@@ -242,8 +242,8 @@ def test_demo(
     )
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
-        model_args = VisionModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_seq_len)
-        visual_model = DropInVisionTransformer(reference_model.visual, model_args, debug=False)  # show PCC
+        vision_model_args = VisionModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_seq_len)
+        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
     else:
         visual_model = reference_model.visual
     processor = AutoProcessor.from_pretrained(model_args.model_name)
