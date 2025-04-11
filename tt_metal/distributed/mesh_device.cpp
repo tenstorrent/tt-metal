@@ -140,9 +140,9 @@ MeshDevice::ScopedDevices::ScopedDevices(
         trace_region_size,
         dispatch_core_config,
         {},
+        worker_l1_size,
         /*init_profiler*/ false,
-        /*use_max_eth_core_count_on_all_devices*/ true,
-        worker_l1_size);
+        /*use_max_eth_core_count_on_all_devices*/ true);
 
     for (auto device_id : device_ids) {
         devices_.push_back(opened_devices_.at(device_id));
