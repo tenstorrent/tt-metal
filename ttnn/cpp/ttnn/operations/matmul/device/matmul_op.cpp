@@ -1536,36 +1536,6 @@ void Matmul::validate(
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core
             // or single row/col We can uplift these variants to skip mcasting to
             // support single core (1D) or single row/col (2D)
-            if constexpr (
-                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig> ||
-                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                // Validate input tensor A is within grid if sharded and not in DRAM
-                if (input_tensor_a.memory_config().is_sharded() &&
-                    input_tensor_a.memory_config().buffer_type != BufferType::DRAM) {
-                    const auto& shard_spec = input_tensor_a.memory_config().shard_spec.value();
-                    const auto& shard_grid = shard_spec.grid;
-                    CoreRange range(CoreCoord(0, 0), program_config.compute_with_storage_grid_size);
-                    TT_FATAL(
-                        range.contains(shard_grid),
-                        "Input tensor A shard spec grid must be within config grid! Shard grid: {}, Config grid: {}",
-                        shard_grid,
-                        program_config.compute_with_storage_grid_size);
-                }
-
-                // Validate input tensor B is within grid if sharded and not in DRAM
-                if (input_tensor_b.memory_config().is_sharded() &&
-                    input_tensor_b.memory_config().buffer_type != BufferType::DRAM) {
-                    const auto& shard_spec = input_tensor_b.memory_config().shard_spec.value();
-                    const auto& shard_grid = shard_spec.grid;
-                    CoreRange range(CoreCoord(0, 0), program_config.compute_with_storage_grid_size);
-                    TT_FATAL(
-                        range.contains(shard_grid),
-                        "Input tensor B shard spec grid must be within config grid! Shard grid: {}, Config grid: ()",
-                        shard_grid,
-                        program_config.compute_with_storage_grid_size);
-                }
-            }
-
             if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 TT_FATAL(
                     program_config.per_core_M % program_config.out_block_h == 0,
