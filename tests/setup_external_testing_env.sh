@@ -15,7 +15,6 @@ usage() {
 REUSE=false
 CLEAN=false
 TT_SMI_REPO="https://github.com/tenstorrent/tt-smi"
-SFPI_RELEASE_URL="https://github.com/tenstorrent/sfpi/releases/download/v6.6.0/sfpi-release.tgz"
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
