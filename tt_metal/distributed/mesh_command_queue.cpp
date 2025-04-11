@@ -32,7 +32,6 @@
 #include "strong_type.hpp"
 #include "system_memory_manager.hpp"
 #include "trace_buffer.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"

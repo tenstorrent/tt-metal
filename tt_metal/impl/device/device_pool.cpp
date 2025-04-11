@@ -32,7 +32,6 @@
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt_metal.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"

@@ -34,7 +34,6 @@
 #include "dispatch/memcpy.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/dispatch_mem_map.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>

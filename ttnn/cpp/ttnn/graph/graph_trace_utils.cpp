@@ -6,7 +6,6 @@
 
 #include <cstdlib>  // std::strtoul
 #include <string>
-#include <cstdlib>  // std::strtoul
 
 #include "graph_consts.hpp"
 #include "graph_processor.hpp"

@@ -20,7 +20,6 @@
 #include "eth_tunneler.hpp"
 #include "hal.hpp"
 #include "prefetch.hpp"
-#include "impl/context/metal_context.hpp"
 #include "utils.hpp"
 
 using namespace tt::tt_metal;

@@ -17,7 +17,6 @@
 #include "eth_router.hpp"
 #include "hal.hpp"
 #include "mux.hpp"
-#include "impl/context/metal_context.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
 

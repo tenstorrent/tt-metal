@@ -15,7 +15,6 @@
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 
 using namespace tt::tt_metal;
 

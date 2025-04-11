@@ -25,7 +25,6 @@
 #include "strong_type.hpp"
 #include "sub_device_types.hpp"
 #include "tt_align.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
