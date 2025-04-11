@@ -554,7 +554,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
     Layout input_tensor_layout,
     const DeviceComputeKernelConfig& compute_config,
     const MemoryConfig& input_memory_config,
-    const bool has_bias) {
+    const bool has_bias,
+    const bool disable_shard_height_tiling) {
     auto compute_grid_size = device->compute_with_storage_grid_size();
 
     conv_config = determine_conv_config_for_auto_shard(
@@ -572,6 +573,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
         input_tensor_layout,
         input_memory_config,
         kernel_size,
+        stride,
         groups,
         has_bias,
         compute_config);
@@ -599,7 +601,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
             compute_grid_size,
             shard_orientation,
             !mm_conv,
-            true,
+            !disable_shard_height_tiling,
             true,
             conv_config.act_block_h_override);
     }
@@ -1076,7 +1078,7 @@ ttnn::Tensor prepare_conv_weights(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
-
+    bool disable_shard_height_tiling = disable_shard_height_tile(stride, conv_config);
     auto opt_conv_op_block_config = get_opt_block_config(
         mm_conv,
         in_channels,
@@ -1094,7 +1096,8 @@ ttnn::Tensor prepare_conv_weights(
         input_tensor_layout,
         compute_config,
         input_memory_config,
-        has_bias);
+        has_bias,
+        disable_shard_height_tiling);
 
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
@@ -1120,7 +1123,7 @@ ttnn::Tensor prepare_conv_weights(
             device->compute_with_storage_grid_size(),
             shard_orientation,
             !mm_conv,
-            true,
+            !disable_shard_height_tiling,
             true,
             conv_config.act_block_h_override);
     }
@@ -1178,6 +1181,7 @@ ttnn::Tensor prepare_conv_bias(
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
+    bool disable_shard_height_tiling = disable_shard_height_tile(stride, conv_config);
     auto opt_conv_op_block_config = get_opt_block_config(
         mm_conv,
         in_channels,
@@ -1195,7 +1199,8 @@ ttnn::Tensor prepare_conv_bias(
         input_tensor_layout,
         compute_config,
         input_memory_config,
-        true);
+        true,
+        disable_shard_height_tiling);
 
     uint32_t weight_block_w_ntiles = opt_conv_op_block_config.out_subblock_w_ntiles;
     ShardOrientation shard_orientation =
@@ -1222,7 +1227,7 @@ ttnn::Tensor prepare_conv_bias(
             compute_grid,
             shard_orientation,
             !mm_conv,
-            true,
+            disable_shard_height_tiling,
             true,
             conv_config.act_block_h_override);
     }

@@ -72,7 +72,8 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool enable_split_reader,
-    bool enable_subblock_padding) {
+    bool enable_subblock_padding,
+    bool disable_shard_height_tiling) {
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({a, b}))};
 
     operation::launch_op(
@@ -90,7 +91,8 @@ Tensor optimized_conv_new(
          enable_act_double_buffer,
          enable_weights_double_buffer,
          enable_split_reader,
-         enable_subblock_padding](
+         enable_subblock_padding,
+         disable_shard_height_tiling](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -135,7 +137,8 @@ Tensor optimized_conv_new(
                 enable_act_double_buffer,
                 enable_weights_double_buffer,
                 enable_split_reader,
-                enable_subblock_padding);
+                enable_subblock_padding,
+                disable_shard_height_tiling);
             IDevice* device = a.device();
 
             optimized_conv_op.pre_op_l1_allocation_size_bytes =
@@ -201,8 +204,10 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
     // Tiled output shape is padded shape. Padded to tile shape.
     auto shape_w = batch_size * conv_output_h * conv_output_w;
     auto shape_c = output_channels;
-    auto padded_shape_w =
-        parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT;
+    auto padded_shape_w = this->disable_shard_height_tiling
+                              ? parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height
+                              : parallelization_config.num_cores_nhw *
+                                    parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT;
     auto padded_shape_c = tt::round_up(this->output_channels, TILE_WIDTH);
     ttnn::Shape output_shape({1, 1, shape_w, shape_c});
     ttnn::Shape padded_output_shape({1, 1, padded_shape_w, padded_shape_c});
@@ -214,6 +219,11 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
             uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntile;
             std::array<uint32_t, 2> shard_shape = {
                 this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT, padded_output_shape[-1]};
+            if (this->disable_shard_height_tiling) {
+                num_cores = this->parallelization_config.num_cores_nhw;
+                uint32_t total_height = output_shape.volume() / output_shape[-1];
+                shard_shape = {std::ceil((float)total_height / num_cores), padded_output_shape[-1]};
+            }
             CoreRangeSet shard_grid =
                 tt::tt_metal::num_cores_to_corerangeset(num_cores, this->parallelization_config.grid_size, true);
             auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
@@ -295,7 +305,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         enable_act_double_buffer,
         enable_weights_double_buffer,
         enable_split_reader,
-        enable_subblock_padding);
+        enable_subblock_padding,
+        disable_shard_height_tiling);
 
     const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
@@ -326,7 +337,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             output_channels,
             kernel_dims[1],
             sliding_window_config.get_output_shape()[2],
-            has_bias));
+            has_bias),
+        disable_shard_height_tiling);
 
     TT_FATAL(
         actual_cb_size == l1_usage.CB_allocation_size,
@@ -340,7 +352,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     bool is_graph_capture_no_dispathch_mode = post_op_l1_allocation_size == 0;
     TT_FATAL(
         post_op_l1_allocation_size == (this->pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size) ||
-            is_graph_capture_no_dispathch_mode,
+            is_graph_capture_no_dispathch_mode || disable_shard_height_tiling,
         "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
         this->pre_op_l1_allocation_size_bytes,
         post_op_l1_allocation_size,

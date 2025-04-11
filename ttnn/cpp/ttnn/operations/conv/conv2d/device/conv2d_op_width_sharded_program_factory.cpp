@@ -753,7 +753,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         partials_cb_uses_output = cb_config_matmul_partials.globally_allocated_address().value() ==
                                   cb_config_output.globally_allocated_address().value();
     }
-
     compute_kernel_args = {
         act_block_w_ntiles,      // in0_block_w
         act_num_subblocks,       // in0_num_sublocks
@@ -788,6 +787,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         cb_indices.out0_cb,
         0,
         partials_cb_uses_output,
+        num_output_tiles,
+        false,
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
 
     };

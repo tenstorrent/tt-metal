@@ -197,6 +197,7 @@ Result conv_transpose2d(
             ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                                    : std::nullopt,
             kernel_size,
+            stride,
             groups,
             bias_tensor.has_value(),
             compute_config);
@@ -214,7 +215,8 @@ Result conv_transpose2d(
         in_channels,
         out_channels,
         mm_conv,
-        auto_shard);
+        auto_shard,
+        false);
 
     uint32_t round_up_size = tt::constants::TILE_HEIGHT;
 

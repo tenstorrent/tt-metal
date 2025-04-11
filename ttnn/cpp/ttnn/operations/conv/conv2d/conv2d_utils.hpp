@@ -55,7 +55,7 @@ sliding_window::ParallelConfig determine_parallel_config(
     const CoreCoord& compute_grid_size,
     tt::tt_metal::ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
-    bool is_shard_height_tile_multiple = true,
+    bool disable_shard_height_tiling = true,
     bool is_shard_width_tile_multiple = true,
     uint32_t act_block_h_override = 0);
 
@@ -75,6 +75,8 @@ std::tuple<uint32_t, uint32_t> calculate_output_image_size(
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
 uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
+
+bool disable_shard_height_tile(const std::array<uint32_t, 2>& stride, const Conv2dConfig& conv_config);
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(
     const ttnn::Shape& tensor_shape, const sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
@@ -125,7 +127,8 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
     uint32_t width,
     uint32_t in_channels,
     uint32_t out_channels,
-    bool is_mm_conv);
+    bool is_mm_conv,
+    bool disable_shard_height_tiling);
 
 template <typename DeviceType>
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(DeviceType* device);
@@ -145,6 +148,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     Layout input_tensor_layout,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
     const uint32_t groups,
     const bool enable_bias,
     const DeviceComputeKernelConfig& compute_config);
@@ -161,7 +165,8 @@ shard_or_reshard_tensor_if_required(
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv,
-    bool auto_shard);
+    bool auto_shard,
+    bool disable_shard_height_tiling);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 

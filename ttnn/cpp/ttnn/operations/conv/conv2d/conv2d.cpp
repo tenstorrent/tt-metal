@@ -85,11 +85,15 @@ Result conv2d(
             ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                                    : std::nullopt,
             kernel_size,
+            stride,
             groups,
             bias_tensor.has_value(),
             compute_config);
         auto_shard = true;
     }
+
+    bool disable_shard_height_tiling = disable_shard_height_tile(stride, conv_config);
+    log_info(tt::LogOp, "disable_shard_height_tiling: {}", disable_shard_height_tiling);
 
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
@@ -104,7 +108,8 @@ Result conv2d(
         in_channels,
         out_channels,
         mm_conv,
-        auto_shard);
+        auto_shard,
+        disable_shard_height_tiling);
 
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
@@ -178,7 +183,7 @@ Result conv2d(
             .dilation_hw = {dilation[0], dilation[1]},
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid,
-            .snap_to_tile = true,
+            .snap_to_tile = !disable_shard_height_tiling,
         };
 
         bool bypass_halo =
@@ -203,7 +208,7 @@ Result conv2d(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 0,
                 input_tensor_post_tm.memory_config(),
-                true,
+                !disable_shard_height_tiling,
                 conv_config.in_place);
 
             if (conv_config.deallocate_activation) {
@@ -235,7 +240,9 @@ Result conv2d(
             compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
-            conv_config.enable_split_reader);
+            conv_config.enable_split_reader,
+            conv_config.enable_subblock_padding,
+            disable_shard_height_tiling);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);

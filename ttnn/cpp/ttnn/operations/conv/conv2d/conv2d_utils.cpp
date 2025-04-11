@@ -93,6 +93,18 @@ static uint32_t set_shard_width_to_half_tile_if_possible(
     return num_cores;
 }
 
+bool disable_shard_height_tile(const std::array<uint32_t, 2>& stride, const Conv2dConfig& conv_config) {
+    log_info(
+        tt::LogOp,
+        "stride[0]: {} stride[1] {} conv_config.shard_layout: {} conv_config.output_layout: {}",
+        stride[0],
+        stride[1],
+        conv_config.shard_layout,
+        conv_config.output_layout);
+    return stride[0] >= 8 && stride[1] >= 8 && conv_config.shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+           conv_config.output_layout == Layout::ROW_MAJOR;
+}
+
 ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
@@ -290,6 +302,7 @@ OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_o
         .num_cores_c = num_cores_c,
         .per_core_out_matrix_height_ntile = div_up(shard_shape[0], tt::constants::TILE_HEIGHT),
         .per_core_out_matrix_width_ntile = div_up(shard_shape[1], tt::constants::TILE_WIDTH),
+        .per_core_out_matrix_height = shard_shape[0],
     };
 }
 
@@ -437,7 +450,8 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
     uint32_t width,
     uint32_t in_channels,
     uint32_t out_channels,
-    bool is_mm_conv) {
+    bool is_mm_conv,
+    bool disable_shard_height_tiling) {
     ttnn::Tensor input_tensor = input_tensor_;  // tensor to return
     bool input_tensor_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_);
     bool needs_shard_or_reshard = false;
@@ -502,6 +516,9 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
             }
         }
     }
+    if (disable_shard_height_tiling) {
+        needs_shard_or_reshard = true;
+    }
 
     ParallelConfig parallel_config = input_tensor_parallel_config;
     if (conv_config.reshard_if_not_optimal || needs_shard_or_reshard) {
@@ -517,7 +534,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
             device->compute_with_storage_grid_size(),
             block_shard_orientation,
             !is_mm_conv,
-            true,
+            !disable_shard_height_tiling,
             true,
             conv_config.act_block_h_override);
 
@@ -545,7 +562,8 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
         const auto& input_shape = input_tensor.get_logical_shape();
         uint32_t tensor_height = input_shape[0] * input_shape[1] * input_shape[2];
         uint32_t round_up_size = tt::constants::TILE_HEIGHT;
-        if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED && input_tensor_.layout() == Layout::ROW_MAJOR) {
+        if ((shard_layout == TensorMemoryLayout::WIDTH_SHARDED && input_tensor_.layout() == Layout::ROW_MAJOR) ||
+            disable_shard_height_tiling) {
             round_up_size = 1;
         }
         uint32_t input_tensor_height_snapped_to_tile = tt::round_up(tensor_height, input_num_cores_nhw * round_up_size);
@@ -589,14 +607,24 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv,
-    bool auto_shard) {
+    bool auto_shard,
+    bool disable_shard_height_tiling) {
     ttnn::Tensor input_tensor = input_tensor_;  // tensor to return
     bool input_tensor_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_);
     auto compute_grid_size = device->compute_with_storage_grid_size();
 
     auto [input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard] =
         get_conv_padded_input_shape_and_mem_config(
-            device, input_tensor_, conv_config, batch_size, height, width, in_channels, out_channels, is_mm_conv);
+            device,
+            input_tensor_,
+            conv_config,
+            batch_size,
+            height,
+            width,
+            in_channels,
+            out_channels,
+            is_mm_conv,
+            disable_shard_height_tiling);
     ParallelConfig parallel_config = {
         .grid = input_tensor_sharded_memory_config.shard_spec.value().grid,
         .shard_scheme = input_tensor_sharded_memory_config.memory_layout,
@@ -735,6 +763,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     Layout input_tensor_layout,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
     const uint32_t groups,
     const bool enable_bias,
     const DeviceComputeKernelConfig& compute_config) {
@@ -786,6 +815,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         // conv2d params, but these are good enough for L1 usage estimation.
         const ttnn::Shape weights_shape(
             {1, 1, in_channels_padded * kernel_size[0] * kernel_size[1], output_channels_padded});
+        bool disable_shard_height_tiling = disable_shard_height_tile(stride, conv_config);
 
         const ParallelConfig input_parallel_config = determine_parallel_config(
             conv_config.shard_layout.value(),
@@ -797,7 +827,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             compute_grid_size,
             shard_orientation,
             !is_mm_conv,
-            true,
+            !disable_shard_height_tiling,
             true,
             conv_config.act_block_h_override);
 
@@ -836,7 +866,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             conv_config,
             conv_out_memory_config,
             enable_bias,
-            conv_is_1d_deptwise);
+            conv_is_1d_deptwise,
+            disable_shard_height_tiling);
 
         // Since we don't have L1 usage for halo output (input to conv2d)
         // use approx input tensor size per core as a proxy.
@@ -847,7 +878,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         uint32_t approx_input_size_per_core = approx_input_size / input_parallel_config.grid.num_cores();
 
         l1_usage.tensor_allocation_size += approx_input_size_per_core;
-        log_debug(
+        log_info(
             tt::LogOp,
             "L1 usage for {}: {}, {}",
             conv_config.shard_layout,
@@ -860,14 +891,16 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     };
 
     core_count_and_size height = get_l1_usage_for_sharding(TensorMemoryLayout::HEIGHT_SHARDED, conv_config);
-
+    log_info(tt::LogOp, "L1 usage for height sharding: {}", height.size);
     // 1d deptwise convs support only height sharding
     if (conv_is_1d_deptwise) {
         return height.conv_config;
     }
 
     const core_count_and_size block = get_l1_usage_for_sharding(TensorMemoryLayout::BLOCK_SHARDED, conv_config);
+    log_info(tt::LogOp, "L1 usage for block sharding: {}", block.size);
     const core_count_and_size width = get_l1_usage_for_sharding(TensorMemoryLayout::WIDTH_SHARDED, conv_config);
+    log_info(tt::LogOp, "L1 usage for width sharding: {}", width.size);
 
     core_count_and_size& winning_config = height;
     // Make sure that BS not only has smaller size but provides at least some slicing along the channels.
@@ -879,8 +912,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         winning_config = width;
     }
 
-    log_debug(LogOp, "Core counts H: {} B: {}, W: {}", height.core_count, block.core_count, width.core_count);
-    log_debug(
+    log_info(LogOp, "Core counts H: {} B: {}, W: {}", height.core_count, block.core_count, width.core_count);
+    log_info(
         LogOp, "Selected shard layout: {}, size: {}", winning_config.conv_config.shard_layout, winning_config.size);
 
     return winning_config.conv_config;
@@ -947,7 +980,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const Conv2dConfig& conv_config,
     const MemoryConfig& output_memory_config,
     const bool enable_bias,
-    bool is_1d_depthwise_conv) {
+    bool is_1d_depthwise_conv,
+    bool disable_shard_height_tiling) {
     bool untilize_out = conv_config.output_layout == Layout::ROW_MAJOR;
 
     // Output of halo op is always ROW_MAJOR, so input for convs is eighter DataType::FLOAT32 or DataType::BFLOAT16
@@ -1251,7 +1285,8 @@ template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input
     uint32_t width,
     uint32_t in_channels,
     uint32_t out_channels,
-    bool is_mm_conv);
+    bool is_mm_conv,
+    bool disable_shard_height_tiling);
 
 template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config<MeshDevice>(
     MeshDevice* device,
@@ -1262,7 +1297,8 @@ template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input
     uint32_t width,
     uint32_t in_channels,
     uint32_t out_channels,
-    bool is_mm_conv);
+    bool is_mm_conv,
+    bool disable_shard_height_tiling);
 
 template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor_if_required<IDevice>(
     IDevice* device,
@@ -1274,7 +1310,8 @@ template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_resha
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv,
-    bool auto_shard);
+    bool auto_shard,
+    bool disable_shard_height_tiling);
 
 template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor_if_required<MeshDevice>(
     MeshDevice* device,
@@ -1286,7 +1323,8 @@ template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_resha
     uint32_t in_channels,
     uint32_t out_channel,
     bool is_mm_conv,
-    bool auto_shard);
+    bool auto_shard,
+    bool disable_shard_height_tiling);
 
 template DeviceComputeKernelConfig get_conv_default_compute_kernel_config<tt::tt_metal::IDevice>(
     tt::tt_metal::IDevice* device);
