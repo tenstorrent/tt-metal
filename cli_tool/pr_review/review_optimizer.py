@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import argparse
 import subprocess
@@ -27,6 +27,7 @@ def get_pr_files(pr_number, repo):
 def get_codeowners(file_path):
     """Get codeowners for a file path"""
     try:
+        # "codeowners" installation in setup.py
         result = subprocess.run(
             ["codeowners", file_path],
             capture_output=True,
@@ -42,7 +43,7 @@ def get_codeowners(file_path):
             owners_list = owners_part.split() if owners_part else []
         else:
             owners_list = []
-        # print(f"Owners for {file_path}: {owners_list}")
+        print(f"Owners for {file_path}: {owners_list}")
         return owners_list
     except subprocess.CalledProcessError as e:
         print(f"Error getting codeowners for {file_path}: {e}")
@@ -64,11 +65,10 @@ def select_reviewers(file_owners, include, skip):
         if any(owner in include for owner in file['owners']):
             file['owners'] = []
 
-    # Refreshes untouched files after including reviewers
-    untouched_files = [file for file in file_owners if file['owners']]
+    remaining_owner_files = [file for file in file_owners if file['owners']]
 
     owner_files = {}
-    for file in untouched_files:
+    for file in remaining_owner_files:
         for owner in file['owners']:
             if owner in owner_files:
                 owner_files[owner].add(file['filename'])
@@ -76,7 +76,7 @@ def select_reviewers(file_owners, include, skip):
                 owner_files[owner] = {file['filename']}
 
     # Sort the owners by the number of unique files they cover
-    while untouched_files:
+    while remaining_owner_files:
         max_coverage_owner = max(owner_files, key=lambda o: len(owner_files[o]), default=None)
         
         if not max_coverage_owner:
@@ -86,15 +86,13 @@ def select_reviewers(file_owners, include, skip):
         
         # Remove all files that the selected owner can review
         covered_files = owner_files.pop(max_coverage_owner, set())
-        untouched_files = [file for file in untouched_files if file['filename'] not in covered_files]
+        remaining_owner_files = [file for file in remaining_owner_files if file['filename'] not in covered_files]
 
         # Update owner_files by removing the files already reviewed
         for owner in owner_files:
             owner_files[owner] -= covered_files
 
     return sorted(f"@{reviewer}" for reviewer in selected_reviewers)  # Ensure consistent output format
-
-
 
 def review_optimizer():
     args = parse_args()

@@ -2,7 +2,22 @@
 
 A tool to automatically select reviewers for pull requests based on code ownership.
 
-## Installation
+# Codeowner Installation
+
+Before installing this package, ensure you have the `codeowners` CLI installed:
+
+## macOS
+```sh
+brew tap hmarr/tap
+brew install codeowners
+```
+
+## Other platforms
+```sh
+go install github.com/hmarr/codeowners/cmd/codeowners@latest
+```
+
+## Review Optimizer Installation
 
 ### For Development (Editable Install)
 
