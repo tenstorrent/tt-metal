@@ -140,8 +140,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     else:
         assert enable_persistent_fabric, "Persistent fabric must be enabled for async reduce scatter"
 
-    for d in mesh_device.get_devices():
-        ttnn.enable_program_cache(d)
+    ttnn.enable_program_cache(mesh_device)
     mesh_device.enable_async(enable_async)
 
     per_reduce_scatter_output_shape = list(per_chip_input_shape)
