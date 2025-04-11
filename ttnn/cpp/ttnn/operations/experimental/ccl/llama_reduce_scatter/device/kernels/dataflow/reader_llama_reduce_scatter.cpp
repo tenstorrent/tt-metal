@@ -145,27 +145,8 @@ void kernel_main() {
 
             noc_async_read(output_noc_address, receiver_l1_address, page_size_bytes);
         }
-        if (receiver_core) {
-            // Precompute multicast semaphore address once
-#ifndef SKIP_MCAST
-            const uint64_t multicast_semaphore_addr = static_noc_multicast_addr(
-                packet_worker_start_x,
-                packet_worker_start_y,
-                packet_worker_end_x,
-                packet_worker_end_y,
-                local_semaphore_address);
 
-            noc_semaphore_wait((uint32_t*)receiver_semaphore_address, total_senders);
-            noc_semaphore_set_multicast(
-                receiver_semaphore_address,
-                multicast_semaphore_addr,
-                num_dests - 1);  // could do different mcast for each device by having num_devices - 1 receiver cores
-#else
-            noc_semaphore_wait((uint32_t*)receiver_semaphore_address, total_senders);
-#endif
-        } else {
-            noc_semaphore_wait((uint32_t*)local_semaphore_address, total_senders);
-        }
+        noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices);
 
         noc_async_read_barrier();
         cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
