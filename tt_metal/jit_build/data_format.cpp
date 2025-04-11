@@ -126,7 +126,7 @@ std::vector<DataFormat> get_unpack_src_formats(DataFormat data_formats[NUM_CIRCU
 }
 
 const DataFormat get_single_unpack_dst_format(
-    const DataFormat src_format, const DataFormat pack_format, const DataFormat unpack_conditional_dst_format) {
+    const DataFormat src_format, const DataFormat /*pack_format*/, const DataFormat unpack_conditional_dst_format) {
     DataFormat dst_format = src_format;
     if (src_format == DataFormat::Float32) {
         TT_FATAL(
@@ -155,7 +155,7 @@ bool is_all_fp32_formats(const DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
 std::vector<DataFormat> get_unpack_dst_formats(
     DataFormat buf_formats[NUM_CIRCULAR_BUFFERS],
     DataFormat unpack_conditional_dst_format,
-    bool fp32_dest_acc_en,
+    bool /*fp32_dest_acc_en*/,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
     bool int_fpu_en) {
     if (!unpack_to_dest_mode.empty()) {

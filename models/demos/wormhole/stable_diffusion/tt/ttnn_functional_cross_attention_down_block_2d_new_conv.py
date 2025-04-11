@@ -12,15 +12,11 @@ from loguru import logger
 
 
 class cross_attention_down_block_2d:
-    def __init__(
-        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-    ):
+    def __init__(self, device, parameters, batch_size, input_height, input_width, compute_kernel_config):
         self.device = device
         self.parameters = parameters
         self.resnets = [
-            resnetBlock2D(
-                device, resnet, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-            )
+            resnetBlock2D(device, resnet, batch_size, input_height, input_width, compute_kernel_config)
             for i, resnet in enumerate(parameters.resnets)
         ]
         self.attentions = [
@@ -30,7 +26,6 @@ class cross_attention_down_block_2d:
         self.downsample_2d = downsample_2d(
             device,
             parameters.downsamplers[0],
-            reader_patterns_cache,
             batch_size,
             input_height,
             input_width,

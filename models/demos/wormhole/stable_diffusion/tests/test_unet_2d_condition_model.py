@@ -119,8 +119,7 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
         encoder_hidden_states, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
     encoder_hidden_states = ttnn.to_device(encoder_hidden_states, device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    reader_patterns_cache = {}
-    model = UNet2D(device, parameters, batch_size, input_height, input_width, reader_patterns_cache)
+    model = UNet2D(device, parameters, batch_size, input_height, input_width)
 
     first_iter = time.time()
     use_signpost = True

@@ -23,7 +23,7 @@
 #include "host_runtime_commands.hpp"
 #include "launch_message_ring_buffer_state.hpp"
 #include "multi_producer_single_consumer_queue.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "span.hpp"
 #include "sub_device_types.hpp"
 #include "trace_buffer.hpp"

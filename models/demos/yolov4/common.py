@@ -18,6 +18,10 @@ from models.demos.yolov4.reference.head import Head
 from models.demos.yolov4.reference.neck import Neck
 from models.demos.yolov4.reference.yolov4 import Yolov4
 
+YOLOV4_BOXES_PCC = 0.99
+YOLOV4_CONFS_PCC = 0.9
+YOLOV4_BOXES_PCC_BLACKHOLE = 0.96
+
 
 def load_image(image_path, resolution):
     image = cv2.imread(image_path)

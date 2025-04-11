@@ -791,7 +791,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
 // weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propogate link addresses
-void JitBuildState::weaken(const string& log_file, const string& out_dir) const {
+void JitBuildState::weaken(const string& /*log_file*/, const string& out_dir) const {
     // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";

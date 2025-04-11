@@ -31,7 +31,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"

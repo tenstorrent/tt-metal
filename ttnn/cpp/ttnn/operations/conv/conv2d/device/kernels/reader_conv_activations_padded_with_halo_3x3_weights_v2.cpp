@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-
 constexpr uint32_t DILATION_W = get_compile_time_arg_val(3);
 void kernel_main() {
     constexpr uint32_t stride_h = get_compile_time_arg_val(0);
@@ -129,6 +128,7 @@ void kernel_main() {
                         l1_write_addr_act += conv_act_c_read_bytes;
                         act_l1_offset += stride_w_bytes;
                     }
+                    l1_write_addr_act += act_block_w_extra_align_bytes;
 
                     act_l1_offset = reader_offset + (reader_idx_2 * conv_act_c_read_bytes);
                     for (uint32_t inner = 0; inner < weight_size_w; inner++) {
@@ -136,6 +136,7 @@ void kernel_main() {
                         l1_write_addr_act += conv_act_c_read_bytes;
                         act_l1_offset += stride_w_bytes;
                     }
+                    l1_write_addr_act += act_block_w_extra_align_bytes;
                 }
                 reader_idx++;
             }

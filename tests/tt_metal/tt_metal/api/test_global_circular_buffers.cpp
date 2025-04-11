@@ -20,7 +20,7 @@
 #include <tt-metalium/data_types.hpp>
 #include "dispatch_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_metal {

@@ -7,7 +7,7 @@
 #include <circular_buffer.hpp>
 #include <device.hpp>
 #include <kernel.hpp>
-#include <program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <vector_aligned.hpp>
 #include <worker_config_buffer.hpp>

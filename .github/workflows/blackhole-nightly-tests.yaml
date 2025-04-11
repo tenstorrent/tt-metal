@@ -9,7 +9,7 @@ on:
           type: string
           default: 'BH'
       run-ttnn-tests:
-          description: "Run ttnn test suite"
+          description: "Run ttnn unit and L2 test suite"
           default: false
           type: boolean
   workflow_call:
@@ -23,7 +23,7 @@ on:
     - cron: "0 */12 * * *"  # Every day at 0:00 and 12:00 UTC
     - cron: "0 8 * * 6"     # Runs at 8am UTC every Saturday
 
-run-name: ${{ (github.event.schedule == '0 8 * * 6' || (github.event_name == 'workflow_dispatch' && inputs.run-ttnn-tests)) && '(Blackhole) Blackhole nightly tests (with ttnn)' || '(Blackhole) Blackhole nightly tests' }}  # Dynamically change name based on day
+run-name: ${{ (github.event.schedule == '0 8 * * 6' || (github.event_name == 'workflow_dispatch' && inputs.run-ttnn-tests)) && '(Blackhole) Blackhole nightly tests (with ttnn+L2)' || '(Blackhole) Blackhole nightly tests' }}  # Dynamically change name based on day
 
 jobs:
   build-artifact:
@@ -48,6 +48,18 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  ttnn-l2-tests:
+    needs: build-artifact
+    if: github.event.schedule == '0 8 * * 6' || (github.event_name == 'workflow_dispatch' && inputs.run-ttnn-tests)  # Only run L2 on the weekends or if workflow manually triggered with ttnn enabled
+    secrets: inherit
+    uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 120
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

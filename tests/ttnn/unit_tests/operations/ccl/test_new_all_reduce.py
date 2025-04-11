@@ -74,6 +74,7 @@ def run_all_reduce_impl(
     input_core_range_set,
     output_num_cores,
     output_core_range_set,
+    output_dtype=None,
     loopback_size=1,
     num_iters=1,
     warmup_iters=0,
@@ -83,6 +84,9 @@ def run_all_reduce_impl(
     profiler=BenchmarkProfiler(),
 ):
     cluster_shape = (8, 4)
+
+    if output_dtype is None:
+        output_dtype = input_dtype
 
     create_persistent_fabric = True
     teardown_persistent_fabric = True
@@ -226,6 +230,7 @@ def run_all_reduce_impl(
                     mesh_device=mesh_device,
                     multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
                     memory_config=output_mem_config,
+                    dtype=output_dtype,
                     topology=all_reduce_topology,
                     num_links=num_links,
                     subdevice_id=worker_sub_device_id,

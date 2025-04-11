@@ -25,6 +25,7 @@ void validate_supported_arch_dtype(
         case UnaryOpType::LEFT_SHIFT:
         case UnaryOpType::RIGHT_SHIFT:
         case UnaryOpType::MAXIMUM:
+        case UnaryOpType::MINIMUM:
             TT_FATAL(
                 arch != tt::ARCH::GRAYSKULL,
                 "UnaryOpType '{}' is not supported on Grayskull architecture.",

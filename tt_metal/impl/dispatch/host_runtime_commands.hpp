@@ -21,7 +21,7 @@
 #include "device_command.hpp"
 #include "env_lib.hpp"
 #include "multi_producer_single_consumer_queue.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"

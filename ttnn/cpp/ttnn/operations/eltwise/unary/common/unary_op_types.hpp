@@ -94,6 +94,7 @@ enum class UnaryOpType {
     ZERO_POINT,
     MISH,
     MAXIMUM,
+    MINIMUM,
 };
 
 struct UnaryWithParam {

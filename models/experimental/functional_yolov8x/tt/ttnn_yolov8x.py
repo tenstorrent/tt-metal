@@ -68,7 +68,6 @@ class Conv:
         enable_act_double_buffer=False,
         enable_split_reader=False,
         reshard_if_not_optimal=False,
-        cache={},
         batch_size=1,
     ):
         self.device = device
@@ -90,7 +89,6 @@ class Conv:
         self.enable_act_double_buffer = enable_act_double_buffer
         self.enable_split_reader = enable_split_reader
         self.reshard_if_not_optimal = reshard_if_not_optimal
-        self.cache = cache
         self.batch_size = batch_size
 
         self.conv_config = self._initialize_conv_config()
@@ -168,8 +166,6 @@ class Conv:
             input_width=input_width,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
-            conv_op_cache=self.cache,
-            debug=False,
             groups=self.groups,
             memory_config=None,
             return_weights_and_bias=True,

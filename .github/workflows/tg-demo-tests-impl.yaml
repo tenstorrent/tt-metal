@@ -62,6 +62,19 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
+      - name: Save environment data
+        if: ${{ (matrix.test-group.name == 'TG Falcon7b demo tests') && !cancelled() }}
+        run: |
+          python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+      - name: Upload benchmark data
+        if: ${{ (matrix.test-group.name == 'TG Falcon7b demo tests') && !cancelled() }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

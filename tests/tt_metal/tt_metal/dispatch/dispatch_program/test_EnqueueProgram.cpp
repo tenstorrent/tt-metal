@@ -42,7 +42,7 @@
 #include "llrt/hal.hpp"
 #include <tt-metalium/logger.hpp>
 #include "multi_command_queue_fixture.hpp"
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "random_program_fixture.hpp"
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/semaphore.hpp>

@@ -6,7 +6,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov4.common import get_model_result, load_torch_model
+from models.demos.yolov4.common import (
+    YOLOV4_BOXES_PCC,
+    YOLOV4_CONFS_PCC,
+    get_model_result,
+    load_torch_model,
+)
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs, get_region_boxes
 from models.demos.yolov4.tt.model_preprocessing import create_yolov4_model_parameters
 from models.demos.yolov4.tt.yolov4 import TtYOLOv4
@@ -34,7 +39,7 @@ class YOLOv4PerformanceRunnerInfra:
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
 
-        torch_model = load_torch_model(self.model_location_generator)
+        self.torch_model = load_torch_model(self.model_location_generator)
 
         input_shape = (1, *resolution, 3)
 
@@ -42,10 +47,10 @@ class YOLOv4PerformanceRunnerInfra:
         self.input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
         self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
 
-        parameters = create_yolov4_model_parameters(torch_model, self.torch_input_tensor, resolution, device)
+        parameters = create_yolov4_model_parameters(self.torch_model, self.torch_input_tensor, resolution, device)
         self.ttnn_yolov4_model = TtYOLOv4(parameters, device)
 
-        self.torch_output_tensor = torch_model(self.torch_input_tensor)
+        self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
         ref1, ref2, ref3 = gen_yolov4_boxes_confs(self.torch_output_tensor)
         self.ref_boxes, self.ref_confs = get_region_boxes([ref1, ref2, ref3])
 
@@ -101,16 +106,12 @@ class YOLOv4PerformanceRunnerInfra:
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
         result_boxes, result_confs = get_model_result(output_tensor, self.resolution)
 
-        valid_pcc = 0.99
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.ref_boxes, result_boxes, pcc=valid_pcc)
-
+        self.pcc_passed, self.pcc_message = assert_with_pcc(self.ref_boxes, result_boxes, pcc=YOLOV4_BOXES_PCC)
         logger.info(
             f"Yolov4 - Bboxes. batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
         )
 
-        valid_pcc = 0.71
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.ref_confs, result_confs, pcc=valid_pcc)
-
+        self.pcc_passed, self.pcc_message = assert_with_pcc(self.ref_confs, result_confs, pcc=YOLOV4_CONFS_PCC)
         logger.info(
             f"Yolov4 - Confs. batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
         )

@@ -45,7 +45,7 @@
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include "logger.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "semaphore.hpp"
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
@@ -250,7 +250,7 @@ void SetRuntimeArgsImpl(
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
     const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
-    bool blocking) {
+    bool /*blocking*/) {
     std::vector<uint32_t> resolved_runtime_args = {};
     resolved_runtime_args.reserve(runtime_args_ptr->size());
 

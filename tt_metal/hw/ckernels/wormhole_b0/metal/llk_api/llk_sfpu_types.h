@@ -77,6 +77,7 @@ enum SfpuType {
     unary_gt,
     unary_lt,
     unary_max,
+    unary_min,
     softplus,
     tiled_prod,
     bitwise_xor,

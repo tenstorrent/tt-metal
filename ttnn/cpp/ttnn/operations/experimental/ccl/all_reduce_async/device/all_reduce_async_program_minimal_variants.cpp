@@ -48,6 +48,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
+    DataType output_dtype,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -138,6 +139,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     uint32_t cb_num_pages = tt::div_up(output_tensor_cores.num_cores(), num_links) * output_tensor_shard_num_pages;
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat output_df = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
@@ -258,13 +260,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     auto cb_reduction = tt::tt_metal::CreateCircularBuffer(program, all_cores, reduction_cb_config);
 
     /* out cb */
-    uint32_t out_CB_single_tile_size = output_tensor.get_tensor_spec().tile().get_tile_size(df);
+    uint32_t out_CB_single_tile_size = output_tensor.get_tensor_spec().tile().get_tile_size(output_df);
     uint32_t out_CB_tiles = output_tensor_shard_num_pages;
     uint32_t out_CB_size = out_CB_tiles * out_CB_single_tile_size;
 
     uint32_t out_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig out_cb_config =
-        tt::tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, df}})
+        tt::tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, output_df}})
             .set_page_size(out_cb_index, out_CB_single_tile_size)
             .set_globally_allocated_address(*output_tensor.buffer());  // TODO: Remove once new cb attached for output
     auto cb_out = tt::tt_metal::CreateCircularBuffer(

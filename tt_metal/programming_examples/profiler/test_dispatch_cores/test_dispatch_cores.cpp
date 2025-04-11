@@ -55,7 +55,7 @@ void RunCustomCycle(tt_metal::IDevice* device, int loop_count) {
     tt_metal::DumpDeviceProfileResults(device, program);
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

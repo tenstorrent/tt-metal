@@ -5,7 +5,7 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
