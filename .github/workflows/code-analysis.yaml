@@ -69,7 +69,6 @@ jobs:
     container:
       image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
       env:
-        CCACHE_REMOTE_STORAGE: "redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
         CARGO_HOME: /tmp/.cargo
@@ -89,11 +88,17 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
           if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
             echo "Redis password is missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
+          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: Create ccache tmpdir

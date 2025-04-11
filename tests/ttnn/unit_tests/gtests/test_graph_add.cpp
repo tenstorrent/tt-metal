@@ -70,7 +70,9 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             ttnn::zeros(params.b_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, params.memory_config);
 
         auto call = [&] {
-            const auto output_tensor = ttnn::add(input_tensor_a, input_tensor_b);
+            constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+            const auto output_tensor = ttnn::add(
+                input_tensor_a, input_tensor_b, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
             return output_tensor;
         };
 
@@ -148,7 +150,10 @@ INSTANTIATE_TEST_SUITE_P(
                 .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
                 .expected_calltrace =
-                    {"ttnn::add", "ttnn::prim::binary", "BinaryDeviceOperation", "tt::tt_metal::create_device_tensor"},
+                    {"ttnn::add",
+                     "ttnn::prim::binary_ng",
+                     "BinaryNgDeviceOperation",
+                     "tt::tt_metal::create_device_tensor"},
                 .expected_peak_L1_memory_usage = 30720,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 3 * 4096,
@@ -164,34 +169,14 @@ INSTANTIATE_TEST_SUITE_P(
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
                 .expected_calltrace =
                     {"ttnn::add",
-                     "ttnn::repeat",
-                     "ttnn::to_layout",
-                     "ttnn::untilize",
-                     "ttnn::prim::old_infra_device_operation",
-                     "Untilize",
-                     "tt::tt_metal::create_device_tensor",
-                     "ttnn::view",
-                     "ttnn::experimental::view",
-                     "Tensor::reshape",
-                     "ttnn::prim::old_infra_device_operation",
-                     "RepeatDeviceOperation",
-                     "tt::tt_metal::create_device_tensor",
-                     "ttnn::view",
-                     "ttnn::experimental::view",
-                     "Tensor::reshape",
-                     "ttnn::to_layout",
-                     "ttnn::tilize",
-                     "ttnn::prim::old_infra_device_operation",
-                     "Tilize",
-                     "tt::tt_metal::create_device_tensor",
-                     "ttnn::prim::binary",
-                     "BinaryDeviceOperation",
+                     "ttnn::prim::binary_ng",
+                     "BinaryNgDeviceOperation",
                      "tt::tt_metal::create_device_tensor"},
-                .expected_peak_L1_memory_usage = 92160,
+                .expected_peak_L1_memory_usage = 67584,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 3 * 4096,
                 .expected_l1_output_per_core = 2048,
-                .expected_l1_peak_per_core = 2 * 2048,
+                .expected_l1_peak_per_core = 2048,
                 .expected_output_info = {graph::TensorInfo{
                     .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
                     .size = 24576,
@@ -209,7 +194,10 @@ INSTANTIATE_TEST_SUITE_P(
                              {6 * 32, 32 * 32},
                              ShardOrientation::COL_MAJOR}},
                 .expected_calltrace =
-                    {"ttnn::add", "ttnn::prim::binary", "BinaryDeviceOperation", "tt::tt_metal::create_device_tensor"},
+                    {"ttnn::add",
+                     "ttnn::prim::binary_ng",
+                     "BinaryNgDeviceOperation",
+                     "tt::tt_metal::create_device_tensor"},
                 .expected_peak_L1_memory_usage = 20054016,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 0,

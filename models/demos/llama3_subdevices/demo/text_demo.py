@@ -454,7 +454,7 @@ def test_demo_text(
             prompt_lens=decoding_pos,
             enable_trace=prefill_enable_trace,
         )
-        prefilled_token = torch.argmax(logits, dim=-1)
+        prefilled_token = logits.view(-1, 1)  # torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
