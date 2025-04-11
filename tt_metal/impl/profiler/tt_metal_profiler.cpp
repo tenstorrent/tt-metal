@@ -140,7 +140,7 @@ void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
         if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
             // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
-            // generic API to read from an address instead of a buffer.
+            // generic API to read from an address instead of a buffer. (#15015)
             CoreCoord logical_worker_core =
                 soc_d.translate_coord_to(curr_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
             auto control_buffer_view = get_control_buffer_view(
@@ -189,8 +189,12 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = kernel_defines});
 
-    tt_metal::detail::LaunchProgram(
-        device, sync_program, false /* wait_until_cores_done */, /* force_slow_dispatch */ true);
+    if (device->dispatch_firmware_active()) {
+        EnqueueProgram(device->command_queue(), *sync_program, false);
+    } else {
+        tt_metal::detail::LaunchProgram(
+            device, sync_program, false /* wait_until_cores_done */, /* force_slow_dispatch */ true);
+    }
 
     std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
@@ -217,8 +221,11 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             &sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
-
-    tt_metal::detail::WaitProgramDone(device, *sync_program, false);
+    if (device->dispatch_firmware_active()) {
+        Finish(device->command_queue());
+    } else {
+        tt_metal::detail::WaitProgramDone(device, *sync_program, false);
+    }
 
     log_info("SYNC PROGRAM FINISH IS DONE ON {}", device_id);
     if ((smallestHostime[device_id] == 0) || (smallestHostime[device_id] > hostStartTime)) {
@@ -400,6 +407,12 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
     }
 
     if (device_sender != nullptr and device_receiver != nullptr) {
+        FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+        TT_FATAL(
+            fabric_config != FabricConfig::DISABLED,
+            "Cannot support device to device synchronization when TT-Fabric is disabled.");
+        log_info("Calling {} when TT-Fabric is enabled. This may take a while", __FUNCTION__);
+
         constexpr std::uint16_t sample_count = 240;
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;

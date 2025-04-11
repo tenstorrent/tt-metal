@@ -90,7 +90,7 @@ void DeviceProfiler::readRiscProfilerResults(
     std::vector<uint32_t> control_buffer;
     if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
         // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
-        // generic API to read from an address instead of a buffer.
+        // generic API to read from an address instead of a buffer. (#15015)
         auto control_buffer_view = get_control_buffer_view(
             device,
             reinterpret_cast<uint64_t>(profiler_msg->control_vector),
@@ -290,9 +290,19 @@ void DeviceProfiler::readRiscProfilerResults(
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
     control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
     control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
-
-    tt::llrt::write_hex_vec_to_core(
-        device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+    if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
+        // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
+        // generic API to read from an address instead of a buffer. (#15015)
+        auto control_buffer_view = get_control_buffer_view(
+            device,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE,
+            logical_worker_core);
+        EnqueueWriteBuffer(device->command_queue(), control_buffer_view, control_buffer_reset, true);
+    } else {
+        tt::llrt::write_hex_vec_to_core(
+            device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+    }
 }
 
 void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
