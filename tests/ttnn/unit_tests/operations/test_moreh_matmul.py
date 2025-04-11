@@ -417,6 +417,7 @@ def test_moreh_matmul_backward(params, requires_grad, dtype, device):
     moreh_matmul_backward(params, requires_grad, device, dtype=dtype)
 
 
+@skip_for_blackhole("Fails on BH. Issue #19639")
 @pytest.mark.parametrize(
     "params",
     (
