@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -139,12 +139,12 @@ def run_all_reduce_qkv_heads_perf_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        output_core_range_set = ttnn.num_cores_to_corerangeset(output_num_cores, ttnn.CoreCoord(8, 5), row_wise=True)
+        ar_core_range_set = ttnn.num_cores_to_corerangeset(output_num_cores, ttnn.CoreCoord(8, 5), row_wise=True)
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                output_core_range_set,
+                ar_core_range_set,
                 [M, output_N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -153,7 +153,7 @@ def run_all_reduce_qkv_heads_perf_impl(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                output_core_range_set,
+                ar_core_range_set,
                 [M, output_N_per_shard * cluster_shape[cluster_axis]],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -484,12 +484,12 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        output_core_range_set = ttnn.num_cores_to_corerangeset(output_num_cores, ttnn.CoreCoord(8, 5), row_wise=True)
+        ar_core_range_set = ttnn.num_cores_to_corerangeset(output_num_cores, ttnn.CoreCoord(8, 5), row_wise=True)
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                output_core_range_set,
+                ar_core_range_set,
                 [M, output_N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -498,7 +498,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                output_core_range_set,
+                ar_core_range_set,
                 [M, output_N_per_shard * cluster_shape[cluster_axis]],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -809,12 +809,12 @@ def run_all_reduce_qkv_heads_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        output_core_range_set = ttnn.num_cores_to_corerangeset(output_num_cores, ttnn.CoreCoord(8, 5), row_wise=True)
+        ar_core_range_set = ttnn.num_cores_to_corerangeset(output_num_cores, ttnn.CoreCoord(8, 5), row_wise=True)
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                output_core_range_set,
+                ar_core_range_set,
                 [M, output_N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -823,7 +823,7 @@ def run_all_reduce_qkv_heads_impl(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                output_core_range_set,
+                ar_core_range_set,
                 [M, output_N_per_shard * cluster_shape[cluster_axis]],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -1049,12 +1049,12 @@ def run_all_reduce_qkv_heads_fuse_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        output_core_range_set = ttnn.num_cores_to_corerangeset(output_num_cores, ttnn.CoreCoord(8, 5), row_wise=True)
+        ar_core_range_set = ttnn.num_cores_to_corerangeset(output_num_cores, ttnn.CoreCoord(8, 5), row_wise=True)
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                output_core_range_set,
+                ar_core_range_set,
                 [M, output_N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -1063,7 +1063,7 @@ def run_all_reduce_qkv_heads_fuse_impl(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                output_core_range_set,
+                ar_core_range_set,
                 [M, output_N_per_shard * cluster_shape[cluster_axis]],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
