@@ -396,6 +396,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     output_shape,
     cluster_axis,
     input_dtype,
+    output_dtype,
     num_links,
     input_num_cores,
     output_num_cores,
@@ -572,6 +573,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
             batch_offset=batch_offset_tt_tensor,
             slice_size=8,
+            dtype=output_dtype,
         )
 
         # After ConcatMesh2dToTensor
@@ -627,6 +629,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                     final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
                     batch_offset=batch_offset_tt_tensor,
                     slice_size=8,
+                    dtype=output_dtype,
                 )
 
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
@@ -650,6 +653,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
                 batch_offset=batch_offset_tt_tensor,
                 slice_size=8,
+                dtype=output_dtype,
             )
 
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -959,6 +963,7 @@ def run_all_reduce_qkv_heads_fuse_impl(
     output_shape,
     cluster_axis,
     input_dtype,
+    output_dtype,
     num_links,
     input_num_cores,
     output_num_cores,
@@ -1122,6 +1127,7 @@ def run_all_reduce_qkv_heads_fuse_impl(
             final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
             batch_offset=batch_offset_tt_tensor,
             slice_size=8,
+            dtype=output_dtype,
         )  # [1, 1, 32, 1280]
         # Batch Slicing
         # 32 BS is split into 8 Mini BS across 4 devices
@@ -1260,6 +1266,12 @@ def test_all_reduce_qkv_heads(
         ttnn.bfloat8_b,
     ],
 )
+@pytest.mark.parametrize(
+    "output_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize(
     "mesh_device",
@@ -1273,6 +1285,7 @@ def test_all_reduce_qkv_heads_fuse(
     output_shape,
     cluster_axis,
     input_dtype,
+    output_dtype,
     num_links,
     input_num_cores,
     output_num_cores,
@@ -1287,6 +1300,7 @@ def test_all_reduce_qkv_heads_fuse(
         output_shape,
         cluster_axis,
         input_dtype,
+        output_dtype,
         num_links,
         input_num_cores,
         output_num_cores,
@@ -1381,6 +1395,12 @@ def test_all_reduce_qkv_heads_perf(
 @pytest.mark.parametrize(
     "input_dtype",
     [
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "output_dtype",
+    [
         ttnn.bfloat16,
     ],
 )
@@ -1401,6 +1421,7 @@ def test_all_reduce_qkv_heads_fuse_perf(
     output_shape,
     cluster_axis,
     input_dtype,
+    output_dtype,
     num_links,
     input_num_cores,
     output_num_cores,
@@ -1418,6 +1439,7 @@ def test_all_reduce_qkv_heads_fuse_perf(
         output_shape,
         cluster_axis,
         input_dtype,
+        output_dtype,
         num_links,
         input_num_cores,
         output_num_cores,

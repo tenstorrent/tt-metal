@@ -14,6 +14,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     std::vector<Tensor>& output_tensors,
+    const DataType dtype,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -39,7 +40,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
 
     // For qkv heads fuse
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
 
     const uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     const uint32_t head_tiles = head_dim / tt::constants::TILE_WIDTH;
@@ -214,7 +215,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     uint32_t cb_num_pages = input_tensor_num_pages;  // TODO: Reduce this to double-buffer packet-size?
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    tt::DataFormat output_df = tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::BFLOAT16);
+    tt::DataFormat output_df = tt::tt_metal::datatype_to_dataformat_converter(dtype);
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})

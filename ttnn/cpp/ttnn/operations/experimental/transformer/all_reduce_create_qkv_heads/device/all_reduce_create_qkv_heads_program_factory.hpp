@@ -38,6 +38,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
+    const DataType dtype,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
