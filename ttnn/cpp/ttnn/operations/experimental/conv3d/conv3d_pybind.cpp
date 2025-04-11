@@ -18,7 +18,23 @@ void py_bind_conv3d(pybind11::module& module) {
         module,
         ttnn::experimental::conv3d,
         R"doc(
-        Conv 3D
+        Applies a 3D convolution over an input signal composed of several input planes. \
+        Expects Input Tensor in [N, D, H, W, C] format.  \
+        Expects Weight Tensor in [1, 1, kD * kH * kW * C_in, C_out] format. \
+        Expects Bias Tensor in [1, 1, 1, 32, C_out] format. \
+        Input must be in row major interleaved format. \
+        Output will be in row major interleaved format.
+
+        :param input_tensor: Input tensor.
+        :param weight_tensor: Weight tensor.
+        :param bias_tensor: Bias tensor.
+        :param config: Configuration for the Conv3D operation.
+        :param memory_config: Memory configuration for the output of the Conv3D operation.
+        :param compute_kernel_config: Compute kernel configuration for the Conv3D operation.
+        :param queue_id: Queue ID for the Conv3D operation.
+
+        :return: Output tensor after applying the Conv3D operation.
+        :rtype: ttnn.Tensor
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::experimental::conv3d)& self,
