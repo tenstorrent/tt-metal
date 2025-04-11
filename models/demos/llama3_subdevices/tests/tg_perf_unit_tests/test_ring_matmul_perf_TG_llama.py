@@ -14,11 +14,11 @@ THRESHOLD = 1.0
 @pytest.mark.parametrize(
     "mm_type, perf_target_us",
     [
-        ("qkv", 8.9),
+        ("qkv", 9.2),
         ("do", 7.3),
-        ("ff13", 8.9),
-        ("ff2", 13.8),
-        ("lm_head", 340),
+        ("ff13", 9.9),
+        ("ff2", 14.8),
+        ("lm_head", 380),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

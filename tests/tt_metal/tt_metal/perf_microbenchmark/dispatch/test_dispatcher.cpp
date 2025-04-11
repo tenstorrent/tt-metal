@@ -600,6 +600,8 @@ int main(int argc, char** argv) {
             0,
             0,
             0,
+            0,
+            0,
             0,     // unused for single device - used to "virtualize" the number of eth cores across devices
             0,     // unused for single device - used to "virtualize" the number of eth cores across devices
             0,     // unused for single device - used to "virtualize" the number of eth cores across devices

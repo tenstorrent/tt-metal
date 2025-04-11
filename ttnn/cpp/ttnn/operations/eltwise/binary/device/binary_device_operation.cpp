@@ -44,6 +44,7 @@ namespace utils {
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_AND:
         case BinaryOpType::BITWISE_OR: return (a == DataType::INT32 && b == DataType::INT32);
+        case BinaryOpType::MAXIMUM:
         case BinaryOpType::POWER: return true;
         default: return false;
     }

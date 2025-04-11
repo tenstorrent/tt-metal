@@ -85,7 +85,7 @@ struct AllGatherConcat {
         const ttnn::MeshCoordinate& mesh_coord,
         const std::vector<Tensor>& input_tensors,
         std::vector<Tensor>& output_tensors) const;
-    const tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
+    tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
 // All Gather Variants

@@ -177,7 +177,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Softmax::create_program(
         this->program_config);
 }
 
-const tt::tt_metal::operation::Hash Softmax::compute_program_hash(
+tt::tt_metal::operation::Hash Softmax::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     return tt::tt_metal::operation::hash_operation<Softmax>(
