@@ -75,9 +75,6 @@ void MAIN {
                     if (j > i) {
                         const uint32_t left_tile_id = i;
                         const uint32_t right_tile_id = j;
-                        DPRINT_MATH(
-                            DPRINT << "INPUT MATRIX ROW: " << U32(h) << " SORTING TILES: " << U32(left_tile_id)
-                                   << " and " << U32(right_tile_id) << ENDL());
 
                         acquire_dst();
 
