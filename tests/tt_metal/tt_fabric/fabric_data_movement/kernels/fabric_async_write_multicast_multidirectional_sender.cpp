@@ -38,14 +38,10 @@ void kernel_main() {
     volatile fabric_pull_client_interface_t* client_interface =
         (volatile fabric_pull_client_interface_t*)client_interface_addr;
     for (uint32_t i = 0; i < num_dirs; i++) {
-        fabric_endpoint_init<decltype(client_interface)>(client_interface + i, 0 /* unused */);
+        fabric_endpoint_init(client_interface + i, 0 /* unused */);
     }
 
-    fabric_async_write_multicast<
-        decltype(client_interface),
-        (ClientDataMode)data_mode,
-        AsyncWriteMode::ALL,
-        RoutingType::ROUTER_XY>(
+    fabric_async_write_multicast<(ClientDataMode)data_mode, AsyncWriteMode::ALL, RoutingType::ROUTER_XY>(
         client_interface,
         e_router_noc_xy,
         src_addr,  // source address in sender’s memory
@@ -70,7 +66,6 @@ void kernel_main() {
         packet_header->packet_parameters.mcast_parameters.west = w_depth;
 
         fabric_async_write_multicast<
-            decltype(client_interface),
             (ClientDataMode)data_mode,
             AsyncWriteMode::ADD_AND_SEND_PR,
             RoutingType::ROUTER_XY>(
@@ -89,11 +84,7 @@ void kernel_main() {
         client_interface++;
         // For sideband header, we will use header slot in second client interface.
         // Use AsyncWriteMode::ALL, since the header slot needs to be initialized.
-        fabric_async_write_multicast<
-            decltype(client_interface),
-            (ClientDataMode)data_mode,
-            AsyncWriteMode::ALL,
-            RoutingType::ROUTER_XY>(
+        fabric_async_write_multicast<(ClientDataMode)data_mode, AsyncWriteMode::ALL, RoutingType::ROUTER_XY>(
             client_interface,
             w_router_noc_xy,
             src_addr,  // source address in sender’s memory
