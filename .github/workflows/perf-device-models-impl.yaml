@@ -61,7 +61,7 @@ jobs:
           if [[ "${{ matrix.test-info.arch }}" == "wormhole_b0" ]]; then
             export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
           fi
-          pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
+          TRANSFORMERS_CACHE=/mnt/MLPerf/tt_dnn-models/StableDiffusion HF_HOME=/mnt/MLPerf/tt_dnn-models/StableDiffusion pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
           pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
           pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
           pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal
