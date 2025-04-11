@@ -1120,7 +1120,7 @@ void Device::init_fabric() {
             if (core_type == CoreType::ETH) {
                 tt_cxy_pair virtual_eth_core(this->id(), physical_core);
                 // Enable internal ethernet routing
-                tt::Cluster::instance().write_core(
+                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                     (void*)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr, false);
             }
         }

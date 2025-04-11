@@ -596,13 +596,9 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                 "N300/T3K expects devices in mmio/remote pairs.");
             std::vector<DispatchKernelNode> nodes_for_one_mmio;
             // TODO: Put this in a better place
-            if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
-                TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
-                // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
-                nodes_for_one_mmio = two_chip_arch_1cq_fabric;
-            } else {
-                nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq : two_chip_arch_2cq;
-            }
+            TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
+            // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
+            nodes_for_one_mmio = two_chip_arch_1cq_fabric;
 
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
