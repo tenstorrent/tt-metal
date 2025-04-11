@@ -617,15 +617,87 @@ if(WITH_PYTHON_BINDINGS)
             "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp>"
     )
 
-    target_link_libraries(
-        ttnn
-        PUBLIC
-            "$<BUILD_INTERFACE:TTNN::CPP>"
-        PRIVATE
-            pybind11::module
-            Boost::algorithm
-            TT::Metalium
-    )
+    if(EXPERIMENTAL_NANOBIND_BINDINGS)
+        # TODO: This block was removed in main. Figure out how to interop with
+        # manylinux work
+        # nanobind requires this to be invoked before nanobind is included
+        if(CMAKE_VERSION VERSION_LESS 3.18)
+            set(DEV_MODULE Development)
+        else()
+            set(DEV_MODULE Development.Module)
+        endif()
+
+        # This is what pybind11 does in its cmake under the hood, so it should be fine
+        # with the manylinux wheel.
+        set(Python3_FIND_STRATEGY LOCATION)
+        find_package(
+            Python3
+            REQUIRED
+            COMPONENTS
+                Interpreter
+                ${DEV_MODULE}
+            OPTIONAL_COMPONENTS
+                Development.SABIModule
+        )
+        message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
+
+        # https://nanobind.readthedocs.io/en/latest/api_cmake.html#low-level-interface
+        # -static Perform a static library build (without this suffix, a shared build is used)
+        # -abi3   Perform a stable ABI build targeting Python v3.12+.
+        # -ft     Perform a build that opts into the Python 3.13+ free-threaded behavior.
+
+        set(NANOBIND_LIBNAME "nanobind-static")
+        nanobind_build_library(${NANOBIND_LIBNAME})
+        add_library(TT::Nanobind ALIAS ${NANOBIND_LIBNAME})
+
+        # find_package(Python3) required for here.
+        # nanobind doesn't build otherwise.
+        # PUBLIC on the headers also required
+        target_include_directories(${NANOBIND_LIBNAME} PUBLIC ${Python3_INCLUDE_DIRS})
+
+        target_link_libraries(
+            ttnn
+            PUBLIC
+                "$<BUILD_INTERFACE:TTNN::CPP>"
+            PRIVATE
+                TT::Nanobind
+                Boost::algorithm
+                TT::Metalium
+        )
+        # .. enable size optimizations
+        nanobind_opt_size(ttnn)
+
+        # .. enable link time optimization
+        nanobind_lto(ttnn)
+
+        # .. set the default symbol visibility to 'hidden'
+        #nanobind_set_visibility(ttnn)
+
+        # .. strip unneeded symbols and debug info from the binary (only active in release builds)
+        #nanobind_strip(ttnn)
+
+        # .. disable the stack protector
+        #nanobind_disable_stack_protector(ttnn)
+
+        # .. set the Python extension suffix
+        #nanobind_extension(ttnn)
+
+        # .. set important compilation flags
+        nanobind_compile_options(ttnn)
+
+        # .. set important linker flags
+        nanobind_link_options(ttnn)
+    else()
+        target_link_libraries(
+            ttnn
+            PUBLIC
+                "$<BUILD_INTERFACE:TTNN::CPP>"
+            PRIVATE
+                pybind11::module
+                Boost::algorithm
+                TT::Metalium
+        )
+    endif()
     if(TT_INSTALL)
         install(TARGETS ttnn EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime)
     endif()

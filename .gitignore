@@ -17,6 +17,8 @@ build
 build_*
 /python_env/
 CMakeUserPresets.json
+.session
+
 /llk_out/
 /out/
 
@@ -55,6 +57,7 @@ docs/build
 docs/env
 docs/doxygen_build
 
+**~
 **.swp
 **.swo
 **.swn

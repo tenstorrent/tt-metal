@@ -137,6 +137,7 @@ void py_module(py::module& module) {
         py::arg("transpose_mcast").noconvert(),
         py::arg("fused_activation"),
         py::arg("fuse_batch").noconvert() = true);
+
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "compute_with_storage_grid_size",
         &MatmulMultiCoreReuseMultiCastProgramConfig::compute_with_storage_grid_size,
@@ -147,6 +148,7 @@ void py_module(py::module& module) {
         access to storage. This determines how the computation is distributed across cores
         and affects multicast communication patterns.
     )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "in0_block_w", &MatmulMultiCoreReuseMultiCastProgramConfig::in0_block_w, R"doc(
         Block width for both input tensors along the K dimension (shared inner dimension).
@@ -156,6 +158,7 @@ void py_module(py::module& module) {
         Must be a divisor of the K dimension. Smaller blocks can improve load balancing but
         may increase communication overhead in multicast scenarios.
     )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "out_subblock_h", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_h, R"doc(
         Height of output subblocks in tiles.
@@ -164,6 +167,7 @@ void py_module(py::module& module) {
         Must divide evenly into out_block_h. Affects memory usage and compute scheduling
         in the multicast implementation.
     )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "out_subblock_w", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_w, R"doc(
         Width of output subblocks in tiles.
@@ -172,6 +176,7 @@ void py_module(py::module& module) {
         Must divide evenly into out_block_w. Affects memory usage and compute scheduling
         in the multicast implementation.
     )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "out_block_h", &MatmulMultiCoreReuseMultiCastProgramConfig::out_block_h, R"doc(
         Height of output blocks in tiles.
@@ -180,6 +185,7 @@ void py_module(py::module& module) {
         defaults to per_core_M. Must be divisible by out_subblock_h and should be chosen
         to optimize multicast efficiency and memory usage.
     )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "out_block_w", &MatmulMultiCoreReuseMultiCastProgramConfig::out_block_w, R"doc(
         Width of output blocks in tiles.
@@ -188,6 +194,7 @@ void py_module(py::module& module) {
         defaults to per_core_N. Must be divisible by out_subblock_w and should be chosen
         to optimize multicast efficiency and memory usage.
     )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "per_core_M", &MatmulMultiCoreReuseMultiCastProgramConfig::per_core_M, R"doc(
         Number of output tiles each core processes along the M dimension.
@@ -195,6 +202,7 @@ void py_module(py::module& module) {
         Determines how the M dimension is distributed across cores in the multicast setup.
         Used as the default value for out_block_h if not explicitly specified.
     )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "per_core_N", &MatmulMultiCoreReuseMultiCastProgramConfig::per_core_N, R"doc(
         Number of output tiles each core processes along the N dimension.
@@ -202,6 +210,7 @@ void py_module(py::module& module) {
         Determines how the N dimension is distributed across cores in the multicast setup.
         Used as the default value for out_block_w if not explicitly specified.
     )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "transpose_mcast", &MatmulMultiCoreReuseMultiCastProgramConfig::transpose_mcast, R"doc(
         Whether to transpose the multicast communication pattern.
@@ -210,6 +219,7 @@ void py_module(py::module& module) {
         certain tensor shapes and grid configurations. This affects how data is broadcast
         across cores and can impact performance depending on the access patterns.
     )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation, R"doc(
         Optional fused activation function to apply to the output.
@@ -218,6 +228,7 @@ void py_module(py::module& module) {
         directly during the matmul computation, avoiding the need for a separate activation
         operation and improving performance.
     )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def_readwrite(
         "fuse_batch", &MatmulMultiCoreReuseMultiCastProgramConfig::fuse_batch, R"doc(
         Whether to fuse batch dimensions into the matrix dimensions.

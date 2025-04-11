@@ -8,7 +8,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 
-ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
+ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
 TEST_SHAPES = [(5, 5), (32, 32), (50, 50), (16, 16, 16), (16, 16, 16, 16), (16, 16, 16, 16, 16)]
 
 

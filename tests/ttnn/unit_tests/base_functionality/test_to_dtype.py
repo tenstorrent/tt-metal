@@ -23,8 +23,8 @@ def is_ttnn_float_type(tt_dtype) -> bool:
             return False
 
 
-ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
-FLOAT_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if is_ttnn_float_type(dtype)]
+ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
+FLOAT_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if is_ttnn_float_type(dtype)]
 
 
 @pytest.mark.parametrize("height", [32])

@@ -32,6 +32,7 @@ void py_bind_view(py::module& module) {
             >>> tensor = ttnn.from_torch(torch.tensor((2, 1, 4), dtype=torch.bfloat16), device=device)
             >>> output = ttnn.experimental.view(tensor, (2, 1, 1, 4))
         )doc";
+
     bind_registered_operation(
         module,
         ttnn::experimental::view,

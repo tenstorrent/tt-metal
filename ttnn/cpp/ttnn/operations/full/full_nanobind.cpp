@@ -1,0 +1,58 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "full_nanobind.hpp"
+
+#include <optional>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/tuple.h>
+
+#include "full.hpp"
+#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn/operations/full/device/full_device_operation.hpp"
+
+namespace ttnn::operations::full {
+void bind_full_operation(nb::module_& mod) {
+    auto doc = fmt::format(
+        R"doc(
+        Creates a tensor of the specified shape and fills it with the specified scalar value.
+
+        Args:
+            shape (ttnn.Shape): The shape of the tensor.
+            fill_value (float or int): The value to fill the tensor with.
+            any (ttnn.tensor): Any input tensor with desired device and data types for output tensor.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
+            device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: A filled tensor of specified shape and value.
+
+        Example:
+            >>> any = ttnn.zeros(shape=(2, 2), dtype=ttnn.bfloat16)
+            >>> filled_tensor = ttnn.moreh_full([2, 2], any, 7.0, dtype=ttnn.bfloat16)
+            >>> print(filled_tensor)
+            ttnn.Tensor([[[[7.0,  7.0],
+                            [7.0,  7.0]]]], shape=Shape([2, 2]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+        )doc",
+        ttnn::moreh_full.base_name());
+
+    bind_registered_operation(
+        mod,
+        ttnn::moreh_full,
+        doc,
+        ttnn::nanobind_arguments_t{
+            nb::arg("shape"),
+            nb::arg("fill_value"),
+            nb::arg("any"),
+            nb::kw_only(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("layout") = nb::none(),
+            nb::arg("memory_config") = nb::none()});
+}
+
+}  // namespace ttnn::operations::full
