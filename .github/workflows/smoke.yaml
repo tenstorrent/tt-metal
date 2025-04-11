@@ -21,7 +21,7 @@ jobs:
   metalium-smoke:
     runs-on: >-
       ${{
-        github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        fromJSON(format('["{0}"]',·inputs.runner)
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner))
       }}
     container:
