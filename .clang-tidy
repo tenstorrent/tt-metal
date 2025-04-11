@@ -148,7 +148,6 @@ Checks: >
   -readability-avoid-const-params-in-decls,
   -readability-avoid-unconditional-preprocessor-if,
   -readability-braces-around-statements,
-  -readability-const-return-type,
   -readability-container-contains,
   -readability-container-data-pointer,
   -readability-container-size-empty,
