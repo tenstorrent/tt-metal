@@ -150,7 +150,11 @@ static_assert(
     "Special marker 0 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t SENDER_CHANNEL_ACK_NOC_IDS_START_IDX = SPECIAL_MARKER_0_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t SKIP_LIVENESS_CHECK_ARG_IDX = SPECIAL_MARKER_0_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
+    fill_array_with_next_n_args<bool, SKIP_LIVENESS_CHECK_ARG_IDX, NUM_SENDER_CHANNELS>();
+
+constexpr size_t SENDER_CHANNEL_ACK_NOC_IDS_START_IDX = SKIP_LIVENESS_CHECK_ARG_IDX + NUM_SENDER_CHANNELS;
 constexpr size_t SENDER_CHANNEL_ACK_CMD_BUF_IDS_START_IDX = SENDER_CHANNEL_ACK_NOC_IDS_START_IDX + NUM_SENDER_CHANNELS;
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids =
     fill_array_with_next_n_args<size_t, SENDER_CHANNEL_ACK_NOC_IDS_START_IDX, NUM_SENDER_CHANNELS>();
