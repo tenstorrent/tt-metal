@@ -30,6 +30,7 @@ set(TTNN_CCL_UNIT_TESTS_SRC
 )
 
 set(TTNN_FABRIC_EDM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_fabric_edm.cpp)
+set(TTNN_1D_FABRIC_LATENCY_TEST_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_1d_fabric_loopback_latency.cpp)
 
 set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/common_tensor_test_utils.cpp
@@ -49,6 +50,7 @@ add_executable(unit_tests_ttnn ${TTNN_UNIT_TESTS_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_ttnn)
 add_executable(unit_tests_ttnn_ccl ${TTNN_CCL_UNIT_TESTS_SRC})
 add_executable(unit_tests_ttnn_fabric_edm ${TTNN_FABRIC_EDM_SRC})
+add_executable(unit_tests_ttnn_1d_fabric_latency ${TTNN_1D_FABRIC_LATENCY_TEST_SRC})
 add_executable(unit_tests_ttnn_tensor ${TTNN_TENSOR_UNIT_TESTS_SRC})
 add_executable(test_multi_device ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_device.cpp)
 add_executable(galaxy_unit_tests_ttnn ${CMAKE_CURRENT_SOURCE_DIR}/test_ccl_on_galaxy.cpp)
@@ -69,6 +71,7 @@ target_link_libraries(
 setup_ttnn_test_target(unit_tests_ttnn)
 setup_ttnn_test_target(unit_tests_ttnn_ccl)
 setup_ttnn_test_target(unit_tests_ttnn_fabric_edm)
+setup_ttnn_test_target(unit_tests_ttnn_1d_fabric_latency)
 setup_ttnn_test_target(unit_tests_ttnn_tensor)
 setup_ttnn_test_target(test_multi_device)
 setup_ttnn_test_target(galaxy_unit_tests_ttnn)
