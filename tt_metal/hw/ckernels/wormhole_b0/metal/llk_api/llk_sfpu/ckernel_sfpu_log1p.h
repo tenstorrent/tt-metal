@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-#include "sfpi.h"
 
 using namespace sfpi;
 
@@ -26,6 +25,7 @@ inline void calculate_log1p() {
         in = in + 1.0f;
         vFloat x = setexp(in, 127);  // Normalize to [1, 2] range
 
+        // Cheby Approximation using Horner Form Multiplication: 3rd Order
         vFloat series_result = x * (x * (x * a + b) + 2.0871) + -1.4753f;
 
         vInt exp = exexp(in);
@@ -35,9 +35,13 @@ inline void calculate_log1p() {
         vFloat expf = int32_to_float(exp, 0);
         vFloat result = expf * vConstLn2 + series_result;
 
-        v_if(in == 0.0F) {  // Reload for register pressure
-            result = -std::numeric_limits<float>::infinity();
-        }
+        v_if(in == 0.0F) { result = -std::numeric_limits<float>::infinity(); }
+        v_endif;
+
+        v_if(in == 1.0F) { result = 0.0f; }
+        v_endif;
+
+        v_if(in <= 0) { result = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
 
         dst_reg[0] = result;
