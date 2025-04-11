@@ -59,7 +59,7 @@ constexpr uint32_t downstream_dev_id = get_compile_time_arg_val(30);
 constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(31);
 constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(32);
 constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(33);
-constexpr uint32_t client_interface_addr = get_compile_time_arg_val(34);
+constexpr uint32_t client_interface_rb = get_compile_time_arg_val(34);
 constexpr uint32_t outbound_eth_chan = get_compile_time_arg_val(35);
 constexpr uint32_t header_rb = get_compile_time_arg_val(36);
 constexpr uint32_t client_interface_rb_entries = 32;
@@ -104,8 +104,6 @@ static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 static uint32_t write_offset[3];  // added to write address on non-host writes
 
 static uint32_t upstream_total_acquired_page_count;
-
-static auto client_interface = reinterpret_cast<volatile fabric_pull_client_interface_t*>(client_interface_addr);
 
 constexpr uint32_t packed_write_max_multicast_sub_cmds =
     get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
@@ -238,7 +236,10 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
                         upstream_noc_xy,
                         upstream_dispatch_cb_sem_id,
                         dispatch_cb_pages_per_block,
-                        dispatch_cb_blocks>(client_interface, block_noc_writes_to_clear, rd_block_idx);
+                        dispatch_cb_blocks>(
+                        get_fabric_interface<client_interface_rb, client_interface_rb_entries, client_interface_size>(),
+                        block_noc_writes_to_clear,
+                        rd_block_idx);
                     noc_async_writes_flushed();
                     init_noc_state();
                 }
@@ -337,9 +338,11 @@ void relay_to_next_cb(
                 if (rd_block_idx == dispatch_cb_blocks - 1) {
                     ASSERT(cb_fence == dispatch_cb_end);
                     if (orphan_size != 0) {
-                        tt::tt_fabric::fabric_wait_for_pull_request_flushed(client_interface);
-                        tt::tt_fabric::fabric_async_write<decltype(client_interface), ClientDataMode::RAW_DATA>(
-                            client_interface,
+                        tt::tt_fabric::fabric_async_write<ClientDataMode::RAW_DATA>(
+                            get_fabric_interface<
+                                client_interface_rb,
+                                client_interface_rb_entries,
+                                client_interface_size>(),
                             fabric_router_noc_xy,
                             data_ptr,
                             downstream_mesh_id,
@@ -369,7 +372,10 @@ void relay_to_next_cb(
                     upstream_noc_xy,
                     upstream_dispatch_cb_sem_id,
                     dispatch_cb_pages_per_block,
-                    dispatch_cb_blocks>(client_interface, block_noc_writes_to_clear, rd_block_idx);
+                    dispatch_cb_blocks>(
+                    get_fabric_interface<client_interface_rb, client_interface_rb_entries, client_interface_size>(),
+                    block_noc_writes_to_clear,
+                    rd_block_idx);
             }
 
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
@@ -378,9 +384,8 @@ void relay_to_next_cb(
             cb_fence += n_pages * dispatch_cb_page_size;
         }
 
-        tt::tt_fabric::fabric_wait_for_pull_request_flushed(client_interface);
-        tt::tt_fabric::fabric_async_write<decltype(client_interface), ClientDataMode::RAW_DATA>(
-            client_interface,
+        tt::tt_fabric::fabric_async_write<ClientDataMode::RAW_DATA>(
+            get_fabric_interface<client_interface_rb, client_interface_rb_entries, client_interface_size>(),
             fabric_router_noc_xy,
             data_ptr,
             downstream_mesh_id,
@@ -395,7 +400,8 @@ void relay_to_next_cb(
             fabric_router_noc_xy,
             my_noc_index,
             downstream_noc_xy,
-            downstream_cb_sem_id>(client_interface, 1);
+            downstream_cb_sem_id>(
+            get_fabric_interface<client_interface_rb, client_interface_rb_entries, client_interface_size>(), 1);
 
         length -= xfer_size;
         data_ptr += xfer_size;
@@ -488,7 +494,10 @@ void process_write_linear(
                         upstream_noc_xy,
                         upstream_dispatch_cb_sem_id,
                         dispatch_cb_pages_per_block,
-                        dispatch_cb_blocks>(client_interface, block_noc_writes_to_clear, rd_block_idx);
+                        dispatch_cb_blocks>(
+                        get_fabric_interface<client_interface_rb, client_interface_rb_entries, client_interface_size>(),
+                        block_noc_writes_to_clear,
+                        rd_block_idx);
                     // Reinitialize the NoC state because remote move_rd_to_next_block_and_release_pages uses noc
                     // async writes
                     noc_async_writes_flushed();
@@ -1282,7 +1291,9 @@ void cleanup_remote(
         upstream_noc_index,
         upstream_noc_xy,
         upstream_dispatch_cb_sem_id,
-        dispatch_cb_pages_per_block>(client_interface, block_noc_writes_to_clear);
+        dispatch_cb_pages_per_block>(
+        get_fabric_interface<client_interface_rb, client_interface_rb_entries, client_interface_size>(),
+        block_noc_writes_to_clear);
 
     // Release any held pages from the current block
     cb_release_pages_remote<
@@ -1291,14 +1302,20 @@ void cleanup_remote(
         fabric_router_noc_xy,
         upstream_noc_index,
         upstream_noc_xy,
-        upstream_dispatch_cb_sem_id>(client_interface, previous_block_pages);
+        upstream_dispatch_cb_sem_id>(
+        get_fabric_interface<client_interface_rb, client_interface_rb_entries, client_interface_size>(),
+        previous_block_pages);
 }
 
 void kernel_main() {
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
     if constexpr (!(is_h_variant && is_d_variant)) {
         DPRINT << "fabric_endpoint_init" << ENDL();
-        tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*unused*/);
+        for (uint32_t i = 0; i < client_interface_rb_entries; ++i) {
+            auto client_interface =
+                get_fabric_interface<client_interface_rb, client_interface_rb_entries, client_interface_size>();
+            tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*unused*/);
+        }
     }
 
     // Initialize local state of any additional nocs used instead of the default
@@ -1361,7 +1378,7 @@ void kernel_main() {
                     upstream_noc_xy,
                     upstream_dispatch_cb_sem_id,
                     dispatch_cb_pages_per_block>(
-                    client_interface,
+                    get_fabric_interface<client_interface_rb, client_interface_rb_entries, client_interface_size>(),
                     cmd_ptr,
                     cb_fence,
                     block_noc_writes_to_clear,
