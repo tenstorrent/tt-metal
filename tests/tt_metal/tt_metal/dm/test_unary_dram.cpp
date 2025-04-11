@@ -13,12 +13,12 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
-namespace unit_tests::dm {
+namespace unit_tests::dm::dram {
 
 uint32_t runtime_host_id = 0;
 
-// Test config
-struct DmConfig {
+// Test config, i.e. test parameters
+struct DramConfig {
     uint32_t test_id = 0;
     uint32_t num_of_transactions = 0;
     uint32_t transaction_size_pages = 0;
@@ -29,11 +29,11 @@ struct DmConfig {
     array<uint32_t, 2> num_dram_banks = {0, 0};
 };
 
-/// @brief Does Dram --> Reader --> CB --> Writer --> Dram.
+/// @brief Does Dram --> Reader --> L1 CB --> Writer --> Dram.
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const DmConfig& test_config) {
+bool run_dm(IDevice* device, const DramConfig& test_config) {
     // Program
     Program program = CreateProgram();
 
@@ -142,7 +142,7 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
     return is_close_packed_vectors<bfloat16, uint32_t>(
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
 }
-}  // namespace unit_tests::dm
+}  // namespace unit_tests::dm::dram
 
 /* ========== Test case for varying transaction numbers and sizes; Test id = 0 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
@@ -162,7 +162,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
             // Test config
-            unit_tests::dm::DmConfig test_config = {
+            unit_tests::dm::dram::DramConfig test_config = {
                 .test_id = 0,
                 .num_of_transactions = num_of_transactions,
                 .transaction_size_pages = transaction_size_pages,
@@ -197,7 +197,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
                 CoreRangeSet core_range_set(CoreRange({x, y}, {x, y}));
 
                 // Test config
-                unit_tests::dm::DmConfig test_config = {
+                unit_tests::dm::dram::DramConfig test_config = {
                     .test_id = 1,
                     .num_of_transactions = num_of_transactions,
                     .transaction_size_pages = transaction_size_pages,
@@ -245,7 +245,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
             array<uint32_t, 2> num_dram_banks = {dram_banks_dim_size, dram_banks_dim_size};
 
             // Test config
-            unit_tests::dm::DmConfig test_config = {
+            unit_tests::dm::dram::DramConfig test_config = {
                 .test_id = 2,
                 .num_of_transactions = num_of_transactions,
                 .transaction_size_pages = transaction_size_pages,
