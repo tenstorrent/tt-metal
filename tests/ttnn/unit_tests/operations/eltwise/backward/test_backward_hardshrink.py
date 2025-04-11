@@ -18,8 +18,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
 )
 @pytest.mark.parametrize("lambd", [2.2, 0.5, 1.0, 5.5, 9.9])
 def test_bw_hardshrink(input_shapes, lambd, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.hardshrink_bw(grad_tensor, input_tensor, lambd=lambd)
 
@@ -39,8 +39,8 @@ def test_bw_hardshrink(input_shapes, lambd, device):
     ),
 )
 def test_bw_hardshrink_default(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.hardshrink_bw(grad_tensor, input_tensor)
 

@@ -25,8 +25,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
 #   self: zeros_like(grad)
 #   result: at::fill(self_t, 0)
 def test_bw_fill(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.fill_bw(grad_tensor, input_tensor)
 
@@ -46,8 +46,8 @@ def test_bw_fill(input_shapes, device):
     ),
 )
 def test_bw_fill_opt_tensor(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True, seed=1)
 
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
     input_grad = ttnn.to_memory_config(input_grad, ttnn.L1_MEMORY_CONFIG)

@@ -29,8 +29,8 @@ from models.utility_functions import (
     [1, 2, 3, 6, 7, 10],
 )
 def test_bw_polygamma(input_shapes, order, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 1, 10, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 1, 10, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device, seed=1)
     n = order
 
     tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
@@ -51,8 +51,8 @@ def test_bw_polygamma(input_shapes, order, device):
     [1, 4, 7, 10],
 )
 def test_bw_polygamma_range_pos(input_shapes, order, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 1, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 30, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 1, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 30, device, seed=1)
     n = order
 
     tt_output_tensor_on_device = ttnn.polygamma_bw(grad_tensor, input_tensor, n)
@@ -98,7 +98,7 @@ def test_bw_polygamma_zero(input_shapes, order, device):
     [2, 5],
 )
 def test_bw_polygamma_grad_zero(input_shapes, order, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True, seed=0)
     grad_data, grad_tensor = data_gen_with_val(input_shapes, device, True, 0)
     n = order
 
@@ -121,7 +121,7 @@ def test_bw_polygamma_grad_zero(input_shapes, order, device):
     [1, 2, 5],
 )
 def test_bw_polygamma_input_zero(input_shapes, order, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
     in_data, input_tensor = data_gen_with_val(input_shapes, device, True, 0)
     n = order
 

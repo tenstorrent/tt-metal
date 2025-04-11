@@ -17,8 +17,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ),
 )
 def test_bw_floor(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 199, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 201, device, required_grad=True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 199, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 201, device, required_grad=True, seed=1)
 
     tt_output_tensor_on_device = ttnn.floor_bw(grad_tensor, input_tensor)
 

@@ -20,9 +20,9 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     ),
 )
 def test_bw_atan2(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, required_grad=True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, required_grad=True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, required_grad=True, seed=1)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, required_grad=True, seed=2)
 
     pyt_y = torch.atan2(in_data, other_data)
 

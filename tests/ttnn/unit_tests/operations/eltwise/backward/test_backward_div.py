@@ -34,9 +34,9 @@ from models.utility_functions import (
     ),
 )
 def test_bw_div_binary(input_shapes, round_mode, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=1)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=2)
 
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data, round_mode)
@@ -56,9 +56,9 @@ def test_bw_div_binary(input_shapes, round_mode, device):
     ),
 )
 def test_bw_div_binary_default(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=1)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=2)
 
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data)
@@ -87,7 +87,7 @@ def test_bw_div_binary_default(input_shapes, device):
 @pytest.mark.parametrize("scalar", [0.0])
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bw_unary_div_0(input_shapes, scalar, round_mode, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
     grad_data, grad_tensor = data_gen_with_val(input_shapes, device, False, val=0)
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, scalar, round_mode=round_mode)
@@ -116,8 +116,8 @@ def test_bw_unary_div_0(input_shapes, scalar, round_mode, device):
 )
 @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12, 0.0, -0.05, -1.0, -0.5, -0.12])
 def test_bw_unary_div(input_shapes, scalar, round_mode, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, scalar, round_mode=round_mode)
     golden_function = ttnn.get_golden_function(ttnn.div_bw)
@@ -138,7 +138,7 @@ def test_bw_unary_div(input_shapes, scalar, round_mode, device):
 @pytest.mark.parametrize("scalar", [0.0])
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bw_unary_div_0_default(input_shapes, scalar, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
     grad_data, grad_tensor = data_gen_with_val(input_shapes, device, False, val=0)
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, scalar)
@@ -160,8 +160,8 @@ def test_bw_unary_div_0_default(input_shapes, scalar, device):
 )
 @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12, 0.0, -0.05, -1.0, -0.5, -0.12])
 def test_bw_unary_div_default(input_shapes, scalar, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, scalar)
 
@@ -182,8 +182,12 @@ def test_bw_unary_div_default(input_shapes, scalar, device):
 )
 @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12, 0.0, -0.05, -1.0, -0.5, -0.12])
 def test_bw_unary_div_bf8b(input_shapes, scalar, device):
-    in_data, input_tensor = data_gen_with_range_dtype(input_shapes, -100, 100, device, True, False, ttnn.bfloat8_b)
-    grad_data, grad_tensor = data_gen_with_range_dtype(input_shapes, -1, 1, device, False, False, ttnn.bfloat8_b)
+    in_data, input_tensor = data_gen_with_range_dtype(
+        input_shapes, -100, 100, device, True, False, ttnn.bfloat8_b, seed=0
+    )
+    grad_data, grad_tensor = data_gen_with_range_dtype(
+        input_shapes, -1, 1, device, False, False, ttnn.bfloat8_b, seed=1
+    )
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, scalar)
 
@@ -212,8 +216,8 @@ def test_bw_unary_div_bf8b(input_shapes, scalar, device):
 )
 @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12, 0.0, -0.05, -1.0, -0.5, -0.12])
 def test_bw_div_scalar_opt_output(input_shapes, scalar, round_mode, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=1)
 
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
@@ -247,18 +251,18 @@ def test_bw_div_scalar_opt_output(input_shapes, scalar, round_mode, device):
 )
 @pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
 def test_bw_div_opt(input_shapes, round_mode, are_required_outputs, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=1)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=2)
 
     input_grad = None
     other_grad = None
     tt_output_tensor_on_device = None
 
     if are_required_outputs[0]:
-        _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
+        _, input_grad = data_gen_with_range(input_shapes, -1, 1, device, seed=3)
     if are_required_outputs[1]:
-        _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
+        _, other_grad = data_gen_with_range(input_shapes, -1, 1, device, seed=4)
 
     cq_id = 0
 

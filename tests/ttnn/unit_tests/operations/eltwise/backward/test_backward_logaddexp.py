@@ -17,10 +17,10 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ),
 )
 def test_bw_logaddexp(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -20, 20, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True, seed=0)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -20, 20, device, True, seed=1)
 
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=2)
 
     tt_output_tensor_on_device = ttnn.logaddexp_bw(grad_tensor, input_tensor, other_tensor)
 
