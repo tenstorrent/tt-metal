@@ -240,7 +240,9 @@ private:
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
 
     bool initialized_ = false;
-
+    // This variable tracks the state of dispatch firmware on device.
+    // It is set to true when dispatch firmware is launched, and reset
+    // after the terimnate command is sent.
     bool dispatch_firmware_active_ = false;
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
