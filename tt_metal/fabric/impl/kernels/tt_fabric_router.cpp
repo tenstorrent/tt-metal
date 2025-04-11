@@ -42,7 +42,7 @@ volatile tt_l1_ptr chan_req_buf* fvc_outbound_req_buf =
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 
-#define SWITCH_THRESHOLD 0x1000
+#define SWITCH_THRESHOLD 0x3FFF
 
 void kernel_main() {
     tt_fabric_init();
