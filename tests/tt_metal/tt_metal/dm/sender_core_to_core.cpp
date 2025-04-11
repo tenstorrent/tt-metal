@@ -15,7 +15,11 @@ void kernel_main() {
     // constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(4);
     // constexpr uint32_t test_id = get_compile_time_arg_val(5);
 
-    auto sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(0)));
+    auto sem = get_semaphore(get_arg_val<uint32_t>(0));
+    DPRINT << "Get sem result: " << sem << ENDL();
+
+    // auto sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(0)));
+    uint64_t sem_addr = get_noc_addr(2, 3, sem);
 
     constexpr uint32_t transaction_size_bytes = transaction_num_pages * page_size_bytes;
     // constexpr uint32_t total_num_pages = num_of_transactions * transaction_num_pages;
@@ -23,7 +27,6 @@ void kernel_main() {
     // DeviceTimestampedData("Number of transactions", num_of_transactions);
     // DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     // DeviceTimestampedData("Test id", test_id);
-    DPRINT << "Sem address: " << sem_addr << ENDL();
 
     {
         // DeviceZoneScopedN("SENDER");
@@ -32,6 +35,9 @@ void kernel_main() {
 
         noc_async_write(src_addr, dst_noc_addr, transaction_size_bytes);
         noc_async_write_barrier();
-        noc_semaphore_set(sem_addr, 1);
+
+        DPRINT << "Sender before sem call" << ENDL();
+        noc_semaphore_inc(sem_addr, 1);
+        DPRINT << "Sender after sem call" << ENDL();
     }
 }
