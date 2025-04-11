@@ -135,10 +135,10 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(
-        input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 ||
-            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "Unsupported data format");
+    // TT_FATAL(
+    //     input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 ||
+    //         input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
+    //     "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Only tile layout is supported for input tensor");
 
     // input
@@ -212,8 +212,8 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     const auto& input_shape = input_tensor.get_logical_shape();
-    auto output_tensor_layout =
-        input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->all_reduce_mem_config);
+    tt::tt_metal::TensorLayout output_tensor_layout = tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::BFLOAT16, input_tensor.tensor_spec().page_config(), this->all_reduce_mem_config);
     auto all_reduce_tensor_spec{TensorSpec(input_shape, output_tensor_layout)};
     auto batch = input_shape[2];
     if (this->slice_size.has_value()) {
@@ -268,15 +268,15 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
         TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), q_mem_config)),
+                tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(input_tensor.get_layout()), q_mem_config)),
         TensorSpec(
             k_output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), k_mem_config)),
+                tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(input_tensor.get_layout()), k_mem_config)),
         TensorSpec(
             v_output_shape,
             tt::tt_metal::TensorLayout(
-                input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), v_mem_config))};
+                tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(input_tensor.get_layout()), v_mem_config))};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_program(

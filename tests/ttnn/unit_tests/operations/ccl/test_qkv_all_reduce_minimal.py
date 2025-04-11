@@ -1123,7 +1123,6 @@ def run_all_reduce_qkv_heads_fuse_impl(
             batch_offset=batch_offset_tt_tensor,
             slice_size=8,
         )  # [1, 1, 32, 1280]
-        # breakpoint()
         # Batch Slicing
         # 32 BS is split into 8 Mini BS across 4 devices
         ttnn.synchronize_device(mesh_device)
@@ -1257,7 +1256,8 @@ def test_all_reduce_qkv_heads(
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat16,
+        # ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize("enable_async", [True])
