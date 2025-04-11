@@ -18,7 +18,6 @@ target_sources(
 )
 target_include_directories(
     unit_tests_dispatch_smoke
-    BEFORE
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
@@ -32,17 +31,9 @@ target_link_libraries(unit_tests_dispatch_smoke PRIVATE test_metal_common_libs)
 add_library(unit_tests_dispatch_sanity OBJECT)
 add_library(TT::Metalium::Test::Dispatch::Sanity ALIAS unit_tests_dispatch_sanity)
 TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_sanity)
-target_sources(
-    unit_tests_dispatch_sanity
-    PRIVATE
-        dispatch_buffer/test_EnqueueWriteBuffer_and_EnqueueReadBuffer.cpp
-        dispatch_program/test_EnqueueProgram.cpp
-        dispatch_trace/test_EnqueueTrace.cpp
-        dispatch_trace/test_sub_device.cpp
-)
+target_sources(unit_tests_dispatch_sanity PRIVATE dispatch_trace/test_sub_device.cpp)
 target_include_directories(
     unit_tests_dispatch_sanity
-    BEFORE
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
@@ -51,6 +42,27 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
 target_link_libraries(unit_tests_dispatch_sanity PRIVATE test_metal_common_libs)
+
+add_library(unit_tests_dispatch_slow OBJECT)
+add_library(TT::Metalium::Test::Dispatch::Slow ALIAS unit_tests_dispatch_slow)
+TT_ENABLE_UNITY_BUILD(unit_tests_dispatch_slow)
+target_sources(
+    unit_tests_dispatch_slow
+    PRIVATE
+        dispatch_buffer/test_EnqueueWriteBuffer_and_EnqueueReadBuffer.cpp # FIXME: Fix the heap-buffer-overflow in here and see if it's fast enough for Sanity
+        dispatch_program/test_EnqueueProgram.cpp
+        dispatch_trace/test_EnqueueTrace.cpp
+)
+target_include_directories(
+    unit_tests_dispatch_slow
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+target_link_libraries(unit_tests_dispatch_slow PRIVATE test_metal_common_libs)
 
 # Target for all Dispatch tests regardless of duration
 add_executable(unit_tests_dispatch)
@@ -67,4 +79,5 @@ target_link_libraries(
     PRIVATE
         TT::Metalium::Test::Dispatch::Smoke
         TT::Metalium::Test::Dispatch::Sanity
+        TT::Metalium::Test::Dispatch::Slow
 )
