@@ -99,9 +99,11 @@ jobs:
           - name: ttnn example tests
             cmd: ./tests/scripts/run_ttnn_examples.sh
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - "in-service"
+    runs-on: >-
+      ${{
+        github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+      }}
     container:
       image: ${{ inputs.docker-image }}
       env:

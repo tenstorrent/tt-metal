@@ -191,6 +191,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   run-profiler-regression:
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact-profiler
     strategy:
       fail-fast: false
@@ -208,6 +209,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   t3000-fast-tests:
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
