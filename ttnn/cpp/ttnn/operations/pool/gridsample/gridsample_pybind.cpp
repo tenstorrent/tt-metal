@@ -20,20 +20,19 @@ void bind_gridsample(py::module& module) {
         gridsample a given multi-channel 2D (spatial) data.
         The input data is assumed to be of the form [N, H, W, C].
 
-        The algorithms available for gridsample are 'nearest' for now.
-
+        The algorithms available for gridsample are 'bilinear' for now.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             grid (ttnn.Tensor): the grid tensor.
 
         Keyword args:
+            mode (string) : Mode of Grid sample. Default to Bilinear.
+            align_corners : Default to  False
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
 
         Returns:
             ttnn.Tensor: the output tensor.
-
 
         )doc";
 
