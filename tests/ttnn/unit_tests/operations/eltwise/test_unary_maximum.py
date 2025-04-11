@@ -162,3 +162,43 @@ def test_unary_max_fp32(input_shapes, low, high, scalar, device):
     tt_result = ttnn.maximum(tt_in, scalar)
     comp_pass = compare_equal([tt_result], [golden])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([5, 10, 1024, 1024])),
+    ),
+)
+def test_unary_max_fp32_opt(input_shapes, device):
+    scalar = 11.3
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+    torch_input = torch.linspace(100, -100, num_elements, dtype=torch.float32)
+    torch_input = torch_input[:num_elements].reshape(input_shapes)
+
+    output_tensor = torch.zeros(input_shapes, dtype=torch.float32)
+
+    golden_function = ttnn.get_golden_function(ttnn.maximum)
+    golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
+
+    cq_id = 0
+
+    tt_in = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out = ttnn.from_torch(
+        output_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn.maximum(tt_in, scalar, output_tensor=tt_out, queue_id=cq_id)
+    comp_pass = compare_equal([tt_out], [golden])
+    assert comp_pass

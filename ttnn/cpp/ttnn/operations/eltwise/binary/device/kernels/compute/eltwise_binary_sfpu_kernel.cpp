@@ -14,6 +14,7 @@
 #include "compute_kernel_api/binary_shift.h"
 #include "compute_kernel_api/add_int32_sfpu.h"
 #include "compute_kernel_api/sub_int32_sfpu.h"
+#include "compute_kernel_api/binary_max.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 

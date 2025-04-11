@@ -57,7 +57,8 @@ struct OpConfig {
         BITWISE_XOR,
         QUANT,
         REQUANT,
-        DEQUANT
+        DEQUANT,
+        MAXIMUM
     };
 
     template <class EnumT>

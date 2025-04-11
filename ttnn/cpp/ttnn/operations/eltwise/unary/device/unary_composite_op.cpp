@@ -505,7 +505,7 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     if (min.value() == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
-        return ttnn::maximum(a_max, min.value(), output_memory_config);
+        return ttnn::maximum(ttnn::DefaultQueueId, a_max, min.value(), std::nullopt, output_memory_config);
     }
 }
 
@@ -527,7 +527,7 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     Tensor temp = ttnn::where(
         ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config),
         ttnn::relu(a_max, output_memory_config),
-        ttnn::maximum(a_max, min.value(), output_memory_config),
+        ttnn::maximum(ttnn::DefaultQueueId, a_max, min.value(), std::nullopt, output_memory_config),
         output_memory_config);
     return ttnn::where(
         ttnn::gt(min.value(), max.value(), std::nullopt, output_memory_config),
@@ -567,7 +567,7 @@ Tensor _selu(
     result_t2_.deallocate();
 
     // term 1
-    Tensor x_max = ttnn::maximum(x, 0.0f, output_mem_config);
+    Tensor x_max = ttnn::maximum(ttnn::DefaultQueueId, x, 0.0f, std::nullopt, output_mem_config);
     Tensor result_term1 = ttnn::multiply(x_max, scale, std::nullopt, output_mem_config);
     x_max.deallocate();
     Tensor result_selu = ttnn::add(result_term1, result_term2, std::nullopt, output_mem_config);

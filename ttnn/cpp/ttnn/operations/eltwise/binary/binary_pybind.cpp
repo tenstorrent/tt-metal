@@ -221,6 +221,137 @@ void bind_binary_operation(
 }
 
 template <typename binary_operation_t>
+void bind_binary_unary_max_operation(
+    py::module& module,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& supported_dtype = "BFLOAT16, FLOAT32",
+    const std::string& note = " ") {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            activations (List[str], optional): list of activation functions to apply to the output tensor{4}Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {3}
+                 - TILE
+                 - 2, 3, 4
+
+            {4}
+
+        Example:
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor1, tensor2/scalar)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description,
+        supported_dtype,
+        note);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        // tensor and scalar
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const ttnn::Tensor& input_tensor_a,
+               const float scalar,
+               const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const std::optional<bool>& use_legacy,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor_a,
+                    scalar,
+                    dtype,
+                    memory_config,
+                    output_tensor,
+                    activations,
+                    input_tensor_a_activations,
+                    input_tensor_b_activations,
+                    use_legacy);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("input_b"),
+            py::kw_only(),
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("use_legacy") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
+
+        // tensor and tensor
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const std::optional<bool>& use_legacy,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor_a,
+                    input_tensor_b,
+                    dtype,
+                    memory_config,
+                    output_tensor,
+                    activations,
+                    input_tensor_a_activations,
+                    input_tensor_b_activations,
+                    use_legacy);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("use_legacy") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId});
+}
+
+template <typename binary_operation_t>
 void bind_binary_unary_operation(
     py::module& module,
     const binary_operation_t& operation,
@@ -1917,11 +2048,10 @@ void py_module(py::module& module) {
         ttnn::floor_div,
         R"doc(Computes floor division for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
-    detail::bind_binary_composite_overload(
+    detail::bind_binary_unary_max_operation(
         module,
         ttnn::maximum,
-        R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_prelu(
         module,
