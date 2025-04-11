@@ -267,10 +267,19 @@ def get_updated_device_params(device_params):
 
     dispatch_core_type = get_dispatch_core_type()
     new_device_params = device_params.copy()
-    dispatch_core_axis = new_device_params.pop(
-        "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if ttnn.get_arch_name() == "blackhole" else ttnn.DispatchCoreAxis.ROW,
-    )
+
+    is_blackhole = ttnn.get_arch_name() == "blackhole"
+    dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
+
+    # Set default if not specified
+    if dispatch_core_axis is None:
+        dispatch_core_axis = ttnn.DispatchCoreAxis.COL if is_blackhole else ttnn.DispatchCoreAxis.ROW
+
+    # Force COL for blackhole regardless of user setting
+    if is_blackhole and dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
+        logger.warning("blackhole arch does not support DispatchCoreAxis.Row, using DispatchCoreAxis.COL instead.")
+        dispatch_core_axis = ttnn.DispatchCoreAxis.COL
+
     dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
     new_device_params["dispatch_core_config"] = dispatch_core_config
     return new_device_params
