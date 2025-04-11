@@ -302,8 +302,8 @@ public:
     CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const;
 
     // These two functions should be removed in favor of direct translation.
-    const std::unordered_map<int, int> get_worker_logical_to_virtual_x(chip_id_t chip_id) const;
-    const std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const;
+    std::unordered_map<int, int> get_worker_logical_to_virtual_x(chip_id_t chip_id) const;
+    std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const;
 
     const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
 

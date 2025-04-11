@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks AttnMatmulDeviceOperation::create_program(
         this->compute_kernel_config);
 }
 
-const operation::Hash AttnMatmulDeviceOperation::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+operation::Hash AttnMatmulDeviceOperation::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     TT_ASSERT(
         std::holds_alternative<DeviceStorage>(input_tensors.at(0).storage()),
         "Unexpected type {}",

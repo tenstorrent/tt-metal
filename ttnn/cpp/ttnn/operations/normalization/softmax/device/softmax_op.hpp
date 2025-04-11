@@ -37,7 +37,7 @@ struct Softmax {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
 
-    const tt::tt_metal::operation::Hash compute_program_hash(
+    tt::tt_metal::operation::Hash compute_program_hash(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };

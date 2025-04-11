@@ -166,8 +166,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
         this->enable_persistent_fabric_mode);
 }
 
-const tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(
-    const std::vector<Tensor>& input_tensors) const {
+tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     auto input_shape = input_tensors[0].get_padded_shape();
     auto input_memory_layout = input_tensors[0].get_layout();
     auto input_dtype = input_tensors[0].get_dtype();

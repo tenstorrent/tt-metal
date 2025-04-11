@@ -330,7 +330,7 @@ MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
     return *(mesh_command_queues_[cq_id]);
 }
 
-const DeviceIds MeshDevice::get_device_ids() const {
+DeviceIds MeshDevice::get_device_ids() const {
     DeviceIds device_ids;
     for (auto device : this->get_devices()) {
         device_ids.push_back(device->id());
