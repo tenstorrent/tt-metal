@@ -29,7 +29,8 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
     uint32_t num_kv_heads,
     bool input_on_subcoregrids,
     std::optional<const uint32_t> slice_size,
-    const std::optional<MemoryConfig>& final_memory_config) {
+    const std::optional<MemoryConfig>& final_memory_config,
+    const std::optional<const DataType> dtype) {
     uint32_t num_devices = devices.size();
 
     std::optional<IDevice*> forward_device = std::nullopt;
@@ -69,7 +70,8 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
         num_kv_heads,
         input_on_subcoregrids,
         slice_size,
-        final_memory_config.value_or(input_tensor.memory_config())};
+        final_memory_config.value_or(input_tensor.memory_config()),
+        dtype.value_or(input_tensor.get_dtype())};
 }
 
 }  // namespace all_reduce_create_qkv_heads_detail
@@ -360,7 +362,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     uint32_t num_kv_heads,
     bool input_on_subcoregrids,
     std::optional<const uint32_t> slice_size,
-    const std::optional<MemoryConfig>& final_memory_config) {
+    const std::optional<MemoryConfig>& final_memory_config,
+    const std::optional<const DataType> dtype) {
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -387,7 +390,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
          num_kv_heads,
          input_on_subcoregrids,
          slice_size,
-         final_memory_config](
+         final_memory_config,
+         dtype](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -419,7 +423,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
                     num_kv_heads,
                     input_on_subcoregrids,
                     slice_size,
-                    final_memory_config),
+                    final_memory_config,
+                    dtype),
                 {input_tensor, buffer_tensor, batch_offset_tensor});
         },
         {input_tensor, buffer_tensor, batch_offset_tensor},

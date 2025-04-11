@@ -44,7 +44,7 @@ struct AllReduceCreateQkvHeads {
     const bool input_on_subcoregrids;
     std::optional<const uint32_t> slice_size;
     const MemoryConfig final_mem_config;
-
+    const DataType dtype;
     AllReduceCreateQkvHeads(
         std::optional<IDevice*> forward_device,
         std::optional<IDevice*> backward_device,
@@ -61,7 +61,8 @@ struct AllReduceCreateQkvHeads {
         uint32_t num_kv_heads,
         bool input_on_subcoregrids,
         std::optional<const uint32_t> slice_size,
-        MemoryConfig final_mem_config) :
+        MemoryConfig final_mem_config,
+        DataType dtype) :
         forward_device(forward_device),
         backward_device(backward_device),
         num_links(num_links),
@@ -77,7 +78,8 @@ struct AllReduceCreateQkvHeads {
         num_kv_heads(num_kv_heads),
         input_on_subcoregrids(input_on_subcoregrids),
         slice_size(slice_size),
-        final_mem_config(final_mem_config) {}
+        final_mem_config(final_mem_config),
+        dtype(dtype) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -124,7 +126,8 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
     uint32_t num_kv_heads,
     bool input_on_subcoregrids,
     std::optional<const uint32_t> slice_size,
-    MemoryConfig final_mem_config);
+    MemoryConfig final_mem_config,
+    const std::optional<const DataType> dtype);
 
 }  // namespace all_reduce_create_qkv_heads_detail
 }  // namespace ccl
@@ -158,7 +161,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     uint32_t num_kv_heads = 1,
     bool input_on_subcoregrids = false,
     std::optional<const uint32_t> slice_size = std::nullopt,
-    const std::optional<MemoryConfig>& final_memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& final_memory_config = std::nullopt,
+    const std::optional<const DataType> dtype = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental
