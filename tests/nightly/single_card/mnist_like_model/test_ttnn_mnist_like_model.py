@@ -1,0 +1,1 @@
+../../../ttnn/integration_tests/mnist_like_model/test_ttnn_mnist_like_model.py
