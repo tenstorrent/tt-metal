@@ -142,11 +142,7 @@ def test_llama_tg_LayerNorm(
 
 
 @pytest.mark.models_device_performance_bare_metal
-@pytest.mark.parametrize(
-    "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
