@@ -179,6 +179,12 @@ run_whisper_perf() {
 
 }
 
+run_mobilenetv2_func(){
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -k "pretrained_weight_true" models/experimental/functional_mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo
+
+}
+
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
   if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
