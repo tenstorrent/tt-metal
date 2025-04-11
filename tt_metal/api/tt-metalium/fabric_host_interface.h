@@ -20,6 +20,9 @@
 #define FABRIC_MODE_2D_MESH_DYNAMIC (FABRIC_MODE_2D_MESH | FABRIC_MODE_DYNAMIC)
 #define FABRIC_MODE_2D_TORUS_DYNAMIC (FABRIC_MODE_2D_TORUS | FABRIC_MODE_DYNAMIC)
 
+// type for host code
+using FABRIC_MODE_ = std::uint16_t;
+
 // TODO: move routing table here
 namespace tt::tt_fabric {
 

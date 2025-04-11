@@ -976,13 +976,13 @@ void ControlPlane::print_ethernet_channels() const {
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
-void ControlPlane::set_fabric_mode(uint16_t mode) {
+void ControlPlane::set_fabric_mode(FABRIC_MODE_ mode) {
     TT_ASSERT(
         this->fabric_mode_ == FABRIC_MODE_UNDEFINED || this->fabric_mode_ == mode,
         "Control Plane: Routing mode already set");
     this->fabric_mode_ = mode;
 }
 
-uint16_t ControlPlane::get_fabric_mode() const { return this->fabric_mode_; }
+FABRIC_MODE_ ControlPlane::get_fabric_mode() const { return this->fabric_mode_; }
 
 }  // namespace tt::tt_fabric
