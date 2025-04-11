@@ -565,7 +565,7 @@ void configure_kernel_variant(
         path,
         {my_core},
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = my_noc_index,
             .compile_args = compile_args,
             .defines = defines,
