@@ -6,6 +6,7 @@
 #include "cpp/pybind11/decorators.hpp"
 
 #include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
+#include <pybind11/pybind11.h>
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -20,6 +21,14 @@ namespace operations::conv {
 namespace conv2d {
 
 void py_bind_conv2d(py::module& module) {
+    auto py_conv_weights_bias_tensor = py::class_<ConvWeightsBiasTensor>(module, "ConvWeightsBiasTensor");
+    py_conv_weights_bias_tensor.def(py::init<ttnn::Tensor&>()).def(py::init<const ttnn::Tensor&>());
+    py::implicitly_convertible<ttnn::Tensor, ConvWeightsBiasTensor>();
+    py::implicitly_convertible<ConvWeightsBiasTensor, ttnn::Tensor>();
+
+    module.def("print_preprocessed", print_preprocessed, py::arg("tensor"));
+    auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
+
     bind_registered_operation(
         module,
         ttnn::conv2d,
@@ -46,7 +55,7 @@ void py_bind_conv2d(py::module& module) {
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
+               const ConvWeightsBiasTensor& weight_tensor,
                ttnn::IDevice* device,
                uint32_t in_channels,
                uint32_t out_channels,
@@ -109,7 +118,7 @@ void py_bind_conv2d(py::module& module) {
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
+               const ConvWeightsBiasTensor& weight_tensor,
                ttnn::MeshDevice* device,
                uint32_t in_channels,
                uint32_t out_channels,
@@ -172,8 +181,8 @@ void py_bind_conv2d(py::module& module) {
     module.def(
         "prepare_conv_weights",
         prepare_conv_weights<ttnn::IDevice>,
-        py::kw_only(),
         py::arg("weight_tensor"),
+        py::kw_only(),
         py::arg("input_memory_config"),
         py::arg("input_tensor_layout"),
         py::arg("weights_format"),
@@ -195,8 +204,8 @@ void py_bind_conv2d(py::module& module) {
     module.def(
         "prepare_conv_weights",
         prepare_conv_weights<ttnn::MeshDevice>,
-        py::kw_only(),
         py::arg("weight_tensor"),
+        py::kw_only(),
         py::arg("input_memory_config"),
         py::arg("input_tensor_layout"),
         py::arg("weights_format"),
@@ -218,8 +227,8 @@ void py_bind_conv2d(py::module& module) {
     module.def(
         "prepare_conv_bias",
         prepare_conv_bias<ttnn::IDevice>,
-        py::kw_only(),
         py::arg("bias_tensor"),
+        py::kw_only(),
         py::arg("input_memory_config"),
         py::arg("input_tensor_layout"),
         py::arg("in_channels"),
@@ -239,8 +248,8 @@ void py_bind_conv2d(py::module& module) {
     module.def(
         "prepare_conv_bias",
         prepare_conv_bias<ttnn::MeshDevice>,
-        py::kw_only(),
         py::arg("bias_tensor"),
+        py::kw_only(),
         py::arg("input_memory_config"),
         py::arg("input_tensor_layout"),
         py::arg("in_channels"),
@@ -337,7 +346,6 @@ void py_bind_conv2d(py::module& module) {
         .value("SliceHeight", Conv2dSliceConfig::SliceType::HEIGHT)
         .value("SliceWidth", Conv2dSliceConfig::SliceType::WIDTH);
 
-    auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
         py::init<
             DataType,

@@ -42,7 +42,7 @@ template <typename T>
 Result conv2d(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    const ConvWeightsBiasTensor& wrapped_weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -63,7 +63,7 @@ Result conv2d(
         return conv2d_DRAM(
             queue_id,
             input_tensor,
-            weight_tensor,
+            wrapped_weight_tensor,
             device,
             in_channels,
             out_channels,
@@ -84,7 +84,7 @@ Result conv2d(
         return conv2d_L1(
             queue_id,
             input_tensor,
-            weight_tensor,
+            wrapped_weight_tensor,
             device,
             in_channels,
             out_channels,
@@ -116,7 +116,7 @@ template <typename T>
 Result conv2d_DRAM(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    const ConvWeightsBiasTensor& wrapped_weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -133,6 +133,7 @@ Result conv2d_DRAM(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     const Conv2dSliceConfig& dram_slice_config) {
+    ttnn::Tensor weight_tensor = (ttnn::Tensor)wrapped_weight_tensor;
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
@@ -347,7 +348,7 @@ template <typename T>
 Result conv2d_L1(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    const ConvWeightsBiasTensor& wrapped_weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -363,6 +364,8 @@ Result conv2d_L1(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
+    ttnn::Tensor weight_tensor = (ttnn::Tensor)wrapped_weight_tensor;
+
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
@@ -592,7 +595,7 @@ Result conv2d_L1(
 template Result conv2d<IDevice>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    const ConvWeightsBiasTensor& wrapped_weight_tensor,
     IDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -613,7 +616,7 @@ template Result conv2d<IDevice>(
 template Result conv2d<MeshDevice>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    const ConvWeightsBiasTensor& wrapped_weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -634,7 +637,7 @@ template Result conv2d<MeshDevice>(
 Result Conv2dOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    const ConvWeightsBiasTensor& wrapped_weight_tensor,
     IDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -654,7 +657,7 @@ Result Conv2dOperation::invoke(
     return conv2d(
         queue_id,
         input_tensor,
-        weight_tensor,
+        wrapped_weight_tensor,
         device,
         in_channels,
         out_channels,
@@ -676,7 +679,7 @@ Result Conv2dOperation::invoke(
 Result Conv2dOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    const ConvWeightsBiasTensor& wrapped_weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -696,7 +699,7 @@ Result Conv2dOperation::invoke(
     return conv2d(
         queue_id,
         input_tensor,
-        weight_tensor,
+        wrapped_weight_tensor,
         device,
         in_channels,
         out_channels,

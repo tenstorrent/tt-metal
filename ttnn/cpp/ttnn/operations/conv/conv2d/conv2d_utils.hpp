@@ -15,6 +15,22 @@ namespace ttnn {
 
 namespace operations::conv {
 using namespace conv2d;
+
+class ConvWeightsBiasTensor {
+    ttnn::Tensor weights;
+    bool _is_preprocessed;
+
+public:
+    ConvWeightsBiasTensor(const ttnn::Tensor& weights);
+    ConvWeightsBiasTensor(const ttnn::Tensor& weights, bool is_preprocessed);
+    operator ttnn::Tensor() { return weights; }
+    operator ttnn::Tensor() const { return weights; }
+
+    bool is_preprocessed() const { return _is_preprocessed; }
+};
+
+void print_preprocessed(const ConvWeightsBiasTensor& tensor);
+
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;

@@ -64,8 +64,8 @@ ttnn::Tensor conv_bias_layout_convert(
     bool is_non_tile_mul_width);
 
 template <typename T>
-ttnn::Tensor prepare_conv_weights(
-    const ttnn::Tensor& weight_tensor,
+ConvWeightsBiasTensor prepare_conv_weights(
+    const ConvWeightsBiasTensor& wrapped_weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
     const std::string& weights_format,

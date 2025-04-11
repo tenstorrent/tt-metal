@@ -32,6 +32,26 @@ namespace operations::conv {
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
+ConvWeightsBiasTensor::ConvWeightsBiasTensor(const ttnn::Tensor& weights, bool is_preprocessed) {
+    this->weights = std::move(weights);
+    this->_is_preprocessed = is_preprocessed;
+}
+
+ConvWeightsBiasTensor::ConvWeightsBiasTensor(const ttnn::Tensor& weights) {
+    log_warning(
+        "Implicit conversion of ttnn::Tensor to ConvWeightsBiasTensor assumes weights are not prepared. Instead use "
+        "prepare_conv_weights or load_prepared_conv_weights");
+    this->weights = std::move(weights);
+    this->_is_preprocessed = false;
+}
+
+void print_preprocessed(const ConvWeightsBiasTensor& tensor) {
+    if (tensor.is_preprocessed()) {
+        log_info("ConvWeightsBiasTensor is preprocessed");
+    } else {
+        log_info("ConvWeightsBiasTensor is not preprocessed");
+    }
+}
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
     while (num % divisor != 0) {

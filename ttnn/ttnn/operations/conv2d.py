@@ -20,6 +20,8 @@ def _nearest_32(x):
 
 
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
+ConvWeightsBiasTensor = ttnn._ttnn.operations.conv.ConvWeightsBiasTensor
+
 Conv2dSliceConfig = ttnn._ttnn.operations.conv.Conv2dSliceConfig
 Conv2dSliceHeight = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.SliceHeight
 Conv2dSliceWidth = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.SliceWidth

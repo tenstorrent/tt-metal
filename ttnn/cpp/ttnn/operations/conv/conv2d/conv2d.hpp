@@ -24,7 +24,7 @@ template <typename T>
 Result conv2d_L1(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    const ConvWeightsBiasTensor& weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -45,7 +45,7 @@ template <typename T>
 Result conv2d_DRAM(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    const ConvWeightsBiasTensor& weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -68,7 +68,7 @@ template <typename T>
 Result conv2d(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    const ConvWeightsBiasTensor& weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -90,7 +90,7 @@ struct Conv2dOperation {
     static Result invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
+        const ConvWeightsBiasTensor& weight_tensor,
         IDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
@@ -111,7 +111,7 @@ struct Conv2dOperation {
     static Result invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
+        const ConvWeightsBiasTensor& weight_tensor,
         MeshDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,

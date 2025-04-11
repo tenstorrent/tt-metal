@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "tt-metalium/logger.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -1046,8 +1047,8 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 }
 
 template <typename T>
-ttnn::Tensor prepare_conv_weights(
-    const ttnn::Tensor& weight_tensor,
+ConvWeightsBiasTensor prepare_conv_weights(
+    const ConvWeightsBiasTensor& wrapped_weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
     const std::string& weights_format,
@@ -1065,6 +1066,11 @@ ttnn::Tensor prepare_conv_weights(
     T* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
+    if (wrapped_weight_tensor.is_preprocessed()) {
+        log_warning(tt::LogOp, "Weight tensor is already preprocessed. 🤷 Skipping weight tensor preparation.");
+        return wrapped_weight_tensor;
+    }
+    ttnn::Tensor weight_tensor = wrapped_weight_tensor;
     TT_FATAL(
         !ttnn::is_tensor_on_device_or_multidevice(weight_tensor),
         "Error: weight tensor must be on host for preparation.");
@@ -1146,7 +1152,7 @@ ttnn::Tensor prepare_conv_weights(
         opt_conv_op_block_config.act_block_h_ntiles,
         input_width);
 
-    return weight_tensor_on_device;
+    return ConvWeightsBiasTensor(weight_tensor_on_device, true);
 }
 
 template <typename T>
@@ -1245,8 +1251,8 @@ ttnn::Tensor prepare_conv_bias(
     return bias_tensor_;
 }
 
-template ttnn::Tensor prepare_conv_weights<IDevice>(
-    const ttnn::Tensor& weight_tensor,
+template ConvWeightsBiasTensor prepare_conv_weights<IDevice>(
+    const ConvWeightsBiasTensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
     const std::string& weights_format,
@@ -1265,8 +1271,8 @@ template ttnn::Tensor prepare_conv_weights<IDevice>(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
-template ttnn::Tensor prepare_conv_weights<MeshDevice>(
-    const ttnn::Tensor& weight_tensor,
+template ConvWeightsBiasTensor prepare_conv_weights<MeshDevice>(
+    const ConvWeightsBiasTensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
     const std::string& weights_format,
