@@ -672,7 +672,7 @@ def reset_tensix(tt_open_devices=None):
     if not shutil.which("tt-smi"):
         logger.error("tt-smi command not found. Cannot reset devices. Please install tt-smi.")
         return
-        
+
     if tt_open_devices is None:
         logger.info(f"Running reset for all pci devices")
         smi_reset_result = run_process_and_get_result(f"tt-smi -r")
