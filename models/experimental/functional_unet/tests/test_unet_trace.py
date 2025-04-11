@@ -213,13 +213,6 @@ def test_unet_trace_2cq(
     ttnn.release_trace(device, tid)
 
 
-def buffer_address(tensor):
-    addr = []
-    for ten in ttnn.get_device_tensors(tensor):
-        addr.append(ten.buffer_address())
-    return addr
-
-
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize(
@@ -301,7 +294,7 @@ def test_unet_trace_2cq_multi_device(
     l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config)
     op_event = ttnn.record_event(mesh_device, 0)
 
-    input_trace_addr = buffer_address(l1_input_tensor)
+    input_trace_addr = l1_input_tensor.buffer_address()
     spec = l1_input_tensor.spec
     output_tensor.deallocate(force=True)
 
@@ -310,7 +303,7 @@ def test_unet_trace_2cq_multi_device(
 
     # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
     l1_input_tensor = ttnn.allocate_tensor_on_device(spec, mesh_device)
-    assert input_trace_addr == buffer_address(l1_input_tensor)
+    assert input_trace_addr == l1_input_tensor.buffer_address()
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
 
     ttnn.synchronize_device(mesh_device)
@@ -577,7 +570,7 @@ def test_unet_trace_2cq_same_io_multi_device(
     l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config)
     op_event = ttnn.record_event(mesh_device, 0)
 
-    input_trace_addr = buffer_address(l1_input_tensor)
+    input_trace_addr = l1_input_tensor.buffer_address()
     shape = l1_input_tensor.shape
     dtype = l1_input_tensor.dtype
     layout = l1_input_tensor.layout
@@ -590,7 +583,7 @@ def test_unet_trace_2cq_same_io_multi_device(
     l1_input_tensor = ttnn.allocate_tensor_on_device(
         shape, dtype, layout, mesh_device, ttnn_model.input_sharded_memory_config
     )
-    assert input_trace_addr == buffer_address(l1_input_tensor)
+    assert input_trace_addr == l1_input_tensor.buffer_address()
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     ttnn.synchronize_device(mesh_device)

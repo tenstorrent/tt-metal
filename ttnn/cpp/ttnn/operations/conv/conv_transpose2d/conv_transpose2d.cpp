@@ -82,8 +82,13 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
             },
             conv_weight_tensor.get_storage());
     };
-    return ttnn::distributed::is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor)
-                                                                         : convert_tensor(conv_weight_tensor);
+    TT_FATAL(
+        !is_device_tensor(conv_weight_tensor), "transform_weights_for_conv_transpose2d only supports host tensors");
+
+    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
+    return ttnn::distributed::is_multi_device_host_tensor(conv_weight_tensor)
+               ? transform(conv_weight_tensor, convert_tensor)
+               : convert_tensor(conv_weight_tensor);
 }
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {

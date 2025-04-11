@@ -243,7 +243,7 @@ Tensor reduce(
             {input_tensor},
             output_tensors);
     } else {
-        operation::launch_with_autoformat(
+        operation::launch_op(
             [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config, config](
                 const std::vector<Tensor>& input_tensors,
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,

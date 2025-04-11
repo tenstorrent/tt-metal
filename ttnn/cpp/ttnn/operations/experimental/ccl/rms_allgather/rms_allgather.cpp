@@ -12,7 +12,7 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& semaphore,
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
     const std::optional<size_t> num_preferred_links,
     const ttnn::ccl::Topology topology,
@@ -39,15 +39,13 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const std::vector<std::optional<const Tensor>> optional_input_tensors = {residual_input_tensor, weight, stats};
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-    std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
     tt::tt_metal::operation::launch_op(
         [num_preferred_links,
          memory_config,
-         mesh_view,
          cluster_axis,
          num_devices,
          topology,
-         semaphores,
+         semaphore,
          subdevice_id,
          epsilon,
          program_config,
@@ -58,27 +56,21 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
-            TT_FATAL(
-                mesh_view.is_mesh_2d(),
-                "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
-                                                                : mesh_view.get_devices_on_row(coordinate[0]);
             const auto& input_tensor = input_tensors.at(0);
             return tt::tt_metal::operation::run(
-                ttnn::operations::fused::normalization::create_rms_struct(
-                    input_device_tensor,
-                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-                    memory_config,
-                    devices,
-                    topology,
-                    semaphores,
-                    subdevice_id,
+                RMSAllGather(
                     epsilon,
+                    memory_config.value_or(input_tensor.memory_config()),
                     program_config,
                     kernel_config_val,
                     dtype,
-                    is_pre),
+                    topology,
+                    is_pre,
+                    num_preferred_links.value_or(1),
+                    num_devices,
+                    semaphore,
+                    subdevice_id,
+                    cluster_axis),
                 {input_tensor},
                 optional_input_tensors,
                 optional_output_tensors);

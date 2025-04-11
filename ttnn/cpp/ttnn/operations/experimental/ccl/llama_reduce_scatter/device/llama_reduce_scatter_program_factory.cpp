@@ -7,6 +7,7 @@
 #include <vector>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
@@ -254,24 +255,66 @@ CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_
 
 }  // namespace detail
 
-LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::cached_program_t
-LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
+LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::cached_mesh_workload_t
+LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
+        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        shared_variables.emplace(coord, std::move(cached_program.shared_variables));
+    }
+    return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
+}
+
+ttnn::device_operation::CachedProgram<LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::shared_variables_t>
+LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
-    uint32_t ring_size = operation_attributes.ring_devices;
-    uint32_t num_devices = ring_size;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    auto* device = input_tensor.mesh_device();
+    const auto& mesh_view = device->get_view();
+    const uint32_t ring_devices =
+        (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
+
+    const uint32_t ring_size = operation_attributes.ring_devices;
+    const uint32_t num_devices = ring_size;
+
+    uint32_t ring_index = 0;  // Initialize device index
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<GlobalSemaphore> semaphore = std::nullopt;
+    const auto coordinate = mesh_view.find_device(input_tensor.device()->id());
+    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
+                                        ? mesh_view.get_devices_on_column(coordinate[1])
+                                        : mesh_view.get_devices_on_row(coordinate[0]);
+    for (uint32_t i = 0; i < ring_size; ++i) {
+        if (devices.at(i) == input_tensor.device()) {
+            ring_index = i;
+            if (i != 0) {
+                backward_device = devices.at(i - 1);
+            }
+            if (i != ring_size - 1) {
+                forward_device = devices.at(i + 1);
+            }
+        }
+    }
+
     bool enable_persistent_fabric = true;
     uint32_t num_links = operation_attributes.num_links;
 
-    uint32_t ring_index = operation_attributes.ring_index;
     std::string device_order = detail::device_order_array_string(ring_size, ring_index);
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
@@ -336,8 +379,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
         ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
             device,
-            operation_attributes.forward_device.value_or(nullptr),
-            operation_attributes.backward_device.value_or(nullptr),
+            forward_device.value_or(nullptr),
+            backward_device.value_or(nullptr),
             &program,
             enable_persistent_fabric,
             num_links);
@@ -748,35 +791,38 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 }
 
 void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_arguments(
-    cached_program_t& cached_program,
+    cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        const auto& shared_variables = cached_workload.shared_variables.at(range);
 
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& intermediate_packet_buffer = tensor_args.intermediate_packet_buffer;
-    auto& output_tensor = tensor_return_value;
+        auto& unary_reader_kernel_id = shared_variables.unary_reader_kernel_id;
+        auto& unary_writer_kernel_id = shared_variables.unary_writer_kernel_id;
 
-    auto input_tensor_buffer = input_tensor.buffer();
-    auto output_tensor_buffer = output_tensor.buffer();
-    auto packet_buffer = intermediate_packet_buffer.buffer();
+        const auto& input_tensor = tensor_args.input_tensor;
+        const auto& intermediate_packet_buffer = tensor_args.intermediate_packet_buffer;
+        auto& output_tensor = tensor_return_value;
 
-    auto& all_cores_grid = cached_program.shared_variables.core_range;
+        auto input_tensor_buffer = input_tensor.buffer();
+        auto output_tensor_buffer = output_tensor.buffer();
+        auto packet_buffer = intermediate_packet_buffer.buffer();
 
-    auto cores = corerange_to_cores(all_cores_grid, std::nullopt);
+        auto& all_cores_grid = shared_variables.core_range;
 
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[0], *input_tensor_buffer);
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[1], *output_tensor_buffer);
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[2], *packet_buffer);
+        auto cores = corerange_to_cores(all_cores_grid, std::nullopt);
 
-    for (const auto& core : cores) {
-        auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
-        writer_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore->address();
-        auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
-        reader_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore->address();
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_handles[0], *input_tensor_buffer);
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_handles[1], *output_tensor_buffer);
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_handles[2], *packet_buffer);
+
+        for (const auto& core : cores) {
+            auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            writer_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore->address();
+            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            reader_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore->address();
+        }
     }
 }
 

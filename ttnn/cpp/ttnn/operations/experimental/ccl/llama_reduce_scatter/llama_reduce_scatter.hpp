@@ -17,7 +17,7 @@ struct ExecuteLlamaReduceScatter {
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& intermediate_packet_buffer,
         const int32_t dim,
-        const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
+        const GlobalSemaphore& cross_device_semaphore,
         const tt::tt_metal::SubDeviceId& subdevice_id,
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,

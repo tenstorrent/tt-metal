@@ -11,7 +11,6 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
 )
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
@@ -141,8 +140,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     else:
         assert enable_persistent_fabric, "Persistent fabric must be enabled for async reduce scatter"
 
-    for d in mesh_device.get_devices():
-        ttnn.enable_program_cache(d)
+    ttnn.enable_program_cache(mesh_device)
     mesh_device.enable_async(enable_async)
 
     per_reduce_scatter_output_shape = list(per_chip_input_shape)
@@ -173,8 +171,8 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
             sub_device_stall_group = [worker_sub_device_id]
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
         # create global semaphore handles
-        from_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
-        to_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
+        from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+        to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
     else:
         worker_sub_device_id = None
     ##

@@ -22,6 +22,73 @@ namespace ttnn::device_operation::mesh_device_operation_utils {
 template <typename T>
 using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
 
+// Returns true if all tensors have uniform storage, false otherwise.
+template <typename TensorArgs>
+bool all_tensors_have_uniform_storage(const TensorArgs& tensor_args) {
+    Tensor first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+    const bool first_uniform = first_tensor.device_storage().is_uniform_storage();
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) {
+            TT_FATAL(
+                tensor.device_storage().is_uniform_storage() == first_uniform,
+                "Expected either all or none of the tensors to have uniform storage.");
+        },
+        tensor_args);
+    return first_uniform;
+}
+
+// Filters shards from `tensor_return_value` that are in `tensor_coordinates`.
+template <typename TensorReturnValue>
+void filter_tensor_shards(
+    const std::vector<ttnn::MeshCoordinate>& tensor_coordinates, TensorReturnValue& tensor_return_value) {
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor_to_return) {
+            auto& tensor_storage = std::get<tt::tt_metal::DeviceStorage>(tensor_to_return.tensor_attributes->storage);
+
+            auto coord_it = tensor_coordinates.cbegin();
+            auto storage_it = tensor_storage.specs.begin();
+            auto insert_it = tensor_storage.specs.begin();
+            while (coord_it != tensor_coordinates.end() && storage_it != tensor_storage.specs.end()) {
+                if (storage_it->first == *coord_it) {
+                    std::swap(*insert_it, *storage_it);
+                    ++insert_it;
+                    ++coord_it;
+                    ++storage_it;
+                } else {
+                    ++storage_it;
+                }
+            }
+            tensor_storage.specs.erase(insert_it, tensor_storage.specs.end());
+        },
+        tensor_return_value);
+}
+
+// Verifies all tensors span the same set of coordinates, and returns them in a vector.
+template <typename TensorArgs>
+std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& tensor_args) {
+    Tensor first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+    std::vector<ttnn::MeshCoordinate> tensor_coordinates;
+    std::transform(
+        first_tensor.device_storage().specs.begin(),
+        first_tensor.device_storage().specs.end(),
+        std::back_inserter(tensor_coordinates),
+        [](const auto& spec) { return spec.first; });
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) {
+            TT_FATAL(
+                tensor.device_storage().specs.size() == tensor_coordinates.size(),
+                "Tensors with non-uniform storage must have the same number of coordinates");
+            auto tensor_coordinates_it = tensor_coordinates.begin();
+            for (const auto& [coord, _] : tensor.device_storage().specs) {
+                TT_FATAL(
+                    coord == *tensor_coordinates_it, "Tensors with non-uniform storage must have the same coordinates");
+                ++tensor_coordinates_it;
+            }
+        },
+        tensor_args);
+    return tensor_coordinates;
+}
+
 // Sets runtime ID for all programs in `workload`.
 inline void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload, ttnn::MeshDevice* mesh_device) {
     for (auto& [_, program] : workload.get_programs()) {
