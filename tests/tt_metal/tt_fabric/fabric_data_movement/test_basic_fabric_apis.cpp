@@ -138,10 +138,7 @@ std::shared_ptr<tt_metal::Buffer> PrepareBuffer(
 }
 
 void RunAsyncWriteTest(
-    BaseFabricFixture* fixture,
-    test_fabric_mode mode,
-    bool is_raw_write,
-    RoutingDirection direction = RoutingDirection::E) {
+    BaseFabricFixture* fixture, fabric_mode mode, bool is_raw_write, RoutingDirection direction = RoutingDirection::E) {
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -222,7 +219,7 @@ void RunAsyncWriteTest(
         tt_metal::hal_ref.noc_xy_encoding(routers[0].second.x, routers[0].second.y),
         *outbound_eth_channels.begin()};
     std::map<string, string> defines = {};
-    if (mode == test_fabric_mode::PULL) {
+    if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
     defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
@@ -253,7 +250,7 @@ void RunAsyncWriteTest(
     }
 }
 
-void RunAtomicIncTest(BaseFabricFixture* fixture, test_fabric_mode mode) {
+void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -312,7 +309,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, test_fabric_mode mode) {
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
     std::map<string, string> defines = {};
-    if (mode == test_fabric_mode::PULL) {
+    if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
     defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
@@ -352,7 +349,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, test_fabric_mode mode) {
     ValidateBuffer(receiver_buffer_data, receiver_buffer);
 }
 
-void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, test_fabric_mode mode, bool is_raw_write) {
+void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bool is_raw_write) {
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -429,7 +426,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, test_fabric_mode mod
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
     std::map<string, string> defines = {};
-    if (mode == test_fabric_mode::PULL) {
+    if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
     defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
@@ -477,7 +474,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, test_fabric_mode mod
 }
 
 void RunAsyncWriteMulticastTest(
-    BaseFabricFixture* fixture, test_fabric_mode mode, bool is_raw_write, bool multidirectional = false) {
+    BaseFabricFixture* fixture, fabric_mode mode, bool is_raw_write, bool multidirectional = false) {
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -531,7 +528,7 @@ void RunAsyncWriteMulticastTest(
 
     // Create receiver programs and buffers
     std::map<string, string> defines = {};
-    if (mode == test_fabric_mode::PULL) {
+    if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
     defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
@@ -688,48 +685,40 @@ void RunAsyncWriteMulticastTest(
     }
 }
 
-TEST_F(Fabric2DPullFixture, TestAsyncWrite) { RunAsyncWriteTest(this, test_fabric_mode::PULL, false); }
+TEST_F(Fabric2DPullFixture, TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PULL, false); }
 
-TEST_F(Fabric2DPushFixture, TestAsyncWrite) { RunAsyncWriteTest(this, test_fabric_mode::PUSH, false); }
+TEST_F(Fabric2DPushFixture, TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PUSH, false); }
 
-TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) { RunAsyncWriteTest(this, test_fabric_mode::PULL, true); }
+TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) { RunAsyncWriteTest(this, fabric_mode::PULL, true); }
 
-TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) { RunAsyncWriteTest(this, test_fabric_mode::PUSH, true); }
+TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) { RunAsyncWriteTest(this, fabric_mode::PUSH, true); }
 
-TEST_F(Fabric2DPullFixture, TestAtomicInc) { RunAtomicIncTest(this, test_fabric_mode::PULL); }
+TEST_F(Fabric2DPullFixture, TestAtomicInc) { RunAtomicIncTest(this, fabric_mode::PULL); }
 
-TEST_F(Fabric2DPushFixture, TestAtomicInc) { RunAtomicIncTest(this, test_fabric_mode::PUSH); }
+TEST_F(Fabric2DPushFixture, TestAtomicInc) { RunAtomicIncTest(this, fabric_mode::PUSH); }
 
-TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) {
-    RunAsyncWriteAtomicIncTest(this, test_fabric_mode::PULL, false);
-}
+TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) { RunAsyncWriteAtomicIncTest(this, fabric_mode::PULL, false); }
 
-TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
-    RunAsyncWriteAtomicIncTest(this, test_fabric_mode::PUSH, false);
-}
+TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) { RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, false); }
 
-TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
-    RunAsyncWriteAtomicIncTest(this, test_fabric_mode::PULL, true);
-}
+TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) { RunAsyncWriteAtomicIncTest(this, fabric_mode::PULL, true); }
 
-TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
-    RunAsyncWriteAtomicIncTest(this, test_fabric_mode::PUSH, true);
-}
+TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) { RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, true); }
 
 TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
-    RunAsyncWriteMulticastTest(this, test_fabric_mode::PULL, false, false);
+    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, false, false);
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
-    RunAsyncWriteMulticastTest(this, test_fabric_mode::PULL, true, false);
+    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, true, false);
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
-    RunAsyncWriteMulticastTest(this, test_fabric_mode::PULL, false, true);
+    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, false, true);
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
-    RunAsyncWriteMulticastTest(this, test_fabric_mode::PULL, true, true);
+    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, true, true);
 }
 
 }  // namespace fabric_router_tests

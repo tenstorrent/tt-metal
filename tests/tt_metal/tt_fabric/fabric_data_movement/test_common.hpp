@@ -4,7 +4,7 @@
 
 #pragma once
 
-enum test_fabric_mode {
+enum fabric_mode {
     PULL,
     PUSH,
 };
