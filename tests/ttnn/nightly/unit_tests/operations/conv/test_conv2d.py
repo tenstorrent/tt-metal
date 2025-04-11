@@ -1481,6 +1481,9 @@ def test_sd14_vae_conv(
     split_factor_input_channels,
     split_factor_output_channels,
 ):
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
+
     batch = 1
     dtype = ttnn.bfloat8_b
     kernel = (3, 3)
