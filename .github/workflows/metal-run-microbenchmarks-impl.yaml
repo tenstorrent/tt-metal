@@ -100,5 +100,5 @@ jobs:
         timeout-minutes: 10
         with:
           name: microbenchmark-report-csv-${{ join(matrix.test-group.name) }}
-          path: generated/profiler/.logs
+          path: /work/generated/profiler/.logs
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
