@@ -147,6 +147,7 @@ def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
+@skip_for_blackhole("Requires wormhole_b0 to run. Issue #19640")
 @pytest.mark.parametrize(
     "shape",
     [

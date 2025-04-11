@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 import pytest
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
@@ -205,6 +205,7 @@ def test_moreh_nll_loss_unreduced_callback(shape, device, use_program_cache):
     )
 
 
+@skip_for_blackhole("Fails on BH. Issue #20579")
 @pytest.mark.parametrize(
     "shape",
     [
