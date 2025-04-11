@@ -279,7 +279,14 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 25000000, "num_command_queues": 1, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    [
+        {
+            "trace_region_size": 25000000,
+            "num_command_queues": 1,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(

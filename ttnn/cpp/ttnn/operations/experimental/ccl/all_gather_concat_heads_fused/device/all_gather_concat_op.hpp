@@ -161,7 +161,7 @@ Tensor all_gather_concat(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false);
+    bool enable_persistent_fabric_mode = true);
 
 }  // namespace ccl
 }  // namespace experimental

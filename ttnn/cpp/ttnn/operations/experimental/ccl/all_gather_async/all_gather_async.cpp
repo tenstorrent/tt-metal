@@ -19,6 +19,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode) {
+    TT_FATAL(enable_persistent_fabric_mode, "Op can only be run with persistent fabric");
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
         dim,
@@ -42,6 +43,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode) {
+    TT_FATAL(enable_persistent_fabric_mode, "Op can only be run with persistent fabric");
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
         dim,

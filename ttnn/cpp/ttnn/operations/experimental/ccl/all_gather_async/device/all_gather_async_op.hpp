@@ -168,7 +168,7 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false);  // TODO make reference
+    bool enable_persistent_fabric_mode = true);  // TODO make reference
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -181,7 +181,7 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false);
+    bool enable_persistent_fabric_mode = true);
 
 }  // namespace ccl
 }  // namespace experimental

@@ -44,7 +44,11 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
         "decode",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 def test_llama_rms_norm_inference(
     max_seq_len,
     batch_size,

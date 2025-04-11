@@ -20,7 +20,7 @@ struct ExecuteAllGatherAsync {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-        bool enable_persistent_fabric_mode = false);
+        bool enable_persistent_fabric_mode = true);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -33,7 +33,7 @@ struct ExecuteAllGatherAsync {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_preferred_links = std::nullopt,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-        bool enable_persistent_fabric_mode = false);
+        bool enable_persistent_fabric_mode = true);
 };
 
 }  // namespace operations::experimental::ccl

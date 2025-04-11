@@ -3,11 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from loguru import logger
 import torch
 
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import check_mesh_tensor_alloc
@@ -19,9 +17,6 @@ class TT_CCL:
         mesh_device,
         model_args,
         worker_sub_device_id,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
         mode="decode",
     ):
         self.mode = mode
@@ -30,49 +25,40 @@ class TT_CCL:
         self.mesh_device = mesh_device
         self.sub_device_crs = all_crs if mode == "prefill" else model_args.sub_core_grids
         self.worker_sub_device_id = worker_sub_device_id
-        self.enable_persistent_fabric = enable_persistent_fabric
-        self.create_persistent_fabric = create_persistent_fabric
-        self.teardown_persistent_fabric = teardown_persistent_fabric
         self.model_config = model_args.model_config
+        self.num_cbs = 2
+        self.from_remote_semaphore_handles = []
+        self.to_remote_semaphore_handles = []
 
-        if create_persistent_fabric:
-            assert enable_persistent_fabric
-        if teardown_persistent_fabric:
-            assert enable_persistent_fabric
-        if create_persistent_fabric:
-            self.num_cbs = 2
-            self.from_remote_semaphore_handles = []
-            self.to_remote_semaphore_handles = []
-
-            # Double buffered on each axis
-            self.gather_semaphore_handles = [[], []]
-            if mode == "prefill":
-                self.from_semaphore_handles = [[], []]
-                self.to_semaphore_handles = [[], []]
-            for i in range(2):
-                for _ in range(self.num_cbs):
-                    self.gather_semaphore_handles[i].append(
+        # Double buffered on each axis
+        self.gather_semaphore_handles = [[], []]
+        if mode == "prefill":
+            self.from_semaphore_handles = [[], []]
+            self.to_semaphore_handles = [[], []]
+        for i in range(2):
+            for _ in range(self.num_cbs):
+                self.gather_semaphore_handles[i].append(
+                    create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
+                )
+                if mode == "prefill":
+                    self.from_semaphore_handles[i].append(
                         create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
                     )
-                    if mode == "prefill":
-                        self.from_semaphore_handles[i].append(
-                            create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
-                        )
-                        self.to_semaphore_handles[i].append(
-                            create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
-                        )
+                    self.to_semaphore_handles[i].append(
+                        create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
+                    )
 
-            self.gather_idx = [0, 0]
-            self.buffer_idx = [0, 0]
-            self.reduce_scatter_buffer_idx = [0, 0]
+        self.gather_idx = [0, 0]
+        self.buffer_idx = [0, 0]
+        self.reduce_scatter_buffer_idx = [0, 0]
 
-            if mode == "decode":
-                self.persistent_buffers = self.get_persistent_buffers()
-                self.all_gather_buffers = self.get_all_gather_buffers()
-                self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
-            if mode == "prefill":
-                self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
-                self.all_gather_buffers = self.get_prefill_all_gather_buffers()
+        if mode == "decode":
+            self.persistent_buffers = self.get_persistent_buffers()
+            self.all_gather_buffers = self.get_all_gather_buffers()
+            self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
+        if mode == "prefill":
+            self.persistent_buffers = self.get_reduce_scatter_buffers()
+            self.all_gather_buffers = self.get_prefill_all_gather_buffers()
 
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
@@ -391,55 +377,14 @@ class TT_CCL:
             if lm_head:
                 persistent_buffer.deallocate(True)
         else:
-            if self.enable_persistent_fabric:
-                if lm_head:
-                    ttnn_tensor_gathered = self.line_all_gather(
-                        input_tensor_mesh,
-                        dim=0,
-                        num_links=num_links,
-                        cluster_axis=cluster_axis,
-                        memory_config=memory_config,
-                        buffer_key=buffer_key,
-                    )
-                    ttnn_tensor_out = ttnn.experimental.fast_reduce_nc(
-                        ttnn_tensor_gathered,
-                        dims=[0],
-                        output=None,
-                        compute_kernel_config=None,
-                        memory_config=memory_config,
-                    )
-                    return ttnn_tensor_out
-                # ttnn.synchronize_device(self.mesh_device)
-                output_tensor_scattered = self.line_reduce_scatter(
+            if lm_head:
+                ttnn_tensor_gathered = self.line_all_gather(
                     input_tensor_mesh,
-                    memory_config,
-                    dim=3,
-                    cluster_axis=cluster_axis,
+                    dim=0,
                     num_links=num_links,
-                    math_op=ttnn.ReduceType.Sum,
-                    buffer_key=buffer_key,
-                )
-                # ttnn.synchronize_device(self.mesh_device)
-                # Gather the scattered tensor
-                output_tensor_mesh = self.line_all_gather(
-                    output_tensor_scattered,
-                    dim=3,
                     cluster_axis=cluster_axis,
                     memory_config=memory_config,
-                    num_links=num_links,
                     buffer_key=buffer_key,
-                )
-                # ttnn.synchronize_device(self.mesh_device)
-            else:
-                num_links = 1  # if cluster_axis==1 else 4
-                ttnn_tensor_gathered = ttnn.all_gather(
-                    input_tensor_mesh,
-                    0,
-                    num_links=num_links,
-                    cluster_axis=cluster_axis,
-                    mesh_device=self.mesh_device,
-                    topology=ttnn.Topology.Linear,
-                    memory_config=memory_config,
                 )
                 ttnn_tensor_out = ttnn.experimental.fast_reduce_nc(
                     ttnn_tensor_gathered,
@@ -449,6 +394,27 @@ class TT_CCL:
                     memory_config=memory_config,
                 )
                 return ttnn_tensor_out
+            # ttnn.synchronize_device(self.mesh_device)
+            output_tensor_scattered = self.line_reduce_scatter(
+                input_tensor_mesh,
+                memory_config,
+                dim=3,
+                cluster_axis=cluster_axis,
+                num_links=num_links,
+                math_op=ttnn.ReduceType.Sum,
+                buffer_key=buffer_key,
+            )
+            # ttnn.synchronize_device(self.mesh_device)
+            # Gather the scattered tensor
+            output_tensor_mesh = self.line_all_gather(
+                output_tensor_scattered,
+                dim=3,
+                cluster_axis=cluster_axis,
+                memory_config=memory_config,
+                num_links=num_links,
+                buffer_key=buffer_key,
+            )
+            # ttnn.synchronize_device(self.mesh_device)
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         self.buffer_idx[cluster_axis] = (self.buffer_idx[cluster_axis] + 1) % self.num_cbs
@@ -509,18 +475,6 @@ class TT_CCL:
         return ttnn_tensor_out
 
     def line_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None):
-        if self.mode == "prefill" and not self.enable_persistent_fabric:
-            num_links = 1  # if cluster_axis==1 else 4
-            ttnn_tensor_out = ttnn.all_gather(
-                input_tensor_mesh,
-                dim,
-                num_links=num_links,
-                cluster_axis=cluster_axis,
-                mesh_device=self.mesh_device,
-                topology=ttnn.Topology.Linear,
-                memory_config=memory_config,
-            )
-            return ttnn_tensor_out
         persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
@@ -534,7 +488,6 @@ class TT_CCL:
             num_links=num_links,
             memory_config=memory_config,
             subdevice_id=self.worker_sub_device_id,
-            enable_persistent_fabric_mode=self.enable_persistent_fabric,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
@@ -609,11 +562,7 @@ class TT_CCL:
         return ttnn_tensor_out
 
     def close(self):
-        if self.enable_persistent_fabric and self.teardown_persistent_fabric:
-            logger.info("Tearing down persistent fabric interface")
-            self.mesh_device.reset_sub_device_stall_group()
-            teardown_fabric_interface(self.mesh_device)
-            logger.info("Done tearing down persistent fabric interface")
+        self.mesh_device.reset_sub_device_stall_group()
 
 
 def tt_distributed_rmsnorm(

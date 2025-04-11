@@ -136,9 +136,14 @@ void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& 
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
-void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done = true);
-void LaunchProgram(IDevice* device, const std::shared_ptr<Program>& program, bool wait_until_cores_done = true);
-void WaitProgramDone(IDevice* device, Program& program);
+void LaunchProgram(
+    IDevice* device, Program& program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
+void LaunchProgram(
+    IDevice* device,
+    const std::shared_ptr<Program>& program,
+    bool wait_until_cores_done = true,
+    bool force_slow_dispatch = false);
+void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results = true);
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to
@@ -161,10 +166,11 @@ void WaitProgramDone(IDevice* device, Program& program);
  * |---------------------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
  * | device                    | Which device the program is compiled for                         | IDevice*  | Must be
  * initialized via tt_metal::InitializeDevice | Yes      | | program                   | The program to compile |
- * Program & |                                                    | Yes      | | fd_bootloader_mode        | Set when
- * compiling program to initialize fast dispatch           | bool      | | No       |
+ * Program & |                                                    | Yes      | | force_slow_dispatch        | Set when
+ * a user wants to compile a program with Slow Dispatch Force Enabled (advanced feature, currently used internally to
+ * launch Fast Dispatch Firmware and in the Device Performance Profiler)           | bool      | | No |
  */
-void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode = false);
+void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
  * Writes runtime args that are saved in the program to device
@@ -178,13 +184,13 @@ void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode =
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool fd_bootloader_mode = false);
+void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
 // - Configures circular buffers (inits regs with buffer data)
 // - Takes the device out of reset
-bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootloader_mode = false);
+bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
  * Clear profiler control buffer

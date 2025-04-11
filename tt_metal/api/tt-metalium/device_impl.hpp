@@ -191,7 +191,7 @@ public:
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
-
+    bool dispatch_firmware_active() const override { return dispatch_firmware_active_; };
     // TODO #15944: Temporary api until migration to actual fabric is complete
     std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
@@ -240,6 +240,8 @@ private:
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
 
     bool initialized_ = false;
+
+    bool dispatch_firmware_active_ = false;
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;

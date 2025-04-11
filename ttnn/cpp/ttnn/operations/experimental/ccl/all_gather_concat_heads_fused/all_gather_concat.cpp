@@ -24,6 +24,7 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode) {
+    TT_FATAL(enable_persistent_fabric_mode, "Op can only be run with persistent fabric");
     return ttnn::operations::experimental::ccl::all_gather_concat(
         input_tensor,
         buffer_tensor,
