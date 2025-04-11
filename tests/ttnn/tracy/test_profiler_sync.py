@@ -42,6 +42,6 @@ def test_with_ops(device):
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_devices(
-    t3k_mesh_device,
+    mesh_device,
 ):
     logger.debug("Testing All Devices")
