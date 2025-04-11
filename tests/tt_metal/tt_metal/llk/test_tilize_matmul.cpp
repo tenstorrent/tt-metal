@@ -145,7 +145,7 @@ void run_single_core_tilize_matmul(
         "tests/tt_metal/tt_metal/test_kernels/compute/tilize_matmul.cpp",
         core,
         tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::LoFi,
+            .math_fidelity = MathFidelity::HiFi4,
             .compile_args =
                 {in0_cb_index,
                  in1_cb_index,
@@ -186,6 +186,11 @@ void run_single_core_tilize_matmul(
 
     std::vector<bfloat16> in1 = generate_uniform_random_vector<bfloat16>(
         0.0f, 10.0f, dram_buffer_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+
+    /*for (size_t i = 0; i < in0.size(); i++)
+    {
+        in0[i] = bfloat16((float)i);
+    }*/
 
     std::vector<bfloat16> golden = gold_matmul(in0, in1, {32 * rt_dim, 32 * ct_dim, 32 * kt_dim});
     auto golden_packed = pack_vector<uint32_t, bfloat16>(golden);

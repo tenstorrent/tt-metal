@@ -29,7 +29,7 @@ void MAIN {
 #endif
 
     cb_reserve_back(sync_cb, 1);
-    volatile std::uint32_t* base_address = (std::uint32_t*)6768;
+    volatile std::uint32_t* base_address = (std::uint32_t*)MEM_LLK_DEBUG_BASE;
 
 #ifndef TILIZE_MATMUL_FUSED
     tilize_init(in0_cb, kt_dim, imm_cb);
@@ -40,30 +40,45 @@ void MAIN {
     tensix_sync();
     {
         DeviceZoneScopedN("B0");
-        UNPACK((base_address[0] = 1));
-        MATH((base_address[1] = 2));
-        PACK((base_address[2] = 3));
-        while (base_address[0] != 1) {
+        UNPACK((base_address[1] = 1));
+        MATH((base_address[2] = 2));
+        PACK((base_address[3] = 3));
+        while (base_address[1] != 1) {
             asm("nop");
         }
-        while (base_address[1] != 2) {
+        while (base_address[2] != 2) {
             asm("nop");
         }
-        while (base_address[2] != 3) {
+        while (base_address[3] != 3) {
             asm("nop");
         }
-        UNPACK((base_address[0] = 0));
-        MATH((base_address[1] = 0));
-        PACK((base_address[2] = 0));
-        while (base_address[0] != 0) {
+        UNPACK((base_address[5] = 5));
+        MATH((base_address[6] = 6));
+        PACK((base_address[7] = 7));
+        while (base_address[5] != 5) {
             asm("nop");
         }
+        while (base_address[6] != 6) {
+            asm("nop");
+        }
+        while (base_address[7] != 7) {
+            asm("nop");
+        }
+        UNPACK((base_address[1] = 0));
+        MATH((base_address[2] = 0));
+        PACK((base_address[3] = 0));
         while (base_address[1] != 0) {
             asm("nop");
         }
         while (base_address[2] != 0) {
             asm("nop");
         }
+        while (base_address[3] != 0) {
+            asm("nop");
+        }
+        UNPACK((base_address[5] = 0));
+        MATH((base_address[6] = 0));
+        PACK((base_address[7] = 0));
     }
 
     {
@@ -96,30 +111,45 @@ void MAIN {
 
     {
         DeviceZoneScopedN("B1");
-        UNPACK((base_address[0] = 1));
-        MATH((base_address[1] = 2));
-        PACK((base_address[2] = 3));
-        while (base_address[0] != 1) {
+        UNPACK((base_address[1] = 1));
+        MATH((base_address[2] = 2));
+        PACK((base_address[3] = 3));
+        while (base_address[1] != 1) {
             asm("nop");
         }
-        while (base_address[1] != 2) {
+        while (base_address[2] != 2) {
             asm("nop");
         }
-        while (base_address[2] != 3) {
+        while (base_address[3] != 3) {
             asm("nop");
         }
-        UNPACK((base_address[0] = 0));
-        MATH((base_address[1] = 0));
-        PACK((base_address[2] = 0));
-        while (base_address[0] != 0) {
+        UNPACK((base_address[5] = 5));
+        MATH((base_address[6] = 6));
+        PACK((base_address[7] = 7));
+        while (base_address[5] != 5) {
             asm("nop");
         }
+        while (base_address[6] != 6) {
+            asm("nop");
+        }
+        while (base_address[7] != 7) {
+            asm("nop");
+        }
+        UNPACK((base_address[1] = 0));
+        MATH((base_address[2] = 0));
+        PACK((base_address[3] = 0));
         while (base_address[1] != 0) {
             asm("nop");
         }
         while (base_address[2] != 0) {
             asm("nop");
         }
+        while (base_address[3] != 0) {
+            asm("nop");
+        }
+        UNPACK((base_address[5] = 0));
+        MATH((base_address[6] = 0));
+        PACK((base_address[7] = 0));
     }
 
     {
@@ -145,5 +175,48 @@ void MAIN {
     cb_pop_front(mm_cb, rt_dim * kt_dim);
     cb_pop_front(in1_cb, ct_dim * kt_dim);
     cb_push_back(out_cb, rt_dim * ct_dim);
+
+    {
+        DeviceZoneScopedN("B2");
+        UNPACK((base_address[1] = 1));
+        MATH((base_address[2] = 2));
+        PACK((base_address[3] = 3));
+        while (base_address[1] != 1) {
+            asm("nop");
+        }
+        while (base_address[2] != 2) {
+            asm("nop");
+        }
+        while (base_address[3] != 3) {
+            asm("nop");
+        }
+        UNPACK((base_address[5] = 5));
+        MATH((base_address[6] = 6));
+        PACK((base_address[7] = 7));
+        while (base_address[5] != 5) {
+            asm("nop");
+        }
+        while (base_address[6] != 6) {
+            asm("nop");
+        }
+        while (base_address[7] != 7) {
+            asm("nop");
+        }
+        UNPACK((base_address[1] = 0));
+        MATH((base_address[2] = 0));
+        PACK((base_address[3] = 0));
+        while (base_address[1] != 0) {
+            asm("nop");
+        }
+        while (base_address[2] != 0) {
+            asm("nop");
+        }
+        while (base_address[3] != 0) {
+            asm("nop");
+        }
+        UNPACK((base_address[5] = 0));
+        MATH((base_address[6] = 0));
+        PACK((base_address[7] = 0));
+    }
 }
 }  // namespace NAMESPACE
