@@ -6,6 +6,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 import pytest
 import ttnn
 
+from tracy import signpost
+
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_upblock import UpDecoderBlock
 from models.utility_functions import is_wormhole_b0
 
@@ -108,7 +110,9 @@ def test_upblock(
         torch_input.permute([0, 2, 3, 1]), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
+    signpost(header=f"start {block_id}")
     ttnn_output = ttnn_model(ttnn_input)
+    signpost(header=f"end {block_id}")
 
     if ttnn_output.shape[1] == 1:
         ttnn_output = ttnn.reshape(ttnn_output, [1, output_height, output_width, out_channels])

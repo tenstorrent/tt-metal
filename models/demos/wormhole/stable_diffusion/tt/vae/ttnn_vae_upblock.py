@@ -18,8 +18,6 @@ class UpDecoderBlock:
         resnet_conv2_channel_split_factors,
         upsample_conv_channel_split_factors,
     ):
-        breakpoint()
-        print("Initializing UpDecoderBlock")
         self.resnets = []
         for i in range(2):
             self.resnets.append(
