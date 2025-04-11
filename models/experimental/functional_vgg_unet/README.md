@@ -19,8 +19,20 @@ To use the model with the trained weights, follow these steps:
 
 - Set the use_pretrained_weight option to True.
 
+If running on Wormhole N300, the following environment variable needs to be set:
+
+```sh
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
+
 Execute the following command:
 
 ```sh
 pytest tests/ttnn/integration_tests/vgg_unet/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_true]
 ```
+
+Use the following command to run the e2e perf:
+`pytest models/experimental/functional_vgg_unet/tests/test_perf_vgg_unet.py::test_vgg_unet`
+
+Use the following command to run the e2e perf with trace 2cq:
+`pytest models/experimental/functional_vgg_unet/tests/test_e2e_performant.py`
