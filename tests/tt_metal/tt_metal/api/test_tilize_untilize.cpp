@@ -379,6 +379,10 @@ TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
         return;
     }
 
+    if (transpose_of_faces && from_layout == TensorLayoutType::TILED_NFACES) {
+        GTEST_SKIP() << "Transpose of faces is not supported in reference TILED_NFACES->XXX";
+    }
+
     uint32_t n_rows = shape[0];
     uint32_t n_cols = shape[1];
     size_t n_elements = n_batches * n_rows * n_cols;
@@ -418,6 +422,10 @@ TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
 
     if (from_layout == to_layout) {
         return;
+    }
+
+    if (transpose_of_faces && from_layout == TensorLayoutType::TILED_NFACES) {
+        GTEST_SKIP() << "Transpose of faces is not supported in reference TILED_NFACES->XXX";
     }
 
     uint32_t n_rows = shape[0];
@@ -468,7 +476,7 @@ INSTANTIATE_TEST_SUITE_P(
             std::nullopt, PhysicalSize{16, 16}),  // tile_shape. Sometimes tile shape == face shape in real scenarios
         ::testing::Values(std::nullopt),          // face_shape
         ::testing::Values(false),                 // transpose_within_face  true doesn't work even in reference
-        ::testing::Values(false)                  // transpose_of_faces     true doesn't work even in reference
+        ::testing::Bool()                         // transpose_of_faces     true doesn't work even in reference
         ));
 
 // Test that tilize and then untilize give the same result as the original data
