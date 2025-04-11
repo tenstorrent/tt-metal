@@ -73,7 +73,6 @@
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
@@ -586,8 +585,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(
                                 "buffer already exists",
                                 buffer_index);
                         }
-                        cb_indices[buffer_index] = 1;
-                        target_cb_indices[buffer_index] = 1;
+                        cb_indices[buffer_index] = true;
+                        target_cb_indices[buffer_index] = true;
                     }
                 };
                 add_buffer_indices(circular_buffer->config().local_buffer_indices(), local_cb_indices);

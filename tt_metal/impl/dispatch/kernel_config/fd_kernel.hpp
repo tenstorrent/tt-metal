@@ -93,6 +93,7 @@ public:
     // an intermediary FDKernel for indicating a fabric router path needs to be found.
     virtual void UpdateArgsForFabric(
         const CoreCoord& fabric_router_virtual,
+        uint32_t outbound_eth_chan,
         tt::tt_fabric::mesh_id_t upstream_mesh_id,
         chip_id_t upstream_chip_id,
         tt::tt_fabric::mesh_id_t downstream_mesh_id,

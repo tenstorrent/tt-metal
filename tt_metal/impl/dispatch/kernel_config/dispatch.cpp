@@ -27,6 +27,7 @@
 #include "mux.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
+#include "rtoptions.hpp"
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 
@@ -160,7 +161,11 @@ void DispatchKernel::GenerateStaticConfigs() {
             my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs()),
             GetCoreType());  // Apparently unused
 
-        static_config_.split_dispatch_page_preamble_size = sizeof(tt::packet_queue::dispatch_packet_header_t);
+        if (tt::llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+            static_config_.split_dispatch_page_preamble_size = 0;
+        } else {
+            static_config_.split_dispatch_page_preamble_size = sizeof(tt::packet_queue::dispatch_packet_header_t);
+        }
         static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
 
         static_config_.packed_write_max_unicast_sub_cmds =
@@ -378,10 +383,11 @@ void DispatchKernel::CreateKernel() {
         static_config_.dev_completion_q_rd_ptr.value(),
 
         dependent_config_.downstream_mesh_id.value_or(0),
-        dependent_config_.downstream_chip_id.value_or(0),
+        dependent_config_.downstream_dev_id.value_or(0),
         dependent_config_.upstream_mesh_id.value_or(0),
-        dependent_config_.upstream_chip_id.value_or(0),
+        dependent_config_.upstream_dev_id.value_or(0),
         dependent_config_.fabric_router_noc_xy.value_or(0),
+        dependent_config_.outbound_eth_chan.value_or(0),
         static_config_.client_interface_addr.value_or(0),
 
         static_config_.first_stream_used.value(),
@@ -389,7 +395,7 @@ void DispatchKernel::CreateKernel() {
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 38);
+    TT_ASSERT(compile_args.size() == 39);
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
     auto upstream_virtual_core =
         device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
@@ -444,16 +450,18 @@ void DispatchKernel::ConfigureCore() {
 
 void DispatchKernel::UpdateArgsForFabric(
     const CoreCoord& fabric_router_virtual,
+    uint32_t outbound_eth_chan,
     tt::tt_fabric::mesh_id_t upstream_mesh_id,
-    chip_id_t upstream_chip_id,
+    chip_id_t upstream_dev_id,
     tt::tt_fabric::mesh_id_t downstream_mesh_id,
-    chip_id_t downstream_chip_id) {
+    chip_id_t downstream_dev_id) {
     dependent_config_.fabric_router_noc_xy =
         tt::tt_metal::hal_ref.noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
     dependent_config_.upstream_mesh_id = upstream_mesh_id;
-    dependent_config_.upstream_chip_id = upstream_chip_id;
+    dependent_config_.upstream_dev_id = upstream_dev_id;
     dependent_config_.downstream_mesh_id = downstream_mesh_id;
-    dependent_config_.downstream_chip_id = downstream_chip_id;
+    dependent_config_.downstream_dev_id = downstream_dev_id;
+    dependent_config_.outbound_eth_chan = outbound_eth_chan;
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
     static_config_.client_interface_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_INTERFACE);
