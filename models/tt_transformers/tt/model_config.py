@@ -2085,13 +2085,13 @@ class HfModelWrapper:
 class DecodersPrecision:
     @classmethod
     def accuracy(cls, num_decoders, model_name):
-        inst = cls(num_decoders, ModelOptimizations.accuracy(model_name))
+        inst = cls(num_decoders, model_name, ModelOptimizations.accuracy(model_name))
         inst.__name__ = "accuracy"
         return inst
 
     @classmethod
     def performance(cls, num_decoders, model_name):
-        inst = cls(num_decoders, ModelOptimizations.performance(model_name))
+        inst = cls(num_decoders, model_name, ModelOptimizations.performance(model_name))
         inst.__name__ = "performance"
         return inst
 
