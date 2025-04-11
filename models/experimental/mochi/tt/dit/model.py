@@ -132,6 +132,12 @@ class AsymmDiTJoint(LightweightModule):
             out_channels=in_channels,
         )
 
+    def dealloc(self):
+        self.x_embedder.dealloc()
+        for block in self.blocks:
+            block.dealloc()
+        self.final_layer.dealloc()
+
     def prepare_text_features(self, t5_feat, t5_mask):
         """
         Prepare text features for the model.

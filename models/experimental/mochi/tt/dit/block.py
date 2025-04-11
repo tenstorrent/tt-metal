@@ -110,6 +110,18 @@ class AsymmetricJointBlock(LightweightModule):
                 seq_shard=False,
             )
 
+    def dealloc(self):
+        ttnn.deallocate(self.mod_x)
+        if self.mod_x_bias is not None:
+            ttnn.deallocate(self.mod_x_bias)
+        ttnn.deallocate(self.mod_y)
+        if self.mod_y_bias is not None:
+            ttnn.deallocate(self.mod_y_bias)
+        self.attn.dealloc()
+        self.mlp_x.dealloc()
+        if self.update_y:
+            self.mlp_y.dealloc()
+
     def ff_block_x(self, x_1BNX: ttnn.Tensor, scale_x_B11X: ttnn.Tensor, gate_x_B11X: ttnn.Tensor) -> ttnn.Tensor:
         """Feed-forward block for visual features.
 

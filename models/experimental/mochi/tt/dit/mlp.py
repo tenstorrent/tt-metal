@@ -97,6 +97,11 @@ class FeedForward(LightweightModule):
                 grid_size=(8, 8),
             )
 
+    def dealloc(self):
+        ttnn.deallocate(self.w1)
+        ttnn.deallocate(self.w2)
+        ttnn.deallocate(self.w3)
+
     def forward(self, x_1BSD: ttnn.Tensor) -> ttnn.Tensor:
         B = x_1BSD.shape[1]
         S = x_1BSD.shape[2]

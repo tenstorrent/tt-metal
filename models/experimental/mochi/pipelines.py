@@ -126,9 +126,9 @@ def sample_model(device, dit, conditioning, **args):
 
 def decode_latents(decoder, z):
     assert z.ndim == 5
-    z, T = decoder.prepare_input(z)
+    z = decoder.prepare_input(z)
     samples = decoder(z)
-    samples = decoder.postprocess_output(samples, T)
+    samples = decoder.postprocess_output(samples)
     return normalize_decoded_frames(samples)
 
 
@@ -149,9 +149,15 @@ class TTPipeline(MochiSingleGPUPipeline):
                     negative_prompt=negative_prompt,
                 )
 
+            print("get dit")
+            dit = self.dit_factory.get_model(local_rank=0, device_id=0, world_size=1)
             print("sample_model")
-            latents = sample_model(self.device, self.dit, conditioning, **kwargs)
+            latents = sample_model(self.device, dit, conditioning, **kwargs)
+            print("deallocate dit")
+            dit.dealloc()
 
+            print("get decoder")
+            decoder = self.decoder_factory.get_model(local_rank=0, device_id=0, world_size=1)
             if self.decode_type == "tiled_full":
                 # frames = decode_latents_tiled_full(self.decoder, latents, **self.decode_args)
                 pass
@@ -161,6 +167,9 @@ class TTPipeline(MochiSingleGPUPipeline):
                 # )
                 pass
             else:
-                frames = decode_latents(self.decoder, latents)
+                frames = decode_latents(decoder, latents)
+
+            print("deallocate decoder")
+            decoder.dealloc()
 
             return frames.cpu().numpy()

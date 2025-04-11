@@ -113,6 +113,25 @@ class AsymmetricAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
+    def dealloc(self):
+        ttnn.deallocate(self.qkv_x)
+        if self.qkv_x_bias is not None:
+            ttnn.deallocate(self.qkv_x_bias)
+        ttnn.deallocate(self.qkv_y)
+        if self.qkv_y_bias is not None:
+            ttnn.deallocate(self.qkv_y_bias)
+        ttnn.deallocate(self.proj_x)
+        if self.proj_x_bias is not None:
+            ttnn.deallocate(self.proj_x_bias)
+        if self.update_y:
+            ttnn.deallocate(self.proj_y)
+            if self.proj_y_bias is not None:
+                ttnn.deallocate(self.proj_y_bias)
+        del self.q_norm_x
+        del self.k_norm_x
+        del self.q_norm_y
+        del self.k_norm_y
+
     def _create_rmsmorn(self, key):
         return RMSNorm(
             device=self.mesh_device,

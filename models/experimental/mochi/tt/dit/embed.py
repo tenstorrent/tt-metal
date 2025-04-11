@@ -69,6 +69,11 @@ class PatchEmbed(LightweightModule):
 
         self.mm_config = partial(matmul_2d_config, n=embed_dim, grid_size=(8, 8))
 
+    def dealloc(self):
+        ttnn.deallocate(self.weight)
+        if self.bias is not None:
+            ttnn.deallocate(self.bias)
+
     def forward(self, x_1BNI: ttnn.Tensor) -> ttnn.Tensor:
         """
         ttnn TMs aren't working here yet (Issue #17535) so we'll need the

@@ -79,6 +79,14 @@ class FinalLayer(LightweightModule):
         else:
             self.linear_bias = None
 
+    def dealloc(self):
+        ttnn.deallocate(self.mod)
+        if self.mod_bias is not None:
+            ttnn.deallocate(self.mod_bias)
+        ttnn.deallocate(self.linear)
+        if self.linear_bias is not None:
+            ttnn.deallocate(self.linear_bias)
+
     def forward(self, x: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass of the final layer.
 
