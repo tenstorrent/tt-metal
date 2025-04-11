@@ -128,6 +128,12 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // TODO: Set runtime arguments for both kernels to receive the semaphore address
 
     // Semaphores
+    CoreCoord master_core = {0, 0};
+    CoreCoord slave_core = {1, 1};
+    CoreCoord physical_master_core = device->worker_core_from_logical_core(master_core);
+    CoreCoord physical_slave_core = device->worker_core_from_logical_core(slave_core);
+    log_info("Phsyical master core: {}", physical_master_core);
+    log_info("Phsyical slave core: {}", physical_slave_core);
     CoreRangeSet sem_core_set = test_config.slave_core_set.merge<CoreRangeSet>(test_config.master_core_set);
     const uint32_t semaphore = CreateSemaphore(program, sem_core_set, 0);
 
