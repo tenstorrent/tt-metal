@@ -138,11 +138,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode) {
-    TT_FATAL(enable_persistent_fabric_mode, "{} can only be called with persistent fabric", __FUNCTION__);
-
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
+    const bool enable_persistent_fabric_mode = true;
     const bool enable_async_output_tensor = false;
     const bool lower_command_stream_to_noc_commands =
         ttnn::ccl::worker_detail::can_command_stream_be_lowered_to_noc_commands(input_tensor);
@@ -335,7 +333,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
                     ttnn::ccl::cmd::UnicastCommandDestArgs{1, true}));
             }
         }
-        bool generate_teardown_commands = !enable_persistent_fabric_mode && link == 0;
+
         bool reset_semaphore = !enable_async_output_tensor && link == 0;
 
         if (reset_semaphore) {

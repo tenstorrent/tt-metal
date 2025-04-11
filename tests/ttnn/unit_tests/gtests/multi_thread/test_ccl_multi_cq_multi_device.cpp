@@ -159,8 +159,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
             1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
-            SubDeviceId(0),
-            true);
+            SubDeviceId(0));
 
         log_info(LogTest, "EnqueueReadBuffer", outer_loop);
         // Read the values from each device and compare them with the results calculated on the host
@@ -292,8 +291,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
             1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
-            SubDeviceId(0),
-            true);
+            SubDeviceId(0));
 
         futures.clear();  // Clear futures for the next set of tasks
         for (size_t i = 0; i < devices.size(); ++i) {

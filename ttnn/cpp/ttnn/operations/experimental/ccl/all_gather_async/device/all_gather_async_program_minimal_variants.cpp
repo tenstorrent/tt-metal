@@ -65,14 +65,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
-    TT_FATAL(
-        enable_persistent_fabric_mode,
-        "only persistent fabric mode is supported for all_gather_async_minimal_interleaved_dim3_1_1_32_any");
-
+    const bool enable_persistent_fabric_mode = true;
     IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
@@ -274,12 +270,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
-    TT_FATAL(
-        enable_persistent_fabric_mode, "only persistent fabric mode is supported for all_gather_async_llama_sharded");
+    const bool enable_persistent_fabric_mode = true;
 
     IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
