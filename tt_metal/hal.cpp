@@ -38,7 +38,12 @@ uint32_t get_pcie_alignment() { return tt::tt_metal::MetalContext::instance().ha
 uint32_t get_erisc_l1_unreserved_base() {
     auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
     if (hal_ref.get_arch() != tt::ARCH::GRAYSKULL) {
-        return hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
+            return hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        } else {
+            return hal_ref.get_dev_addr(
+                HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ROUTING_DISABLED_ERISC_L1_UNRESERVED);
+        }
     }
     return 0;
 }
@@ -46,7 +51,12 @@ uint32_t get_erisc_l1_unreserved_base() {
 uint32_t get_erisc_l1_unreserved_size() {
     auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
     if (hal_ref.get_arch() != tt::ARCH::GRAYSKULL) {
-        return hal_ref.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
+            return hal_ref.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        } else {
+            return hal_ref.get_dev_size(
+                HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ROUTING_DISABLED_ERISC_L1_UNRESERVED);
+        }
     }
     return 0;
 }
