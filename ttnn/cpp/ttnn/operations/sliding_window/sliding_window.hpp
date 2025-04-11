@@ -51,10 +51,12 @@ struct SlidingWindowConfig {
     uint32_t num_cores_c = 1;                                               // num cores along width c
     CoreRangeSet core_range_set = CoreRangeSet(CoreRange({0, 0}, {0, 0}));  // active cores
 
+    int32_t divisor_override = 0;
     bool snap_to_tile = false;
     bool is_bilinear = false;
     bool is_transpose = false;
     bool ceil_mode = false;
+    bool count_include_pad = true;
 
     std::string to_string() const;
     bool has_parallel_config() const;

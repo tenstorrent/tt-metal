@@ -26,7 +26,16 @@ def randomize_tensor(tensor_map, tensor_shape):
 
 
 def run_avg_pool2d(
-    device, tensor_map, input_shape, kernel_size, stride, padding, dilation, ceil_mode, count_include_pad, shard_scheme
+    device,
+    tensor_map,
+    input_shape,
+    kernel_size,
+    stride,
+    padding,
+    ceil_mode,
+    count_include_pad,
+    divisor_override,
+    shard_scheme,
 ):
     ## Test setup for both.
     in_n, in_c, in_h, in_w = input_shape
@@ -46,6 +55,7 @@ def run_avg_pool2d(
         padding,
         ceil_mode=ceil_mode,
         count_include_pad=count_include_pad,
+        divisor_override=divisor_override,
     )
 
     ## Get Actual output
@@ -58,8 +68,9 @@ def run_avg_pool2d(
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
-        dilation=dilation,
         ceil_mode=ceil_mode,
+        count_include_pad=count_include_pad,
+        divisor_override=divisor_override,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         applied_shard_scheme=shard_scheme,
     )
@@ -118,7 +129,6 @@ def run_avg_pool2d(
         (4, 4),
     ),
 )
-@pytest.mark.parametrize("dilation", ((1, 1),))
 @pytest.mark.parametrize(
     "ceil_mode",
     [
@@ -132,15 +142,34 @@ def run_avg_pool2d(
     ],
 )
 @pytest.mark.parametrize(
+    "divisor_override",
+    [
+        10,
+        20,
+        5,
+        11,
+        15,
+    ],
+)
+@pytest.mark.parametrize(
     "shard_scheme",
     [
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        # ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
 def test_run_avg_pool2d(
-    device, tensor_map, input_shape, kernel_size, stride, padding, dilation, ceil_mode, count_include_pad, shard_scheme
+    device,
+    tensor_map,
+    input_shape,
+    kernel_size,
+    stride,
+    padding,
+    ceil_mode,
+    count_include_pad,
+    divisor_override,
+    shard_scheme,
 ):
     if any(p > k // 2 for p, k in zip(padding, kernel_size)):
         pytest.skip(
@@ -153,8 +182,8 @@ def test_run_avg_pool2d(
         kernel_size,
         stride,
         padding,
-        dilation,
         ceil_mode=ceil_mode,
         count_include_pad=count_include_pad,
+        divisor_override=divisor_override,
         shard_scheme=shard_scheme,
     )

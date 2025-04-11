@@ -33,6 +33,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t ceil_pad_w,
     uint32_t dilation_h,
     uint32_t dilation_w,
+    int32_t divisor_override,
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
     uint32_t nblocks) {
@@ -271,7 +272,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     /**
      * Reader Kernel: input rows -> input cb
      */
-    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_hw) << 16;
+    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_hw, divisor_override) << 16;
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
     uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
@@ -449,6 +450,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto dilation_h = sliding_window_config.dilation_hw.first;
     auto dilation_w = sliding_window_config.dilation_hw.second;
     auto num_shards_c = sliding_window_config.num_cores_c;
+    auto divisor_override = sliding_window_config.divisor_override;
 
     return pool2d_multi_core_sharded_with_halo_v2_impl_new(
         program,
@@ -470,6 +472,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         ceil_pad_w,
         dilation_h,
         dilation_w,
+        divisor_override,
         num_shards_c,
         out_mem_config,
         1);
