@@ -9,7 +9,7 @@
 /*************************************************************************
  * LLK UNPACK UNTILIZE
  *************************************************************************/
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t* unpack_untilize_params) {
     constexpr bool is_row_pool = false;
     constexpr bool within_face_16x16_transpose = false;
@@ -27,7 +27,7 @@ inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t* unpack
         unpA_num_faces);
 }
 
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_untilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {
     const llk_unpack_A_params_t unpack_untilize_params = {
         .unpA_operand = unpA_operand,
@@ -37,7 +37,7 @@ inline void llk_unpack_untilize_hw_configure_disaggregated(const std::uint32_t u
 
 inline void llk_unpack_untilize_mop_config() { _llk_unpack_untilize_mop_config_(); }
 
-inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
+inline void llk_unpack_untilize_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = 1;
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
@@ -59,7 +59,7 @@ inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
         unpack_dst_format[operand_id], get_local_cb_interface(operand_id).fifo_page_size, face_r_dim, num_faces);
 }
 
-inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t unpA_ch1_x_stride = (uint)(unpack_dst_format[operand_id] & 0x3) == (uint)DataFormat::Float32   ? 4
                                       : (uint)(unpack_dst_format[operand_id] & 0x3) == (uint)DataFormat::Float16 ? 2
@@ -90,7 +90,7 @@ inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::u
     WAYPOINT("UPUD");
 }
 
-template <bool first_pass = true>
+template <bool first_pass>
 inline void llk_unpack_untilize_pass(std::uint32_t operand, std::uint32_t block_tile_cols) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;

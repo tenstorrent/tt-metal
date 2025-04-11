@@ -10,7 +10,7 @@
  * LLK UNPACK AB MATMUL
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
+template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode>
 inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t* unpack_AB_params) {
     const bool transpose_xy_srca = unpack_AB_params->transpose_xy_srca;
 
@@ -41,9 +41,9 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
         get_local_cb_interface(unpB_operand_id).fifo_page_size);
 }
 
-template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
+template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode>
 inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca = 0) {
+    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca) {
     const llk_unpack_AB_matmul_params_t unpack_AB_matmul_params = {
         .unpA_operand = unpA_operand, .unpB_operand = unpB_operand, .transpose_xy_srca = transpose_xy_srca};
     llk_unpack_AB_matmul_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_AB_matmul_params);
@@ -64,10 +64,10 @@ inline void llk_unpack_AB_matmul_mop_config(
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
-    const std::uint32_t transpose = 0,
-    const std::uint32_t ct_dim = 1,
-    const std::uint32_t rt_dim = 1,
-    const std::uint32_t kt_dim = 1) {
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim) {
     // In0 -> srcB (supports partial face)
     // In1 -> srcA
     const uint32_t operandA_id = get_operand_id(operandB);
