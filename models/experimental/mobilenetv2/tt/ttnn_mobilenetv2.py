@@ -3,16 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.functional_mobilenetv2.tt.common import MobileNetV2Conv2D, InvertedResidual
+from models.experimental.mobilenetv2.tt.common import TtMobileNetV2Conv2D, TtInvertedResidual
 
 
-class MobileNetV2:
+class TtMobileNetV2:
     def __init__(self, model_params, device, batchsize) -> None:
         self.device = device
         self.model_parameters = model_params
         self.batchsize = batchsize
 
-        self.conv1 = MobileNetV2Conv2D(
+        self.conv1 = TtMobileNetV2Conv2D(
             [3, 2, 1, 32],
             (model_params["fused_conv_0_weight"], model_params["fused_conv_0_bias"]),
             device,
@@ -20,18 +20,18 @@ class MobileNetV2:
             use_shallow_covariant=True,
             deallocate_activation=True,
         )
-        self.conv2 = MobileNetV2Conv2D(
+        self.conv2 = TtMobileNetV2Conv2D(
             [3, 1, 1, 32],
             (model_params["fused_conv_1_weight"], model_params["fused_conv_1_bias"]),
             device,
             batchsize,
             groups=32,
         )
-        self.conv3 = MobileNetV2Conv2D(
+        self.conv3 = TtMobileNetV2Conv2D(
             [1, 1, 0, 16], (model_params["conv_0_weight"], model_params["conv_0_bias"]), device, batchsize
         )
 
-        self.block1 = InvertedResidual(
+        self.block1 = TtInvertedResidual(
             model_params,
             device,
             batchsize,
@@ -42,7 +42,7 @@ class MobileNetV2:
             id=1,
             block_shard=False,
         )
-        self.block2 = InvertedResidual(
+        self.block2 = TtInvertedResidual(
             model_params,
             device,
             batchsize,
@@ -53,7 +53,7 @@ class MobileNetV2:
             id=2,
             block_shard=False,
         )
-        self.block3 = InvertedResidual(
+        self.block3 = TtInvertedResidual(
             model_params,
             device,
             batchsize,
@@ -64,7 +64,7 @@ class MobileNetV2:
             id=3,
             block_shard=False,
         )
-        self.block4 = InvertedResidual(
+        self.block4 = TtInvertedResidual(
             model_params,
             device,
             batchsize,
@@ -75,7 +75,7 @@ class MobileNetV2:
             id=4,
             block_shard=False,
         )
-        self.block5 = InvertedResidual(
+        self.block5 = TtInvertedResidual(
             model_params,
             device,
             batchsize,
@@ -86,41 +86,41 @@ class MobileNetV2:
             id=5,
             block_shard=False,
         )
-        self.block6 = InvertedResidual(
+        self.block6 = TtInvertedResidual(
             model_params, device, batchsize, expand_ratio=6, stride=2, in_channels=32, out_channels=64, id=6
         )
-        self.block7 = InvertedResidual(
+        self.block7 = TtInvertedResidual(
             model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=64, out_channels=64, id=7
         )
-        self.block8 = InvertedResidual(
+        self.block8 = TtInvertedResidual(
             model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=64, out_channels=64, id=8
         )
-        self.block9 = InvertedResidual(
+        self.block9 = TtInvertedResidual(
             model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=64, out_channels=64, id=9
         )
-        self.block10 = InvertedResidual(
+        self.block10 = TtInvertedResidual(
             model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=64, out_channels=96, id=10
         )
-        self.block11 = InvertedResidual(
+        self.block11 = TtInvertedResidual(
             model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=96, out_channels=96, id=11
         )
-        self.block12 = InvertedResidual(
+        self.block12 = TtInvertedResidual(
             model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=96, out_channels=96, id=12
         )
-        self.block13 = InvertedResidual(
+        self.block13 = TtInvertedResidual(
             model_params, device, batchsize, expand_ratio=6, stride=2, in_channels=96, out_channels=160, id=13
         )
-        self.block14 = InvertedResidual(
+        self.block14 = TtInvertedResidual(
             model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=160, out_channels=160, id=14
         )
-        self.block15 = InvertedResidual(
+        self.block15 = TtInvertedResidual(
             model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=160, out_channels=160, id=15
         )
-        self.block16 = InvertedResidual(
+        self.block16 = TtInvertedResidual(
             model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=160, out_channels=320, id=16
         )
 
-        self.conv4 = MobileNetV2Conv2D(
+        self.conv4 = TtMobileNetV2Conv2D(
             [1, 1, 0, 1280],
             (model_params["fused_conv_34_weight"], model_params["fused_conv_34_bias"]),
             device,
@@ -166,6 +166,46 @@ class MobileNetV2:
 
         output_tensor = ttnn.reshape(output_tensor, (self.batchsize, -1))
 
-        output_tensor = ttnn.linear(output_tensor, self.l1_weight, bias=self.l1_bias)
+        compute_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        grid_size = (8, 8)
+        shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                )
+            }
+        )
+        shard_shape = [32, 32]
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        width_sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
+        )
+        output_tensor = ttnn.to_memory_config(output_tensor, width_sharded_mem_config)
+        output_tensor = ttnn.linear(
+            output_tensor,
+            self.l1_weight,
+            bias=self.l1_bias,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=matmul_config,
+            compute_kernel_config=compute_config,
+        )
 
         return output_tensor
