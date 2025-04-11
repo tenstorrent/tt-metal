@@ -224,9 +224,35 @@ class MeshToTensor:
 
 
 class ShardTensorToMesh(TensorToMesh):
-    def __init__(self, mesh_device, dim):
+    """
+    Shard a tensor across devices in a mesh along a specified dimension.
+
+    This class defines a strategy for distributing a tensor by splitting it
+    into chunks along a given dimension (`dim`) and placing each chunk onto
+    a different device in the mesh. The `linearization` parameter defines the
+    order in which devices receive shards.
+
+    Attributes:
+        mesh_device (MeshDevice): The target device mesh.
+        dim (int): The dimension along which to shard the tensor.
+        linearization (str): The device traversal order for distributing shards.
+            Must be one of:
+            - "row_major": Devices are traversed in row-major order (default).
+                For a 2x4 mesh, the traversal would be:
+                0 1 2 3
+                4 5 6 7
+            - "ring": Devices are traversed following the physical ring
+                For a 2x4 mesh, the traversal would be:
+                0 1 2 3
+                7 6 5 4
+    """
+
+    def __init__(self, mesh_device, dim, linearization: str = "row_major"):
         super().__init__(mesh_device)
         self.shard_dim = dim
+        if linearization not in ["row_major", "ring"]:
+            raise ValueError("linearization must be either 'row_major' or 'ring'")
+        self.linearization = linearization
 
     def map(self, tensor: "torch.Tensor") -> Dict[int, ttnn.Tensor]:
         import torch
@@ -238,6 +264,7 @@ class ShardTensorToMesh(TensorToMesh):
         return {
             "strategy": "shard",
             "shard_dim": f"{self.shard_dim}",
+            "linearization": self.linearization,
         }
 
 

@@ -33,19 +33,24 @@ private:
 
 class ShardTensorToMesh : public TensorToMesh {
 public:
-    ShardTensorToMesh(size_t num_devices, int dim) : num_devices_(num_devices), shard_dim_(dim) {}
+    ShardTensorToMesh(
+        size_t num_devices,
+        int dim,
+        tt::tt_metal::DeviceLinearizationType linearization = ttnn::DeviceLinearizationType::ROW_MAJOR) :
+        num_devices_(num_devices), shard_dim_(dim), linearization_(linearization) {}
 
     std::vector<Tensor> map(const Tensor& tensor) const override {
         return experimental::xtensor::chunk(tensor, num_devices_, shard_dim_);
     }
 
     tt::tt_metal::DistributedTensorConfig config() const override {
-        return tt::tt_metal::DistributedTensorConfig{tt::tt_metal::ShardTensor{shard_dim_}};
+        return tt::tt_metal::DistributedTensorConfig{tt::tt_metal::ShardTensor(shard_dim_, linearization_)};
     }
 
 private:
     size_t num_devices_ = 0;
     int shard_dim_ = -1;
+    ttnn::DeviceLinearizationType linearization_ = ttnn::DeviceLinearizationType::ROW_MAJOR;
 };
 
 class ShardTensorTo2dMesh : public TensorToMesh {
@@ -150,8 +155,15 @@ std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_d
     return std::make_unique<ReplicateTensorToMesh>(mesh_device.num_devices());
 }
 
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim) {
-    return std::make_unique<ShardTensorToMesh>(mesh_device.num_devices(), dim);
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
+    MeshDevice& mesh_device, int dim, ttnn::DeviceLinearizationType linearization) {
+    if (linearization == ttnn::DeviceLinearizationType::RING) {
+        TT_FATAL(
+            mesh_device.shape().dims() <= 2,
+            "Ring linearization is not supported when rank > 2: {}",
+            mesh_device.shape());
+    }
+    return std::make_unique<ShardTensorToMesh>(mesh_device.num_devices(), dim, linearization);
 }
 
 std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(

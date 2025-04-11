@@ -6,6 +6,7 @@
 #include <gmock/gmock.h>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -13,6 +14,7 @@
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
+#include <ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather.hpp>
 
 namespace ttnn::distributed::test {
 
@@ -238,6 +240,33 @@ TEST_F(TensorDistributionT3000Test, Shard2D) {
     Tensor expected_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{kNumRows, 1, kNumCols, 3}, DataType::FLOAT32));
     EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
+}
+
+TEST_F(TensorDistributionT3000Test, AllGatherRingLinearizationShard) {
+    ASSERT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+    const ttnn::Shape host_shape({1, 1, 32, 32 * this->mesh_device_->num_devices()});
+
+    // Create Input Activation Data
+    std::vector<bfloat16> host_data_vec =
+        tt::test_utils::generate_uniform_random_vector<bfloat16>(-1.0f, 1.0f, host_shape.volume(), /*seed=*/42);
+
+    // Create host tensor and distribute it onto the MeshDevice based on mapper
+    TensorSpec host_spec(host_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+    auto host_tensor = Tensor::from_vector(host_data_vec, host_spec);
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
+        *this->mesh_device_, /*dim=*/3, ttnn::DeviceLinearizationType::RING);
+    auto input_distributed = ttnn::distributed::distribute_tensor(host_tensor, *mapper, *(this->mesh_device_));
+
+    // Perform AllGather operation
+    auto output_distributed = ttnn::all_gather(input_distributed, /*dim=*/3);
+
+    // Read back each device tensor and verify against original host data
+    std::vector<ttnn::Tensor> output_device_tensors = ttnn::distributed::get_device_tensors(output_distributed);
+    for (size_t i = 0; i < output_device_tensors.size(); ++i) {
+        auto tensor_host = output_device_tensors[i].cpu();
+        auto result_vec = tensor_host.to_vector<bfloat16>();
+        EXPECT_EQ(result_vec, host_data_vec);
+    }
 }
 
 }  // namespace ttnn::distributed::test

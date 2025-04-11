@@ -176,6 +176,12 @@ std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_
         // this distribution is mapped to physical devices.
         return std::visit(
             tt::stl::overloaded{
+                [&](const ShardTensor& s) {
+                    auto devices = s.linearization == DeviceLinearizationType::ROW_MAJOR
+                                       ? mesh_device.get_devices()
+                                       : mesh_device.get_view().get_ring_devices();
+                    return get_workers_for_tensor(devices);
+                },
                 [&](const ShardTensor2D& s) {
                     const tt::tt_metal::distributed::MeshCoordinateRange range(
                         MeshShape(s.shard_mesh.y, s.shard_mesh.x));
