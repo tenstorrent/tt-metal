@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
-from models.experimental.functional_mobilenetv2.reference.mobilenetv2 import (
+from models.experimental.mobilenetv2.reference.mobilenetv2 import (
     Mobilenetv2,
     Conv2dNormActivation,
     InvertedResidual,

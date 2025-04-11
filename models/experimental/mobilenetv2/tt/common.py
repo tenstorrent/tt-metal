@@ -6,7 +6,7 @@ import ttnn
 import math
 
 
-class MobileNetV2Conv2D:
+class TtMobileNetV2Conv2D:
     def __init__(
         self,
         input_params,
@@ -114,7 +114,7 @@ class MobileNetV2Conv2D:
         return x, h, w
 
 
-class InvertedResidual:
+class TtInvertedResidual:
     def __init__(
         self, model_params, device, batchsize, expand_ratio, stride, in_channels, out_channels, id, block_shard=True
     ):
@@ -131,14 +131,14 @@ class InvertedResidual:
 
         self.conv1 = None
         if expand_ratio != 1:
-            self.conv1 = MobileNetV2Conv2D(
+            self.conv1 = TtMobileNetV2Conv2D(
                 [1, 1, 0, hidden_dim],
                 (model_params[f"fused_conv_{id * 3 - id}_weight"], model_params[f"fused_conv_{id * 3 - id}_bias"]),
                 device,
                 batchsize,
                 block_shard=False if id == 6 and (11 < id <= 16) else self.block_shard,
             )
-        self.conv2 = MobileNetV2Conv2D(
+        self.conv2 = TtMobileNetV2Conv2D(
             [3, stride, 1, hidden_dim],
             (model_params[f"fused_conv_{id * 3 -id +1}_weight"], model_params[f"fused_conv_{id * 3 - id + 1}_bias"]),
             device,
@@ -146,7 +146,7 @@ class InvertedResidual:
             groups=hidden_dim,
             block_shard=self.block_shard,
         )
-        self.conv3 = MobileNetV2Conv2D(
+        self.conv3 = TtMobileNetV2Conv2D(
             [1, 1, 0, out_channels],
             (model_params[f"conv_{id}_weight"], model_params[f"conv_{id}_bias"]),
             device,
