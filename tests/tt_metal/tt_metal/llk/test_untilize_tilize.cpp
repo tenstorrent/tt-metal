@@ -97,7 +97,8 @@ struct TestConfig {
     GoldenFunc golden_function;
 };
 
-void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig& test_config) {
+void run_single_core_tilize_program(
+    tt_metal::IDevice* device, const TestConfig& test_config, bool slow_dispatch = true) {
     Program program = tt::tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -255,7 +256,13 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
             .defines = defines});
 
     std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(input_dram_buffer_size, false);
-    tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
+    // TODO SD VS FS
+    if (slow_dispatch) {
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
+    } else {
+        tt::tt_metal::CommandQueue& cq = device->command_queue();
+        tt::tt_metal::EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
+    }
 
     std::vector<uint32_t> src1_vec;
 
@@ -274,7 +281,13 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
             });
 
         src1_vec = create_constant_vector_of_bfloat16(input_dram_buffer_size, 1.0f);
-        tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_vec);
+        // TODO SD VS FS
+        if (slow_dispatch) {
+            tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_vec);
+        } else {
+            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
+        }
 
     } else {
         // tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n.cpp
@@ -292,10 +305,24 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
 
     tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});
 
-    tt_metal::detail::LaunchProgram(device, program);
+    // TODO SD VS FS
+    if (slow_dispatch) {
+        tt_metal::detail::LaunchProgram(device, program);
+    } else {
+        tt::tt_metal::CommandQueue& cq = device->command_queue();
+        tt::tt_metal::EnqueueProgram(cq, program, false);
+        tt::tt_metal::Finish(cq);
+        tt_metal::DumpDeviceProfileResults(device, program);
+    }
 
     std::vector<uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    // TODO SD VS FS
+    if (slow_dispatch) {
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    } else {
+        tt::tt_metal::CommandQueue& cq = device->command_queue();
+        tt::tt_metal::EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+    }
 
     vector<uint32_t> golden;
     ::unit_tests::compute::GoldenConfig config = {
@@ -393,7 +420,8 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizePerf) {
             .num_tiles_c = ct_dim,
             .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
             .golden_function = unit_tests::compute::gold_standard_tilize};
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        unit_tests::compute::tilize::run_single_core_tilize_program(
+            this->devices_.at(0), test_config, this->slow_dispatch_);
     }
 }
 
@@ -486,7 +514,8 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilizePerf) {
             .num_tiles_c = ct_dim,
             .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
             .golden_function = unit_tests::compute::gold_standard_untilize};
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        unit_tests::compute::tilize::run_single_core_tilize_program(
+            this->devices_.at(0), test_config, this->slow_dispatch_);
     }
 }
 
@@ -559,7 +588,8 @@ TEST_F(DeviceFixture, TensixComputePackUntilizePerf) {
             .num_tiles_c = ct_dim,
             .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
             .golden_function = unit_tests::compute::gold_standard_untilize};
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        unit_tests::compute::tilize::run_single_core_tilize_program(
+            this->devices_.at(0), test_config, this->slow_dispatch_);
     }
 }
 
