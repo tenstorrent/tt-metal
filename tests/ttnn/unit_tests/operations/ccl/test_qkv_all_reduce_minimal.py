@@ -530,6 +530,21 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             )
         ]
 
+        sub_core_grid = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ]
+        )
+        qkv_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(1, 0), 24, sub_core_grid, row_wise=True
+        )
+        head_dim = N // (8 + 2 * 1)
+        qkv_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(qkv_core_range_set, [M, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
         # Validate that the tensor is allocated in same location across devices
         check_mesh_tensor_alloc(tt_intermediate_tensors[0])
 
@@ -570,7 +585,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             num_links=num_links,
             subdevice_id=worker_sub_device_id,
             num_kv_heads=1,
-            final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            final_memory_config=qkv_mem_config,
             batch_offset=batch_offset_tt_tensor,
             slice_size=8,
             dtype=output_dtype,
@@ -626,7 +641,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                     num_links=num_links,
                     subdevice_id=worker_sub_device_id,
                     num_kv_heads=1,
-                    final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+                    final_memory_config=qkv_mem_config,
                     batch_offset=batch_offset_tt_tensor,
                     slice_size=8,
                     dtype=output_dtype,
@@ -650,7 +665,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
                 num_kv_heads=1,
-                final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+                final_memory_config=qkv_mem_config,
                 batch_offset=batch_offset_tt_tensor,
                 slice_size=8,
                 dtype=output_dtype,
@@ -888,12 +903,6 @@ def run_all_reduce_qkv_heads_impl(
             batch_offset=batch_offset_tt_tensor,
             slice_size=8,
         )  # [1, 8, 8[32], 128], [1, 8, 1[32], 128], [1, 8, 1[32], 128]
-        # q MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=0)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
-        # k MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=1) - (x=7,y=1)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
-        # v MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=0)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
-        # breakpoint()
-        # After ConcatMesh2dToTensor
-        # [1, 8, 8[32], 128] -> [8, 32, 8[32], 128]
 
         # Get non-distributed tensors
         q_non_distributed = ttnn.to_torch(
@@ -1060,6 +1069,21 @@ def run_all_reduce_qkv_heads_fuse_impl(
             ),
         )
 
+        sub_core_grid = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ]
+        )
+        qkv_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(1, 0), 24, sub_core_grid, row_wise=True
+        )
+        head_dim = N // (8 + 2 * 1)
+        qkv_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(qkv_core_range_set, [M, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
         logger.info(f"Input shape: {input_shape[2:]}, Padded shape: {[M, N_per_shard * input_num_cores]}")
         input_tensor = torch.randn(input_shape)
         # input_tensor torch.Size([8, 4, 32, 1280])
@@ -1124,7 +1148,7 @@ def run_all_reduce_qkv_heads_fuse_impl(
             num_links=num_links,
             subdevice_id=worker_sub_device_id,
             num_kv_heads=1,
-            final_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            final_memory_config=qkv_mem_config,
             batch_offset=batch_offset_tt_tensor,
             slice_size=8,
             dtype=output_dtype,
