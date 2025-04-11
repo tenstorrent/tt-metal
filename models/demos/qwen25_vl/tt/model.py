@@ -126,7 +126,6 @@ class VisionTransformer(LightweightModule):
         Returns:
             ttnn.Tensor: Output tensor
         """
-
         # Forward through each block
         for i, block in enumerate(self.blocks):
             # Determine which attention type to use (full or windowed)
@@ -141,13 +140,6 @@ class VisionTransformer(LightweightModule):
                 cu_seqlens=cu_seqlens_now,
                 rot_mats=rot_mats,
             )
-
-            mesh_composer = ttnn.ConcatMesh2dToTensor(
-                self.args.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape
-            )
-            torch_x = ttnn.to_torch(x, mesh_composer=mesh_composer)
-            torch_x = torch_x[:, 0:1, :, : x.shape[3]].squeeze(0).squeeze(0)
-            torch.save(torch_x, f"our_x_{i}.pt")
 
         # Merge patches - first remove any sequence length padding
         x = x[:, :, :unpadded_seq_len, :]

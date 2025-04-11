@@ -1,26 +1,74 @@
-import ttnn
 import torch
-from models.utility_functions import comp_pcc
+import numpy as np
+from argparse import ArgumentParser
+from loguru import logger
 
 
-def compare(base_name):
-    model = torch.load("our_" + base_name + ".pt", weights_only=False)
-    test = torch.load("ref_" + base_name + ".pt", weights_only=False)
-    model = model[: test.shape[0], : test.shape[1]]
+def comp_pcc(golden, calculated, pcc=0.99):
+    golden = torch.Tensor(golden)
+    calculated = torch.Tensor(calculated)
 
-    print(f"{base_name}: PCC: {comp_pcc(model, test)[1]}")
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
 
-    # print(f"{base_name}: Row-wise max absolute difference:")
-    # for i in range(model.shape[0]):
-    #     print(base_name, i, i % 448, (model[i] - test[i]).abs().max().item())
+    if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
+        logger.warning("Both tensors are 'nan'")
+        return True, 1.0
+
+    if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
+        logger.error("One tensor is all nan, the other is not.")
+        return False, 0.0
+
+    # Test if either is completely zero
+    if torch.any(golden.bool()) != torch.any(calculated.bool()):
+        logger.error("One tensor is all zero")
+        return False, 0.0
+
+    # For now, mask all infs and nans so that we check the rest... TODO
+    golden = golden.clone()
+    golden[
+        torch.logical_or(
+            torch.isnan(golden),
+            torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
+        )
+    ] = 0
+    calculated = calculated.clone()
+    calculated[
+        torch.logical_or(
+            torch.isnan(calculated),
+            torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
+        )
+    ] = 0
+
+    if torch.equal(golden, calculated):
+        return True, 1.0
+
+    if golden.dtype == torch.bfloat16:
+        golden = golden.type(torch.float32)
+        calculated = calculated.type(torch.float32)
+    cal_pcc = np.min(
+        np.ma.corrcoef(
+            np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
+            np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
+        )
+    )
+
+    if isinstance(cal_pcc, np.ma.core.MaskedConstant):
+        return True, 1.0
+
+    return cal_pcc >= pcc, cal_pcc
 
 
-# for i in range(32):
-#     compare(f"x_{i}")
+def compare(a, b):
+    model = torch.load(a, weights_only=False)
+    test = torch.load(b, weights_only=False)
 
-compare("1_attn_norm")
-compare("2_attn")
-compare("3_residual_add")
-compare("4_ff_norm")
-compare("5_ff")
-compare("6_residual_add")
+    return comp_pcc(model, test)[1]
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument("a", type=str)
+    parser.add_argument("b", type=str)
+    args = parser.parse_args()
+    print(compare(args.a, args.b))

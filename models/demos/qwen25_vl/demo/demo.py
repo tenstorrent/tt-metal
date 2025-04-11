@@ -243,7 +243,7 @@ def test_demo(
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
         model_args = VisionModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_seq_len)
-        visual_model = DropInVisionTransformer(reference_model.visual, model_args, debug=True)  # show PCC
+        visual_model = DropInVisionTransformer(reference_model.visual, model_args, debug=False)  # show PCC
     else:
         visual_model = reference_model.visual
     processor = AutoProcessor.from_pretrained(model_args.model_name)
@@ -251,65 +251,39 @@ def test_demo(
 
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
-        ttt_preprocess = False
         logger.info(f"Processing batch {batch_idx}")
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
         text = processor.apply_chat_template(input_prompts, tokenize=False, add_generation_prompt=True)
-        # image_inputs, video_inputs = process_vision_info(input_prompts)
-        # inputs = processor(
-        #     text=[text],
-        #     images=image_inputs,
-        #     videos=video_inputs,
-        #     padding=True,
-        #     return_tensors="pt",
-        # )
-        if ttt_preprocess:
-            (
-                input_prefill_pt,
-                encoded_prompts,
-                decoding_pos,
-                prefill_lens,
-            ) = ttt_preprocess_inputs_prefill(
-                [text],
-                tokenizer,
-                model_args,
-                instruct=False,  # processor.apply_chat_template already applied an instruct prompt
-                max_generated_tokens=max_generated_tokens,
-            )
-            input_prefill_pt = torch.stack(input_prefill_pt).view(batch_size, -1)
-            print(f"{input_prefill_pt.shape=}")
-            print(f"{tokenizer.decode(encoded_prompts[0])=}")
-        else:
-            image_inputs, video_inputs = process_vision_info(input_prompts)
-            inputs = processor(
-                text=[text],
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                return_tensors="pt",
-            )
-            # Vision prefill
-            image_embeds = (
-                visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-                if "pixel_values" in inputs
-                else torch.tensor([], dtype=torch.bfloat16)
-            )
+        image_inputs, video_inputs = process_vision_info(input_prompts)
+        inputs = processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        )
+        # Vision prefill
+        image_embeds = (
+            visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+            if "pixel_values" in inputs
+            else torch.tensor([], dtype=torch.bfloat16)
+        )
 
-            # Prepare text + vision inputs for decoder model
-            # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
-            text_embeds = reference_model.model.embed_tokens(inputs.input_ids)
-            input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, reference_model.config)
-            (
-                input_prefill_pt,
-                decoding_pos,
-                prefill_lens,
-            ) = preprocess_inputs_prefill(
-                input_embeds,
-                model_args,
-            )
-            # replace our generated cos/sin with the reference model's versions
-            cos, sin = multimodal_rope_from_hf(inputs, input_embeds, reference_model, model_args.max_seq_len)
-            model.rope_setup.set_cos_sin(cos, sin)
+        # Prepare text + vision inputs for decoder model
+        # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
+        text_embeds = reference_model.model.embed_tokens(inputs.input_ids)
+        input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, reference_model.config)
+        (
+            input_prefill_pt,
+            decoding_pos,
+            prefill_lens,
+        ) = preprocess_inputs_prefill(
+            input_embeds,
+            model_args,
+        )
+        # replace our generated cos/sin with the reference model's versions
+        cos, sin = multimodal_rope_from_hf(inputs, input_embeds, reference_model, model_args.max_seq_len)
+        model.rope_setup.set_cos_sin(cos, sin)
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking

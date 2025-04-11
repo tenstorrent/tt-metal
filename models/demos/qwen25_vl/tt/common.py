@@ -3,7 +3,9 @@
 
 import math
 import torch
+import os
 from loguru import logger
+import ttnn
 from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
 
 
@@ -115,3 +117,17 @@ def multimodal_rope_from_hf(
     cos, sin = convert_rope_style_hf_to_meta(cos, sin)
     # we have precomputed embeddings for the entire sequence length and converted to 1D so we no longer need to track rope_deltas
     return cos, sin
+
+
+def check_tensor(ttnn_tensor, name, mesh_device):
+    our = torch.Tensor(ttnn.to_torch(ttnn_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))
+    if not os.path.exists(f"{name}.pt"):
+        torch.save(our, f"{name}.pt")
+        return
+
+    ref = torch.load(f"{name}.pt")
+    if not torch.allclose(our, ref):
+        logger.error(f"Tensor {name} mismatch")
+        breakpoint()
+    else:
+        logger.info(f"Tensor match: {name}")
