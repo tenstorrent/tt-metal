@@ -42,4 +42,3 @@ body:
         - Python version
         - Framework version (e.g. JAX version)
         - Version of software (e.g. release wheel or commit ID if you built from source)
-        
