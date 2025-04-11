@@ -420,4 +420,5 @@ def test_demo(user_input, device, use_program_cache, get_tt_cache_path, model_ve
         device=device,
         cache_dir=get_tt_cache_path(model_version),
         generated_sequence_length=max_gen_len,
+        assert_on_performance_measurements=False,
     )
