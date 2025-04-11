@@ -17,10 +17,17 @@ std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tenso
     if (dim < 0) {
         dim += num_dims;
     }
-    TT_FATAL(num_dims > dim, "Invalid dimension for chunk operation");
+    TT_FATAL(
+        num_dims > dim,
+        "Invalid dimension for chunk operation, the given dimension {} needs to be less than or equal to {} and the "
+        "the given dimension must be in the range of [{}, {}]",
+        dim,
+        num_dims - 1,
+        -num_dims,
+        num_dims - 1);
 
     int size_along_dim = size[dim];
-    int chunk_size = std::ceil(static_cast<float>(size_along_dim) / num_chunks);
+    int chunk_size = tt::div_up(size_along_dim, num_chunks);
 
     std::vector<ttnn::Tensor> chunks;
     int start = 0;
@@ -37,7 +44,7 @@ std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tenso
         slice_end[dim] = end;
         ttnn::SmallVector<int> slice_step(num_dims, 1);
 
-        ttnn::Tensor chunk_tensor = ttnn::Tensor(ttnn::slice(input_tensor, slice_start, slice_end, slice_step));
+        ttnn::Tensor chunk_tensor = ttnn::slice(input_tensor, slice_start, slice_end, slice_step);
 
         chunks.push_back(chunk_tensor);
 
