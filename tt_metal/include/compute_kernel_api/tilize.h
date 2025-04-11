@@ -27,7 +27,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
           false /*is_int_en*/,
           true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb, icb)));
+    MATH((llk_math_hw_configure_disaggregated<false, false>(icb, icb)));
 
     PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE, ReluType::NO_RELU, 0, true /*tilize en*/>(ocb)));
     PACK((llk_pack_init<false, false, true /*tilize en*/>(ocb)));
@@ -53,9 +53,9 @@ ALWI void tilizeA_B_reduce_init(
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
 
-    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>()));
+    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>(0)));
     MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure_disaggregated(icb0, icb1_scaler)));
+    MATH((llk_math_hw_configure_disaggregated<false, false>(icb0, icb1_scaler)));
 
     PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
@@ -87,7 +87,7 @@ ALWI void tilizeA_B_dot_product_init(
 
     MATH((llk_math_matmul_init<MATH_FIDELITY>(icb0, icb1)));
     MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure_disaggregated(icb0, icb1)));
+    MATH((llk_math_hw_configure_disaggregated<false, false>(icb0, icb1)));
 
     PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));

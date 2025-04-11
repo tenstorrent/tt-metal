@@ -20,9 +20,9 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
     UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb, icb_scaler)));
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
 
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>(0)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure_disaggregated(icb, icb_scaler)));
+    MATH((llk_math_hw_configure_disaggregated<false, false>(icb, icb_scaler)));
 
     PACK((llk_pack_init()));
     PACK((llk_pack_reduce_config_v2<reduce_dim, at_start, false, DST_ACCUM_MODE>(ocb)));
@@ -32,7 +32,7 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_init_short(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>(0)));
     PACK((llk_pack_reduce_config_v2<reduce_dim, false, false, DST_ACCUM_MODE>(ocb)));
 }
 
@@ -41,7 +41,7 @@ ALWI void reduce_init_delta(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb0, icb1)));
 
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>(0)));
 
     PACK((llk_pack_reduce_config_v2<reduce_dim, at_start, false, DST_ACCUM_MODE>(ocb)));
 }
@@ -51,12 +51,12 @@ ALWI void reduce_init_delta_no_pack(uint32_t icb0, uint32_t icb1) {
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<>(icb0, icb1)));
 
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>(0)));
 }
 
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_init_delta_math() {
-    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
+    MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>(0)));
 }
 
 template <ReduceDim reduce_dim = REDUCE_DIM>

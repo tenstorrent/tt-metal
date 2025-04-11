@@ -11,9 +11,9 @@
  *************************************************************************/
 
 template <
-    bool is_fp32_dest_acc_en = false,
-    StochRndType stoch_rnd_mode = StochRndType::None,
-    bool disable_src_zero_flag = false>
+    bool is_fp32_dest_acc_en,
+    StochRndType stoch_rnd_mode,
+    bool disable_src_zero_flag>
 inline void llk_unpack_A_hw_configure(
     const llk_unpack_A_params_t* unpack_A_params, const int within_face_16x16_transpose = 0) {
     const uint32_t unpA_operand_id = get_operand_id(unpack_A_params->unpA_operand);
@@ -29,9 +29,9 @@ inline void llk_unpack_A_hw_configure(
 }
 
 template <
-    bool is_fp32_dest_acc_en = false,
-    StochRndType stoch_rnd_mode = StochRndType::None,
-    bool disable_src_zero_flag = false>
+    bool is_fp32_dest_acc_en,
+    StochRndType stoch_rnd_mode,
+    bool disable_src_zero_flag>
 inline void llk_unpack_A_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const int within_face_16x16_transpose = 0) {
     const llk_unpack_A_params_t unpack_A_params = {.unpA_operand = unpA_operand};
@@ -40,10 +40,10 @@ inline void llk_unpack_A_hw_configure_disaggregated(
 }
 
 template <
-    BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest = false,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    BroadcastType BType,
+    bool acc_to_dest,
+    EltwiseBinaryReuseDestType binary_reuse_dest,
+    bool unpack_to_dest>
 inline void llk_unpack_A_mop_config(
     const bool transpose_of_faces,
     const std::uint32_t operand_id,
@@ -56,10 +56,10 @@ inline void llk_unpack_A_mop_config(
 }
 
 template <
-    BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest = false,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    BroadcastType BType,
+    bool acc_to_dest,
+    EltwiseBinaryReuseDestType binary_reuse_dest,
+    bool unpack_to_dest>
 inline void llk_unpack_A_init(
     const std::uint32_t transpose_of_faces = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
@@ -86,10 +86,10 @@ inline void llk_unpack_A_init(
 }
 
 template <
-    BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest = false,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    BroadcastType BType,
+    bool acc_to_dest,
+    EltwiseBinaryReuseDestType binary_reuse_dest,
+    bool unpack_to_dest>
 inline void llk_unpack_A(
     const std::uint32_t operand, const std::uint32_t tile_index, const bool transpose_of_faces = 0) {
     std::uint32_t operand_id = get_operand_id(operand);
@@ -104,10 +104,10 @@ inline void llk_unpack_A(
 }
 
 template <
-    BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest = false,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    BroadcastType BType,
+    bool acc_to_dest,
+    EltwiseBinaryReuseDestType binary_reuse_dest,
+    bool unpack_to_dest>
 inline void llk_unpack_A_block(
     const std::uint32_t operand,
     const std::uint32_t start_tile_index,
