@@ -10,12 +10,21 @@ Yolov9 marks a significant advancement in real-time object detection, introducin
 ## Details:
 The entry point to functional_yolov9c model is YoloV9 in `models/experimental/functional_yolov9c/tt/ttnn_yolov9c.py`. The model picks up certain configs and weights from Ultralytics pretrained model. We've used weights available [here](https://docs.ultralytics.com/models/yolov9/#performance-on-ms-coco-dataset) under YOLOv9c.
 
-
 ## How to Run:
+If running on Wormhole N300 (not required for N150 or Blackhole), the following environment variable needs to be set as the model requires at least 8x8 core grid size:
+```sh
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
+
 Use the following command to run the Yolov9c model :
 ```
 pytest --disable-warnings tests/ttnn/integration_tests/yolov9c/test_ttnn_yolov9c.py::test_yolov9c
 ```
+### Demo
+Use the following command to run the demo :
+```
+pytest --disable-warnings models/experimental/functional_yolov9c/demo/demo.py
+```
 
-
-Torch ops: avg_pool2d
+## Outputs
+The Demo outputs are saved inside this directory: `models/experimental/functional_yolov9c/demo/runs`
