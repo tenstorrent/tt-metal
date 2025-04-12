@@ -128,7 +128,7 @@ UpdateCacheOpParallelizationStrategy UpdateCache::get_parallelization_strategy(
     return UpdateCacheOpParallelizationStrategy::MULTI_CORE;
 }
 
-const operation::Hash UpdateCache::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+operation::Hash UpdateCache::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     return operation::hash_operation<UpdateCache>(this->op_type, input_tensors);
 }
 
