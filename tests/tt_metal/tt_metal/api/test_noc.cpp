@@ -299,7 +299,7 @@ TEST_F(DeviceFixture, TensixIncrementStreamRegWrite) {
                      bottom_right.x,
                      top_left.y,
                      bottom_right.y,
-                     all_cores.size()});
+                     all_cores.size() - 1});
             }
         }
 

@@ -581,7 +581,7 @@ int main(int argc, char** argv) {
         }
 
         // Wait for tx to return non-zero status.
-        while (1) {
+        while (true) {
             auto tx_status = tt::llrt::read_hex_vec_from_core(test_device_id_l, tx_phys_core[0], test_results_addr, 4);
             if ((tx_status[0] & 0xFFFF) != 0) {
                 break;
