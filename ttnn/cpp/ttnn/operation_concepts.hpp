@@ -56,34 +56,30 @@ concept HasComputeOutputSpecs = requires(
 };
 
 template <typename device_operation_t>
-concept DeviceOperationWithDescriptorConcept = requires {
-    [](const typename device_operation_t::operation_attributes_t& operation_attributes,
-       const typename device_operation_t::tensor_args_t& tensor_args,
-       typename device_operation_t::tensor_return_value_t& tensor_return_value) {
-        device_operation_t::validate(operation_attributes, tensor_args);
-
-        using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
-        static_assert(std::same_as<
-                      decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
-                      tensor_return_value_t>);
-
-        tt::tt_metal::ProgramDescriptor program_descriptor =
-            device_operation_t::create_program(operation_attributes, tensor_args, tensor_return_value);
-    };
+concept DeviceOperationWithDescriptorConcept = requires(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+    { device_operation_t::validate(operation_attributes, tensor_args) };
+    {
+        device_operation_t::create_output_tensors(operation_attributes, tensor_args)
+    } -> std::same_as<typename device_operation_t::tensor_return_value_t>;
+    {
+        device_operation_t::create_program(operation_attributes, tensor_args, tensor_return_value)
+    } -> std::same_as<tt::tt_metal::ProgramDescriptor>;
 };
 
 template <typename device_operation_t>
-concept DeviceOperationWithoutDescriptorConcept = requires {
+concept DeviceOperationWithoutDescriptorConcept = requires(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    { device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args) };
+    { device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args) };
+    {
+        device_operation_t::create_output_tensors(operation_attributes, tensor_args)
+    } -> std::same_as<typename device_operation_t::tensor_return_value_t>;
     [](const typename device_operation_t::operation_attributes_t& operation_attributes,
        const typename device_operation_t::tensor_args_t& tensor_args) {
-        device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
-        device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
-
-        using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
-        static_assert(std::same_as<
-                      decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
-                      tensor_return_value_t>);
-
         // All program factories returned by `select_program_factory` must implement exactly one of
         // `ProgramFactoryConcept` or `MeshWorkloadFactoryConcept`.
         const auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
