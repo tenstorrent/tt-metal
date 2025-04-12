@@ -6,6 +6,7 @@
 
 #include <taskflow/core/async.hpp>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -126,6 +127,7 @@ void JitBuildEnv::init(
     this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
+    // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
         this->gpp_ = "ccache ";
@@ -133,8 +135,28 @@ void JitBuildEnv::init(
         this->gpp_ = "";
     }
 
-    // Tools
-    this->gpp_ += this->root_ + "runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
+    // Use local sfpi for development
+    // Use system sfpi for production to avoid packaging it
+    // Ordered by precedence
+    const std::array<std::string, 2> sfpi_roots = {
+        this->root_ + "runtime/sfpi",
+        "/opt/tenstorrent/sfpi"
+    };
+
+    bool sfpi_found = false;
+    for (unsigned i = 0; i < 2; ++i) {
+        auto gxx = sfpi_roots[i] + "/compiler/bin/riscv32-unknown-elf-g++";
+        if (std::filesystem::exists(gxx)) {
+            this->gpp_ += gxx + " ";
+            this->gpp_include_dir_ = sfpi_roots[i] + "/include";
+            log_debug(tt::LogBuildKernels, "Using {} sfpi at {}", i ? "system" : "local", sfpi_roots[i]);
+            sfpi_found = true;
+            break;
+        }
+    }
+    if (!sfpi_found) {
+        TT_THROW("sfpi not found at {} or {}", sfpi_roots[0], sfpi_roots[1]);
+    }
 
     // Flags
     string common_flags;
@@ -425,7 +447,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " +
-        "-I" + env_.root_ + "runtime/sfpi/include " +
+        "-I" + env_.gpp_include_dir_ + " " +
         "-I" + env_.root_ + "tt_metal/hw/firmware/src " +
         "-I" + env_.root_ + "tt_metal/third_party/tt_llk/tt_llk_" + env.arch_name_ + "/llk_lib ";
     // clang-format on
