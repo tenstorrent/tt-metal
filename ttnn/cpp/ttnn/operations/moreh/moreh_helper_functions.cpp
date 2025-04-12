@@ -76,14 +76,14 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 
     {
         auto iter = core_group_1.ranges();
-        for_each(
+        std::for_each(
             iter.begin(), iter.end(), [](CoreRange core) { log_debug(LogTest, "Use core_group_1 {}", core.str()); });
     }
     log_debug(LogTest, "num_tiles_per_core_group_1 {}", num_tiles_per_core_group_1);
 
     {
         auto iter = core_group_2.ranges();
-        for_each(
+        std::for_each(
             iter.begin(), iter.end(), [](CoreRange core) { log_debug(LogTest, "Use core_group_2 {}", core.str()); });
     }
     log_debug(LogTest, "num_tiles_per_core_group_2 {}", num_tiles_per_core_group_2);

@@ -203,7 +203,7 @@ CoreRangeSet& CoreRangeSet::operator=(CoreRangeSet&& other) noexcept {
     return *this;
 }
 
-CoreRangeSet::CoreRangeSet(std::vector<CoreRange>&& core_ranges) : ranges_(std::move(core_ranges)) {
+CoreRangeSet::CoreRangeSet(CoreRangeVector&& core_ranges) : ranges_(std::move(core_ranges)) {
     ZoneScoped;
     this->validate_no_overlap();
 }
@@ -275,6 +275,7 @@ CoreRangeSet CoreRangeSet::merge(const T& other) const {
     return CoreRangeSet(crs);
 }
 
+template CoreRangeSet CoreRangeSet::merge<CoreRangeVector>(const CoreRangeVector& other) const;
 template CoreRangeSet CoreRangeSet::merge<std::vector<CoreRange>>(const std::vector<CoreRange>& other) const;
 template CoreRangeSet CoreRangeSet::merge<std::set<CoreRange>>(const std::set<CoreRange>& other) const;
 
@@ -307,7 +308,7 @@ bool CoreRangeSet::intersects(const CoreRangeSet& other) const {
 }
 
 CoreRangeSet CoreRangeSet::intersection(const CoreRangeSet& other) const {
-    std::vector<CoreRange> intersection;
+    CoreRangeVector intersection;
     for (const auto& local_cr : this->ranges_) {
         for (const auto& other_cr : other.ranges()) {
             if (auto intersect = local_cr.intersection(other_cr); intersect.has_value()) {
@@ -370,7 +371,7 @@ bool CoreRangeSet::contains(const CoreRangeSet& other) const {
     return false;
 }
 
-const std::vector<CoreRange>& CoreRangeSet::ranges() const { return this->ranges_; }
+const CoreRangeVector& CoreRangeSet::ranges() const { return this->ranges_; }
 
 std::string CoreRangeSet::str() const {
     if (this->ranges().size() > 0) {
@@ -415,6 +416,7 @@ CoreRangeSet CoreRangeSet::merge_ranges() const {
 }
 
 void CoreRangeSet::validate_no_overlap() {
+#ifdef DEBUG
     if (this->ranges_.size() < 2) {
         return;
     }
@@ -430,6 +432,7 @@ void CoreRangeSet::validate_no_overlap() {
             }
         }
     }
+#endif
 }
 
 CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
@@ -441,13 +444,13 @@ CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
         return this_merged;
     }
 
-    std::vector<CoreRange> result_ranges;
+    CoreRangeVector result_ranges;
 
     for (const auto& current_range : this_merged.ranges_) {
-        std::vector<CoreRange> current_remaining = {current_range};
+        CoreRangeVector current_remaining = {current_range};
 
         for (const auto& subtract_range : other_merged.ranges_) {
-            std::vector<CoreRange> new_remaining;
+            CoreRangeVector new_remaining;
 
             for (const auto& remaining : current_remaining) {
                 auto intersection_opt = remaining.intersection(subtract_range);

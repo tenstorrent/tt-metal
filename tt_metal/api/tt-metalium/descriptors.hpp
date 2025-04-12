@@ -38,11 +38,10 @@ struct CBFormatDescriptor {
 };
 
 struct CBDescriptor {
-    using CoreRanges = boost::container::small_vector<CoreRange, 1>;
     using FormatDescriptors = boost::container::small_vector<CBFormatDescriptor, 1>;
 
     uint32_t total_size = 0;
-    CoreRanges core_ranges;
+    CoreRangeVector core_ranges;
     FormatDescriptors format_descriptors;
     FormatDescriptors remote_format_descriptors;
 
@@ -51,10 +50,8 @@ struct CBDescriptor {
 };
 
 struct SemaphoreDescriptor {
-    using CoreRanges = boost::container::small_vector<CoreRange, 1>;
-
     CoreType core_type = CoreType::WORKER;
-    CoreRanges core_ranges;
+    CoreRangeVector core_ranges;
     uint32_t initial_value = 0;
 };
 
@@ -81,7 +78,6 @@ struct EthernetConfigDescriptor {
 };
 
 struct KernelDescriptor {
-    using CoreRanges = boost::container::small_vector<CoreRange, 1>;
     using CompileTimeArgs = boost::container::small_vector<uint32_t, 16>;
     using Defines = boost::container::small_vector<std::pair<std::string, std::string>, 16>;
     using UnpackToDestModes = boost::container::small_vector<UnpackToDestMode, NUM_CIRCULAR_BUFFERS>;
@@ -99,7 +95,7 @@ struct KernelDescriptor {
     std::string kernel_source;
     SourceType source_type = SourceType::FILE_PATH;
 
-    CoreRanges core_ranges;
+    CoreRangeVector core_ranges;
     CompileTimeArgs compile_time_args;
     Defines defines;
 

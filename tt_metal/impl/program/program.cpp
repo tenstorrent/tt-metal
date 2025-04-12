@@ -683,8 +683,8 @@ std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers_on_corera
     return pimpl_->circular_buffers_on_corerange(cr);
 }
 
-std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges() const {
-    std::vector<CoreRange> core_ranges;
+CoreRangeVector detail::ProgramImpl::circular_buffers_unique_coreranges() const {
+    CoreRangeVector core_ranges;
     for (const auto& circular_buffer : circular_buffers_) {
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             if (std::find(core_ranges.begin(), core_ranges.end(), core_range) == core_ranges.end()) {
@@ -695,7 +695,7 @@ std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges()
     return core_ranges;
 }
 
-std::vector<CoreRange> Program::circular_buffers_unique_coreranges() const {
+CoreRangeVector Program::circular_buffers_unique_coreranges() const {
     return pimpl_->circular_buffers_unique_coreranges();
 }
 
@@ -894,7 +894,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
     }
 }
 
-void detail::ProgramImpl::set_cb_data_fmt(const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+void detail::ProgramImpl::set_cb_data_fmt(const CoreRangeVector& crs, JitBuildOptions& build_options) const {
     //ZoneScoped;
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
@@ -907,7 +907,7 @@ void detail::ProgramImpl::set_cb_data_fmt(const std::vector<CoreRange> &crs, Jit
     }
 }
 
-void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+void detail::ProgramImpl::set_cb_tile_dims(const CoreRangeVector& crs, JitBuildOptions& build_options) const {
     //ZoneScoped;
     for (const auto &logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);

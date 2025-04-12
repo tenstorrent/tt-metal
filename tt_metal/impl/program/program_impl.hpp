@@ -71,7 +71,7 @@ public:
     void release_buffers();
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord& core) const;
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_corerange(const CoreRange& cr) const;
-    std::vector<CoreRange> circular_buffers_unique_coreranges() const;
+    CoreRangeVector circular_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
     size_t num_semaphores() const;
@@ -212,9 +212,9 @@ private:
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
 
-    void set_cb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+    void set_cb_data_fmt(const CoreRangeVector& crs, JitBuildOptions& build_options) const;
 
-    void set_cb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+    void set_cb_tile_dims(const CoreRangeVector& crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 

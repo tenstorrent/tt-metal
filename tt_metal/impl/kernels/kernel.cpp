@@ -87,10 +87,7 @@ std::string Kernel::name() const { return this->kernel_src_.name(); }
 
 const std::set<CoreCoord> &Kernel::logical_cores() const { return this->logical_cores_; }
 
-std::vector<CoreRange> Kernel::logical_coreranges() const {
-    auto crs = this->core_range_set_.ranges();
-    return {crs.begin(), crs.end()};
-}
+CoreRangeVector Kernel::logical_coreranges() const { return this->core_range_set_.ranges(); }
 
 bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
     return this->core_range_set_.contains(logical_core);

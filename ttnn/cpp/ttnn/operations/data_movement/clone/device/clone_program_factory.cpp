@@ -42,7 +42,7 @@ tt::tt_metal::ProgramDescriptor CloneOperation::ProgramFactory::create(
     uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
     program.cbs.push_back(CBDescriptor{
         .total_size = 2 * aligned_input_unit_size,
-        .core_ranges = CBDescriptor::CoreRanges(all_cores.ranges().begin(), all_cores.ranges().end()),
+        .core_ranges = all_cores.ranges(),
         .format_descriptors = {CBFormatDescriptor{
             .buffer_index = src_cb_id,
             .data_format = input_data_format,
@@ -56,7 +56,7 @@ tt::tt_metal::ProgramDescriptor CloneOperation::ProgramFactory::create(
         uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
         program.cbs.push_back(CBDescriptor{
             .total_size = 2 * aligned_output_unit_size,
-            .core_ranges = CBDescriptor::CoreRanges(all_cores.ranges().begin(), all_cores.ranges().end()),
+            .core_ranges = all_cores.ranges(),
             .format_descriptors = {CBFormatDescriptor{
                 .buffer_index = dst_cb_id,
                 .data_format = output_data_format,
@@ -100,8 +100,8 @@ tt::tt_metal::ProgramDescriptor CloneOperation::ProgramFactory::create(
     KernelDescriptor read_kernel_descriptor{
         .kernel_source = tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel.cpp"
                                  : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_rm.cpp",
-        .core_ranges = KernelDescriptor::CoreRanges(all_cores.ranges().begin(), all_cores.ranges().end()),
-        .compile_time_args = reader_compile_time_args,
+        .core_ranges = all_cores.ranges(),
+        .compile_time_args = std::move(reader_compile_time_args),
         .config = ReaderConfigDescriptor{},
     };
     read_kernel_descriptor.reserve_runtime_args();
@@ -109,8 +109,8 @@ tt::tt_metal::ProgramDescriptor CloneOperation::ProgramFactory::create(
     KernelDescriptor write_kernel_descriptor{
         .kernel_source = tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel.cpp"
                                  : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel_rm.cpp",
-        .core_ranges = KernelDescriptor::CoreRanges(all_cores.ranges().begin(), all_cores.ranges().end()),
-        .compile_time_args = writer_compile_time_args,
+        .core_ranges = all_cores.ranges(),
+        .compile_time_args = std::move(writer_compile_time_args),
         .config = WriterConfigDescriptor{},
     };
     write_kernel_descriptor.reserve_runtime_args();
@@ -120,15 +120,15 @@ tt::tt_metal::ProgramDescriptor CloneOperation::ProgramFactory::create(
             get_compute_kernel_config_args(input.device()->arch(), operation_attributes.compute_kernel_config);
         auto create_compute_kernel = [&](const auto& core_group, uint32_t num_units_per_core) {
             if (!core_group.ranges().empty()) {
-                KernelDescriptor::CompileTimeArgs compute_kernel_args = {
-                    (uint32_t)src_cb_id,
-                    (uint32_t)dst_cb_id,
-                    (uint32_t)num_units_per_core,
-                };
                 program.kernels.push_back(KernelDescriptor{
                     .kernel_source = "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
-                    .core_ranges = KernelDescriptor::CoreRanges(core_group.ranges().begin(), core_group.ranges().end()),
-                    .compile_time_args = compute_kernel_args,
+                    .core_ranges = core_group.ranges(),
+                    .compile_time_args =
+                        {
+                            (uint32_t)src_cb_id,
+                            (uint32_t)dst_cb_id,
+                            (uint32_t)num_units_per_core,
+                        },
                     .config =
                         ComputeConfigDescriptor{
                             .math_fidelity = math_fidelity,
@@ -146,8 +146,6 @@ tt::tt_metal::ProgramDescriptor CloneOperation::ProgramFactory::create(
     uint32_t start_id = 0;
     uint32_t num_cores_group_1 = core_group_1.num_cores();
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
-
-    KernelDescriptor::RuntimeArgs reader_runtime_args, writer_runtime_args;
 
     for (size_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];

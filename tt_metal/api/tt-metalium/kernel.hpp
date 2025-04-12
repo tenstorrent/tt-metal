@@ -89,7 +89,7 @@ class Kernel : public JitBuildSettings {
 
     const std::set<CoreCoord> &logical_cores() const;
 
-    std::vector<CoreRange> logical_coreranges() const;
+    CoreRangeVector logical_coreranges() const;
 
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 

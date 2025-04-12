@@ -21,6 +21,8 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
 
+#include <boost/container/small_vector.hpp>
+
 namespace tt {
 namespace stl {
 namespace json {
@@ -134,6 +136,8 @@ struct fmt::formatter<CoreRange> {
     auto format(const CoreRange& core_range, format_context& ctx) const -> format_context::iterator;
 };
 
+using CoreRangeVector = boost::container::small_vector<CoreRange, 1>;
+
 class CoreRangeSet {
 public:
     CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges);
@@ -154,7 +158,7 @@ public:
 
     CoreRangeSet& operator=(CoreRangeSet&& other) noexcept;
 
-    CoreRangeSet(std::vector<CoreRange>&& core_ranges);
+    CoreRangeSet(CoreRangeVector&& core_ranges);
 
     bool empty() const;
 
@@ -177,7 +181,7 @@ public:
 
     bool contains(const CoreRangeSet& other) const;
 
-    const std::vector<CoreRange>& ranges() const;
+    const CoreRangeVector& ranges() const;
 
     std::string str() const;
 
@@ -199,7 +203,7 @@ private:
     void validate_no_overlap();
 
     mutable std::mutex ranges_guard;
-    std::vector<CoreRange> ranges_;
+    CoreRangeVector ranges_;
 };
 
 bool operator==(const CoreRangeSet& a, const CoreRangeSet& b);

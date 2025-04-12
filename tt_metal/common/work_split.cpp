@@ -101,7 +101,7 @@ CoreRangeSet num_cores_to_corerangeset(
         total_available_cores);
 
     // 3 is the max number of ranges that will be generated when splitting a grid
-    std::vector<CoreRange> all_cores;
+    CoreRangeVector all_cores;
     all_cores.reserve(3);
     uint32_t leftover_size = target_num_cores;
     CoreCoord s_core = start_core;
@@ -166,7 +166,7 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     // Validate that the start core is contained within the entire CoreRangeSet
     TT_FATAL(sub_core_grids.contains(start_core), "Start core must be contained within the input CoreRangeSet");
 
-    std::vector<CoreRange> result_coreranges;
+    CoreRangeVector result_coreranges;
     bool start_core_found = false;
     CoreCoord current_start_core = start_core;
     CoreCoord current_end_core = start_core;

@@ -44,7 +44,7 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     uint32_t num_sender_cores = sender_receiver_core_mapping.size();
     uint32_t num_receiver_cores = 0;
     uint32_t max_num_receivers_per_sender = 0;
-    std::vector<CoreRange> sender_cores;
+    CoreRangeVector sender_cores;
     sender_cores.reserve(num_sender_cores);
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
         num_receiver_cores += receiver_cores.num_cores();
@@ -52,7 +52,7 @@ GlobalCircularBuffer::GlobalCircularBuffer(
         receiver_cores_ = receiver_cores_.merge(receiver_cores);
         max_num_receivers_per_sender = std::max(max_num_receivers_per_sender, receiver_cores.num_cores());
     }
-    sender_cores_ = CoreRangeSet(sender_cores);
+    sender_cores_ = CoreRangeSet(std::move(sender_cores));
     TT_FATAL(num_sender_cores == sender_cores_.num_cores(), "Duplicate sender cores found");
     TT_FATAL(num_receiver_cores == receiver_cores_.num_cores(), "Duplicate receiver cores found");
     all_cores_ = sender_cores_.merge(receiver_cores_);

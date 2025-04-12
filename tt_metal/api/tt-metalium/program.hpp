@@ -151,7 +151,7 @@ public:
 
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_corerange(const CoreRange& cr) const;
 
-    std::vector<CoreRange> circular_buffers_unique_coreranges() const;
+    CoreRangeVector circular_buffers_unique_coreranges() const;
 
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;

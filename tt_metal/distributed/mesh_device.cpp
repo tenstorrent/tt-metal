@@ -790,7 +790,7 @@ program_cache::detail::ProgramCacheV2& MeshDevice::get_program_cache_v2() {
 }
 HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const { return reference_device()->get_programmable_core_type(virtual_core); }
 std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_noc_multicast_info(
-    const std::vector<CoreRange>& ranges, const CoreType core_type) {
+    const CoreRangeVector& ranges, const CoreType core_type) {
     return reference_device()->extract_dst_noc_multicast_info(ranges, core_type);
 }
 
