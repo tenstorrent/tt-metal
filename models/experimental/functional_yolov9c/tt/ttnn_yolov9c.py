@@ -67,7 +67,6 @@ class TtYOLOv9cConv2D:
             enable_subblock_padding=False,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
-            input_channels_alignment=32,
         )
         config_override = {"act_block_h": 64} if conv.in_channels == 3 else None
         if config_override and "act_block_h" in config_override:

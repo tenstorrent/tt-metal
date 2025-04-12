@@ -699,7 +699,6 @@ class resnet50:
                 activation="relu",
                 deallocate_activation=True,
                 reallocate_halo_output=True,
-                input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
             ),
         }
@@ -1054,7 +1053,6 @@ class resnet50:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
-                input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
             ),
         }
