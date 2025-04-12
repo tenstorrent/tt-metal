@@ -209,6 +209,7 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-this-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-builtins>"
+    "$<$<AND:$<CXX_COMPILER_ID:Clang>,$<VERSION_GREATER_EQUAL:$<CXX_COMPILER_VERSION>,18.0>>:-Wno-vla-extension>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-attributes>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
