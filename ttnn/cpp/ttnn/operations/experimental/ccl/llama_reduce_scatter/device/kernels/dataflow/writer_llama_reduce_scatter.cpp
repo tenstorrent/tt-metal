@@ -12,6 +12,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
+constexpr bool flush = false;
+
 template <uint8_t noc_ind = noc_index>
 FORCE_INLINE std::uint64_t static_noc_multicast_addr(
     std::uint32_t noc_x_start,
@@ -50,6 +52,7 @@ void kernel_main() {
     constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
     constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(14);
     constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(15);
+    constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(16);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -74,6 +77,7 @@ void kernel_main() {
     uint32_t linear_output_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
 
     if (sender_core) {
         auto fabric_connection =
@@ -82,7 +86,7 @@ void kernel_main() {
         // Set up packet headers once
         constexpr uint8_t device_order[other_devices] =
             DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
-        constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
+        constexpr uint8_t packet_worker_cores[num_packet_worker_cores][2] = PACKET_WORKER_CORES;
         const auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
         auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
@@ -109,10 +113,12 @@ void kernel_main() {
             auto& fabric_conn = target_device_id > chip_id ? fabric_connection.get_forward_connection()
                                                            : fabric_connection.get_backward_connection();
 
-            for (uint32_t packet = sender_packet_start; packet < sender_packet_end; packet++) {
+            uint32_t num_pages_sent = 0;
+            uint32_t packet = sender_packet_start;
+            while (num_pages_sent < sender_total_num_pages) {
                 // Determine packet size based on whether it's the last packet
-                const uint32_t curr_packet_num_pages =
-                    packet == num_packets_total_per_device - 1 ? last_packet_num_pages : num_pages_per_packet;
+                auto num_pages_left = sender_total_num_pages - num_pages_sent;
+                const uint32_t curr_packet_num_pages = std::min(num_pages_per_packet, num_pages_left);
                 const uint32_t curr_packet_size_bytes = curr_packet_num_pages * page_size_bytes;
 
                 const uint32_t receiver_core_x = packet_worker_cores[packet][x_index];
@@ -122,8 +128,12 @@ void kernel_main() {
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
                 const auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
 
-                unicast_packet_header->to_noc_unicast_write(
-                    tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, curr_packet_size_bytes);
+                const uint64_t sem_noc_addr =
+                    get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address);
+                unicast_packet_header->to_noc_fused_unicast_write_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                        noc0_dest_noc_addr, sem_noc_addr, 1, 32, flush),
+                    curr_packet_size_bytes);
 
                 fabric_conn.wait_for_empty_write_slot();
 
@@ -134,19 +144,17 @@ void kernel_main() {
                     (uint32_t)unicast_packet_header, packet_header_size);
 
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
+
+                num_pages_sent += curr_packet_num_pages;
+                packet++;
             }
-
-            // Write the mcast packet (forward)
-            sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
-            fabric_conn.wait_for_empty_write_slot();
-
-            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)sem_inc_packet_header, packet_header_size);
         }
 
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.close();
         }
     } else if (worker_core) {
+#ifndef SKIP_WRITE_BACK
         constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
         uint64_t noc_addresses[num_pages_per_packet];
         uint32_t accumulator_l1_addresses[num_pages_per_packet];
@@ -177,5 +185,8 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         cb_pop_front(accumulator_cb_id, num_pages_per_packet);
+#else
+        cb_wait_front(output_tensor_cb_id, num_pages_per_packet);
+#endif
     }
 }

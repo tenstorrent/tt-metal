@@ -90,7 +90,7 @@ std::string get_default_root_path() {
         return "/tmp/tt-metal-cache/";
     }
 }
-JitBuildEnv::JitBuildEnv() {}
+JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
     uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {

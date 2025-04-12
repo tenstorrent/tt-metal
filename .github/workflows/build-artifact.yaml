@@ -52,6 +52,11 @@ on:
         type: boolean
         default: false
         description: "Profile the compilation"
+      build-umd-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "Build UMD tests"
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -110,6 +115,11 @@ on:
         type: boolean
         default: false
         description: "Profile the compilation"
+      build-umd-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "Build UMD tests"
 
 
 jobs:
@@ -219,6 +229,9 @@ jobs:
           fi
           if [ "${{ inputs.profile }}" = "true" ]; then
             build_command="$build_command --enable-time-trace --disable-unity-builds"
+          fi
+          if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
+            build_command="$build_command --build-umd-tests"
           fi
 
           nice -n 19 $build_command
