@@ -49,8 +49,6 @@
 #include "semaphore.hpp"
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
-#include "impl/context/metal_context.hpp"
-#include "impl/context/metal_context.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"

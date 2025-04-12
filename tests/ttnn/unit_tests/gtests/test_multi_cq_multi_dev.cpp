@@ -16,7 +16,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_constants.hpp>
 #include <tt-metalium/device.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/shape.hpp>

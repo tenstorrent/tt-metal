@@ -70,7 +70,9 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "worker_l1_size": 1344544}], indirect=True
+)
 def test_llama_model_inference(
     weights,
     layers,
