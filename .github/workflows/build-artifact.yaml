@@ -198,14 +198,6 @@ jobs:
           fetch-tags: true # Need tags for `git describe`
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
-      - name: Sanity check
-        run: |
-          set -eu # basic shell hygiene
-          if find . -maxdepth 1 -type d -name 'build*' -print -quit | grep -q .; then
-            echo "!!! ALERT !!! This should never happen, but does explain an issue we've been hunting. Please send a link to this job to Metal Infra.  kthxbye."
-            exit 42
-          fi
-
       - name: Create ccache tmpdir
         run: |
           mkdir -p /tmp/ccache
@@ -316,6 +308,3 @@ jobs:
           name: ${{ env.build_artifact_name }}
           path: /work/ttm_any.tar
           if-no-files-found: error
-
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
