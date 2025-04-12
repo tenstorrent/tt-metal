@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 #include <umd/device/tt_core_coordinates.h>
 
@@ -96,7 +97,7 @@ struct KernelDescriptor {
     enum class SourceType { FILE_PATH, SOURCE_CODE };
 
     std::string kernel_source;
-    SourceType source_type;
+    SourceType source_type = SourceType::FILE_PATH;
 
     CoreRanges core_ranges;
     CompileTimeArgs compile_time_args;
@@ -105,9 +106,11 @@ struct KernelDescriptor {
     RuntimeArgs runtime_args;
     CommonRuntimeArgs common_runtime_args;
 
-    std::optional<KernelBuildOptLevel> opt_level;
+    std::optional<KernelBuildOptLevel> opt_level = std::nullopt;
 
     ConfigDescriptor config;
+
+    void reserve_runtime_args();
 };
 
 struct ProgramDescriptor {
@@ -118,6 +121,15 @@ struct ProgramDescriptor {
     KernelDescriptors kernels;
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
+
+    size_t calculate_program_hash() const;
+};
+
+struct MeshWorkloadDescriptor {
+    using ProgramDescriptors =
+        boost::container::small_vector<std::pair<distributed::MeshCoordinateRange, ProgramDescriptor>, 1>;
+
+    ProgramDescriptors programs;
 
     size_t calculate_program_hash() const;
 };

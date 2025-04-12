@@ -32,6 +32,7 @@ namespace tt_metal {
 
 namespace program_cache::detail {
 class ProgramCache;
+class ProgramCacheV2;
 }
 /*
 MemoryBlockTable is a list of memory blocks in the following format:
@@ -190,6 +191,7 @@ public:
     virtual void enable_program_cache() = 0;
     virtual void disable_and_clear_program_cache() = 0;
     virtual program_cache::detail::ProgramCache& get_program_cache() = 0;
+    virtual program_cache::detail::ProgramCacheV2& get_program_cache_v2() = 0;
     virtual std::size_t num_program_cache_entries() = 0;
 
     virtual HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const = 0;

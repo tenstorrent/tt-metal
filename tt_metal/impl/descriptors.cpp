@@ -8,10 +8,14 @@
 
 namespace tt::tt_metal {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+size_t hash_combine(size_t seed, size_t value) { return seed ^ (value + 0x9e3779b9 + (seed << 6) + (seed >> 2)); }
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 size_t ProgramDescriptor::calculate_program_hash() const {
-    auto hash_combine = [](size_t seed, size_t value) -> size_t {
-        return seed ^ (value + 0x9e3779b9 + (seed << 6) + (seed >> 2));
-    };
+    using namespace CMAKE_UNIQUE_NAMESPACE;
 
     auto hash_kernel = [&](const KernelDescriptor& kernel) -> size_t {
         size_t hash = std::hash<std::string>()(kernel.kernel_source);
@@ -134,4 +138,27 @@ size_t ProgramDescriptor::calculate_program_hash() const {
     return hash;
 }
 
+void KernelDescriptor::reserve_runtime_args() {
+    size_t max_x = 0;
+    size_t max_y = 0;
+    for (const auto& core_range : core_ranges) {
+        max_x = std::max(max_x, core_range.end_coord.x + 1);
+        max_y = std::max(max_y, core_range.end_coord.y + 1);
+    }
+    runtime_args.resize(max_x);
+    for (auto& runtime_args_row : runtime_args) {
+        runtime_args_row.resize(max_y);
+    }
+}
+
+size_t MeshWorkloadDescriptor::calculate_program_hash() const {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+
+    size_t hash = 0;
+    for (const auto& [coord_range, program] : programs) {
+        hash = hash_combine(hash, std::hash<distributed::MeshCoordinateRange>()(coord_range));
+        hash = hash_combine(hash, program.calculate_program_hash());
+    }
+    return hash;
+}
 }  // namespace tt::tt_metal

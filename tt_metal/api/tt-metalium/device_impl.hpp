@@ -169,6 +169,7 @@ public:
     void enable_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override { return program_cache_; }
+    program_cache::detail::ProgramCacheV2& get_program_cache_v2() override { return program_cache_v2_; }
     std::size_t num_program_cache_entries() override;
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
@@ -269,6 +270,7 @@ private:
     std::vector<uint16_t> l1_bank_to_noc_xy_;
 
     program_cache::detail::ProgramCache program_cache_;
+    program_cache::detail::ProgramCacheV2 program_cache_v2_;
 
     uint32_t trace_buffers_size_ = 0;
     bool uninitialized_error_fired_ =

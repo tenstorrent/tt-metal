@@ -56,7 +56,24 @@ concept HasComputeOutputSpecs = requires(
 };
 
 template <typename device_operation_t>
-concept DeviceOperationConcept = requires {
+concept DeviceOperationWithDescriptorConcept = requires {
+    [](const typename device_operation_t::operation_attributes_t& operation_attributes,
+       const typename device_operation_t::tensor_args_t& tensor_args,
+       typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+        device_operation_t::validate(operation_attributes, tensor_args);
+
+        using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
+        static_assert(std::same_as<
+                      decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
+                      tensor_return_value_t>);
+
+        tt::tt_metal::ProgramDescriptor program_descriptor =
+            device_operation_t::create_program(operation_attributes, tensor_args, tensor_return_value);
+    };
+};
+
+template <typename device_operation_t>
+concept DeviceOperationWithoutDescriptorConcept = requires {
     [](const typename device_operation_t::operation_attributes_t& operation_attributes,
        const typename device_operation_t::tensor_args_t& tensor_args) {
         device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
@@ -74,7 +91,12 @@ concept DeviceOperationConcept = requires {
             []<typename T>(const T&) { static_assert(ProgramFactoryConcept<T> != MeshWorkloadFactoryConcept<T>); },
             program_factory);
     };
-} && HasComputeOutputSpecs<device_operation_t>;
+};
+
+template <typename device_operation_t>
+concept DeviceOperationConcept = (DeviceOperationWithDescriptorConcept<device_operation_t> ||
+                                  DeviceOperationWithoutDescriptorConcept<device_operation_t>) &&
+                                 HasComputeOutputSpecs<device_operation_t>;
 
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =

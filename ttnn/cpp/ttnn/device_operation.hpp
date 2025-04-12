@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/descriptors.hpp>
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include <tt_stl/reflection.hpp>
@@ -244,10 +245,8 @@ inline void log_operation(
 
 #endif
 
-
-
-template <DeviceOperationConcept device_operation_t>
-void launch_on_worker_thread(
+template <DeviceOperationWithoutDescriptorConcept device_operation_t>
+void launch_on_worker_thread_without_descriptor(
     ttnn::QueueId cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
@@ -361,6 +360,108 @@ void launch_on_worker_thread(
             operation_attributes,
             tensor_args,
             tensor_return_value);
+    }
+}
+
+template <DeviceOperationWithDescriptorConcept device_operation_t>
+void launch_on_worker_thread_with_descriptor(
+    ttnn::QueueId cq_id,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    typename device_operation_t::tensor_return_value_t& tensor_return_value,
+    tt::tt_metal::IDevice* device) {
+    ZoneScopedN("TT_DNN_DEVICE_OP");
+
+    auto device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
+
+    if constexpr (HasSkipLaunch<device_operation_t>) {
+        if (device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            return;
+        }
+    }
+
+    tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
+
+    tt::tt_metal::ProgramDescriptor program_descriptor = device_operation_t::create_program(operation_attributes, tensor_args, tensor_return_value);
+
+    auto& program_cache = device->get_program_cache_v2();
+    auto is_program_cache_enabled = device->get_program_cache().is_enabled();
+
+    size_t program_hash = 0;
+    bool program_cache_hit = false;
+    auto cached_program_it = program_cache.cache.end();
+
+    if (is_program_cache_enabled) {
+        program_hash = program_descriptor.calculate_program_hash();
+        cached_program_it = program_cache.cache.find(program_hash);
+        program_cache_hit = cached_program_it != program_cache.cache.end();
+    }
+
+    log_operation<device_operation_t>(
+            device->id(),
+            operation_attributes,
+            tensor_args,
+            program_hash,
+            program_cache_hit
+        );
+
+    tt::tt_metal::Program* program = nullptr;
+    tt::tt_metal::Program program_owner;
+    if (is_program_cache_enabled) {
+        if (program_cache_hit) {
+            program = &cached_program_it->second;
+            program->update_runtime_info_from_descriptor(std::move(program_descriptor));
+        } else {
+            auto new_program = CreateProgramFromDescriptor(program_descriptor);
+            auto it = program_cache.cache.insert({program_hash, std::move(new_program)});
+            program = &it.first->second;
+        }
+    } else {
+        program_owner = CreateProgramFromDescriptor(program_descriptor);
+        program = &program_owner;
+    }
+
+    const auto enqueue_or_launch_program = [=](tt::tt_metal::Program& program) {
+        if (USE_FAST_DISPATCH) {
+            ZoneScopedN("EnqueueProgram");
+            auto& queue = device->command_queue(*cq_id);
+            tt::tt_metal::EnqueueProgram(queue, program, false);
+        } else {
+            ZoneScopedN("LaunchProgram");
+            tt::tt_metal::detail::LaunchProgram(device, program);
+        }
+    };
+
+    program->set_runtime_id(device_operation_id);
+
+    tt::tt_metal::GraphTracker::instance().track_program(program, device);
+    if (tt::tt_metal::GraphTracker::instance().hook_program(program)) {
+        return;
+    }
+
+    enqueue_or_launch_program(*program);
+
+    TracyOpTTNNDevice(
+        device_operation_t{},
+        device_operation_id,
+        device->id(),
+        *program,
+        operation_attributes,
+        tensor_args,
+        tensor_return_value);
+}
+
+template <DeviceOperationConcept device_operation_t>
+void launch_on_worker_thread(
+    ttnn::QueueId cq_id,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    typename device_operation_t::tensor_return_value_t& tensor_return_value,
+    tt::tt_metal::IDevice* device) {
+    if constexpr (DeviceOperationWithDescriptorConcept<device_operation_t>) {
+        launch_on_worker_thread_with_descriptor<device_operation_t>(cq_id, operation_attributes, tensor_args, tensor_return_value, device);
+    } else {
+        launch_on_worker_thread_without_descriptor<device_operation_t>(cq_id, operation_attributes, tensor_args, tensor_return_value, device);
     }
 }
 

@@ -1602,7 +1602,7 @@ void Device::disable_and_clear_program_cache() {
 }
 std::size_t Device::num_program_cache_entries() {
     this->synchronize();
-    return program_cache_.num_entries();
+    return program_cache_.num_entries() + program_cache_v2_.cache.size();
 }
 
 void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
