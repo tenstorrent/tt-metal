@@ -12,14 +12,6 @@ namespace tt::tt_fabric {
 
 static constexpr uint8_t edm_to_local_chip_noc = 1;
 
-static constexpr uint8_t worker_sender0_sync_cmd_buf = write_reg_cmd_buf;
-static constexpr uint8_t worker_sender1_sync_cmd_buf = write_cmd_buf;
-static constexpr uint8_t worker_sender2_sync_cmd_buf = write_cmd_buf;
-
-static constexpr uint8_t downstream_data_cmd_buf = write_reg_cmd_buf;
-static constexpr uint8_t downstream_sync_cmd_buf = read_cmd_buf;
-static constexpr uint8_t local_chip_data_cmd_buf = write_cmd_buf;
-
 enum EDM_IO_BLOCKING_MODE { FLUSH_BLOCKING, BLOCKING, NON_BLOCKING };
 
 template <EDM_IO_BLOCKING_MODE blocking_mode = EDM_IO_BLOCKING_MODE::BLOCKING>
