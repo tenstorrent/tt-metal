@@ -709,7 +709,7 @@ CoreRange from_json_t<CoreRange>::operator()(const nlohmann::json& json) noexcep
 
 nlohmann::json to_json_t<CoreRangeSet>::operator()(const CoreRangeSet& core_range_set) noexcept {
     nlohmann::json core_range_set_json = nlohmann::json::array();
-    return to_json(core_range_set.ranges());
+    return to_json(std::vector<CoreRange>(core_range_set.ranges().begin(), core_range_set.ranges().end()));
 }
 
 CoreRangeSet from_json_t<CoreRangeSet>::operator()(const nlohmann::json& json) noexcept {
