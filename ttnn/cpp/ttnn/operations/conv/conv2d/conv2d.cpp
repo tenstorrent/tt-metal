@@ -414,7 +414,10 @@ Result conv2d_L1(
         auto_shard);
 
     const uint32_t input_channels_alignment = get_input_channels_alignment(
-        input_tensor_post_tm.memory_config().memory_layout, input_tensor.layout(), mm_conv);
+        input_tensor_post_tm.memory_config().memory_layout,
+        input_tensor.layout(),
+        mm_conv,
+        input_tensor_post_tm.memory_config());
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 

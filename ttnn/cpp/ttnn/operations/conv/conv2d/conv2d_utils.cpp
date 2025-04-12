@@ -71,10 +71,17 @@ uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, ui
 }
 
 uint32_t get_input_channels_alignment(
-    TensorMemoryLayout input_tensor_memory_layout, Layout input_tensor_layout, bool is_mm_conv) {
+    const TensorMemoryLayout input_tensor_memory_layout,
+    Layout input_tensor_layout,
+    bool is_mm_conv,
+    const std::optional<MemoryConfig>& input_memory_config) {
     if (!is_mm_conv && input_tensor_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
         input_tensor_layout == Layout::ROW_MAJOR) {
-        return 8;
+        if (input_memory_config.has_value()) {
+            return std::max(8U, input_memory_config.value().shard_spec.value().shape[1]);
+        } else {
+            return 8;
+        }
     }
     return tt::constants::TILE_WIDTH;
 }
@@ -559,7 +566,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
         }
         uint32_t input_tensor_height_snapped_to_tile = tt::round_up(tensor_height, input_num_cores_nhw * round_up_size);
         const uint32_t input_channels_aligment =
-            get_input_channels_alignment(shard_layout, input_tensor_.layout(), is_mm_conv);
+            get_input_channels_alignment(shard_layout, input_tensor_.layout(), is_mm_conv, std::nullopt);
         TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
         uint32_t input_tensor_width_snapped_to_channels_alignment =
             tt::round_up(input_shape[3], input_num_cores_c * input_channels_aligment);
@@ -792,7 +799,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         }
 
         const uint32_t input_channels_alignment =
-            get_input_channels_alignment(shard_layout, input_tensor_layout, is_mm_conv);
+            get_input_channels_alignment(shard_layout, input_tensor_layout, is_mm_conv, std::nullopt);
         const uint32_t in_channels_aligned = round_up(in_channels, input_channels_alignment);
         const uint32_t output_channels_padded = round_up(out_channels, constants::TILE_WIDTH);
         // Note: These are not exact shapes for weights as prepare_conv_weights will pad the weights depending on the
