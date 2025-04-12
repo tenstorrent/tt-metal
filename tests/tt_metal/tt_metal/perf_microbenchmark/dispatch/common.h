@@ -18,6 +18,7 @@
 #include <tt-metalium/hal.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <magic_enum/magic_enum.hpp>
 
 using namespace tt::tt_metal;  // test only
 
@@ -45,8 +46,8 @@ private:
     bool banked;  // TODO banked and unbanked tests still don't play nicely together
     int amt_written;
     // 10 is a hack...bigger than any core_type
-    uint64_t base_data_addr[10];
-    uint64_t base_result_data_addr[10];
+    uint64_t base_data_addr[magic_enum::enum_count<CoreType>()];
+    uint64_t base_result_data_addr[magic_enum::enum_count<CoreType>()];
     std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>> all_data;
     CoreCoord host_core;
 
