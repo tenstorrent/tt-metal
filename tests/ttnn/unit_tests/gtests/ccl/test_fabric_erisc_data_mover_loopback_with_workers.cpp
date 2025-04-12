@@ -1380,7 +1380,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_3_onehop) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_4) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1389,7 +1388,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_4) {
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_5) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     const size_t num_mcasts = 1;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1437,7 +1435,6 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_10) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_6_Short) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     const size_t num_mcasts = 100;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1445,8 +1442,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_6_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_7_Short) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
-
     const size_t num_mcasts = 1000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1454,8 +1449,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_7_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_8_Short) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
-
     const size_t num_mcasts = 50000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1463,8 +1456,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_8_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_9_Short) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
-
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1472,8 +1463,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_9_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_10_Short) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
-
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1482,8 +1471,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_10_Short) {
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_0_WithLineSync) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
-
     const size_t num_mcasts = 100;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1495,8 +1482,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_0_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_1_WithLineSync) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
-
     const size_t num_mcasts = 1000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1508,8 +1493,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_1_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_2_WithLineSync) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
-
     const size_t num_mcasts = 50000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1521,8 +1504,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_2_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_3_WithLineSync) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
-
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1534,8 +1515,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_3_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
-
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1548,7 +1527,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
 }
 
 TEST(EdmFabric, RingDeadlockStabilityTest) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     const size_t num_mcasts = 200000;
     const size_t num_links = 1;
     const size_t num_op_invocations = 5;
