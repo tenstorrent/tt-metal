@@ -19,5 +19,6 @@ permissions:
 jobs:
   nightly-debug:
     uses: ./.github/workflows/all-post-commit-workflows.yaml
+    secrets: inherit
     with:
       build-type: RelWithDebInfo
