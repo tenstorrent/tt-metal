@@ -117,7 +117,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     const auto [sender_worker_core_range, sender_worker_cores] =
         ar_choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, available_cores);
 
-    constexpr bool has_work = 1;
+    constexpr bool has_work = true;
 
     // output_cores_unused is the cores that should do no work
     auto output_cores_unused = output_cores_all.subtract(output_tensor_cores);

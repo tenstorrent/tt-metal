@@ -34,10 +34,10 @@ SystemMemoryCQInterface::SystemMemoryCQInterface(uint16_t channel, uint8_t cq_id
     // queue
     //  but on host, we access a region of sysmem using addresses relative to a particular channel
     this->issue_fifo_wr_ptr = (this->cq_start + this->offset) >> 4;  // In 16B words
-    this->issue_fifo_wr_toggle = 0;
+    this->issue_fifo_wr_toggle = false;
 
     this->completion_fifo_rd_ptr = this->issue_fifo_limit;
-    this->completion_fifo_rd_toggle = 0;
+    this->completion_fifo_rd_toggle = false;
 }
 
 }  // namespace tt::tt_metal

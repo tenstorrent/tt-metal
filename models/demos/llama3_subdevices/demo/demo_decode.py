@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 5
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 340, "max": 355}, 10: {"min": 180, "max": 200}, 80: {"min": 39, "max": 41}}
+TSU_THRESHOLDS = {1: {"min": 355, "max": 375}, 10: {"min": 180, "max": 200}, 80: {"min": 40, "max": 44}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -544,7 +544,7 @@ def run_llama3_demo(
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
@@ -559,7 +559,7 @@ def run_llama3_demo(
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
@@ -574,7 +574,7 @@ def run_llama3_demo(
             1024,  # max_seq_len
             32,  # batch_size
             4 * 128 * 1024,  # max_generated_tokens (same index for stress test)
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
@@ -604,7 +604,7 @@ def run_llama3_demo(
             1024,  # max_seq_len
             32,  # batch_size
             1,  # max_generated_tokens
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
