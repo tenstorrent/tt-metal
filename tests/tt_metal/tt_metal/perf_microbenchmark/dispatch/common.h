@@ -18,7 +18,7 @@
 #include <tt-metalium/hal.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 
 using namespace tt::tt_metal;  // test only
 
