@@ -26,7 +26,7 @@ namespace detail {
 constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
            op == BinaryOpType::LOGICAL_AND || op == BinaryOpType::LOGICAL_OR || op == BinaryOpType::LOGADDEXP ||
-           op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR;
+           op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR || op == BinaryOpType::MAXIMUM;
 }
 
 // Tensor - Scalar
@@ -550,5 +550,6 @@ template struct BinaryOperationSfpu<BinaryOpType::BITWISE_XOR>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_OR>;
 template struct BinaryOperationSfpu<BinaryOpType::LEFT_SHIFT>;
 template struct BinaryOperationSfpu<BinaryOpType::RIGHT_SHIFT>;
+template struct BinaryOperationSfpu<BinaryOpType::MAXIMUM>;
 
 }  // namespace ttnn::operations::binary

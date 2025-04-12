@@ -54,19 +54,15 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("input_a_is_sharded", [True, False])
 @pytest.mark.parametrize("output_is_sharded", [True, False])
-@pytest.mark.parametrize("m_size, num_cores", [[25088, 98]])
+@pytest.mark.parametrize("m_size, num_cores", [[5632, 22]])
 @pytest.mark.parametrize("k_size, n_size", [[64, 64], [64, 256]])
 @pytest.mark.parametrize("input_a_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("input_b_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_ttnn_linear(
     device, input_a_is_sharded, output_is_sharded, m_size, k_size, n_size, num_cores, input_a_dtype, input_b_dtype
 ):
-    grid_size = device.compute_with_storage_grid_size()
+    grid_size = (6, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
-    if num_cores > (compute_grid_size.x * compute_grid_size.y):
-        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
-    if input_a_dtype != input_b_dtype and is_wormhole_b0():
-        pytest.skip("WH does not work with mixed precision")
 
     input_shape_a = [1, 1, m_size, k_size]
     input_shape_b = [1, 1, k_size, n_size]
@@ -81,7 +77,7 @@ def test_ttnn_linear(
     output_memory_config = sharded_memory_config if output_is_sharded else interleaved_memory_config
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(12, 9),
+        compute_with_storage_grid_size=grid_size,
         in0_block_w=k_size // 32,
         out_subblock_h=8 // (n_size // 32),
         out_subblock_w=n_size // 32,

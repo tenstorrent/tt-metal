@@ -87,7 +87,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
     if (is_w_index_exist) {
         // compute index info
-        IndexInfo index_info[5] = {0};
+        IndexInfo index_info[5] = {false};
 
         for (uint32_t i = 0; i < index_tensors.size(); i++) {
             auto dim = index_dims[i] + input_dim_offset;
@@ -325,7 +325,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     } else {
         // compute index info
 
-        IndexInfo index_info[5] = {0};
+        IndexInfo index_info[5] = {false};
 
         for (uint32_t i = 0; i < index_tensors.size(); i++) {
             auto dim = index_dims[i] + input_dim_offset;
@@ -566,7 +566,7 @@ void MorehGetItemOperation::MorehGetItemTilizedFactory::override_runtime_argumen
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = tensor_return_value.buffer();
     auto index_tensors = tensor_args.index_tensors;
-    IndexInfo index_info[5] = {0};
+    IndexInfo index_info[5] = {false};
     for (uint32_t i = 0; i < index_dims.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
         auto index_buffer = index_tensors[i];

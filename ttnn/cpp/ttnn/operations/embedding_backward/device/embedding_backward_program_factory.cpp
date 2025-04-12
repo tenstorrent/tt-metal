@@ -35,9 +35,9 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
 
     Program program{};
 
-    bool grad_is_dram = grad_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool index_is_dram = index_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool grad_is_dram = grad_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool index_is_dram = index_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
 
     uint32_t grad_element_size_bytes = grad_tensor.element_size();
     uint32_t index_element_size_bytes = index_tensor.element_size();

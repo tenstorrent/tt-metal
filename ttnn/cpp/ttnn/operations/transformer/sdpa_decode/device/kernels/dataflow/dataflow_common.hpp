@@ -50,7 +50,7 @@ void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t 
 template <uint32_t tile_bytes>
 void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
     if (val == 0) {
-        constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
+        constexpr uint32_t num_zeros_reads = tile_bytes / MEM_ZEROS_SIZE;
         uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
         uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
         volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
@@ -65,7 +65,7 @@ void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
         // Fill 2 uint16 datums in each writes to optimize for performance
         volatile tt_l1_ptr uint32_t* ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
-        constexpr int num_uint32_datums_tile = (32 * 32) / 2;
+        constexpr int num_uint32_datums_tile = tile_bytes / 4;
         for (int k = 0; k < num_uint32_datums_tile; k++) {
             ptr[k] = val;
         }
@@ -77,6 +77,7 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
     /*
     We want to fill cur_pos_in_tile + 1 to the end
     */
+    constexpr int num_faces = (tile_bytes == 1024) ? 2 : 4;
 
     fill_tile<tile_bytes>(cb_id, tile_id, 0);
     if (cur_pos_in_tile == 31 || partial_val == 0) {
@@ -92,7 +93,7 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
     if (face_start == 0) {
         // Fill 2 datums in each writes to optimize for performance
         constexpr int num_uint32_datums_tile_face = (16 * 16) / 2;
-        for (int k = 1; k < 4; k += 2) {
+        for (int k = 1; k < num_faces; k += 2) {
             uint32_t uint32_face_idx = k << 7;
             for (int j = 0; j < num_uint32_datums_tile_face; j++) {
                 uint32_ptr[uint32_face_idx + j] = partial_val;
@@ -108,7 +109,7 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
     constexpr uint32_t num_cols_in_face = 16;
     constexpr uint32_t num_rows_in_face = 16;
     constexpr uint32_t num_cols_in_uint32_face = num_cols_in_face >> 1;
-    for (int k = face_start; k < 4; k += 2) {
+    for (int k = face_start; k < num_faces; k += 2) {
         uint32_t uint16_face_idx = k << 8;
         uint32_t uint32_face_idx = k << 7;
 
@@ -130,14 +131,13 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
 /******************************************************************************
  *                   Attention Mask Functions                                 *
  ******************************************************************************/
-template <
-    uint32_t cb_mask_in,
+template <uint32_t cb_mask_in, uint32_t mask_tile_bytes, uint32_t barrier_threshold, uint32_t PNHt>
+uint32_t read_mask_chunk(
+    uint32_t PSt,
+    uint32_t Sk_chunk_t,
     uint32_t mask_chunk_tiles,
-    uint32_t mask_tile_bytes,
-    uint32_t barrier_threshold,
-    uint32_t PNHt,
-    uint32_t Sk_chunk_t>
-uint32_t read_mask_chunk(uint32_t PSt, uint32_t mask_start_tile_id, const InterleavedAddrGenFast<true> mask_reader) {
+    uint32_t mask_start_tile_id,
+    const InterleavedAddrGenFast<true> mask_reader) {
     // Read mask chunk
     cb_reserve_back(cb_mask_in, mask_chunk_tiles);
     uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
@@ -161,8 +161,8 @@ uint32_t read_mask_chunk(uint32_t PSt, uint32_t mask_start_tile_id, const Interl
     return mask_start_tile_id;
 }
 
-template <uint32_t cb_mask_in, uint32_t PNHt, uint32_t Sk_chunk_t>
-void generate_mask(uint32_t k_num_chunks, uint32_t cur_pos) {
+template <uint32_t cb_mask_in, uint32_t PNHt>
+void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos) {
     /*
     example 1: 64 seqlen at cur_pos 40, 2 cores, 32 chunk size
     k_num_chunks = 2
@@ -368,10 +368,7 @@ uint32_t write_partial_tiles_to_memory(
 
 template <
     uint32_t DHt,
-    uint32_t Sk_chunk_t,
     uint32_t barrier_threshold,
-    uint32_t k_chunk_tiles,
-    uint32_t mask_chunk_tiles,
     uint32_t mask_tile_bytes,
     uint32_t PNHt,
     bool use_attention_mask,
@@ -384,6 +381,9 @@ void read_kv_mask_chunks(
     uint32_t k_start_tile_id,
     uint32_t v_start_tile_id,
     uint32_t mask_start_tile_id,
+    uint32_t Sk_chunk_t,
+    uint32_t k_chunk_tiles,
+    uint32_t mask_chunk_tiles,
     const InterleavedAddrGenFast<true>& k_reader,
     const InterleavedAddrGenFast<true>& v_reader,
     const InterleavedAddrGenFast<true>& mask_reader,
@@ -413,9 +413,8 @@ void read_kv_mask_chunks(
         k_start_tile_id += k_chunk_tiles;
 
         if constexpr (use_attention_mask) {
-            mask_start_tile_id =
-                read_mask_chunk<cb_mask_in, mask_chunk_tiles, mask_tile_bytes, barrier_threshold, PNHt, Sk_chunk_t>(
-                    PSt, mask_start_tile_id, mask_reader);
+            mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
+                PSt, Sk_chunk_t, mask_chunk_tiles, mask_start_tile_id, mask_reader);
         }
 
         // Read V chunk

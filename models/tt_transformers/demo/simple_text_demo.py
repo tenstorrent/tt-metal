@@ -14,7 +14,7 @@ import os
 import ttnn
 
 
-from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.generator import Generator, SamplingParams
 from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
@@ -617,6 +617,10 @@ def test_demo_text(
         argmax_on_device = (
             False if (global_batch_size // data_parallel > 1 or sampling_params["temperature"] != 0) else True
         )
+        if argmax_on_device:
+            device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
+        else:
+            device_sampling_params = None
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
@@ -644,11 +648,11 @@ def test_demo_text(
                 enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
-                argmax_on_device=argmax_on_device,
+                sampling_params=device_sampling_params,
             )
 
             # Get the next token
-            if argmax_on_device:
+            if device_sampling_params is not None:
                 out_tok = logits.unsqueeze(1)
             else:
                 # TODO Fix use case with temperature > 0
