@@ -189,11 +189,7 @@ def run_conv(
     if act_func:
         ref = act_func(ref)
 
-    tt_weight_tensor = ttnn.from_torch(
-        torch_weight_tensor,
-        weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
-        mesh_mapper=weight_mesh_mapper,
-    )
+    tt_weight_tensor = ttnn.load_torch_weights_for_conv(torch_weight_tensor, device, weights_dtype)
     tt_bias_tensor = None
     if has_bias:
         tt_bias_tensor = ttnn.from_torch(
@@ -241,7 +237,7 @@ def run_conv(
             conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (11, 7)), ttnn.CoreRange((0, 8), (1, 8))})
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
-
+    print(tt_weight_tensor)
     [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
@@ -264,10 +260,11 @@ def run_conv(
         return_output_dim=True,
         return_weights_and_bias=True,
     )
+    print(tt_weight_tensor)
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
-            weight_tensor=tt_weight_tensor,
+            weight_tensor=ttnn.ConvWeightsBiasTensor(d_w, True),
             in_channels=input_channels,
             out_channels=output_channels,
             device=device,
@@ -644,6 +641,7 @@ def test_conv_activation(
         fp32_accum=fp32_accum,
         packer_l1_acc=False,
         activation=activation,
+        run_twice=True,
     )
 
 

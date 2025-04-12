@@ -65,7 +65,7 @@ ttnn::Tensor conv_bias_layout_convert(
 
 template <typename T>
 ConvWeightsBiasTensor prepare_conv_weights(
-    const ConvWeightsBiasTensor& wrapped_weight_tensor,
+    ConvWeightsBiasTensor& wrapped_weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
     const std::string& weights_format,

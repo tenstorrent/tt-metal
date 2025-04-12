@@ -22,12 +22,14 @@ namespace conv2d {
 
 void py_bind_conv2d(py::module& module) {
     auto py_conv_weights_bias_tensor = py::class_<ConvWeightsBiasTensor>(module, "ConvWeightsBiasTensor");
-    py_conv_weights_bias_tensor.def(py::init<ttnn::Tensor&>()).def(py::init<const ttnn::Tensor&>());
+    py_conv_weights_bias_tensor.def(py::init<ttnn::Tensor&>());
+    py_conv_weights_bias_tensor.def(py::init<ttnn::Tensor&, bool>());
+    py_conv_weights_bias_tensor.def(
+        "__repr__", [](const ConvWeightsBiasTensor& tensor) { return fmt::format("{}", tensor); });
+    py_conv_weights_bias_tensor.def_readwrite("weights", &ConvWeightsBiasTensor::weights);
+    py_conv_weights_bias_tensor.def_readwrite("is_preprocessed", &ConvWeightsBiasTensor::is_preprocessed);
     py::implicitly_convertible<ttnn::Tensor, ConvWeightsBiasTensor>();
     py::implicitly_convertible<ConvWeightsBiasTensor, ttnn::Tensor>();
-
-    module.def("print_preprocessed", print_preprocessed, py::arg("tensor"));
-    auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
 
     bind_registered_operation(
         module,
@@ -55,7 +57,7 @@ void py_bind_conv2d(py::module& module) {
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
                const ttnn::Tensor& input_tensor,
-               const ConvWeightsBiasTensor& weight_tensor,
+               ConvWeightsBiasTensor& weight_tensor,
                ttnn::IDevice* device,
                uint32_t in_channels,
                uint32_t out_channels,
@@ -118,7 +120,7 @@ void py_bind_conv2d(py::module& module) {
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
                const ttnn::Tensor& input_tensor,
-               const ConvWeightsBiasTensor& weight_tensor,
+               ConvWeightsBiasTensor& weight_tensor,
                ttnn::MeshDevice* device,
                uint32_t in_channels,
                uint32_t out_channels,
@@ -346,6 +348,7 @@ void py_bind_conv2d(py::module& module) {
         .value("SliceHeight", Conv2dSliceConfig::SliceType::HEIGHT)
         .value("SliceWidth", Conv2dSliceConfig::SliceType::WIDTH);
 
+    auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
         py::init<
             DataType,

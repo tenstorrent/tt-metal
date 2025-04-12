@@ -42,7 +42,7 @@ template <typename T>
 Result conv2d(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ConvWeightsBiasTensor& wrapped_weight_tensor,
+    ConvWeightsBiasTensor& wrapped_weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -116,7 +116,7 @@ template <typename T>
 Result conv2d_DRAM(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ConvWeightsBiasTensor& wrapped_weight_tensor,
+    ConvWeightsBiasTensor& wrapped_weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -159,7 +159,6 @@ Result conv2d_DRAM(
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
-    ttnn::Tensor weight_tensor_on_device;
     std::optional<ttnn::Tensor> bias_tensor_on_device;
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
@@ -295,29 +294,28 @@ Result conv2d_DRAM(
         );
         auto conv_config_l1 = conv_config;
         ttnn::Tensor sliced_output_tensor;
-        std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
-            conv2d_L1(
-                queue_id,
-                sliced_input_tensor,
-                // TODO: Add check to ensure that the shard_layout and memory_config are the same as the last slice to
-                // re-use the weights tensor.
-                // TODO: Add caching mechanism for multiple weights tensors, depending on the memory configs.
-                first_run ? weight_tensor : weight_tensor_on_device,
-                device,
-                in_channels,
-                out_channels,
-                batch_size,
-                input_slice_height,
-                input_slice_width,
-                kernel_size,
-                stride,
-                std::array<uint32_t, 4>({pad_top, pad_bottom, pad_left, pad_right}),
-                dilation,
-                groups,
-                first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
-                conv_config_l1,
-                compute_config_,
-                memory_config_);
+        std::tie(sliced_output_tensor, std::ignore, std::ignore, std::ignore, bias_tensor_on_device) = conv2d_L1(
+            queue_id,
+            sliced_input_tensor,
+            // TODO: Add check to ensure that the shard_layout and memory_config are the same as the last slice to
+            // re-use the weights tensor.
+            // TODO: Add caching mechanism for multiple weights tensors, depending on the memory configs.
+            wrapped_weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_slice_height,
+            input_slice_width,
+            kernel_size,
+            stride,
+            std::array<uint32_t, 4>({pad_top, pad_bottom, pad_left, pad_right}),
+            dilation,
+            groups,
+            first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
+            conv_config_l1,
+            compute_config_,
+            memory_config_);
         if (sliced_output_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED &&
             sliced_output_tensor.memory_config().memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
             sliced_output_tensor = ttnn::to_memory_config(
@@ -341,14 +339,14 @@ Result conv2d_DRAM(
         first_run = false;
     }
 
-    return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+    return {dram_output_tensor, output_height, output_width, weight_tensor, bias_tensor_on_device};
 }
 
 template <typename T>
 Result conv2d_L1(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ConvWeightsBiasTensor& wrapped_weight_tensor,
+    ConvWeightsBiasTensor& wrapped_weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -364,8 +362,6 @@ Result conv2d_L1(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
-    ttnn::Tensor weight_tensor = (ttnn::Tensor)wrapped_weight_tensor;
-
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
@@ -388,7 +384,7 @@ Result conv2d_L1(
             out_channels,
             output_height,
             output_width,
-            weight_tensor.get_logical_shape()[3],
+            wrapped_weight_tensor.weights.get_logical_shape()[3],
             input_height,
             input_width,
             compute_grid_size,
@@ -430,16 +426,14 @@ Result conv2d_L1(
         kernel_size,
         compute_grid_size);
 
-    bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
-    ttnn::Tensor weight_tensor_on_device = weight_tensor;
+    bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(wrapped_weight_tensor.weights);
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-    if (!weight_is_on_device || conv_config.always_preprocess_weights) {
+    if (wrapped_weight_tensor.is_preprocessed == false) {
         // prepare weights in desired layout and move to device
-
-        // TODO: Implement heuristic to decide if weights should be preprocessed on device.
-        if (conv_config.preprocess_weights_on_device == false) {
-            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
-                weight_tensor,
+        log_info("Preparing weights for conv2d 🏋️‍♀️");
+        if (weight_is_on_device == false) {
+            tie(wrapped_weight_tensor.weights, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
+                wrapped_weight_tensor.weights,
                 bias_tensor,
                 conv_config.input_channels_alignment,
                 conv_config.weights_dtype,
@@ -453,8 +447,8 @@ Result conv2d_L1(
                 input_width,
                 true);
         } else {
-            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
-                weight_tensor,
+            tie(wrapped_weight_tensor.weights, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
+                wrapped_weight_tensor.weights,
                 bias_tensor,
                 conv_config.input_channels_alignment,
                 conv_config.weights_dtype,
@@ -468,6 +462,7 @@ Result conv2d_L1(
                 input_width,
                 true);
         }
+        wrapped_weight_tensor.is_preprocessed = true;
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     if (mm_conv) {
@@ -531,7 +526,7 @@ Result conv2d_L1(
         // call conv micro op
         auto conv_output = optimized_conv_new(
             input_tensor_post_tm,
-            weight_tensor_on_device,
+            wrapped_weight_tensor.weights,
             bias_tensor_on_device,
             sliding_window_config,
             out_channels,
@@ -551,7 +546,7 @@ Result conv2d_L1(
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
         }
-        return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        return {conv_output, output_height, output_width, wrapped_weight_tensor.weights, bias_tensor_on_device};
     } else {
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
@@ -575,7 +570,7 @@ Result conv2d_L1(
         }
         Tensor matmul_output = ttnn::linear(
             input_tensor_post_tm,
-            weight_tensor_on_device,
+            wrapped_weight_tensor.weights,
             bias_tensor_on_device,
             false,
             false,
@@ -588,14 +583,14 @@ Result conv2d_L1(
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
 
-        return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        return {matmul_output, output_height, output_width, wrapped_weight_tensor.weights, bias_tensor_on_device};
     }
 }
 
 template Result conv2d<IDevice>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ConvWeightsBiasTensor& wrapped_weight_tensor,
+    ConvWeightsBiasTensor& wrapped_weight_tensor,
     IDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -616,7 +611,7 @@ template Result conv2d<IDevice>(
 template Result conv2d<MeshDevice>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ConvWeightsBiasTensor& wrapped_weight_tensor,
+    ConvWeightsBiasTensor& wrapped_weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -637,7 +632,7 @@ template Result conv2d<MeshDevice>(
 Result Conv2dOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ConvWeightsBiasTensor& wrapped_weight_tensor,
+    ConvWeightsBiasTensor& wrapped_weight_tensor,
     IDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -679,7 +674,7 @@ Result Conv2dOperation::invoke(
 Result Conv2dOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ConvWeightsBiasTensor& wrapped_weight_tensor,
+    ConvWeightsBiasTensor& wrapped_weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,

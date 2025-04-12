@@ -17,16 +17,16 @@ namespace operations::conv {
 using namespace conv2d;
 
 class ConvWeightsBiasTensor {
-    ttnn::Tensor weights;
-    bool _is_preprocessed;
-
 public:
+    ttnn::Tensor weights;
+    bool is_preprocessed;
     ConvWeightsBiasTensor(const ttnn::Tensor& weights);
     ConvWeightsBiasTensor(const ttnn::Tensor& weights, bool is_preprocessed);
     operator ttnn::Tensor() { return weights; }
     operator ttnn::Tensor() const { return weights; }
 
-    bool is_preprocessed() const { return _is_preprocessed; }
+    static constexpr auto attribute_names = std::forward_as_tuple("is_preprocessed", "weights");
+    constexpr auto attribute_values() const { return std::forward_as_tuple(this->is_preprocessed, this->weights); }
 };
 
 void print_preprocessed(const ConvWeightsBiasTensor& tensor);

@@ -37,6 +37,23 @@ def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
     return (input + (2 * pad) - dilation * (window - 1) - 1) // stride + 1
 
 
+def load_torch_weights_for_conv(weights, device, dtype=ttnn.bfloat16):
+    """
+    Loads torch weights for convolution operation.
+    This function is used to load weights from torch format to ttnn format.
+    """
+    if isinstance(weights, ConvWeightsBiasTensor):
+        return weights
+
+    if not isinstance(weights, torch.Tensor):
+        raise TypeError("weights must be a torch.Tensor")
+
+    # Convert to ttnn tensor
+    ttnn_weights = ttnn.from_torch(weights, device=device, dtype=dtype if dtype != ttnn.bfloat8_b else ttnn.float32)
+    ttnn_weights = ttnn.to_memory_config(ttnn_weights, ttnn.DRAM_MEMORY_CONFIG)
+    return ConvWeightsBiasTensor(ttnn_weights, False)
+
+
 def prepare_conv_weights(
     *,
     weight_tensor,

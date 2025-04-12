@@ -62,7 +62,7 @@ constexpr bool is_specialization_v = detail::is_specialization<Test, Ref>::value
 // Forward Declare hash_object
 namespace hash {
 
-constexpr bool DEBUG_HASH_OBJECT_FUNCTION = false;
+constexpr bool DEBUG_HASH_OBJECT_FUNCTION = true;
 
 using hash_t = std::uint64_t;
 constexpr hash_t DEFAULT_SEED = 1234;
@@ -1109,7 +1109,7 @@ inline hash_t hash_object(const T& object) noexcept {
         return object;
     } else if constexpr (detail::is_std_hashable_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing {} using std::hash: {}\n", get_type_name<T>(), object);
+            // fmt::print("Hashing {} using std::hash: {}\n", get_type_name<T>(), object);
         }
         return std::hash<T>{}(object);
     } else if constexpr (tt::stl::reflection::detail::supports_to_hash_v<T>) {
@@ -1119,7 +1119,7 @@ inline hash_t hash_object(const T& object) noexcept {
         return object.to_hash();
     } else if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing struct {} using compile-time attributes: {}\n", get_type_name<T>(), object);
+            // fmt::print("Hashing struct {} using compile-time attributes: {}\n", get_type_name<T>(), object);
         }
         constexpr auto num_attributes = reflection::detail::get_num_attributes<T>();
         hash_t hash = 0;
@@ -1135,7 +1135,7 @@ inline hash_t hash_object(const T& object) noexcept {
         return hash;
     } else if constexpr (is_specialization_v<T, std::tuple>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing std::tuple of type {}: {}\n", get_type_name<T>(), object);
+            // fmt::print("Hashing std::tuple of type {}: {}\n", get_type_name<T>(), object);
         }
         constexpr auto num_elements = std::tuple_size_v<T>;
         hash_t hash = 0;
@@ -1150,13 +1150,13 @@ inline hash_t hash_object(const T& object) noexcept {
         return hash;
     } else if constexpr (is_specialization_v<T, std::pair>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing std::pair of type {}: {}\n", get_type_name<T>(), object);
+            // fmt::print("Hashing std::pair of type {}: {}\n", get_type_name<T>(), object);
         }
         hash_t hash = 0;
         return hash_objects(hash, object.first, object.second);
     } else if constexpr (is_specialization_v<T, std::vector>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
+            // fmt::print("Hashing std::vector of type {}: {}\n", get_type_name<T>(), object);
         }
         hash_t hash = 0;
         for (const auto& element : object) {
@@ -1209,7 +1209,7 @@ inline hash_t hash_object(const T& object) noexcept {
         }
     } else if constexpr (tt::stl::concepts::Reflectable<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
+            // fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
         }
         hash_t hash = 0;
         reflect::for_each([&hash, &object](auto I) { hash = hash_objects(hash, reflect::get<I>(object)); }, object);

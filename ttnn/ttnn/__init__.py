@@ -354,6 +354,7 @@ from ttnn.operations.conv2d import (
     Conv2dConfig,
     ConvWeightsBiasTensor,
     get_conv_output_dim,
+    load_torch_weights_for_conv,
     prepare_conv_weights,
     prepare_conv_bias,
     Conv2dSliceConfig,

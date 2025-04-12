@@ -1048,7 +1048,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
 template <typename T>
 ConvWeightsBiasTensor prepare_conv_weights(
-    const ConvWeightsBiasTensor& wrapped_weight_tensor,
+    ConvWeightsBiasTensor& wrapped_weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
     const std::string& weights_format,
@@ -1066,7 +1066,7 @@ ConvWeightsBiasTensor prepare_conv_weights(
     T* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
-    if (wrapped_weight_tensor.is_preprocessed()) {
+    if (wrapped_weight_tensor.is_preprocessed) {
         log_warning(tt::LogOp, "Weight tensor is already preprocessed. 🤷 Skipping weight tensor preparation.");
         return wrapped_weight_tensor;
     }
@@ -1252,7 +1252,7 @@ ttnn::Tensor prepare_conv_bias(
 }
 
 template ConvWeightsBiasTensor prepare_conv_weights<IDevice>(
-    const ConvWeightsBiasTensor& weight_tensor,
+    ConvWeightsBiasTensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
     const std::string& weights_format,
@@ -1272,7 +1272,7 @@ template ConvWeightsBiasTensor prepare_conv_weights<IDevice>(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
 template ConvWeightsBiasTensor prepare_conv_weights<MeshDevice>(
-    const ConvWeightsBiasTensor& weight_tensor,
+    ConvWeightsBiasTensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
     const std::string& weights_format,
