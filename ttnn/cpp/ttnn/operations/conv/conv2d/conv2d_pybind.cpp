@@ -343,7 +343,6 @@ void py_bind_conv2d(py::module& module) {
             DataType,
             DataType,
             string,
-            uint32_t,
             bool,
             bool,
             uint32_t,
@@ -365,7 +364,6 @@ void py_bind_conv2d(py::module& module) {
         py::arg("dtype") = DataType::BFLOAT16,
         py::arg("weights_dtype") = DataType::BFLOAT16,
         py::arg("activation") = "",
-        py::arg("input_channels_alignment") = 32,
         py::arg("deallocate_activation") = false,
         py::arg("reallocate_halo_output") = true,
         py::arg("act_block_h_override") = 0,
@@ -386,7 +384,6 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def_readwrite("dtype", &Conv2dConfig::dtype);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype);
     py_conv_config.def_readwrite("activation", &Conv2dConfig::activation);
-    py_conv_config.def_readwrite("input_channels_alignment", &Conv2dConfig::input_channels_alignment);
     py_conv_config.def_readwrite("deallocate_activation", &Conv2dConfig::deallocate_activation);
     py_conv_config.def_readwrite("reallocate_halo_output", &Conv2dConfig::reallocate_halo_output);
     py_conv_config.def_readwrite("act_block_h_override", &Conv2dConfig::act_block_h_override);

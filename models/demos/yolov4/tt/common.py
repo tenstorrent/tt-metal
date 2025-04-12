@@ -30,7 +30,6 @@ class Conv:
             weights_dtype=ttnn.bfloat8_b,
             activation=activation,
             shard_layout=conv_param.shard_layout,
-            input_channels_alignment=16 if conv_param.in_channels < 16 else 32,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
             deallocate_activation=conv_param.deallocate_activation,
             enable_act_double_buffer=conv_param.enable_act_double_buffer,

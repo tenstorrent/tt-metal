@@ -78,7 +78,6 @@ def run_conv(
         dtype=output_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
-        input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
     )
     compute_config = ttnn.init_device_compute_kernel_config(

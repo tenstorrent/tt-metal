@@ -54,7 +54,6 @@ class MobileNetV2Conv2D:
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            input_channels_alignment=16 if self.use_shallow_covariant else 32,
             act_block_w_div=1,
             transpose_shards=False,
             deallocate_activation=self.deallocate_activation,

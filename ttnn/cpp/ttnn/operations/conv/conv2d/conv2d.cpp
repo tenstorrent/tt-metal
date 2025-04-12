@@ -413,12 +413,17 @@ Result conv2d_L1(
         mm_conv,
         auto_shard);
 
+    const uint32_t input_channels_alignment =
+        get_input_channels_alignment(conv_config.shard_layout.value(), input_tensor.layout(), mm_conv);
+    const uint32_t in_channels_padded = tt::round_up(
+        in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
+
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
         compute_config,
         parallel_config,
         output_parallel_config,
-        in_channels,
+        in_channels_padded,
         out_channels,
         batch_size,
         output_height,
@@ -437,7 +442,7 @@ Result conv2d_L1(
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
                 weight_tensor,
                 bias_tensor,
-                conv_config.input_channels_alignment,
+                input_channels_alignment,
                 conv_config.weights_dtype,
                 opt_conv_op_block_config.act_block_w_ntiles,
                 opt_conv_op_block_config.out_subblock_w_ntiles,
@@ -452,7 +457,7 @@ Result conv2d_L1(
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
                 weight_tensor,
                 bias_tensor,
-                conv_config.input_channels_alignment,
+                input_channels_alignment,
                 conv_config.weights_dtype,
                 opt_conv_op_block_config.act_block_w_ntiles,
                 opt_conv_op_block_config.out_subblock_w_ntiles,
