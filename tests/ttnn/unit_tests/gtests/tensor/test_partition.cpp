@@ -69,7 +69,7 @@ TEST(PartitionTest, DefaultAxis) {
     xt::xarray<double> result = concat(input);  // axis=0 by default
     xt::xarray<double> expected = {{1.0, 2.0}, {3.0, 4.0}, {5.0, 6.0}, {7.0, 8.0}};
 
-    xt::allclose(result, expected);
+    EXPECT_TRUE(xt::allclose(result, expected));
 }
 
 TEST(PartitionTest, AxisOne) {
@@ -80,7 +80,7 @@ TEST(PartitionTest, AxisOne) {
     xt::xarray<int> result = concat(input, 1);
     xt::xarray<int> expected = {{1, 2, 3, 7, 8}, {4, 5, 6, 9, 10}};
 
-    xt::allclose(result, expected);
+    EXPECT_TRUE(xt::allclose(result, expected));
 }
 
 TEST(PartitionTest, MultipleArraysAxis0) {
@@ -92,7 +92,7 @@ TEST(PartitionTest, MultipleArraysAxis0) {
     xt::xarray<float> result = concat(input, 0);
     xt::xarray<float> expected = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
 
-    xt::allclose(result, expected);
+    EXPECT_TRUE(xt::allclose(result, expected));
 }
 
 TEST(PartitionTest, EmptyArray) {
@@ -115,7 +115,7 @@ TEST(PartitionTest, HigherDimensions) {
     // Expected: shape (4,2,2) with arr1 stacked over arr2 along axis 0
     xt::xarray<int> expected = xt::concatenate(xt::xtuple(arr1, arr2), 0);
 
-    xt::allclose(result, expected);
+    EXPECT_TRUE(xt::allclose(result, expected));
 }
 
 TEST(PartitionTest, HigherAxis) {
@@ -128,7 +128,47 @@ TEST(PartitionTest, HigherAxis) {
     // Expected shape: (2,2,4)
     xt::xarray<int> expected = {{{1, 2, 9, 10}, {3, 4, 11, 12}}, {{5, 6, 13, 14}, {7, 8, 15, 16}}};
 
-    xt::allclose(result, expected);
+    EXPECT_TRUE(xt::allclose(result, expected));
+}
+
+TEST(PartitionTest, UnmatchedDimensions) {
+    xt::xarray<int> arr1 = {{{1, 2}, {3, 4}}, {{5, 6}, {7, 8}}};
+    xt::xarray<int> arr2 = {{{9, 10}, {11, 12}}, {{13, 14}, {15, 16}}, {{17, 18}, {19, 20}}};
+    // arr1 has shape (2,2,2), arr2 has shape (3,2,2)
+    xt::xarray<int> result_dim0 = xt::concatenate(xt::xtuple(arr1, arr2), 0);
+
+    std::vector<xt::xarray<int>> input = {arr1, arr2};
+    EXPECT_NO_THROW(concat(input, 0));
+    EXPECT_TRUE(xt::allclose(concat(input, 0), result_dim0));
+
+    EXPECT_ANY_THROW(concat(input, 1));  // Should throw for axis 1
+    EXPECT_ANY_THROW(concat(input, 2));  // Should throw for axis 2
+}
+
+TEST(PartitionTest, UnmatchedDimensionCount) {
+    xt::xarray<int> arr1 = {{1, 2}, {3, 4}};
+    xt::xarray<int> arr2 = {{{9, 10}, {11, 12}}, {{13, 14}, {15, 16}}};
+    // arr1 has shape (2,2), arr2 has shape (2,2,2)
+
+    std::vector<xt::xarray<int>> input = {arr1, arr2};
+    EXPECT_ANY_THROW(concat(input, 0));  // Should throw for axis 0
+    EXPECT_ANY_THROW(concat(input, 1));  // Should throw for axis 1
+    EXPECT_ANY_THROW(concat(input, 2));  // Should throw for axis 2
+}
+
+TEST(PartitionTest, DimensionOutofRange) {
+    xt::xarray<int> arr1 = {{{1, 2}, {3, 4}}, {{5, 6}, {7, 8}}};
+    xt::xarray<int> arr2 = {{{9, 10}, {11, 12}}, {{13, 14}, {15, 16}}};
+
+    std::vector<xt::xarray<int>> input = {arr1, arr2};
+    EXPECT_ANY_THROW(concat(input, 6));   // Dimension out of range
+    EXPECT_ANY_THROW(concat(input, -6));  // Negative dimension out of range
+}
+
+TEST(PartitionTest, EmptyInput) {
+    std::vector<xt::xarray<int>> input;
+    EXPECT_NO_THROW(concat(input, 0));
+    EXPECT_TRUE(xt::allclose(concat(input, 0), xt::xarray<int>{}));
 }
 
 }  // namespace
