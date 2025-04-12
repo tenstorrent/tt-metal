@@ -1503,11 +1503,10 @@ void detail::ProgramImpl::update_runtime_info_from_descriptor(ProgramDescriptor&
             kernel_from.common_runtime_args.size() * sizeof(uint32_t));
     };
 
-    for (size_t kernels_idx = 0, descriptor_kernels_idx = 0; kernels_idx < kernels_.size(); ++kernels_idx) {
+    for (size_t kernels_idx = 0; kernels_idx < kernels_.size(); ++kernels_idx) {
         auto& kernels = kernels_[kernels_idx];
         for (auto& [id, kernel] : kernels) {
-            copy_runtime_args(*kernel, std::move(descriptor.kernels[descriptor_kernels_idx]));
-            descriptor_kernels_idx++;
+            copy_runtime_args(*kernel, std::move(descriptor.kernels[id]));
         }
     }
 
@@ -1519,6 +1518,9 @@ void detail::ProgramImpl::update_runtime_info_from_descriptor(ProgramDescriptor&
             should_invalidate_cb_allocation |= circular_buffer->config().total_size() != descriptor_cb.total_size;
         }
         circular_buffer->config() = CircularBufferConfig(descriptor_cb);
+        if (descriptor_cb.global_circular_buffer) {
+            circular_buffer->set_global_circular_buffer(*descriptor_cb.global_circular_buffer);
+        }
         if (circular_buffer->globally_allocated()) {
             circular_buffer->assign_global_address();
         }
