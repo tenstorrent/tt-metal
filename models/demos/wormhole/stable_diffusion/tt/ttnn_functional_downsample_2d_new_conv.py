@@ -120,7 +120,6 @@ class downsample_2d:
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=self.shard_layout,
-            input_channels_alignment=32,
             transpose_shards=False,
             reshard_if_not_optimal=False,
         )

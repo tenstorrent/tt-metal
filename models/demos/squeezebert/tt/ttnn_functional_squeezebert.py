@@ -71,7 +71,6 @@ def ttnn_conv1d(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         activation=activation,
-        input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
         reallocate_halo_output=reallocate_halo,
         act_block_h_override=32,

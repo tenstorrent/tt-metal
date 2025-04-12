@@ -29,7 +29,6 @@ class TtResnetBlock2D(nn.Module):
             dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=None,
-            input_channels_alignment=32,
             deallocate_activation=True,
             enable_act_double_buffer=False,
             enable_split_reader=False,

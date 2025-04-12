@@ -535,7 +535,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         input_channels_padded % 8 == 0,
         "Expected input channels to be padded for 16 byte alignment in L1 ({} % 16 != 0)",
         input_channels_padded);
-    // Always use split reader for first conv in resnet which has input channels = 16
     // TODO: Expose option to split readers for 1D convs to python?
     if (enable_split_reader) {
         TT_FATAL(not weight_width_sliced, "split reader does not work with 2d conv");

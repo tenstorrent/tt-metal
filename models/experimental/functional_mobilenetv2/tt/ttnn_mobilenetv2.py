@@ -17,8 +17,8 @@ class MobileNetV2:
             (model_params["fused_conv_0_weight"], model_params["fused_conv_0_bias"]),
             device,
             batchsize,
-            use_shallow_covariant=True,
             deallocate_activation=True,
+            activation_dtype=ttnn.bfloat16,
         )
         self.conv2 = MobileNetV2Conv2D(
             [3, 1, 1, 32],

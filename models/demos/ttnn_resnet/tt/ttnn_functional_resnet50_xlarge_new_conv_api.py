@@ -538,7 +538,6 @@ class resnet50:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
-                input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
             ),
             compute_config=ttnn.init_device_compute_kernel_config(
@@ -841,7 +840,6 @@ class resnet50:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
-                input_channels_alignment=16 if not is_wormhole_b0() else 32,
                 act_block_h_override=act_block_h_override,
             ),
             compute_config=ttnn.init_device_compute_kernel_config(

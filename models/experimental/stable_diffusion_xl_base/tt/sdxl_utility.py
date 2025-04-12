@@ -69,7 +69,6 @@ def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, a
         dtype=act_dtype,
         weights_dtype=dtype,
         shard_layout=None,
-        input_channels_alignment=32,
         deallocate_activation=True,
         reallocate_halo_output=False,
         enable_act_double_buffer=False,

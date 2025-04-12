@@ -45,7 +45,6 @@ class TtnnUFLDV2Conv2D:
             enable_subblock_padding=False,
             reshard_if_not_optimal=True,
             activation=activation,
-            input_channels_alignment=8,
         )
         if conv_pth.bias is not None:
             bias = ttnn.from_device(conv_pth.bias)

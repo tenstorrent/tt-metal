@@ -166,7 +166,6 @@ class UNetConv2D:
             enable_subblock_padding=False,
             activation=activation,
             output_layout=output_layout,
-            input_channels_alignment=conv.input_channels_alignment if "input_channels_alignment" in conv else 32,
             reshard_if_not_optimal=reshard_if_not_optimal,
             in_place=(conv.in_place if "in_place" in conv else False),
             reallocate_halo_output=reallocate_halo_output,

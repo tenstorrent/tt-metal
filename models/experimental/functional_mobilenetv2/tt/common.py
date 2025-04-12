@@ -24,7 +24,6 @@ class MobileNetV2Conv2D:
         enable_act_double_buffer=False,
         enable_split_reader=False,
         reshard_if_not_optimal=False,
-        use_shallow_covariant=False,
         activation_dtype=ttnn.bfloat8_b,
     ):
         self.device = device
@@ -43,7 +42,6 @@ class MobileNetV2Conv2D:
         self.enable_split_reader = enable_split_reader
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
-        self.use_shallow_covariant = use_shallow_covariant
         self.conv_config = self._initialize_conv_config()
         self.compute_config = self._initialize_compute_config()
         self.weights, self.bias = self.parameters
@@ -54,7 +52,6 @@ class MobileNetV2Conv2D:
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            input_channels_alignment=16 if self.use_shallow_covariant else 32,
             act_block_w_div=1,
             transpose_shards=False,
             deallocate_activation=self.deallocate_activation,
@@ -110,7 +107,6 @@ class MobileNetV2Conv2D:
             return_weights_and_bias=True,
             return_output_dim=True,
         )
-
         return x, h, w
 
 
