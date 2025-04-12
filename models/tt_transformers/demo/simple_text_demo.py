@@ -15,7 +15,7 @@ import ttnn
 
 
 from models.tt_transformers.tt.generator import Generator, SamplingParams
-from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json, CheckpointType
+from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
@@ -494,6 +494,10 @@ def test_demo_text(
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
 
+    model_name_env = os.getenv("HF_MODEL")
+    if max_seq_len > 32 * 1024 and model_name_env and "Mistral-7B" in model_name_env:
+        pytest.skip("Mistral-7B models do not support seq_len > {32*1024}")
+
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
 
@@ -561,10 +565,6 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
     )
-
-    if (model_args[0].checkpoint_type == CheckpointType.HuggingFace) and (max_seq_len > model_args[0].max_context_len):
-        logger.info(f"Override max_seq_len to {model_args[0].max_context_len} for HuggingFace checkpoint")
-        max_seq_len = model_args[0].max_context_len
 
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
