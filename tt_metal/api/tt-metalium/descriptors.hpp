@@ -63,7 +63,8 @@ struct DataMovementConfigDescriptor {
     NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
 };
 struct ComputeConfigDescriptor {
-    using UnpackToDestModes = boost::container::small_vector<UnpackToDestMode, NUM_CIRCULAR_BUFFERS>;
+    using UnpackToDestModes = std::vector<UnpackToDestMode>;
+
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
@@ -80,7 +81,6 @@ struct EthernetConfigDescriptor {
 struct KernelDescriptor {
     using CompileTimeArgs = boost::container::small_vector<uint32_t, 16>;
     using Defines = boost::container::small_vector<std::pair<std::string, std::string>, 16>;
-    using UnpackToDestModes = boost::container::small_vector<UnpackToDestMode, NUM_CIRCULAR_BUFFERS>;
     using CoreRuntimeArgs = boost::container::small_vector<uint32_t, 16>;
     using RuntimeArgs = boost::container::small_vector<boost::container::small_vector<CoreRuntimeArgs, 8>, 8>;
     using CommonRuntimeArgs = boost::container::small_vector<uint32_t, 16>;

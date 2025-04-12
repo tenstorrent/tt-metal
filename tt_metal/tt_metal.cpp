@@ -1456,9 +1456,7 @@ Program CreateProgramFromDescriptor(const ProgramDescriptor& descriptor) {
                         .math_fidelity = compute_descriptor.math_fidelity,
                         .fp32_dest_acc_en = compute_descriptor.fp32_dest_acc_en,
                         .dst_full_sync_en = compute_descriptor.dst_full_sync_en,
-                        .unpack_to_dest_mode = std::vector<UnpackToDestMode>(
-                            compute_descriptor.unpack_to_dest_mode.begin(),
-                            compute_descriptor.unpack_to_dest_mode.end()),
+                        .unpack_to_dest_mode = compute_descriptor.unpack_to_dest_mode,
                         .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
                         .math_approx_mode = compute_descriptor.math_approx_mode,
                         .compile_args = std::move(compile_args),
