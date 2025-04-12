@@ -355,7 +355,11 @@ from ttnn.operations.conv2d import (
     get_conv_output_dim,
     prepare_conv_weights,
     prepare_conv_bias,
+    Conv2dSliceConfig,
+    Conv2dSliceHeight,
+    Conv2dSliceWidth,
 )
+
 from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn.operations.conv1d import Conv1d, Conv1dConfig
 

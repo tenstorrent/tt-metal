@@ -5,11 +5,12 @@
 #include <tt-metalium/constants.hpp>
 #include "cpp/pybind11/decorators.hpp"
 
-#include "conv2d_pybind.hpp"
-#include "cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
-#include "conv2d.hpp"
-#include "conv2d_utils.hpp"
-#include "prepare_conv2d_weights.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
+#include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -61,6 +62,7 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const Conv2dSliceConfig>& slice_config_,
                QueueId queue_id) -> Result {
                 return self(
                     queue_id,
@@ -80,7 +82,8 @@ void py_bind_conv2d(py::module& module) {
                     bias_tensor,
                     conv_config,
                     compute_config,
-                    memory_config);
+                    memory_config,
+                    slice_config_);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -100,6 +103,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("slice_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
 
         ttnn::pybind_overload_t{
@@ -121,6 +125,7 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const Conv2dSliceConfig>& slice_config_,
                QueueId queue_id) -> Result {
                 return self(
                     queue_id,
@@ -140,7 +145,8 @@ void py_bind_conv2d(py::module& module) {
                     bias_tensor,
                     conv_config,
                     compute_config,
-                    memory_config);
+                    memory_config,
+                    slice_config_);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -160,6 +166,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("slice_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 
     module.def(
@@ -317,6 +324,18 @@ void py_bind_conv2d(py::module& module) {
         py::arg("tensor_shape"),
         py::arg("parallel_config"),
         py::arg("tile_size"));
+
+    auto py_conv_slice_config = py::class_<Conv2dSliceConfig>(module, "Conv2dSliceConfig");
+    py_conv_slice_config.def(
+        py::init<Conv2dSliceConfig::SliceType, uint32_t>(),
+        py::kw_only(),
+        py::arg("slice_type"),
+        py::arg("num_slices"));
+    py_conv_slice_config.def_readwrite("slice_type", &Conv2dSliceConfig::slice_type);
+    py_conv_slice_config.def_readwrite("num_slices", &Conv2dSliceConfig::num_slices);
+    py::enum_<Conv2dSliceConfig::SliceType>(py_conv_slice_config, "SliceTypeEnum")
+        .value("SliceHeight", Conv2dSliceConfig::SliceType::HEIGHT)
+        .value("SliceWidth", Conv2dSliceConfig::SliceType::WIDTH);
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
