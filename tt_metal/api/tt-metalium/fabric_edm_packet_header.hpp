@@ -12,6 +12,7 @@
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+#include "tt_metal/api/tt-metalium/fabric_types.hpp"
 #else
 #include <tt-metalium/assert.hpp>
 #endif
@@ -536,10 +537,10 @@ static constexpr size_t header_size_bytes = sizeof(PacketHeader);
 #elif ((FABRIC_MODE == FABRIC_MODE_2D_MESH_LOW_LATENCY) || (FABRIC_MODE == FABRIC_MODE_2D_TORUS_LOW_LATENCY))
 #define PACKET_HEADER_TYPE low_latency_packet_header_t
 #elif ((FABRIC_MODE == FABRIC_MODE_2D_MESH_DYNAMIC) || (FABRIC_MODE == FABRIC_MODE_2D_TORUS_DYNAMIC))
-#define PACKET_HEADER_TYPE dynamic_packet_header_t
+static_assert(false, "FABRIC_MODE_DYNAMIC is not supported yet");
 #else
-static_assert(false, "Invalid FABRIC_MODE");
+static_assert(false, "non supported FABRIC_MODE" #FABRIC_MODE);
 #endif
-#endif
+#endif  // FABRIC_MODE
 
 }  // namespace tt::tt_fabric

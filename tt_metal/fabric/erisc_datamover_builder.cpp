@@ -124,11 +124,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     // TODO: more detail fabric mode selection
     if (topology == Topology::Ring) {
-        control_plane->set_fabric_mode(FABRIC_MODE_1D_RING);
+        control_plane->set_fabric_mode(FABRIC_MODE_1D_RING_LOW_LATENCY);
     } else {
         this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
-        control_plane->set_fabric_mode(topology == Topology::Linear ? FABRIC_MODE_1D_LINE : FABRIC_MODE_2D_MESH);
+        control_plane->set_fabric_mode(
+            topology == Topology::Linear ? FABRIC_MODE_1D_LINE_LOW_LATENCY : FABRIC_MODE_2D_MESH);
     }
 
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
