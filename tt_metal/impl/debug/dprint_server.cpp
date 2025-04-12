@@ -974,9 +974,14 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         while (contains_newline) {
                             const char* pos_after_newline = newline_pos + 1;
                             const uint32_t substr_len = pos_after_newline - cptr;
-                            char substr_upto_newline[substr_len + 1];
-                            strncpy(substr_upto_newline, cptr, substr_len);
-                            substr_upto_newline[substr_len] = '\0';
+
+                            // strchr returns nullptr if it encounters a null terminator,
+                            // so we can guarentee that this is valid data since it was
+                            // already checked. We don't need to append a '\0' because
+                            // the stream operator only takes upto '\0' when passed
+                            // a char* (wrt the previous impl)
+                            const std::string_view substr_upto_newline(cptr, substr_len);
+
                             *intermediate_stream << substr_upto_newline;
                             TransferToAndFlushOutputStream(risc_key, intermediate_stream);
                             cptr = pos_after_newline;

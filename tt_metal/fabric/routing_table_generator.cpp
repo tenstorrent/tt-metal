@@ -97,16 +97,15 @@ std::vector<std::vector<std::vector<std::pair<chip_id_t, mesh_id_t>>>> RoutingTa
     mesh_id_t src, const InterMeshConnectivity& inter_mesh_connectivity) {
     // TODO: add more tests for this
     std::uint32_t num_meshes = inter_mesh_connectivity.size();
-    bool visited[num_meshes];
-    std::fill_n(visited, num_meshes, false);
+    // avoid vector<bool> specialization
+    std::vector<std::uint8_t> visited(num_meshes, false);
 
     // paths[target_mesh_id][path_count][next_chip and next_mesh];
     std::vector<std::vector<std::vector<std::pair<chip_id_t, mesh_id_t>>>> paths;
     paths.resize(num_meshes);
     paths[src] = {{{}}};
 
-    std::uint32_t dist[num_meshes];
-    std::fill_n(dist, num_meshes, std::numeric_limits<std::uint32_t>::max());
+    std::vector<std::uint32_t> dist(num_meshes, std::numeric_limits<std::uint32_t>::max());
     dist[src] = 0;
 
     std::queue<mesh_id_t> q;

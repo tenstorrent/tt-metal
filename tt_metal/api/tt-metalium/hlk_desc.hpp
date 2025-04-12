@@ -133,11 +133,21 @@ public:
 
 // Hash for hlk_args
 inline void hash_hlk_args(size_t& seed, void* hlk_args, size_t hlk_args_size) {
-    char buffer[hlk_args_size];
-    std::memcpy(buffer, hlk_args, hlk_args_size);
+    // C++20 standard, section 7.2.1, paragraph 11:
+    // If a program attempts to access the stored value of an object through a glvalue whose type is not
+    // similar to one of the following types the behavior is undefined:
+    // - the dynamic type of the object,
+    // - a type that is the signed or unsigned type corresponding to the dynamic type of the object, or
+    // - a char, unsigned char, or std::byte type
+    // </standard>
+    //
+    // Since we are accessing the raw bytes through a char type,
+    // reinterpret_casting is well defined.
 
-    for (int i = 0; i < hlk_args_size; i++) {
-        tt::utils::hash_combine(seed, std::hash<char>{}(buffer[i]));
+    const char* const raw_bytes = reinterpret_cast<char*>(hlk_args);
+
+    for (size_t i = 0; i < hlk_args_size; ++i) {
+        tt::utils::hash_combine(seed, std::hash<char>{}(raw_bytes[i]));
     }
 }
 
