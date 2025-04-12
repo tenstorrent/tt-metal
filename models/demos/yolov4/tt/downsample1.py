@@ -38,6 +38,7 @@ class Down1:
             device,
             conv_args.c1,
             parameters.c1,
+            input_tensor_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
         self.conv2 = Conv(

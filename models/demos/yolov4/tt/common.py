@@ -6,13 +6,7 @@ import ttnn
 
 
 class Conv:
-    def __init__(
-        self,
-        device,
-        conv_param,
-        conv_pth,
-        activation="",
-    ) -> None:
+    def __init__(self, device, conv_param, conv_pth, activation="", input_tensor_layout=ttnn.TILE_LAYOUT) -> None:
         self.conv_param = conv_param
         self.conv_pth = conv_pth
         self.device = device
@@ -80,7 +74,7 @@ class Conv:
                 weight_tensor=self.weight,
                 weights_format="OIHW",
                 input_memory_config=self.input_memory_config,
-                input_layout=ttnn.TILE_LAYOUT,
+                input_layout=input_tensor_layout,
                 has_bias=True,
                 **self.conv_kwargs,
             )
@@ -88,7 +82,7 @@ class Conv:
             self.bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.bias,
                 input_memory_config=self.input_memory_config,
-                input_layout=ttnn.TILE_LAYOUT,
+                input_layout=input_tensor_layout,
                 **self.conv_kwargs,
             )
             self.weight = ttnn.to_device(self.weight, device)
