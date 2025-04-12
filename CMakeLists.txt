@@ -101,10 +101,6 @@ set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 ############################################################################################################################
 message(STATUS "ENABLE_LIBCXX: ${ENABLE_LIBCXX}")
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
-message(STATUS "Build with ASAN: ${ENABLE_ASAN}")
-message(STATUS "Build with MSAN: ${ENABLE_MSAN}")
-message(STATUS "Build with TSAN: ${ENABLE_TSAN}")
-message(STATUS "Build with UBSAN: ${ENABLE_UBSAN}")
 message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
 message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
@@ -123,25 +119,6 @@ if(ENABLE_BUILD_TIME_TRACE)
         message(FATAL_ERROR "ENABLE_BUILD_TIME_TRACE is only supported with Clang")
     endif()
 endif()
-
-set(SANITIZER_ENABLED ${ENABLE_ASAN})
-if(SANITIZER_ENABLED AND ENABLE_MSAN)
-    message(FATAL_ERROR "Multiple sanitizers are not supported")
-elseif(ENABLE_MSAN)
-    set(SANITIZER_ENABLED ${ENABLE_MSAN})
-endif()
-
-if(SANITIZER_ENABLED AND ENABLE_TSAN)
-    message(FATAL_ERROR "Multiple sanitizers are not supported")
-elseif(ENABLE_TSAN)
-    set(SANITIZER_ENABLED ${ENABLE_TSAN})
-endif()
-
-if(SANITIZER_ENABLED AND ENABLE_UBSAN)
-    message(FATAL_ERROR "Multiple sanitizers are not supported")
-endif()
-
-unset(SANITIZER_ENABLED)
 
 ############################################################################################################################
 # Find all required libraries to build
@@ -236,16 +213,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-unused-local-typedefs>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-volatile>"
-    "$<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>"
-    "$<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>"
-    "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
-    "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
-)
-add_link_options(
-    "$<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>"
-    "$<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>"
-    "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
-    "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
 )
 
 # Planned to be temporary, remove later.
