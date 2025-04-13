@@ -34,7 +34,7 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include "test_common.hpp"
