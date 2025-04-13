@@ -30,7 +30,7 @@
 /////////////
 // RISC-V Address map definition (hardware)
 #define MEM_L1_BASE 0x0
-#define MEM_L1_SIZE (1464 * 1024)
+#define MEM_L1_SIZE (1536 * 1024)
 
 #define MEM_ETH_BASE 0x0
 // Top 64K is reserved for syseng
@@ -55,7 +55,7 @@
 #define MEM_TRISC1_FIRMWARE_SIZE 1536
 #define MEM_TRISC2_FIRMWARE_SIZE 1536
 
-#define MEM_BRISC_KERNEL_SIZE (24 * 1024)
+#define MEM_BRISC_KERNEL_SIZE (48 * 1024)
 #define MEM_NCRISC_KERNEL_SIZE (24 * 1024)
 #define MEM_TRISC0_KERNEL_SIZE (24 * 1024)
 #define MEM_TRISC1_KERNEL_SIZE (24 * 1024)

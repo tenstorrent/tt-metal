@@ -14,6 +14,7 @@ from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.rope import RotarySetup
 from models.tt_transformers.tt.embedding import Embedding
+from models.tt_transformers.tt.model_config import TensorGroup
 
 
 class Transformer(LightweightModule):
@@ -236,11 +237,11 @@ class Transformer(LightweightModule):
         )[0, 0, last_token_idx, : self.vocab_size]
         return logits
 
-    def process_output_decode(self, tt_out, B, S=1, argmax_on_device=False):
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """
-        Input is ttnn device tensor of logits. Output is torch logits tensor or the generated token if argmax on device
+        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
-        if argmax_on_device:
+        if is_tokens:
             tt_out = ttnn.to_torch(
                 tt_out,  # tt_out.cpu(blocking=True, cq_id=1),
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -347,15 +348,16 @@ class Transformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
     ):
-        # No-op if callers already provide the right memory config
-        if mode == "decode" and not self.args.is_galaxy:
-            x = ttnn.to_memory_config(
-                x, self.model_config["DECODE_RESIDUAL_MEMCFG"], self.model_config["ACTIVATION_DTYPE"]
-            )
-        elif self.model_config["ACTIVATION_DTYPE"] is not None and x.dtype != self.model_config["ACTIVATION_DTYPE"]:
-            x = ttnn.typecast(x, self.model_config["ACTIVATION_DTYPE"])
-
         for i, layer in enumerate(self.layers):
+            # No-op if callers already provide the right memory config
+            activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+                decoder_id=i, tensor=TensorGroup.ACTIVATION
+            )
+            if mode == "decode" and not self.args.is_galaxy:
+                x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"], activation_dtype)
+            elif activation_dtype is not None and x.dtype != activation_dtype:
+                x = ttnn.typecast(x, activation_dtype)
+
             x = layer(
                 x,
                 current_pos,

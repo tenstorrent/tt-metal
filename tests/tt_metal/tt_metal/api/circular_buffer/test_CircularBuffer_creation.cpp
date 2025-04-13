@@ -22,7 +22,7 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt {

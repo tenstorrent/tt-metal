@@ -35,7 +35,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "span.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_memory.h>
@@ -65,7 +65,7 @@ using namespace tt;
 using namespace tt::test_utils;
 
 namespace unit_tests::erisc::direct_send {
-const size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& max) {
+size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& max) {
     TT_ASSERT(!(base & 0x1F) and !(max & 0x1F));
     size_t word_size = (max >> 5) - (base >> 5);
     return (((rand() % word_size) << 5) + base);

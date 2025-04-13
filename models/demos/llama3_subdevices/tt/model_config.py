@@ -562,6 +562,17 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 4),
+                sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    self.start_core, 32, self.sub_core_grids, row_wise=True
+                ),
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=0,
+            )
+
+            # TODO: Need to uplift UpdateCache to support dynamic chunk sizes if non-paged
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
@@ -1074,6 +1085,33 @@ class TtModelArgs:
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
                 )
+            )
+
+            PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                ]
+            )
+            self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 512),
+                core_grid=PACKET_WORKER_CRS,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            FF1_CRS_RS_OUT = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                ttnn.CoreCoord(1, 0), 30, self.sub_core_grids, row_wise=True
+            )
+            self.model_config["REDUCE_SCATTER_OUT_MEMCFG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    FF1_CRS_RS_OUT,
+                    [32, 32],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
             )
 
             self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"] = (

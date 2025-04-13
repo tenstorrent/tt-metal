@@ -6,6 +6,7 @@
 #include <mesh_command_queue.hpp>
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 #include <algorithm>
 #include <array>
@@ -26,12 +27,11 @@
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_workload.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "shape2d.hpp"
 #include "strong_type.hpp"
 #include "system_memory_manager.hpp"
 #include "trace_buffer.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
@@ -69,7 +69,10 @@ MeshCommandQueue::MeshCommandQueue(
     mesh_device_ = mesh_device;
     id_ = id;
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
-        config_buffer_mgr_, expected_num_workers_completed_, DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
+        config_buffer_mgr_,
+        expected_num_workers_completed_,
+        DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+        mesh_device_->allocator()->get_config().l1_unreserved_base);
     this->populate_virtual_program_dispatch_core();
     this->populate_dispatch_core_type();
     this->populate_read_descriptor_queue();
@@ -768,7 +771,10 @@ void MeshCommandQueue::reset_worker_state(
             mesh_device_, go_signal_noc_data, device->sysmem_manager(), id_);
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
-        config_buffer_mgr_, expected_num_workers_completed_, mesh_device_->num_sub_devices());
+        config_buffer_mgr_,
+        expected_num_workers_completed_,
+        mesh_device_->num_sub_devices(),
+        mesh_device_->allocator()->get_config().l1_unreserved_base);
     if (reset_launch_msg_state) {
         std::for_each(
             this->worker_launch_message_buffer_state_->begin(),

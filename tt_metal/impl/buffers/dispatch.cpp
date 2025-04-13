@@ -25,7 +25,6 @@
 #include "strong_type.hpp"
 #include "sub_device_types.hpp"
 #include "tt_align.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
@@ -346,7 +345,7 @@ using InterleavedBufferWriteDispatchParamsVariant =
 
 InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_params(
     const Buffer& buffer,
-    const BufferDispatchConstants& buf_dispatch_constants,
+    const BufferDispatchConstants& /*buf_dispatch_constants*/,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     const BufferRegion& region) {

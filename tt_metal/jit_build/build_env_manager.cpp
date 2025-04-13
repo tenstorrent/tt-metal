@@ -28,7 +28,6 @@
 #include "jit_build/build.hpp"
 #include "metal_soc_descriptor.h"
 #include "system_memory_manager.hpp"
-#include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 namespace tt::tt_metal {
@@ -139,7 +138,7 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
     return build_key;
 }
 
-JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t device_id, uint8_t num_hw_cqs, bool is_fw) {
+JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_id*/, uint8_t num_hw_cqs, bool is_fw) {
     // Get the dispatch message address for this device
     CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     uint32_t dispatch_message_addr =

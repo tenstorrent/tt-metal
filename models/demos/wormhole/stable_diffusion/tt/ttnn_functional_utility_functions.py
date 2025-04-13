@@ -8,8 +8,6 @@ import math
 
 import torch
 
-conv_cache = {}
-
 
 def round_up_to_tile_dim(n):
     return ((n + 31) // 32) * 32

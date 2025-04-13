@@ -7,7 +7,6 @@ import ttnn
 import torch
 from typing import Optional
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    conv_cache,
     get_default_compute_config,
 )
 
@@ -39,7 +38,6 @@ class downsample_2d:
         self,
         device,
         parameters,
-        reader_patterns_cache,
         batch_size,
         input_height,
         input_width,
@@ -173,7 +171,6 @@ class downsample_2d:
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
         )
 
         return hidden_states

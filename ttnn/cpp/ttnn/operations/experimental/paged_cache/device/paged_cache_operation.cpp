@@ -214,7 +214,7 @@ void PagedUpdateCacheDeviceOperation::validate(
     }
 }
 
-const std::vector<ttnn::TensorSpec> PagedUpdateCacheDeviceOperation::compute_output_specs(
+std::vector<ttnn::TensorSpec> PagedUpdateCacheDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};
@@ -275,7 +275,7 @@ PagedUpdateCacheOpParallelizationStrategy PagedUpdateCacheDeviceOperation::get_p
     return PagedUpdateCacheOpParallelizationStrategy::MULTI_CORE;
 }
 
-const operation::Hash PagedUpdateCacheDeviceOperation::compute_program_hash(
+operation::Hash PagedUpdateCacheDeviceOperation::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     return operation::hash_operation<PagedUpdateCacheDeviceOperation>(

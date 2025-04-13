@@ -27,7 +27,6 @@
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "hw/inc/debug/ring_buffer.h"
-#include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -667,7 +666,7 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& co
     }
 }
 
-void WatcherDeviceReader::DumpRingBuffer(CoreDescriptor& core, const mailboxes_t* mbox_data, bool to_stdout) {
+void WatcherDeviceReader::DumpRingBuffer(CoreDescriptor& /*core*/, const mailboxes_t* mbox_data, bool to_stdout) {
     const debug_ring_buf_msg_t* ring_buf_data = &mbox_data->watcher.debug_ring_buf;
     string out = "";
     if (ring_buf_data->current_ptr != DEBUG_RING_BUFFER_STARTING_INDEX) {
