@@ -33,7 +33,7 @@ public:
         const CoreRangeSet& core_ranges,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
-    CircularBuffer(const CBDescriptor& descriptor);
+    CircularBuffer(CBDescriptor&& descriptor);
 
     const CBHandle id() const { return id_; }
 

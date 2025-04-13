@@ -412,12 +412,12 @@ void launch_on_worker_thread_with_descriptor(
             program = &cached_program_it->second;
             program->update_runtime_info_from_descriptor(std::move(program_descriptor));
         } else {
-            auto new_program = CreateProgram(program_descriptor);
+            auto new_program = CreateProgram(std::move(program_descriptor));
             auto it = program_cache.cache.insert({program_hash, std::move(new_program)});
             program = &it.first->second;
         }
     } else {
-        program_owner = CreateProgram(program_descriptor);
+        program_owner = CreateProgram(std::move(program_descriptor));
         program = &program_owner;
     }
 

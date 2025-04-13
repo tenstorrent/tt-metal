@@ -146,7 +146,7 @@ Program CreateProgram();
  * | descriptor   | Descriptor for the program                                                                                                                 | ProgramDescriptor &                                      |             | Yes      |
  */
 // clang-format on
-Program CreateProgram(const ProgramDescriptor& descriptor);
+Program CreateProgram(ProgramDescriptor&& descriptor);
 
 // clang-format off
 /**

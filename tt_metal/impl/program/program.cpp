@@ -628,8 +628,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     return add_circular_buffer_(circular_buffer);
 }
 
-CBHandle detail::ProgramImpl::add_circular_buffer(const CBDescriptor& descriptor) {
-    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(descriptor);
+CBHandle detail::ProgramImpl::add_circular_buffer(CBDescriptor&& descriptor) {
+    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(std::move(descriptor));
     return add_circular_buffer_(circular_buffer);
 }
 
@@ -644,8 +644,8 @@ CBHandle Program::add_circular_buffer(
     return pimpl_->add_circular_buffer(core_range_set, config, global_circular_buffer);
 }
 
-CBHandle Program::add_circular_buffer(const CBDescriptor& descriptor) {
-    return pimpl_->add_circular_buffer(descriptor);
+CBHandle Program::add_circular_buffer(CBDescriptor&& descriptor) {
+    return pimpl_->add_circular_buffer(std::move(descriptor));
 }
 
 std::shared_ptr<CircularBuffer> detail::ProgramImpl::get_circular_buffer(CBHandle cb_id) const {
@@ -1491,16 +1491,21 @@ std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_progra
 
 void detail::ProgramImpl::update_runtime_info_from_descriptor(ProgramDescriptor&& descriptor) {
     auto copy_runtime_args = [](Kernel& kernel_to, KernelDescriptor&& kernel_from) {
+        auto& runtime_args_to = kernel_to.runtime_args_data();
         for (size_t i = 0; i < kernel_from.runtime_args.size(); i++) {
             for (size_t j = 0; j < kernel_from.runtime_args[i].size(); j++) {
-                kernel_to.set_runtime_args(CoreCoord(i, j), kernel_from.runtime_args[i][j]);
+                const auto& runtime_arg_from = kernel_from.runtime_args[i][j];
+                std::memcpy(
+                    runtime_args_to[i][j].data(),
+                    runtime_arg_from.data(),
+                    runtime_arg_from.size() * sizeof(runtime_arg_from[0]));
             }
         }
         auto common_to = kernel_to.common_runtime_args_data();
         std::memcpy(
             common_to.data(),
             kernel_from.common_runtime_args.data(),
-            kernel_from.common_runtime_args.size() * sizeof(uint32_t));
+            kernel_from.common_runtime_args.size() * sizeof(kernel_from.common_runtime_args[0]));
     };
 
     for (size_t kernels_idx = 0; kernels_idx < kernels_.size(); ++kernels_idx) {

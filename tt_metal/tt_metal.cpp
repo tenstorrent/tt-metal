@@ -1397,26 +1397,26 @@ void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::S
     }
 }
 
-Program CreateProgram(const ProgramDescriptor& descriptor) {
-    auto program = Program();
+Program CreateProgram(ProgramDescriptor&& descriptor) {
+    Program program;
 
-    for (const auto& cb_descriptor : descriptor.cbs) {
-        program.add_circular_buffer(cb_descriptor);
+    for (auto& cb_descriptor : descriptor.cbs) {
+        program.add_circular_buffer(std::move(cb_descriptor));
     }
 
-    for (const auto& semaphore_descriptor : descriptor.semaphores) {
+    for (auto& semaphore_descriptor : descriptor.semaphores) {
         CreateSemaphore(
             program,
-            CoreRangeSet(semaphore_descriptor.core_ranges),
+            CoreRangeSet(std::move(semaphore_descriptor.core_ranges)),
             semaphore_descriptor.initial_value,
             semaphore_descriptor.core_type);
     }
 
-    for (const auto& kernel_descriptor : descriptor.kernels) {
+    for (auto& kernel_descriptor : descriptor.kernels) {
         auto source_type = kernel_descriptor.source_type == KernelDescriptor::SourceType::FILE_PATH
                                ? KernelSource::FILE_PATH
                                : KernelSource::SOURCE_CODE;
-        KernelSource kernel_source(kernel_descriptor.kernel_source, source_type);
+        KernelSource kernel_source(std::move(kernel_descriptor.kernel_source), source_type);
         std::vector<uint32_t> compile_args(
             kernel_descriptor.compile_time_args.begin(), kernel_descriptor.compile_time_args.end());
         std::map<std::string, std::string> defines(kernel_descriptor.defines.begin(), kernel_descriptor.defines.end());
@@ -1429,7 +1429,7 @@ Program CreateProgram(const ProgramDescriptor& descriptor) {
                         std::move(defines),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2));
                     return CreateDataMovementKernel(
-                        program, kernel_source, CoreRangeSet(kernel_descriptor.core_ranges), reader_config);
+                        program, kernel_source, CoreRangeSet(std::move(kernel_descriptor.core_ranges)), reader_config);
                 },
                 [&](const WriterConfigDescriptor&) {
                     auto writer_config = WriterDataMovementConfig(
@@ -1437,7 +1437,7 @@ Program CreateProgram(const ProgramDescriptor& descriptor) {
                         std::move(defines),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2));
                     return CreateDataMovementKernel(
-                        program, kernel_source, CoreRangeSet(kernel_descriptor.core_ranges), writer_config);
+                        program, kernel_source, CoreRangeSet(std::move(kernel_descriptor.core_ranges)), writer_config);
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor) {
                     auto dm_config = DataMovementConfig{
@@ -1449,7 +1449,7 @@ Program CreateProgram(const ProgramDescriptor& descriptor) {
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
                     };
                     return CreateDataMovementKernel(
-                        program, kernel_source, CoreRangeSet(kernel_descriptor.core_ranges), dm_config);
+                        program, kernel_source, CoreRangeSet(std::move(kernel_descriptor.core_ranges)), dm_config);
                 },
                 [&](const ComputeConfigDescriptor& compute_descriptor) {
                     auto compute_config = ComputeConfig{
@@ -1464,7 +1464,7 @@ Program CreateProgram(const ProgramDescriptor& descriptor) {
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
                     };
                     return CreateComputeKernel(
-                        program, kernel_source, CoreRangeSet(kernel_descriptor.core_ranges), compute_config);
+                        program, kernel_source, CoreRangeSet(std::move(kernel_descriptor.core_ranges)), compute_config);
                 },
                 [&](const EthernetConfigDescriptor& ethernet_descriptor) {
                     auto ethernet_config = EthernetConfig{
@@ -1476,7 +1476,10 @@ Program CreateProgram(const ProgramDescriptor& descriptor) {
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::Os),
                     };
                     return CreateEthernetKernel(
-                        program, kernel_source, CoreRangeSet(kernel_descriptor.core_ranges), ethernet_config);
+                        program,
+                        kernel_source,
+                        CoreRangeSet(std::move(kernel_descriptor.core_ranges)),
+                        ethernet_config);
                 },
             },
             kernel_descriptor.config);

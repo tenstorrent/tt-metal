@@ -205,7 +205,7 @@ private:
         const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
-    friend Program CreateProgram(const ProgramDescriptor& descriptor);
+    friend Program CreateProgram(ProgramDescriptor&& descriptor);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program& program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 
@@ -224,7 +224,7 @@ private:
         const CoreRangeSet& core_range_set,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
-    CBHandle add_circular_buffer(const CBDescriptor& descriptor);
+    CBHandle add_circular_buffer(CBDescriptor&& descriptor);
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 

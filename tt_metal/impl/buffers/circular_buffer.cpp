@@ -52,7 +52,7 @@ CircularBuffer::CircularBuffer(
     this->set_global_circular_buffer(global_circular_buffer);
 }
 
-CircularBuffer::CircularBuffer(const CBDescriptor& descriptor) :
+CircularBuffer::CircularBuffer(CBDescriptor&& descriptor) :
     id_(reinterpret_cast<uintptr_t>(this)),
     core_ranges_(CoreRangeSet(descriptor.core_ranges)),
     config_(descriptor),

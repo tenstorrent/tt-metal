@@ -60,6 +60,9 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
                 {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
         }
     };
+    this->buffer_indices_.reserve(descriptor.format_descriptors.size() + descriptor.remote_format_descriptors.size());
+    this->local_buffer_indices_.reserve(descriptor.format_descriptors.size());
+    this->remote_buffer_indices_.reserve(descriptor.remote_format_descriptors.size());
     for (const auto& format_descriptor : descriptor.format_descriptors) {
         process_format_descriptor(format_descriptor);
         this->buffer_indices_.insert(format_descriptor.buffer_index);
