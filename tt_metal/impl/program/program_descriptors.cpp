@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt-metalium/descriptors.hpp"
+#include "tt-metalium/program_descriptors.hpp"
 
 #include "tt_stl/overloaded.hpp"
 
@@ -10,7 +10,9 @@ namespace tt::tt_metal {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-size_t hash_combine(size_t seed, size_t value) { return seed ^ (value + 0x9e3779b9 + (seed << 6) + (seed >> 2)); }
+inline size_t hash_combine(size_t seed, size_t value) {
+    return seed ^ (value + 0x9e3779b9 + (seed << 6) + (seed >> 2));
+}
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 

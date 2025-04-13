@@ -1397,7 +1397,7 @@ void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::S
     }
 }
 
-Program CreateProgramFromDescriptor(const ProgramDescriptor& descriptor) {
+Program CreateProgram(const ProgramDescriptor& descriptor) {
     auto program = Program();
 
     for (const auto& cb_descriptor : descriptor.cbs) {

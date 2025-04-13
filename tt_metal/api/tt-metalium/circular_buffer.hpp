@@ -12,7 +12,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace tt {
 namespace tt_metal {

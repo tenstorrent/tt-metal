@@ -31,9 +31,9 @@ struct TileDescriptor {
 };
 
 struct CBFormatDescriptor {
-    uint8_t buffer_index;
-    tt::DataFormat data_format;
-    uint32_t page_size;
+    uint8_t buffer_index = 0;
+    tt::DataFormat data_format = tt::DataFormat::Float32;
+    uint32_t page_size = 0;
     std::optional<TileDescriptor> tile;
 };
 

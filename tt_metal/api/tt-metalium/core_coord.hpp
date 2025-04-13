@@ -200,7 +200,7 @@ public:
     CoreRangeSet subtract(const CoreRangeSet& other) const;
 
 private:
-    void validate_no_overlap();
+    void validate_no_overlap_debug();
 
     mutable std::mutex ranges_guard;
     CoreRangeVector ranges_;

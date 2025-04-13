@@ -170,12 +170,12 @@ auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_conte
 CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges) :
     ranges_(core_ranges.begin(), core_ranges.end()) {
     ZoneScoped;
-    this->validate_no_overlap();
+    this->validate_no_overlap_debug();
 }
 
 CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(core_ranges.begin(), core_ranges.end()) {
     ZoneScoped;
-    this->validate_no_overlap();
+    this->validate_no_overlap_debug();
 }
 
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
@@ -205,7 +205,7 @@ CoreRangeSet& CoreRangeSet::operator=(CoreRangeSet&& other) noexcept {
 
 CoreRangeSet::CoreRangeSet(CoreRangeVector&& core_ranges) : ranges_(std::move(core_ranges)) {
     ZoneScoped;
-    this->validate_no_overlap();
+    this->validate_no_overlap_debug();
 }
 
 bool CoreRangeSet::empty() const { return this->ranges_.empty(); }
@@ -415,7 +415,7 @@ CoreRangeSet CoreRangeSet::merge_ranges() const {
     return CoreRangeSet().merge(*this);
 }
 
-void CoreRangeSet::validate_no_overlap() {
+void CoreRangeSet::validate_no_overlap_debug() {
 #ifdef DEBUG
     if (this->ranges_.size() < 2) {
         return;

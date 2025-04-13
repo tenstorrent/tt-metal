@@ -14,7 +14,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/lightmetal_binary.hpp>
-#include <tt-metalium/descriptors.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 /** @file */
 
@@ -146,7 +146,7 @@ Program CreateProgram();
  * | descriptor   | Descriptor for the program                                                                                                                 | ProgramDescriptor &                                      |             | Yes      |
  */
 // clang-format on
-Program CreateProgramFromDescriptor(const ProgramDescriptor& descriptor);
+Program CreateProgram(const ProgramDescriptor& descriptor);
 
 // clang-format off
 /**
