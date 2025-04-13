@@ -131,7 +131,13 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          ${{ matrix.test-group.cmd }}
+          strace -f -e trace=open,openat -o file_access.log ${{ matrix.test-group.cmd }}
+
+      - name: Upload trace log
+        uses: actions/upload-artifact@v4
+        with:
+          name: file-access-log
+          path: file_access.log
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
