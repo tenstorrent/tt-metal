@@ -4,7 +4,7 @@ add_library(TT:STL ALIAS tt_stl)
 target_sources(
     tt_stl
     INTERFACE
-        FILE_SET tt_stl
+        FILE_SET api
         TYPE HEADERS
         BASE_DIRS .
         FILES
@@ -31,3 +31,5 @@ target_link_libraries(
         magic_enum::magic_enum
         nlohmann_json::nlohmann_json
 )
+
+install(TARGETS tt_stl EXPORT Metalium FILE_SET api COMPONENT metalium-dev)

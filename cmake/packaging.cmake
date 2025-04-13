@@ -34,6 +34,25 @@ set(CPACK_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
 set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS TRUE)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS FALSE)
 
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file(
+    ${PROJECT_BINARY_DIR}/tt-metalium-config-version.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+configure_package_config_file(
+    ${CMAKE_CURRENT_LIST_DIR}/packaging.d/tt-metalium-config.cmake.in
+    ${PROJECT_BINARY_DIR}/tt-metalium-config.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-metalium
+)
+install(
+    FILES
+        ${PROJECT_BINARY_DIR}/tt-metalium-config.cmake
+        ${PROJECT_BINARY_DIR}/tt-metalium-config-version.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-metalium
+    COMPONENT metalium-dev
+)
+
 get_cmake_property(CPACK_COMPONENTS_ALL COMPONENTS)
 list(
     REMOVE_ITEM

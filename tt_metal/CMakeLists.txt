@@ -5,7 +5,18 @@ if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 add_library(tt_metal)
-add_library(Metalium::Metal ALIAS tt_metal)
+add_library(TT::Metalium ALIAS tt_metal)
+add_library(Metalium::Metal ALIAS tt_metal) # For backwards compatibility
+
+set_target_properties(
+    tt_metal
+    PROPERTIES
+        EXPORT_NAME
+            Metalium
+)
+
+# FIXME: TT-Metalium should support pre-C++20, but we have headers (eg: <reflect>) in our public API that is pushing C++20 on consumers
+target_compile_features(tt_metal PUBLIC cxx_std_20)
 
 target_sources(
     tt_metal
@@ -275,12 +286,49 @@ endif()
 install(
     TARGETS
         tt_metal
-        jitapi
+    EXPORT Metalium
     LIBRARY
         COMPONENT metalium-runtime
+    FILE_SET
+    api
+        DESTINATION COMPONENT
+        metalium-dev
+)
+install(EXPORT Metalium NAMESPACE TT:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-metalium COMPONENT metalium-dev)
+
+install(
+    TARGETS
+        jitapi
     FILE_SET
     jit_api
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal # FIXME: fix the include paths for jit_build
         COMPONENT metalium-runtime
+)
+
+# 3rd party dependencies we export in our public API.
+# We must ship not only these libraries, but their public headers as well
+# ... or refactor our public API.
+install(
+    TARGETS
+        reflect
+        magic_enum
+        TracyClient
+        span
+        small_vector
+        boost_core
+        boost_assert
+        boost_config
+        boost_static_assert
+        boost_throw_exception
+    # boost_container
+    # boost_intrusive
+    # boost_move
+    # fmt-header-only
+    # nlohmann_json
+    EXPORT Metalium
+    FILE_SET
+    api
+        COMPONENT metalium-dev
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/metalium-thirdparty
 )

@@ -43,7 +43,11 @@ add_library(span INTERFACE)
 target_link_libraries(span INTERFACE Boost::core)
 
 add_library(small_vector INTERFACE)
-target_link_libraries(small_vector INTERFACE Boost::container)
+target_link_libraries(
+    small_vector
+    INTERFACE
+        "$<BUILD_INTERFACE:Boost::container>" # FIXME: this is a hack so we do not need to package up Boost
+)
 
 ############################################################################################################################
 # yaml-cpp
@@ -87,7 +91,7 @@ CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.1.1)
 if(reflect_ADDED)
     add_library(reflect INTERFACE)
     add_library(Reflect::Reflect ALIAS reflect)
-    target_include_directories(reflect SYSTEM INTERFACE ${reflect_SOURCE_DIR})
+    target_include_directories(reflect SYSTEM INTERFACE "$<BUILD_INTERFACE:${reflect_SOURCE_DIR}>")
 endif()
 
 ############################################################################################################################
@@ -133,6 +137,7 @@ CPMAddPackage(
     GIT_TAG v3.11.3
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "JSON_Install ON"
 )
 
 ############################################################################################################################
