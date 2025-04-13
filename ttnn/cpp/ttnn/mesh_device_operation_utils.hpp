@@ -25,16 +25,10 @@ using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCa
 // Returns true if all tensors have uniform storage, false otherwise.
 template <typename TensorArgs>
 bool all_tensors_have_uniform_storage(const TensorArgs& tensor_args) {
-    Tensor first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    const bool first_uniform = first_tensor.device_storage().is_uniform_storage();
+    bool uniform_storage = true;
     tt::stl::reflection::visit_object_of_type<Tensor>(
-        [&](const Tensor& tensor) {
-            TT_FATAL(
-                tensor.device_storage().is_uniform_storage() == first_uniform,
-                "Expected either all or none of the tensors to have uniform storage.");
-        },
-        tensor_args);
-    return first_uniform;
+        [&](const Tensor& tensor) { uniform_storage &= tensor.device_storage().is_uniform_storage(); }, tensor_args);
+    return uniform_storage;
 }
 
 // Filters shards from `tensor_return_value` that are in `tensor_coordinates`.
@@ -63,6 +57,37 @@ void filter_tensor_shards(
         tensor_return_value);
 }
 
+// Checks if the MeshCoordinateRangeSet containing all coordinates in b is a subset of a.
+inline bool is_sub_set_of(const std::vector<MeshCoordinate>& a, const std::vector<MeshCoordinate>& b) {
+    MeshCoordinateRangeSet a_set;
+    MeshCoordinateRangeSet b_set;
+
+    // Generate a MeshCoordinateRangeSet from the vectors of coordinates passed in
+    for (const auto& coord : a) {
+        a_set.merge(MeshCoordinateRange(coord));
+    }
+    for (const auto& coord : b) {
+        b_set.merge(MeshCoordinateRange(coord));
+    }
+    // Check if b_set is a subset of a_set
+    // This is true if every range in b_set is completely contained in some range
+    // in a_set
+    bool is_subset;
+    for (const auto& b_range : b_set.ranges()) {
+        is_subset = false;
+        for (const auto& a_range : a_set.ranges()) {
+            if (a_range.contains(b_range)) {
+                is_subset = true;
+                break;
+            }
+        }
+        if (not is_subset) {
+            return is_subset;
+        }
+    }
+    return is_subset;
+}
+
 // Verifies all tensors span the same set of coordinates, and returns them in a vector.
 template <typename TensorArgs>
 std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& tensor_args) {
@@ -73,16 +98,28 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& t
         first_tensor.device_storage().specs.end(),
         std::back_inserter(tensor_coordinates),
         [](const auto& spec) { return spec.first; });
+    // Verification Step: Assert if the tensors are placed on different coordinate ranges
+    // that do not overlap.
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor) {
-            TT_FATAL(
-                tensor.device_storage().specs.size() == tensor_coordinates.size(),
-                "Tensors with non-uniform storage must have the same number of coordinates");
-            auto tensor_coordinates_it = tensor_coordinates.begin();
-            for (const auto& [coord, _] : tensor.device_storage().specs) {
-                TT_FATAL(
-                    coord == *tensor_coordinates_it, "Tensors with non-uniform storage must have the same coordinates");
-                ++tensor_coordinates_it;
+            std::vector<ttnn::MeshCoordinate> tensor_mesh_coords;
+            std::transform(
+                tensor.device_storage().specs.begin(),
+                tensor.device_storage().specs.end(),
+                std::back_inserter(tensor_mesh_coords),
+                [](const auto& spec) { return spec.first; });
+            // Case 1: Current tensor is placed on a smaller set of coordinates than tensor_coordinates.
+            if (tensor_mesh_coords.size() < tensor_coordinates.size()) {
+                TT_ASSERT(
+                    is_subset_of(tensor_coordinates, tensor_mesh_coords),
+                    "Tensors are placed on different MeshCoordinate ranges that do not intersect.");
+                tensor_coordinates = std::move(tensor_mesh_coords);
+            }
+            // Case 2: Current tensor is placed on a larger set of coordinates than tensor_coordinates.
+            if (tensor_coordinates.size() < tensor_mesh_coords.size()) {
+                TT_ASSERT(
+                    is_subset_of(tensor_mesh_coords, tensor_coordinates),
+                    "Tensors are placed on different MeshCoordinate ranges that do not intersect.");
             }
         },
         tensor_args);
