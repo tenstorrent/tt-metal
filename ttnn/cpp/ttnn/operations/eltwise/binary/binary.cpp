@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -11,6 +10,8 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/run_operation.hpp"
+#include "device/eltwise_binary_scalar_row_major_program_factory.hpp"
 
 namespace ttnn::operations::binary {
 
@@ -133,9 +134,9 @@ inline auto invoke_binary_ng(
         const std::optional lhs_activation =
             lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
 
-        if constexpr (requires { detail::preprocess_inputs(binary_op_type, lhs, rhs); }) {
+        // Check if rhs is Tensor using compile-time check
+        if constexpr (std::is_same_v<std::decay_t<decltype(rhs)>, Tensor>) {
             auto [a, b] = detail::preprocess_inputs(binary_op_type, lhs, rhs);
-
             return ttnn::prim::binary(
                 queue_id, a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
         } else {
@@ -156,7 +157,7 @@ inline auto invoke_binary_ng(
 
     bool typecast_a = binary::needs_typecast_to_bfloat16(a_dtype);
     bool typecast_b = [&] {
-        if constexpr (requires { rhs.get_dtype(); }) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(rhs)>, Tensor>) {
             return binary::needs_typecast_to_bfloat16(rhs.get_dtype());
         } else {
             return false;
@@ -164,20 +165,53 @@ inline auto invoke_binary_ng(
     }();
     bool typecast_out = binary::needs_typecast_to_bfloat16(out_dtype);
 
+    if constexpr (std::is_same_v<std::decay_t<decltype(rhs)>, float>) {  // Check if rhs is scalar (float)
+        if (lhs.get_layout() == Layout::ROW_MAJOR && binary_op_type == BinaryOpType::ADD &&  // Only for ADD currently
+            !typecast_a && !typecast_b &&  // Ensure no incompatible dtype conversions needed for input
+            !typecast_out &&               // Also check output type for simplicity now
+            !output_preallocated)          // Avoid preallocated output complexities for now
+        {
+            // Conditions met for specialized RowMajor kernel path
+
+            // Prepare tensor_args and operation_attributes for run_operation_with_program_cache
+            // Note: output tensor is created by the factory/run_operation helper
+            const auto tensor_args = TensorArgs{lhs, /* rhs is scalar */ std::nullopt, mem_config};
+            const auto operation_attributes = EltwiseBinaryDeviceOperation::operation_attributes_t{
+                binary_op_type,
+                lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()},
+                std::vector(post_activations.begin(), post_activations.end()),
+                rhs,       // Pass the scalar value here
+                out_dtype  // Pass the desired output dtype
+                // Note: rhs_activations ignored for scalar
+            };
+
+            // Use the TTNN helper to run the operation with custom factory
+            // This implicitly handles program creation, caching, runtime args, and launch
+            // It will use EltwiseBinaryScalarRowMajor::create_output_tensors etc.
+            return run_operation_with_program_cache(
+                queue_id,
+                EltwiseBinaryScalarRowMajor{},  // Pass instance of our factory struct
+                operation_attributes,           // Pass relevant attributes
+                tensor_args                     // Pass tensor arguments
+            );
+            // We return early, bypassing the default tiled logic below
+        }
+    }
+
     // RM is never BFLOAT8 or BFLOAT4 so we can assume it goes in here.
     if (!typecast_a && !typecast_b) {
         bool input_a_rm = lhs.get_layout() == Layout::ROW_MAJOR;
         bool input_b_rm = [&] {
-            if constexpr (requires { rhs.get_layout(); }) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(rhs)>, Tensor>) {
                 return rhs.get_layout() == Layout::ROW_MAJOR;
             } else {
-                return true;
+                return false;
             }
         }();
         Tensor input_a =
             input_a_rm ? ttnn::to_layout(lhs, Layout::TILE, std::nullopt, std::nullopt, (IDevice*)nullptr) : lhs;
         auto input_b = [&] {
-            if constexpr (requires { rhs.get_layout(); }) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(rhs)>, Tensor>) {
                 return input_b_rm ? ttnn::to_layout(rhs, Layout::TILE, std::nullopt, std::nullopt, (IDevice*)nullptr)
                                   : rhs;
             } else {
@@ -215,7 +249,7 @@ inline auto invoke_binary_ng(
     } else {
         Tensor input_a = binary::typecast_to(DataType::BFLOAT16, lhs);
         auto input_b = [&] {
-            if constexpr (requires { binary::typecast_to(DataType::BFLOAT16, rhs); }) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(rhs)>, Tensor>) {
                 return binary::typecast_to(DataType::BFLOAT16, rhs);
             } else {
                 return rhs;
@@ -348,17 +382,6 @@ Tensor RelationalBinary<binary_op_type>::invoke(
         lhs_activations,
         rhs_activations,
         use_legacy);
-}
-// scalar - tensor combination not available on Pytorch for this op
-template <BinaryOpType binary_op_type>
-Tensor RelationalBinary<binary_op_type>::invoke(
-    QueueId queue_id,
-    const float lhs,
-    const ttnn::Tensor& rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
-    return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, memory_config, output);
 }
 
 template <BinaryOpType binary_op_type>
