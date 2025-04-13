@@ -405,23 +405,14 @@ void launch_on_worker_thread_with_descriptor(
             program_cache_hit
         );
 
-    tt::tt_metal::Program* program = nullptr;
-    tt::tt_metal::Program program_owner;
-    if (is_program_cache_enabled) {
-        if (program_cache_hit) {
-            program = &cached_program_it->second;
-            program->update_runtime_info_from_descriptor(std::move(program_descriptor));
-        } else {
-            auto new_program = CreateProgram(std::move(program_descriptor));
-            auto it = program_cache.cache.insert({program_hash, std::move(new_program)});
-            program = &it.first->second;
-        }
-    } else {
-        program_owner = CreateProgram(std::move(program_descriptor));
-        program = &program_owner;
-    }
+    const auto run_program = [&](tt::tt_metal::Program& program) {
+        program.set_runtime_id(device_operation_id);
 
-    const auto enqueue_or_launch_program = [=](tt::tt_metal::Program& program) {
+        tt::tt_metal::GraphTracker::instance().track_program(&program, device);
+        if (tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
+            return;
+        }
+
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
             auto& queue = device->command_queue(*cq_id);
@@ -430,25 +421,32 @@ void launch_on_worker_thread_with_descriptor(
             ZoneScopedN("LaunchProgram");
             tt::tt_metal::detail::LaunchProgram(device, program);
         }
+
+        TracyOpTTNNDevice(
+            device_operation_t{},
+            device_operation_id,
+            device->id(),
+            program,
+            operation_attributes,
+            tensor_args,
+            tensor_return_value);
     };
 
-    program->set_runtime_id(device_operation_id);
-
-    tt::tt_metal::GraphTracker::instance().track_program(program, device);
-    if (tt::tt_metal::GraphTracker::instance().hook_program(program)) {
-        return;
+    tt::tt_metal::Program* program = nullptr;
+    if (is_program_cache_enabled) {
+        if (program_cache_hit) {
+            auto& program = cached_program_it->second;
+            program.update_runtime_info_from_descriptor(std::move(program_descriptor));
+            run_program(program);
+        } else {
+            auto new_program = CreateProgram(std::move(program_descriptor));
+            auto it = program_cache.cache.insert({program_hash, std::move(new_program)});
+            run_program(it.first->second);
+        }
+    } else {
+        auto program = CreateProgram(std::move(program_descriptor));
+        run_program(program);
     }
-
-    enqueue_or_launch_program(*program);
-
-    TracyOpTTNNDevice(
-        device_operation_t{},
-        device_operation_id,
-        device->id(),
-        *program,
-        operation_attributes,
-        tensor_args,
-        tensor_return_value);
 }
 
 template <DeviceOperationConcept device_operation_t>
