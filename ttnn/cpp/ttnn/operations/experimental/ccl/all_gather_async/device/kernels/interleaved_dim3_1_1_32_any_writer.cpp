@@ -40,9 +40,9 @@ inline void fabric_write_wrapper(
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection,
-    size_t l1_read_addr,
+    size_t& l1_read_addr,
     size_t tensor_size) {
-    fabric_write_wrapper(
+    write_and_advance_local_read_address_for_fabric_write(
         noc0_dest_noc_addr, pkt_hdr_forward, pkt_hdr_backward, fabric_connection, l1_read_addr, tensor_size);
     if constexpr (dynamic_alternate) {
         std::swap(
