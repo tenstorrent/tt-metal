@@ -15,10 +15,6 @@ show_help() {
     echo "  -c, --enable-ccache              Enable ccache for the build."
     echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan and TSan."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
-    echo "  -a, --enable-asan                Enable AddressSanitizer."
-    echo "  -m, --enable-msan                Enable MemorySanitizer."
-    echo "  -s, --enable-tsan                Enable ThreadSanitizer."
-    echo "  -u, --enable-ubsan               Enable UndefinedBehaviorSanitizer."
     echo "  -p, --enable-profiler            Enable Tracy profiler."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
@@ -60,10 +56,6 @@ clean() {
 export_compile_commands="OFF"
 enable_ccache="OFF"
 enable_time_trace="OFF"
-enable_asan="OFF"
-enable_msan="OFF"
-enable_tsan="OFF"
-enable_ubsan="OFF"
 build_type="Release"
 enable_profiler="OFF"
 build_dir=""
@@ -103,10 +95,6 @@ build-all
 export-compile-commands
 enable-ccache
 enable-time-trace
-enable-asan
-enable-msan
-enable-tsan
-enable-ubsan
 build-type:
 enable-profiler
 install-prefix:
@@ -158,14 +146,6 @@ while true; do
             enable_ccache="ON";;
         -t|--enable-time-trace)
             enable_time_trace="ON";;
-        -a|--enable-asan)
-            enable_asan="ON";;
-        -m|--enable-msan)
-            enable_msan="ON";;
-        -s|--enable-tsan)
-            enable_tsan="ON";;
-        -u|--enable-ubsan)
-            enable_ubsan="ON";;
         --enable-coverage)
             enable_coverage="ON";;
 	--build-dir)
@@ -266,10 +246,6 @@ echo "INFO: Export compile commands: $export_compile_commands"
 echo "INFO: Enable ccache: $enable_ccache"
 echo "INFO: Build type: $build_type"
 echo "INFO: Enable time trace: $enable_time_trace"
-echo "INFO: Enable AddressSanitizer: $enable_asan"
-echo "INFO: Enable MemorySanitizer: $enable_msan"
-echo "INFO: Enable ThreadSanitizer: $enable_tsan"
-echo "INFO: Enable UndefinedBehaviorSanitizer: $enable_ubsan"
 echo "INFO: Enable Coverage: $enable_coverage"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
@@ -311,22 +287,6 @@ fi
 
 if [ "$enable_time_trace" = "ON" ]; then
     cmake_args+=("-DENABLE_BUILD_TIME_TRACE=ON")
-fi
-
-if [ "$enable_asan" = "ON" ]; then
-    cmake_args+=("-DENABLE_ASAN=ON")
-fi
-
-if [ "$enable_msan" = "ON" ]; then
-    cmake_args+=("-DENABLE_MSAN=ON")
-fi
-
-if [ "$enable_tsan" = "ON" ]; then
-    cmake_args+=("-DENABLE_TSAN=ON")
-fi
-
-if [ "$enable_ubsan" = "ON" ]; then
-    cmake_args+=("-DENABLE_UBSAN=ON")
 fi
 
 if [ "$enable_profiler" = "ON" ]; then
