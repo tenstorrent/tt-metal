@@ -77,7 +77,7 @@ uint32_t get_input_channels_alignment(
     const std::optional<MemoryConfig>& input_memory_config) {
     if (!is_mm_conv && input_tensor_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
         input_tensor_layout == Layout::ROW_MAJOR) {
-        if (input_memory_config.has_value()) {
+        if (input_memory_config->is_sharded()) {
             return std::max(8U, input_memory_config.value().shard_spec.value().shape[1]);
         } else {
             return 8;
