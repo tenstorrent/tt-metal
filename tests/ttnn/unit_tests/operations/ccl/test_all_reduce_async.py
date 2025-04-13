@@ -301,9 +301,9 @@ def run_all_reduce_with_mesh_tensor_along_row(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    from_remote_semaphore_handles = create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    to_remote_semaphore_handles = create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    gather_semaphore_handles = create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    gather_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     try:
         debug = False

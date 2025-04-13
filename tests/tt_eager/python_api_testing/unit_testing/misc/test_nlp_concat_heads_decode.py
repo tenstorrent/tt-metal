@@ -34,7 +34,7 @@ def num_to_corerange(x):
     )
 
 
-def run_test_concat_head(devices, n_local_heads, padded_local_heads, head_dim, batch, sub_core_grids=None):
+def run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, batch, sub_core_grids=None):
     ## Split Heads
     padded_batch = nearest_32(batch)
     seq_len = 1
@@ -64,7 +64,7 @@ def run_test_concat_head(devices, n_local_heads, padded_local_heads, head_dim, b
 
     # Prepare tt input
     concat_head_input_tt = torch2tt_tensor(concat_head_input, tt_device=None).to(
-        device=devices[0], mem_config=SCORES_BATCHED_MM_OUTPUT_MEMCFG
+        device=device, mem_config=SCORES_BATCHED_MM_OUTPUT_MEMCFG
     )
 
     concat_head_output = ttnn.experimental.nlp_concat_heads_decode(
