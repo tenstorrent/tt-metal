@@ -131,6 +131,7 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
+          apt-get update && apt-get install -y strace
           strace -f -e trace=open,openat -o file_access.log ${{ matrix.test-group.cmd }}
 
       - name: Upload trace log
