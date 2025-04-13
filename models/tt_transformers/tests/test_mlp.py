@@ -35,10 +35,11 @@ from models.utility_functions import skip_for_grayskull
     "batch_size",
     (1,),
 )
+@pytest.mark.timeout(600)
 def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     model_name_env = os.getenv("HF_MODEL")
 
-    if seq_len >= 1024 and model_name_env and "Mistral-7B" in model_name_env.lower():
+    if seq_len >= 1024 and model_name_env and "Mistral-7B" in model_name_env:
         pytest.skip("Mistral-7B models do not support seq_len >= 1024")
 
     dtype = ttnn.bfloat8_b
