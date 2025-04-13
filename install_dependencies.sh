@@ -217,11 +217,14 @@ install_gcc() {
 # This could be removed in the future
 
 configure_hugepages() {
-    TT_TOOLS_VERSION='1.1-5_all'
-    echo "Installing Tenstorrent Hugepages Service $TT_TOOLS_VERSION..."
+    # Fetch the lastest tt-tools release link and name of package
+    TT_TOOLS_LINK=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .browser_download_url')
+    TT_TOOLS_NAME=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .name')
+
+    echo "Installing Tenstorrent Hugepages Service $TT_TOOLS_NAME..."
     TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR https://github.com/tenstorrent/tt-system-tools/releases/download/upstream%2F1.1/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
-    apt-get install -y --no-install-recommends $TEMP_DIR/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
+    wget -P $TEMP_DIR $TT_TOOLS_LINK
+    apt-get install -y --no-install-recommends $TEMP_DIR/$TT_TOOLS_NAME
     systemctl enable --now tenstorrent-hugepages.service
     rm -rf "$TEMP_DIR"
 }
