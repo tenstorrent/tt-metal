@@ -122,6 +122,23 @@ void calculate_sum_exp_x() {
     // cb_wait_front(cb_input, Wt);  // wait until reader kernel has written Wt tiles to input buffer
     cb_wait_front(cb_max_value_after_reduction, onetile);  // wait until we get max value in each row
 
+    // DPRINT << "Cb_max_sum_after_reduction" << ENDL();
+
+    // for (int32_t r = 0; r < 32; ++r) {
+    //     SliceRange sr = SliceRange{
+    //         .h0 = static_cast<uint8_t>(r),
+    //         .h1 = static_cast<uint8_t>(r + 1),
+    //         .hs = 1,
+    //         .w0 = 0,
+    //         .w1 = 32,
+    //         .ws = 1
+    //     };
+    //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need to
+    //     specify
+    //     // whether the CB is input or output.
+    //     DPRINT << TSLICE(cb_max_value_after_reduction, 0, sr) << ENDL();
+    // }
+
     // run through all tiles in row
     const uint32_t accum_register = 0;
     const uint32_t tile_register = 1U;
@@ -212,6 +229,9 @@ void MAIN {
     init_sfpu(cb_input, cb_output);
     binary_op_init_common(cb_input, cb_target, cb_output);
 
+    DPRINT << "--------DEBUG PRINT FROM COMPUTE KERNEL!!!---------" << ENDL();
+    DPRINT << "NUMS ROWS  PER CORE: " << num_rows_per_core << ENDL();
+
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         find_max_value_in_row();  // find max value in each row
         calculate_sum_exp_x();    // calculate sum of exp(x - max(x))
@@ -221,6 +241,22 @@ void MAIN {
             // cb_wait_front(cb_input, Wt);   // wait until reader kernel has written Wt tiles to input buffer
             cb_wait_front(cb_target, Wt);  // wait until reader kernel has written Wt tiles to target buffer
             cb_wait_front(cb_exp_sum_after_reduction, onetile);  // <- get here log(sum(exp(x - max(x)))
+
+            // DPRINT << "Cb_exp_sum_after_reduction" << ENDL();
+
+            // for (int32_t r = 0; r < 32; ++r) {
+            //     SliceRange sr = SliceRange{
+            //         .h0 = static_cast<uint8_t>(r),
+            //         .h1 = static_cast<uint8_t>(r + 1),
+            //         .hs = 1,
+            //         .w0 = 0,
+            //         .w1 = 32,
+            //         .ws = 1};
+            //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need
+            //     to
+            //     // specify whether the CB is input or output.
+            //     DPRINT << TSLICE(cb_max_value_after_reduction, 0, sr) << ENDL();
+            // }
 
             cb_reserve_back(
                 cb_output, onetile);  // reserve Wt tiles in output buffer == wait until cb will has Wt tiles
@@ -256,6 +292,7 @@ void MAIN {
                 mul_binary_tile(working_register, target_register);  // choose (x - max(x)) by index
                 negative_tile_init();
                 negative_tile(working_register);
+
                 add_binary_tile_init();
                 add_binary_tile(working_register, log_sum_exp_register);
 
@@ -274,6 +311,23 @@ void MAIN {
             cb_push_back(cb_output_before_reduction, onetile);
 
             cb_wait_front(cb_output_before_reduction, onetile);
+
+            // DPRINT << "cb_output_before_reduction" << ENDL();
+
+            // for (int32_t r = 0; r < 32; ++r) {
+            //     SliceRange sr = SliceRange{
+            //         .h0 = static_cast<uint8_t>(r),
+            //         .h1 = static_cast<uint8_t>(r + 1),
+            //         .hs = 1,
+            //         .w0 = 0,
+            //         .w1 = 32,
+            //         .ws = 1};
+            //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need
+            //     to
+            //     // specify whether the CB is input or output.
+            //     DPRINT << TSLICE(cb_output_before_reduction, 0, sr) << ENDL();
+            // }
+
             const uint32_t reduction_register = 0;
             tile_regs_acquire();
             reconfig_data_format(cb_output_before_reduction, cb_scaler);
@@ -301,6 +355,12 @@ void MAIN {
             cb_pop_front(cb_target, Wt);                          // pop Wt tiles from target buffer
         }
     }
+
+    if constexpr (do_mask_w) {
+        cb_pop_front(cb_mask, onetile);
+        cb_pop_front(cb_max_mask, onetile);
+    }
+    cb_pop_front(cb_scaler, onetile);
 }
 
 }  // namespace NAMESPACE

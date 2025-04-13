@@ -103,7 +103,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Negetive_Values) {
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
     using namespace ttml;
 
-    const uint32_t N = 3, C = 1, H = 2, W = 47;
+    const uint32_t N = 64, C = 1, H = 1024, W = 1024;
     const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
     std::vector<float> logits_data(N * C * H * W);
     std::vector<float> target_data(N * C * H * W, 0.0f);
@@ -153,7 +153,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
     using namespace ttml;
 
-    const uint32_t N = 64, C = 1, H = 1024, W = 1032;
+    const uint32_t N = 64, C = 1, H = 1024, W = 1024;
     const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
     std::vector<float> logits_data(N * C * H * W);
     std::vector<float> target_data(N * C * H * W, 0.0f);

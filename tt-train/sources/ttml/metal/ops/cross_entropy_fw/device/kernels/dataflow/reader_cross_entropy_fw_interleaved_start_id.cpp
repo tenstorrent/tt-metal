@@ -35,32 +35,40 @@ void kernel_main() {
     constexpr bool do_mask_w = false;
 #endif
 
-    // generate mask tile
+    // generate scaler and mask tile
+    cb_reserve_back(cb_scaler_idx, onetile);
+    uint16_t* scaler_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_scaler_idx));  // write scalar tile
+
+    uint16_t* mask_ptr = nullptr;
+    uint16_t* max_mask_ptr = nullptr;
     if constexpr (do_mask_w) {
         cb_reserve_back(cb_mask_idx, onetile);
         cb_reserve_back(cb_max_mask_idx, onetile);
-        cb_reserve_back(cb_scaler_idx, onetile);
-        uint16_t* mask_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask_idx));          // write mask tile
-        uint16_t* max_mask_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_max_mask_idx));  // write max mask tile
-        uint16_t* scaler_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_scaler_idx));      // write scalar tile
-        constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
-        constexpr uint16_t zero = 0x0;
-        constexpr uint16_t minus_inf = 0xFF80;  // (bfloat16)-inf -> uint16_t
-        for (uint32_t face = 0; face < 4; ++face) {
-            uint32_t offset = (face & 1U) << 4U;
-            for (uint32_t h = 0; h < 16; ++h) {
-                for (uint32_t w = 0; w < 16; ++w, ++mask_ptr, ++max_mask_ptr, ++scaler_ptr) {
+        mask_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask_idx));          // write mask tile
+        max_mask_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_max_mask_idx));  // write max mask tile
+    }
+
+    constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
+    constexpr uint16_t zero = 0x0;
+    constexpr uint16_t minus_inf = 0xFF80;  // (bfloat16)-inf -> uint16_t
+    for (uint32_t face = 0; face < 4; ++face) {
+        uint32_t offset = (face & 1U) << 4U;
+        for (uint32_t h = 0; h < 16; ++h) {
+            for (uint32_t w = 0; w < 16; ++w, ++mask_ptr, ++max_mask_ptr, ++scaler_ptr) {
+                if constexpr (do_mask_w) {
                     *mask_ptr = (offset + w < mask_w) ? one : zero;  // how to create the proper mask?
                     *max_mask_ptr = (offset + w < mask_w) ? zero : minus_inf;
-
-                    *scaler_ptr = one;
                 }
+
+                *scaler_ptr = one;
             }
         }
+    }
+    if constexpr (do_mask_w) {
         cb_push_back(cb_mask_idx, onetile);
         cb_push_back(cb_max_mask_idx, onetile);
-        cb_push_back(cb_scaler_idx, onetile);
     }
+    cb_push_back(cb_scaler_idx, onetile);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     const DataFormat data_format = get_dataformat(cb_input_idx);

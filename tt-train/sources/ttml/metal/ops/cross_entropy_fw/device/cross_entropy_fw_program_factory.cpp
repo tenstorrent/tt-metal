@@ -232,7 +232,8 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
 
     // mask_w - this mask used to avoid calculation of extra data(data which will be added to create full tile 32x32)??
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;  // <- width index of first trash value in tile
-
+    std::cout << "[PROGRAM FACTORY]: MASK_W: " << mask_w << std::endl;
+    std::cout << "[PROGRAM FACTORY]: Wt: " << Wt << std::endl;
     // compile arguments
     uint32_t block_size = get_block_size(Wt);
 
