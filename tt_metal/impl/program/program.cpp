@@ -1490,7 +1490,7 @@ std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_progra
 }
 
 void detail::ProgramImpl::update_runtime_info_from_descriptor(ProgramDescriptor&& descriptor) {
-    auto copy_runtime_args = [](Kernel& kernel_to, KernelDescriptor&& kernel_from) {
+    auto copy_runtime_args = [](Kernel& kernel_to, const KernelDescriptor& kernel_from) {
         auto& runtime_args_to = kernel_to.runtime_args_data();
         for (size_t i = 0; i < kernel_from.runtime_args.size(); i++) {
             for (size_t j = 0; j < kernel_from.runtime_args[i].size(); j++) {
@@ -1511,7 +1511,7 @@ void detail::ProgramImpl::update_runtime_info_from_descriptor(ProgramDescriptor&
     for (size_t kernels_idx = 0; kernels_idx < kernels_.size(); ++kernels_idx) {
         auto& kernels = kernels_[kernels_idx];
         for (auto& [id, kernel] : kernels) {
-            copy_runtime_args(*kernel, std::move(descriptor.kernels[id]));
+            copy_runtime_args(*kernel, descriptor.kernels[id]);
         }
     }
 
