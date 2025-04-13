@@ -1495,6 +1495,9 @@ void detail::ProgramImpl::update_runtime_info_from_descriptor(ProgramDescriptor&
         for (size_t i = 0; i < kernel_from.runtime_args.size(); i++) {
             for (size_t j = 0; j < kernel_from.runtime_args[i].size(); j++) {
                 const auto& runtime_arg_from = kernel_from.runtime_args[i][j];
+                if (runtime_arg_from.empty()) {
+                    continue;
+                }
                 std::memcpy(
                     runtime_args_to[i][j].data(),
                     runtime_arg_from.data(),
@@ -1502,10 +1505,12 @@ void detail::ProgramImpl::update_runtime_info_from_descriptor(ProgramDescriptor&
             }
         }
         auto common_to = kernel_to.common_runtime_args_data();
-        std::memcpy(
-            common_to.data(),
-            kernel_from.common_runtime_args.data(),
-            kernel_from.common_runtime_args.size() * sizeof(kernel_from.common_runtime_args[0]));
+        if (!kernel_from.common_runtime_args.empty()) {
+            std::memcpy(
+                common_to.data(),
+                kernel_from.common_runtime_args.data(),
+                kernel_from.common_runtime_args.size() * sizeof(kernel_from.common_runtime_args[0]));
+        }
     };
 
     for (size_t kernels_idx = 0; kernels_idx < kernels_.size(); ++kernels_idx) {

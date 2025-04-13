@@ -54,7 +54,7 @@ CircularBuffer::CircularBuffer(
 
 CircularBuffer::CircularBuffer(CBDescriptor&& descriptor) :
     id_(reinterpret_cast<uintptr_t>(this)),
-    core_ranges_(CoreRangeSet(descriptor.core_ranges)),
+    core_ranges_(CoreRangeSet(std::move(descriptor.core_ranges))),
     config_(descriptor),
     locally_allocated_address_(std::nullopt) {
     this->validate_set_config_attributes();
