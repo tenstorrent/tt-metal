@@ -6,7 +6,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include <umd/device/types/cluster_descriptor_types.h>
@@ -90,7 +90,6 @@ struct FabricEriscDatamoverConfig {
     FabricEriscDatamoverConfig(std::size_t channel_buffer_size_bytes, Topology topology = Topology::Linear);
 
     std::size_t channel_buffer_size_bytes = 0;
-    std::size_t channel_buffer_size_bytes_with_channel_sync = 0;
 
     std::array<std::size_t, num_sender_channels> sender_channels_size_bytes;
     std::array<std::size_t, num_receiver_channels> receiver_channels_size_bytes;
@@ -200,6 +199,7 @@ public:
             tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
     void set_firmware_context_switch_interval(size_t interval);
+    void set_wait_for_host_signal(bool wait_for_host_signal);
 
     //    protected:
     friend class EdmLineFabricOpInterface;
@@ -251,6 +251,7 @@ public:
     bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
     bool dateline_connection = false;
+    bool wait_for_host_signal = false;
 };
 
 }  // namespace tt::tt_fabric

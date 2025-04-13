@@ -366,6 +366,10 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
 
     uint32_t total_num_rows = a.get_logical_shape()[-2];
 
+    if (output.get_padded_shape()[-2] > tt::round_up(total_num_rows, tile_height)) {
+        total_num_rows = output.get_padded_shape()[-2];
+    }
+
     std::map<std::string, std::string> reader_defines = {
         {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
 
@@ -792,7 +796,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     /** writer
      */
     KernelHandle unary_writer_kernel_id;
-    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? true : false;
     std::vector<uint32_t> writer_ct_args = {
         output_cb_index,
     };

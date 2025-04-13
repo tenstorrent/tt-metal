@@ -75,10 +75,12 @@ jobs:
         PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
         DONT_USE_VIRTUAL_ENVIRONMENT: 1
         GITHUB_ACTIONS: true
+        # TODO: Revisit the addition of this env var https://github.com/tenstorrent/tt-metal/issues/20161
+        TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
+        - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -95,7 +97,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           ./tests/scripts/run_profiler_regressions.sh
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -104,8 +106,6 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            /work/generated/test_reports/
           prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

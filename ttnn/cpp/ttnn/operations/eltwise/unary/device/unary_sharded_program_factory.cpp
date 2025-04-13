@@ -93,13 +93,13 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
     TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
     std::vector<uint32_t> reader_compile_time_args = {
         in_cb_id,
     };
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
     std::map<string, string> kernel_defines;

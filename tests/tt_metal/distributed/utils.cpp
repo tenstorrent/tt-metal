@@ -3,7 +3,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tests/tt_metal/distributed/utils.hpp"
+
+#include <fmt/base.h>
+#include <array>
+#include <cstdlib>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/semaphore.hpp>
+#include "span.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal::distributed::test::utils {
 

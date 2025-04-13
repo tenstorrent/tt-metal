@@ -6,7 +6,7 @@
 #include <limits.h>
 #include <tt-metalium/dev_msgs.h>
 #include <tt-metalium/dispatch_settings.hpp>
-#include <tt_cluster.hpp>
+#include "impl/context/metal_context.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -90,7 +90,7 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
         .build();
 }
 
-DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
+DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, const uint32_t num_hw_cqs) {
     return DispatchSettings()
         .num_hw_cqs(num_hw_cqs)
         .core_type(CoreType::ETH)

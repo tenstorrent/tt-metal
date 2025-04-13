@@ -66,14 +66,15 @@ constexpr uint32_t dispatch_s_cb_log_page_size = get_compile_time_arg_val(25);
 
 // used for fd on fabric
 constexpr uint32_t downstream_mesh_id = get_compile_time_arg_val(26);
-constexpr uint32_t downstream_chip_id = get_compile_time_arg_val(27);
+constexpr uint32_t downstream_dev_id = get_compile_time_arg_val(27);
 constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(28);
-constexpr uint32_t upstream_chip_id = get_compile_time_arg_val(29);
+constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(29);
 constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(30);
-constexpr uint32_t client_interface_addr = get_compile_time_arg_val(31);
+constexpr uint32_t outbound_eth_chan = get_compile_time_arg_val(31);
+constexpr uint32_t client_interface_addr = get_compile_time_arg_val(32);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(32);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(33);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(33);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(34);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -373,31 +374,6 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
 
 uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
-#if 0
-    // Out of code memory for prefetcher + DPRINT
-    // Hack this off for now, have to revisit soon
-    uint32_t checksum = 0;
-    uint32_t data_start = (uint32_t)cmd + sizeof(CQPrefetchCmd);
-    uint32_t *data = (uint32_t *)data_start;
-    uint32_t size = cmd->debug.size;
-
-    uint32_t front_size = (size <= cmddat_q_end - data_start) ? size : cmddat_q_end - data_start;
-    for (uint32_t i = 0; i < front_size / sizeof(uint32_t); i++) {
-        checksum += *data++;
-    }
-    uint32_t back_size = size - front_size;
-    if (back_size > 0) {
-        data = (uint32_t *)cmddat_q_base;
-        for (uint32_t i = 0; i < back_size / sizeof(uint32_t); i++) {
-            checksum += *data++;
-        }
-    }
-
-    if (checksum != cmd->debug.checksum) {
-        WAYPOINT("!CHK");
-        ASSERT(0);
-    }
-#endif
     return cmd->debug.stride;
 }
 
@@ -1477,6 +1453,9 @@ void kernel_main_hd() {
 
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    if constexpr (use_fabric(fabric_router_noc_xy)) {
+        tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*unused*/);
+    }
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();

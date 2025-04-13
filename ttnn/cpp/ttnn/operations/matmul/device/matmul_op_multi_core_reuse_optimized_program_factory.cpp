@@ -156,9 +156,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t num_cores_r = core_range.y;
 
     // Compile time args
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in0_is_dram,

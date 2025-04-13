@@ -13,34 +13,15 @@ on:
         required: false
         type: number
         default: 35
-      os:
-        required: false
-        type: string
-        default: "ubuntu-20.04"
-  workflow_dispatch:
-    inputs:
-      arch:
+      docker-image:
         required: true
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-      runner-label:
-        required: true
-        type: choice
-        options:
-          - E150
-          - N150
-          - N300
-          - BH
-      timeout:
-        required: false
-        type: number
-        default: 35
-      os:
-        required: false
         type: string
-        default: "ubuntu-20.04"
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
 
 jobs:
   cpp-unit-tests-slow-dispatch:
@@ -67,31 +48,38 @@ jobs:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
       - in-service
-    env:
-      ARCH_NAME: ${{ inputs.arch }}
-      LOGURU_LEVEL: INFO
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        TT_METAL_SLOW_DISPATCH_MODE: 1
+        TT_METAL_HOME: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/prepare-metal-run
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          # Unsure why these C++ tests need the wheel...  a cleanup to do separately
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
-        uses: ./.github/actions/docker-run
-        with:
-          docker_os_arch: tt-metalium/${{ inputs.os }}-dev-amd64
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e ARCH_NAME=${{ inputs.arch}}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e TT_METAL_SLOW_DISPATCH_MODE=1
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GTEST_OUTPUT=xml:generated/test_reports/
-          run_args: |
-            pip install --force-reinstall pip==21.2.4
-            pip install -r tt_metal/python_env/requirements-dev.txt
-            pip install -e .
-            mkdir -p generated/test_reports
-            ${{ matrix.test-group.cmd }}
-      - uses: ./.github/actions/slack-report
+        run: |
+          mkdir -p generated/test_reports
+          ${{ matrix.test-group.cmd }}
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -100,15 +88,10 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            generated/test_reports/
           prefix: "test_reports_"
       - name: Generate system logs on failure
         uses: ./.github/actions/generate-system-logs
         if: ${{ failure() }}
       - name: Generate gtest annotations on failure
-        uses: ./.github/actions/generate-gtest-failure-message
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
-        with:
-          path: |
-            generated/test_reports/

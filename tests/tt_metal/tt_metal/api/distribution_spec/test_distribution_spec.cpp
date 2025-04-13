@@ -2,10 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
-#include "gmock/gmock.h"
-
+#include <boost/move/utility_core.hpp>
+#include <stddef.h>
 #include <tt-metalium/distribution_spec.hpp>
+#include <functional>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
+#include <tt-metalium/shape.hpp>
 
 namespace distribution_spec_tests {
 using tt::tt_metal::DistributionSpec;

@@ -180,6 +180,7 @@ def test_create_pipeline_json_for_timeout_bad_testcase(workflow_run_gh_environme
 
     for job in pipeline.jobs:
         if job.github_job_id == 36492361640:
+            assert job.failure_signature == str(InfraErrorV1.JOB_HANG)
             assert len(job.tests) > 0
             assert job.job_status == JobStatus.failure
 

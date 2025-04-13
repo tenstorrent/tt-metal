@@ -84,7 +84,6 @@ inline void fabric_send_contig_tiles_dim3_bf16(
                     tensor0_page_size);
                 tile_id++;
                 total++;
-                noc_async_writes_flushed();
                 cb_pop_front(cb0_id, packet_size_in_pages);
             } else {
                 tile_id++;  // skip tile as it is already processed
@@ -114,7 +113,6 @@ inline void fabric_send_contig_tiles_dim3_bf16(
                 tile_id++;
                 total++;
             }
-            noc_async_writes_flushed();
             cb_pop_front(cb0_id, packet_size_in_pages);
         }
     }
@@ -140,7 +138,6 @@ inline void fabric_send_full_contig(
             fabric_connection,
             l1_read_addr,
             packet_size_in_pages * tensor0_page_size);
-        noc_async_writes_flushed();
         cb_pop_front(cb0_id, packet_size_in_pages);
         tile_id++;
         total_local++;
@@ -172,7 +169,6 @@ inline void fabric_send_2contig_bf8(
             2 * tensor0_page_size);
         tile_id++;
         total_local++;
-        noc_async_writes_flushed();
         cb_pop_front(cb0_id, 2);
         if (total_local % num_banks == 0) {
             tile_id += num_banks;
@@ -204,7 +200,6 @@ inline void fabric_send_non_contig(
                 tensor0_page_size);
             tile_id++;
         }
-        noc_async_writes_flushed();
         cb_pop_front(cb0_id, tiles_in_packet);
         total_local += tiles_in_packet;
     }
@@ -468,7 +463,6 @@ inline void fabric_send_dim2_bf8(
         if (total % num_banks == 0) {
             total += num_banks + rest_full_contig_ids;
         }
-        noc_async_writes_flushed();
         cb_pop_front(cb0_id, packet_size_in_pages);
     }
     total += tile_id_start;
@@ -783,13 +777,14 @@ void kernel_main() {
 
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
-        while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
+        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
+        DPRINT << "waitval done\n";
     }
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
-        const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
-        noc_inline_dw_write(dest_noc_addr, 0);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
+        DPRINT << "reset done\n";
     }
 
     if (fabric_connection.is_logically_connected()) {
@@ -797,5 +792,6 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
+
     DPRINT << "DONE \n";
 }

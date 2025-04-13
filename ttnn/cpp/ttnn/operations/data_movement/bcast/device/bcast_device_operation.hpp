@@ -35,7 +35,7 @@ struct EltwiseBinaryBroadcast {
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     BcastOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const;
 
-    const tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
+    tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
 }  // namespace ttnn::operations::data_movement

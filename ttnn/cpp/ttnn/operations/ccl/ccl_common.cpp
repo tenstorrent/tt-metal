@@ -1417,5 +1417,37 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     return worker_slice_shapes;
 }
 
+std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
+    size_t ring_size, size_t ring_index, Topology topology) {
+    // Used for experimentation for optimal perf
+    // May be uplifted to an op parameter if needed
+    constexpr bool enable_dynamic_alternate = false;
+    bool dynamic_alternate = false;
+    size_t num_targets_forward = 0;
+    size_t num_targets_backward = 0;
+    if (topology == Topology::Linear) {
+        LineTopology line_topology(ring_size, ring_index);
+        num_targets_forward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+        num_targets_backward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+    } else if (topology == ccl::Topology::Ring) {
+        // TODO: Commonize
+        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_backward = ring_size - 1 - num_targets_forward;
+        constexpr bool static_alternate = true;
+        if constexpr (static_alternate) {
+            if (ring_index % 2 == 0) {
+                std::swap(num_targets_forward, num_targets_backward);
+            }
+        }
+        if constexpr (enable_dynamic_alternate) {
+            // Even ring size will result in uneven fwd/backward distances
+            dynamic_alternate = ring_size % 2 == 0;
+        }
+    }
+    return std::make_tuple(num_targets_forward, num_targets_backward, dynamic_alternate);
+}
+
 }  // namespace ccl
 }  // namespace ttnn

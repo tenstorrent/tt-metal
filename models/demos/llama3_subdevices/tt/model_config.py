@@ -107,7 +107,7 @@ class LlamaOptimizations:
         """Configuration optimized for accuracy
         Only 3.1-70B uses bfp4 MLPs in this configuration
         """
-        return cls(bfp4_mlp=model_name == "3.1-70B")
+        return cls(bfp4_mlp="70B" in model_name)
 
     @classmethod
     def performance(cls, model_name):
@@ -150,6 +150,7 @@ class TtModelArgs:
 
     LOCAL_LLAMA_PARAMS = {
         "LLAMA3_1_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama3.1-70B-Instruct",
+        "LLAMA3_3_70B_PARAMS": "models/demos/llama3_subdevices/model_params/Llama3.3-70B-Instruct",
     }
 
     def __init__(
@@ -260,6 +261,8 @@ class TtModelArgs:
                 local_params = "LLAMA3_2_11B_PARAMS"
             elif "3.1-70B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_70B_PARAMS"
+            elif "3.3-70B" in self.CKPT_DIR:
+                local_params = "LLAMA3_3_70B_PARAMS"
             else:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
@@ -559,6 +562,17 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 4),
+                sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    self.start_core, 32, self.sub_core_grids, row_wise=True
+                ),
+                exp_approx_mode=False,
+                q_chunk_size=0,
+                k_chunk_size=0,
+            )
+
+            # TODO: Need to uplift UpdateCache to support dynamic chunk sizes if non-paged
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
@@ -918,11 +932,11 @@ class TtModelArgs:
             self.model_config["LM_HEAD_PREFILL_PROGCFG"] = self.matmul_1d_config_from_tensor_shapes(
                 in0_shape=(1, 1, 32, 2048),
                 in1_shape=(1, 1, 2048, 16384),
-                grid=ttnn.CoreGrid(x=7, y=8),  # (7,10) leads to hangs
+                grid=ttnn.CoreGrid(x=7, y=7),  # (7,10) leads to hangs
                 act=None,
                 is_fp32_accumulate=False,
-                # overwrite_subblock_w=None,
-                # overwrite_subblock_h=None,
+                # overwrite_subblock_w=1,
+                # overwrite_subblock_h=1,
             )
 
             attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
@@ -1071,6 +1085,33 @@ class TtModelArgs:
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     use_height_and_width_as_shard_shape=True,
                 )
+            )
+
+            PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                ]
+            )
+            self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 512),
+                core_grid=PACKET_WORKER_CRS,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            FF1_CRS_RS_OUT = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                ttnn.CoreCoord(1, 0), 30, self.sub_core_grids, row_wise=True
+            )
+            self.model_config["REDUCE_SCATTER_OUT_MEMCFG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    FF1_CRS_RS_OUT,
+                    [32, 32],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
             )
 
             self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"] = (

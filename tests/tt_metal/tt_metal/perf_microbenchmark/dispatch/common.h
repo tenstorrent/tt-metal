@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <unordered_map>
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -15,9 +15,10 @@
 #include "noc/noc_parameters.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
-#include "hal.hpp"
+#include <tt-metalium/hal.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <magic_enum/magic_enum.hpp>
 
 using namespace tt::tt_metal;  // test only
 
@@ -45,8 +46,8 @@ private:
     bool banked;  // TODO banked and unbanked tests still don't play nicely together
     int amt_written;
     // 10 is a hack...bigger than any core_type
-    uint64_t base_data_addr[10];
-    uint64_t base_result_data_addr[10];
+    uint64_t base_data_addr[magic_enum::enum_count<CoreType>()];
+    uint64_t base_result_data_addr[magic_enum::enum_count<CoreType>()];
     std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>> all_data;
     CoreCoord host_core;
 
@@ -122,7 +123,7 @@ DeviceData::DeviceData(
     this->banked = is_banked;
     this->amt_written = 0;
 
-    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+    const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
     for (const CoreCoord& core_coord : pcie_cores) {
         CoreCoord core = {core_coord.x, core_coord.y};
@@ -771,7 +772,6 @@ inline size_t debug_prologue(std::vector<uint32_t>& cmds) {
         debug_cmd.base.cmd_id = CQ_DISPATCH_CMD_DEBUG;
         // compiler compains w/o these filled in later fields
         debug_cmd.debug.key = 0;
-        debug_cmd.debug.checksum = 0;
         debug_cmd.debug.size = 0;
         debug_cmd.debug.stride = 0;
         add_bare_dispatcher_cmd(cmds, debug_cmd);
@@ -794,12 +794,6 @@ inline void debug_epilogue(std::vector<uint32_t>& cmds, size_t prior_end) {
         uint32_t size = (full_size > max_size) ? max_size : full_size;
         debug_cmd_ptr->debug.size = size;
         debug_cmd_ptr->debug.stride = sizeof(CQDispatchCmd);
-        uint32_t checksum = 0;
-        uint32_t start = prior_end + sizeof(CQDispatchCmd) / sizeof(uint32_t);
-        for (uint32_t i = start; i < start + size / sizeof(uint32_t); i++) {
-            checksum += cmds[i];
-        }
-        debug_cmd_ptr->debug.checksum = checksum;
     }
 }
 

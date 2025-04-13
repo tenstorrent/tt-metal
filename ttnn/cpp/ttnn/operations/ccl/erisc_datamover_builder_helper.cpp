@@ -5,7 +5,7 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -215,14 +215,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool build_in_worker_connection_mode,
     Topology topology) :
     device_sequence({local_device}), programs({program}) {
-    if (topology == Topology::Ring) {
-        TT_FATAL(
-            forward_device.has_value() && backward_device.has_value(),
-            "RING topology requires both forward and backward devices to be specified");
-        TT_FATAL(
-            forward_device.value() != backward_device.value(),
-            "Ring topology requires different forward and backward devices");
-    }
     static constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);

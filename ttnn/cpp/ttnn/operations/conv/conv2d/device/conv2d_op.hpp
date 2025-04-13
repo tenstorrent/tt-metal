@@ -132,6 +132,20 @@ struct Conv2dConfig {
     }
 };
 
+struct Conv2dSliceConfig {
+    // Determines the dimension along which the input & output tensors are sliced.
+    // Slices based on [N, H, W, C] shape.
+    // Using width slicing is more efficient as it reduces memory usage. This is because the overlap of data between
+    // cores is minimized in width slicing, reducing the size of the Halo output. If the Height & Width dimensions are
+    // similar, then use Width slicing. Use Height slicing if the Height dimension is significantly larger than the
+    // Width dimension.
+    enum class SliceType : bool { HEIGHT, WIDTH };
+    SliceType slice_type = SliceType::WIDTH;
+
+    // Number of slices that the output tensor should be divided into.
+    uint32_t num_slices = 0;
+};
+
 // TODO: Accept parallelization
 enum class OptimizedConvOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
 
@@ -165,7 +179,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const OptimizedConvBlockConfig& block_config,
     tt::tt_metal::DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
-    bool use_shallow_conv_variant,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     Tensor& output,
     bool enable_act_double_buffer,
@@ -185,7 +198,6 @@ struct OptimizedConvNew {
     tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape;  // For sharded input, input tensor shape is nonsense
-    bool use_shallow_conv_variant;
     const DeviceComputeKernelConfig compute_kernel_config;
     bool enable_act_double_buffer;
     bool enable_weights_double_buffer;
@@ -204,7 +216,6 @@ struct OptimizedConvNew {
         tt::tt_metal::MemoryConfig memory_config,
         tt::tt_metal::DataType dtype,
         std::array<std::uint32_t, 4> input_tensor_shape,
-        bool use_shallow_conv_variant,
         const DeviceComputeKernelConfig compute_kernel_config,
         bool enable_act_double_buffer,
         bool enable_weights_double_buffer,
@@ -221,7 +232,6 @@ struct OptimizedConvNew {
         memory_config(memory_config),
         dtype(dtype),
         input_tensor_shape(input_tensor_shape),
-        use_shallow_conv_variant(use_shallow_conv_variant),
         compute_kernel_config(compute_kernel_config),
         enable_act_double_buffer(enable_act_double_buffer),
         enable_weights_double_buffer(enable_weights_double_buffer),
@@ -254,7 +264,6 @@ struct OptimizedConvNew {
         "activation",
         "dtype",
         "input_tensor_shape",
-        "use_shallow_conv_variant",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "enable_split_reader",
@@ -272,7 +281,6 @@ struct OptimizedConvNew {
             std::cref(this->activation),
             std::cref(this->dtype),
             std::cref(this->input_tensor_shape),
-            std::cref(this->use_shallow_conv_variant),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_split_reader),
@@ -294,7 +302,6 @@ Tensor optimized_conv_new(
     const tt::tt_metal::MemoryConfig& memory_config,
     tt::tt_metal::DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
-    bool use_shallow_conv_variant,
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,

@@ -8,7 +8,9 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include <tt-metalium/host_api.hpp>
+
+#include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
 
@@ -21,7 +23,7 @@ namespace utils {
         case BinaryOpType::SUB:
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32));
         case BinaryOpType::MUL:
-        case BinaryOpType::DIV_FAST:
+        case BinaryOpType::DIV:
         case BinaryOpType::RSUB:
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
@@ -42,6 +44,7 @@ namespace utils {
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_AND:
         case BinaryOpType::BITWISE_OR: return (a == DataType::INT32 && b == DataType::INT32);
+        case BinaryOpType::MAXIMUM:
         case BinaryOpType::POWER: return true;
         default: return false;
     }

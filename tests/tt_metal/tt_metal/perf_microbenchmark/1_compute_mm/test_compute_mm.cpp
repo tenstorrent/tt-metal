@@ -2,35 +2,61 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <chrono>
-#include <functional>
-#include <random>
-
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
-
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/constants.hpp>
-#include <optional>
-
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tests/tt_metal/test_utils/tilization.hpp"
-#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <functional>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
+#include <random>
+#include <ratio>
+#include <set>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "span.hpp"
 #include "test_common.hpp"
+#include "tests/tt_metal/test_utils/tilization.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;
@@ -244,12 +270,12 @@ int main(int argc, char** argv) {
         uint32_t fidel = 0;  // lofi
         uint32_t num_tests = 10;
         uint32_t num_blocks = 1;
-        bool matmul_block = 0;
-        bool packer_l1 = 0;
-        bool fp32 = 0;
+        bool matmul_block = false;
+        bool packer_l1 = false;
+        bool fp32 = false;
         uint32_t interm_cb_dtype = 0;
         uint32_t subblock_choice = 0;
-        bool single_core = 0;
+        bool single_core = false;
         bool fast_dispatch_mode = false;
         try {
             std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 11264);

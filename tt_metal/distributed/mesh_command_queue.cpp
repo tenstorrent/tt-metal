@@ -6,6 +6,7 @@
 #include <mesh_command_queue.hpp>
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 #include <algorithm>
 #include <array>
@@ -19,19 +20,18 @@
 #include "buffer.hpp"
 #include "buffer_constants.hpp"
 #include "device.hpp"
-#include "dispatch/dispatch_core_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_workload.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "shape2d.hpp"
 #include "strong_type.hpp"
 #include "system_memory_manager.hpp"
 #include "trace_buffer.hpp"
-#include "tt_cluster.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
@@ -69,7 +69,10 @@ MeshCommandQueue::MeshCommandQueue(
     mesh_device_ = mesh_device;
     id_ = id;
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
-        config_buffer_mgr_, expected_num_workers_completed_, DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
+        config_buffer_mgr_,
+        expected_num_workers_completed_,
+        DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+        mesh_device_->allocator()->get_config().l1_unreserved_base);
     this->populate_virtual_program_dispatch_core();
     this->populate_dispatch_core_type();
     this->populate_read_descriptor_queue();
@@ -131,10 +134,11 @@ void MeshCommandQueue::populate_dispatch_core_type() {
     for (auto device : this->mesh_device_->get_devices()) {
         if (device_idx) {
             TT_FATAL(
-                this->dispatch_core_type_ == dispatch_core_manager::instance().get_dispatch_core_type(),
+                this->dispatch_core_type_ ==
+                    MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
                 "Expected the Dispatch Core Type to match across device in a Mesh");
         } else {
-            this->dispatch_core_type_ = dispatch_core_manager::instance().get_dispatch_core_type();
+            this->dispatch_core_type_ = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
         }
         device_idx++;
     }
@@ -184,7 +188,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = this->mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
-    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     TT_FATAL(
@@ -294,7 +298,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     mesh_workload.set_last_used_command_queue_for_testing(this);
 
     if (blocking) {
-        this->finish();
+        this->finish({sub_device_id});
     }
 }
 
@@ -702,8 +706,10 @@ MultiProducerSingleConsumerQueue<CompletionReaderVariant>& MeshCommandQueue::get
 void MeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor) {
     auto reader_lambda = [this](IDevice* device, uint32_t num_reads) {
         auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+        chip_id_t mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
 
         for (int i = 0; i < num_reads; i++) {
             buffer_dispatch::copy_completion_queue_data_into_user_space(
@@ -738,8 +744,10 @@ void MeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read
     auto& device_range = read_event_descriptor.device_range;
     for (const auto& coord : device_range) {
         auto device = mesh_device_->get_device(coord);
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+        chip_id_t mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
 
         event_dispatch::read_events_from_completion_queue(
@@ -763,7 +771,10 @@ void MeshCommandQueue::reset_worker_state(
             mesh_device_, go_signal_noc_data, device->sysmem_manager(), id_);
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
-        config_buffer_mgr_, expected_num_workers_completed_, mesh_device_->num_sub_devices());
+        config_buffer_mgr_,
+        expected_num_workers_completed_,
+        mesh_device_->num_sub_devices(),
+        mesh_device_->allocator()->get_config().l1_unreserved_base);
     if (reset_launch_msg_state) {
         std::for_each(
             this->worker_launch_message_buffer_state_->begin(),
@@ -778,7 +789,7 @@ void MeshCommandQueue::write_program_cmds_to_subgrid(
     bool stall_first,
     bool stall_before_program,
     std::unordered_set<uint32_t>& chip_ids_in_workload) {
-    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     for (const auto& coord : sub_grid) {
@@ -823,7 +834,7 @@ void MeshCommandQueue::capture_program_trace_on_subgrid(
     auto& sysmem_manager_for_trace = mesh_device_->get_device(sub_grid.start_coord())->sysmem_manager();
     uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
-    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     program_dispatch::write_program_command_sequence(

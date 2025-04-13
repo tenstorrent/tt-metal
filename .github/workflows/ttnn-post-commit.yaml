@@ -106,13 +106,11 @@ jobs:
       image: ${{ inputs.docker-image }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
-        GITHUB_ACTIONS: true
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -135,7 +133,7 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
 
-      - uses: ./.github/actions/slack-report
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -145,8 +143,6 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: |
-            /work/generated/test_reports/
           prefix: "test_reports_"
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

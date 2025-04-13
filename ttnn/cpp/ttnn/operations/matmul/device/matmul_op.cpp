@@ -1386,6 +1386,20 @@ Tensor matmul(
     return output_tensors.at(0);
 }
 
+void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
+    // Validate tensor is within grid if sharded and not in DRAM
+    if (tensor.memory_config().is_sharded() && tensor.memory_config().buffer_type != BufferType::DRAM) {
+        const auto& shard_spec = tensor.memory_config().shard_spec.value();
+        const auto& shard_grid = shard_spec.grid;
+        CoreRange range(CoreCoord(0, 0), grid_size);
+        TT_FATAL(
+            range.contains(shard_grid),
+            "Tensor shard spec grid must be within config grid! Shard grid: {}, Config grid: {}",
+            shard_grid,
+            range);
+    }
+}
+
 void Matmul::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -1606,6 +1620,10 @@ void Matmul::validate(
                     }
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
+                } else {
+                    // Checks specific to non-gather configs
+                    check_tensor_in_grid(input_tensor_a, program_config.compute_with_storage_grid_size);
+                    check_tensor_in_grid(input_tensor_b, program_config.compute_with_storage_grid_size);
                 }
                 if (program_config.mcast_in0 || program_config.gather_in0) {
                     if (input_tensor_a.is_sharded()) {
@@ -1674,6 +1692,9 @@ void Matmul::validate(
                         TT_FATAL(
                             program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
                             "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
+                        TT_FATAL(
+                            program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
+                            "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
                     }
                     if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1 &&
                         input_tensor_b.memory_config().is_sharded()) {
@@ -1743,6 +1764,9 @@ void Matmul::validate(
                         TT_FATAL(
                             program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
                             "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
+                        TT_FATAL(
+                            program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
+                            "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
                     }
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
@@ -1775,6 +1799,8 @@ void Matmul::validate(
                 // tensor in1
                 TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                check_tensor_in_grid(input_tensor_a, program_config.compute_with_storage_grid_size);
+                check_tensor_in_grid(input_tensor_b, program_config.compute_with_storage_grid_size);
                 TT_FATAL(
                     program_config.per_core_M % program_config.out_block_h == 0,
                     "Error: incompatible values {} and {}",
@@ -1875,7 +1901,11 @@ void Matmul::validate(
                     uint32_t per_core_N = program_config.per_core_N;
 
                     TT_FATAL(
-                        program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1, "Error");
+                        program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1,
+                        "Error: out_subblock_w must be equal to per_core_N or out_subblock_h must be equal to 1.");
+                    TT_FATAL(
+                        program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
+                        "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
                 }
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
                 uint32_t M = input_tensor_a.get_padded_shape()[-2] / in0_tile_shape[0];

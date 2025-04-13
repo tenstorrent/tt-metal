@@ -72,6 +72,17 @@ def post_process_ops_log_detailed(
     if op_name != "":
         df = df[df["OP CODE"] == op_name]
 
+    # group by DEVICE ID
+    df = df.groupby("DEVICE ID")
+    # now sort the list of df by the DEVICE FW START CYCLE
+    df = sorted(df, key=lambda x: x[1]["DEVICE FW START CYCLE"].iloc[0])
+
+    # Convert list of tuples to list of dataframes
+    dfs = [group for _, group in df]
+
+    # concatenate the list of df into a single df by interleaving the rows
+    df = pd.concat([df.iloc[[i]] for i in range(len(dfs[0])) for df in dfs], ignore_index=True)
+
     if warmup_iters > 0:
         df = df.iloc[warmup_iters:]
 

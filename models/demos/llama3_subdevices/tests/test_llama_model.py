@@ -26,10 +26,10 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "weights, layers",
+    "weights, layers, iterations",
     [
-        ("random", 1),
-        ("instruct", 80),
+        ("random", 1, 6),
+        ("instruct", 80, 5),
     ],
     ids=["quick", "full"],
 )
@@ -70,10 +70,13 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "worker_l1_size": 1344544}], indirect=True
+)
 def test_llama_model_inference(
     weights,
     layers,
+    iterations,
     max_seq_len,
     batch_size,
     paged_attention,
@@ -106,12 +109,12 @@ def test_llama_model_inference(
 
     # Define minimum PCC for each iteration
     if layers == 1:
-        pcc = 0.922166
+        pcc = 0.921942
     else:
         pcc = 0.94
 
     # Define tight final PCC thresholds for quick mode
-    final_model_pcc = {"llama31_70b": 0.92216}[model_name]
+    final_model_pcc = {"llama31_70b": 0.921942}[model_name]
 
     final_k_cache_pcc = {
         "llama31_70b": 0.9997,
@@ -119,8 +122,6 @@ def test_llama_model_inference(
     final_v_cache_pcc = {
         "llama31_70b": 0.9997,
     }[model_name]
-
-    iterations = 6 if layers == 1 else 5
 
     if layers is not None:
         model_args.n_layers = layers

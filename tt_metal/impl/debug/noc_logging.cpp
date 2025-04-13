@@ -17,7 +17,7 @@
 #include "debug_helpers.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "llrt.hpp"
-#include "llrt/tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "logger.hpp"
 #include "rtoptions.hpp"
 #include <umd/device/tt_soc_descriptor.h>
@@ -48,8 +48,9 @@ void PrintNocData(noc_data_t noc_data, const string& file_name) {
 }
 
 void DumpCoreNocData(chip_id_t device_id, const CoreDescriptor& logical_core, noc_data_t& noc_data) {
-    CoreCoord virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-        device_id, logical_core.coord, logical_core.type);
+    CoreCoord virtual_core =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            device_id, logical_core.coord, logical_core.type);
     for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
         // Read out the DPRINT buffer, we stored our data in the "data field"
         uint64_t addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
@@ -108,8 +109,9 @@ void ClearNocData(chip_id_t device_id) {
 
     CoreDescriptorSet all_cores = GetAllCores(device_id);
     for (const CoreDescriptor& logical_core : all_cores) {
-        CoreCoord virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-            device_id, logical_core.coord, logical_core.type);
+        CoreCoord virtual_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                device_id, logical_core.coord, logical_core.type);
         for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
             uint64_t addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
             std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
