@@ -169,12 +169,10 @@ auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_conte
 
 CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges) :
     ranges_(core_ranges.begin(), core_ranges.end()) {
-    ZoneScoped;
     this->validate_no_overlap_debug();
 }
 
 CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(core_ranges.begin(), core_ranges.end()) {
-    ZoneScoped;
     this->validate_no_overlap_debug();
 }
 
@@ -204,7 +202,6 @@ CoreRangeSet& CoreRangeSet::operator=(CoreRangeSet&& other) noexcept {
 }
 
 CoreRangeSet::CoreRangeSet(CoreRangeVector&& core_ranges) : ranges_(std::move(core_ranges)) {
-    ZoneScoped;
     this->validate_no_overlap_debug();
 }
 
