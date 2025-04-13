@@ -54,6 +54,7 @@ from models.utility_functions import skip_for_grayskull
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.timeout(600)
 def test_attention_inference(
     max_seq_len,
     batch_size,
