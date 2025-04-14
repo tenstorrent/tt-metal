@@ -8,10 +8,6 @@ option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
 option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace)" OFF)
 option(BUILD_SHARED_LIBS "Create shared libraries" ON)
-option(ENABLE_ASAN "Enable build with AddressSanitizer" OFF)
-option(ENABLE_MSAN "Enable build with MemorySanitizer" OFF)
-option(ENABLE_TSAN "Enable build with ThreadSanitizer" OFF)
-option(ENABLE_UBSAN "Enable build with UndefinedBehaviorSanitizer" OFF)
 option(BUILD_PROGRAMMING_EXAMPLES "Enables build of tt_metal programming examples" OFF)
 option(TT_METAL_BUILD_TESTS "Enables build of tt_metal tests" OFF)
 option(TTNN_BUILD_TESTS "Enables build of ttnn tests" OFF)
@@ -21,6 +17,7 @@ option(BUILD_TT_TRAIN "Enables build of tt-train" OFF)
 option(ENABLE_TTNN_SHARED_SUBLIBS "Use shared libraries for ttnn to speed up incremental builds" OFF)
 option(TT_ENABLE_LIGHT_METAL_TRACE "Enable Light Metal Trace" ON)
 option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
+option(TT_UMD_BUILD_SIMULATION "Force UMD to include its simulation harnessing" ON)
 
 ###########################################################################################
 
