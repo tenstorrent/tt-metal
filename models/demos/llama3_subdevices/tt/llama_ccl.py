@@ -54,7 +54,7 @@ class TT_CCL:
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
         if mode == "prefill":
-            self.persistent_buffers = self.get_reduce_scatter_buffers()
+            self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
             self.all_gather_buffers = self.get_prefill_all_gather_buffers()
 
     def reset_gather_and_buffer_idx(self):
