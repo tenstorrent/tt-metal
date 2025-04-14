@@ -128,6 +128,8 @@ def test_untilize_test(input_shapes, untilize_args, device, function_level_defau
         with open(log_file, mode="w", newline="") as file:
             if perf in ["op", "op_no_dm"] and perf_scope == "op":
                 get_op_duration = True
+            else:
+                get_op_duration = False
             writer = csv.writer(file)
             csv_header = [
                 "rt_dim",

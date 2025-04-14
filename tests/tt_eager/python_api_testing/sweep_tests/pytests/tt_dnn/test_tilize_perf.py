@@ -130,6 +130,8 @@ def test_tilize_test(input_shapes, tilize_args, device, function_level_defaults)
         with open(log_file, mode="w", newline="") as file:
             if perf in ["op", "op_no_dm"] and perf_scope == "op":
                 get_op_duration = True
+            else:
+                get_op_duration = False
             writer = csv.writer(file)
             csv_header = [
                 "rt_dim",
@@ -174,10 +176,10 @@ def test_tilize_test(input_shapes, tilize_args, device, function_level_defaults)
                         f"{profiler_data[1] / ct_dim / rt_div:.2f}",
                         f"{profiler_data[2] / ct_dim / rt_div:.2f}",
                     ]
-                    writer.writerow(csv_data)
                     if get_op_duration:
                         csv_data.append(f"{profiler_data[3]:.2f}")
                         csv_data.append(f"{profiler_data[3] / ct_dim / rt_div:.2f}")
+                    writer.writerow(csv_data)
 
         # Unset env variable used to select perf measurement thread target(unpack, math, pack)
         if perf in ["unpack", "pack", "math"]:
