@@ -86,6 +86,7 @@ tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelick
 tt_metal/include/dataflow_kernel_api.h @davorchap @ntarafdar @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT
 tt_metal/tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
+tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
 
 # metal - profiler
 tt_metal/**/profiler/ @mo-tenstorrent
