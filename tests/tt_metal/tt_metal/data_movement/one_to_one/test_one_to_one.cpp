@@ -33,18 +33,11 @@ struct OneToOneConfig {
     //  3. Posted flag
 };
 
-/// @brief Does Dram --> Reader --> CB --> Writer --> Dram. // TODO: Change description
+/// @brief Does L1 Sender Core --> L1 Receiver Core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
-    // TODO: Steps to produce L1 to L1 tests
-    //  1. Create sharded buffers for sender and receiver
-    //  2. Create kernels for sender and receiver cores
-    //  3. Input data into sender buffer (Do we need to wait for data to be written into L1?)
-    //  4. Launch program (maybe two programs: one for sender, one for receiver)
-    //  5. Read data from receiver buffer
-
     // Program
     Program program = CreateProgram();
 
@@ -88,7 +81,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     });
     uint32_t slave_l1_byte_address = slave_l1_buffer->address();
 
-    // Compile-time arguments for kernels // TODO: Change compiletime args
+    // Compile-time arguments for kernels
     vector<uint32_t> sender_compile_args = {
         (uint32_t)master_l1_byte_address,
         (uint32_t)slave_l1_byte_address,
@@ -108,7 +101,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // Kernels
     auto sender_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/dm/sender_core_to_core.cpp",
+        "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/sender.cpp",
         master_core_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -117,7 +110,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 
     auto receiver_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/dm/receiver_core_to_core.cpp",
+        "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/receiver.cpp",
         slave_core_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
