@@ -72,7 +72,7 @@ def get_profiler_data(perf_scope, op_name, op_duration=False):
     return data
 
 
-def test_tilize(device):
+def test_untilize(device):
     # Enable llk perf testing
     os.environ["TT_ENABLE_LLK_PERF"] = "1"
 
