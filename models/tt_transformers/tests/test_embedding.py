@@ -34,7 +34,6 @@ from models.utility_functions import skip_for_grayskull
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-@pytest.mark.timeout(600)
 def test_embedding(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     mesh_device.enable_async(True)
