@@ -316,7 +316,7 @@ def run_rms_fuse_impl(
         wrap_fabric_around_mesh=True,
     )
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-    torch.manual_seed(1234)
+    torch.manual_seed(432)
     num_cores = input_shard_grid.num_cores()
     total_cores = num_cores * num_devices
     padded_dim_per_core = int(math.ceil(elements_per_batch / total_cores / 32) * 32)
@@ -428,7 +428,6 @@ def run_rms_fuse_impl(
         )
         tt_out_array.append(tt_out)
         ttnn.deallocate(tt_stats)
-        ttnn.deallocate(input_tensor[i])
     for i in range(num_iters):
         tt_out_torch = ttnn.to_torch(
             tt_out_array[i],

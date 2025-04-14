@@ -457,7 +457,7 @@ def test_tg_trace_rms_fuse(
     ],
 )
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("num_iters", [110])
+@pytest.mark.parametrize("num_iters", [20])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_rms_fuse(

@@ -55,9 +55,9 @@ FORCE_INLINE void semaphore_and_write_and_advance_local_read_address_for_fabric_
     size_t& l1_read_addr,
     uint32_t payload_size_bytes,
     uint64_t semaphore_noc_addr,
-    uint16_t val,
-    uint16_t wrap,
-    bool flush) {
+    const uint16_t val,
+    const uint16_t wrap,
+    const bool flush) {
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr;
 
@@ -85,8 +85,6 @@ FORCE_INLINE void semaphore_and_write_and_advance_local_read_address_for_fabric_
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
     }
-
-    noc_async_writes_flushed();
 
     l1_read_addr += payload_size_bytes;
 }
