@@ -58,18 +58,24 @@ ttnn::DataType get_output_dtype(
     }
 }
 
-void check_per_tensor_scale_tensor(const ttnn::Tensor& scale) {
+void check_per_tensor_scale(const ttnn::Tensor& scale) {
     const auto dtype = scale.get_dtype();
     TT_FATAL(tt::tt_metal::is_floating_point(dtype), "Quantization only takes floating-point number scales");
     TT_FATAL(!tt::tt_metal::is_block_float(dtype), "Unsupported quantization scale data type");
     TT_FATAL(scale.get_logical_volume() == 1u, "Per-tensor quantization only takes scalar-tensor scales");
 }
 
-void check_per_tensor_zero_point_tensor(const ttnn::Tensor& zero_point) {
+template <typename T>
+void check_per_tensor_scale(T) {}
+
+void check_per_tensor_zero_point(const ttnn::Tensor& zero_point) {
     const auto dtype = zero_point.get_dtype();
     TT_FATAL(dtype == ttnn::DataType::INT32, "Quantization only takes int32 zero-points for now");
     TT_FATAL(zero_point.get_logical_volume() == 1u, "Per-tensor quantization only takes scalar-tensor zero-points");
 }
+
+template <typename T>
+void check_per_tensor_zero_point(T) {}
 
 void check_per_channel_tensor_args(
     const ttnn::Tensor& input_tensor,
@@ -179,6 +185,8 @@ Tensor QuantOp::invoke(
             c_dtype);
     }
 
+    check_per_tensor_scale(scale);
+    check_per_tensor_zero_point(zero_point);
     return std::visit(
         tt::stl::overloaded{
             [&](const float scale, const int32_t zero_point) {
@@ -199,7 +207,6 @@ Tensor QuantOp::invoke(
                     post_activation);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
-                check_per_tensor_scale_tensor(scale);
                 const std::array post_activation{
                     unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
 
@@ -216,7 +223,6 @@ Tensor QuantOp::invoke(
                     post_activation);
             },
             [&](const float scale, const Tensor& zero_point) {
-                check_per_tensor_zero_point_tensor(zero_point);
                 const Tensor input_scaled = ttnn::divide(
                     queue_id, input_a, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
                 return ttnn::typecast(
@@ -234,8 +240,6 @@ Tensor QuantOp::invoke(
                     c_dtype);
             },
             [&](const Tensor& scale, const Tensor& zero_point) {
-                check_per_tensor_scale_tensor(scale);
-                check_per_tensor_zero_point_tensor(zero_point);
                 const Tensor input_scaled = ttnn::divide(
                     queue_id,
                     input_a,
@@ -360,6 +364,10 @@ Tensor RequantOp::invoke(
             c_dtype);
     }
 
+    check_per_tensor_scale(in_scale);
+    check_per_tensor_zero_point(in_zero_point);
+    check_per_tensor_scale(out_scale);
+    check_per_tensor_zero_point(out_zero_point);
     return std::visit(
         tt::stl::overloaded{
             // Enable fast path for all scalar scales & zero-points, fallback to composite ops otherwise
@@ -385,23 +393,7 @@ Tensor RequantOp::invoke(
                     none,
                     post_activation);
             },
-            [&](const std::variant<Tensor, float>& in_scale,
-                const std::variant<Tensor, int32_t>& in_zero_point,
-                const std::variant<Tensor, float>& out_scale,
-                const std::variant<Tensor, int32_t>& out_zero_point) {
-                if (std::holds_alternative<Tensor>(in_scale)) {
-                    check_per_tensor_scale_tensor(std::get<Tensor>(in_scale));
-                }
-                if (std::holds_alternative<Tensor>(in_zero_point)) {
-                    check_per_tensor_zero_point_tensor(std::get<Tensor>(in_zero_point));
-                }
-                if (std::holds_alternative<Tensor>(out_scale)) {
-                    check_per_tensor_scale_tensor(std::get<Tensor>(out_scale));
-                }
-                if (std::holds_alternative<Tensor>(out_zero_point)) {
-                    check_per_tensor_zero_point_tensor(std::get<Tensor>(out_zero_point));
-                }
-
+            [&](const auto& in_scale, const auto& in_zero_point, const auto& out_scale, const auto& out_zero_point) {
                 // The composite op fallback, generic but uses more ops and has worse accuracy
                 const Tensor dequantized = DequantOp::invoke(
                     queue_id, input_tensor, in_scale, in_zero_point, axis, std::nullopt, std::nullopt, std::nullopt);
@@ -479,6 +471,8 @@ Tensor DequantOp::invoke(
             c_dtype);
     }
 
+    check_per_tensor_scale(scale);
+    check_per_tensor_zero_point(zero_point);
     return std::visit(
         tt::stl::overloaded{
             [&](const float scale, const int32_t zero_point) {
@@ -498,7 +492,6 @@ Tensor DequantOp::invoke(
                     post_activation);
             },
             [&](const Tensor& scale, const int32_t zero_point) {
-                check_per_tensor_scale_tensor(scale);
                 const std::array post_activation{
                     unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
                 return ttnn::prim::binary_ng(
@@ -514,7 +507,6 @@ Tensor DequantOp::invoke(
                     post_activation);
             },
             [&](const float scale, const Tensor& zero_point) {
-                check_per_tensor_zero_point_tensor(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
                         queue_id,
@@ -541,8 +533,6 @@ Tensor DequantOp::invoke(
                     false);
             },
             [&](const Tensor& scale, const Tensor& zero_point) {
-                check_per_tensor_scale_tensor(scale);
-                check_per_tensor_zero_point_tensor(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
                         queue_id,
