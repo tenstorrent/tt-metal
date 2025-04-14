@@ -219,7 +219,6 @@ class SegformerBare:
         self.padded_shape = input_shapes[1]
 
     def copy_input_to_device(self):
-        # ttnn.pad does not work on host so we copy to device and pad there
         tt_inputs_l1 = self.tt_inputs_host.to(self.device, self.input_mem_config)
         self.test_infra.input_tensor = ttnn.pad(
             tt_inputs_l1, self.padded_shape, [0, 0, 0, 0], 0, memory_config=self.padded_mem_config
