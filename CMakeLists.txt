@@ -149,9 +149,9 @@ unset(SANITIZER_ENABLED)
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
-    add_subdirectory(dependencies EXCLUDE_FROM_ALL)
+    add_subdirectory(dependencies)
 else()
-    add_subdirectory(dependencies EXCLUDE_FROM_ALL SYSTEM)
+    add_subdirectory(dependencies SYSTEM)
 endif()
 
 if(WITH_PYTHON_BINDINGS)
