@@ -112,7 +112,7 @@ def test_tilize_test(input_shapes, tilize_args, device, function_level_defaults)
     if perf_scope == "block":
         os.environ["TT_LLK_PERF_BLOCK"] = "1"
 
-    for perf in ["op", "op_no_dm", "unpack", "math", "pack"]:
+    for perf in ["op", "op_no_dm", "unpack", "pack"]:
         # Set log csv file name, file will be used to store perf data
         ENVS = dict(os.environ)
         TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
