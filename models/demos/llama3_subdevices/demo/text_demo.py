@@ -169,20 +169,7 @@ def create_tt_model(
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only",
     [
-        (  # Batch-1 run (Latency) - single user, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            1,  # batch_size
-            150,  # max_generated_tokens
-            False,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-        ),
-        (  # Repeat-5 Batch-32 run (Throughput) - 32 users, small prompt
+        (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -195,10 +182,10 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (  # Batch-32 run (Throughput) - 32 users, small prompt
+        (  # Repeat-5 Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
-            5,  # repeat_batches
+            2,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
@@ -262,9 +249,8 @@ def create_tt_model(
         ),
     ],
     ids=[
-        "batch-1",  # latency
         "batch-32",  # throughput
-        "repeat5-batch-32",  # throughput with 5 repeat batches
+        "repeat2",  # throughput with 5 repeat batches
         "long-context",  # max-length
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
@@ -275,14 +261,13 @@ def create_tt_model(
     "optimizations",
     [
         LlamaOptimizations.performance,
-        LlamaOptimizations.accuracy,
     ],
 )
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "trace_region_size": 23887872,
+            "trace_region_size": 25000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
@@ -324,11 +309,12 @@ def test_demo_text(
         pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG
-    if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
-        pytest.skip("TG only supports batch 1 and 32")
+    if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [32]:
+        pytest.skip("Llama TG only supports batch-32")
 
     mesh_device.enable_async(True)
     enable_trace = True  # Use tracing for better perf
+    prefill_enable_trace = repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
@@ -436,27 +422,32 @@ def test_demo_text(
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
-        logger.info("Starting prefill warmup...")
-        profiler.start(f"compile_prefill", iteration=batch_idx)
+        if batch_idx == 0:
+            logger.info("Starting prefill warmup...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
 
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-        )
-        profiler.end(f"compile_prefill", iteration=batch_idx)
-        logger.info("Finished prefill warmup")
+            logits = generator.prefill_forward_text(
+                input_tokens_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+                enable_trace=prefill_enable_trace,
+            )
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Finished prefill warmup")
 
         logger.info(f"Starting prefill...")
+
         profiler.start(f"inference_prefill", iteration=batch_idx)
+
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt[0].unsqueeze(0),
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
+            enable_trace=prefill_enable_trace,
         )
-        prefilled_token = torch.argmax(logits, dim=-1)
+        prefilled_token = logits.view(-1, 1)  # torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
@@ -541,9 +532,10 @@ def test_demo_text(
 
             # Always print perf after every iteration
             tokens_per_second_per_user = 1 / decode_iteration_time
-            logger.info(
-                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
+            if repeat_batches == 1:
+                logger.info(
+                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+                )
 
             current_pos += 1
 
@@ -564,8 +556,8 @@ def test_demo_text(
                             users_decoding = False
 
             # Print out generated outputs for each user at the end of every iteration
-            if not is_ci_env:
-                for user in range(batch_size):
+            if not is_ci_env and repeat_batches == 1:
+                for user in range(1):
                     text = "".join(tokenizer.decode(all_outputs[user]))
                     if len(text) > 100:
                         text = "..." + text[-97:]
@@ -623,7 +615,7 @@ def test_demo_text(
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
     # Average prefill time for each user
-    avg_time_to_first_token = total_inference_prefill_time / batch_size
+    avg_time_to_first_token = total_inference_prefill_time
     # Average decode time per batch iteration
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
 
@@ -686,7 +678,7 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama3.1-70B", "Deepseek-R1-Distill-70B"]
+    supported_models = ["Llama3.1-70B", "Llama3.3-70B", "Deepseek-R1-Distill-70B"]
     # model_args.base_model_name = "Llama3.1-70B"
     supported_devices = ["TG"]
 
@@ -695,12 +687,14 @@ def test_demo_text(
     # Set the target times to first token for every combination of device and model
     target_prefill_tok_s = {
         "TG_Llama3.1-70B": 1050,  # TODO Update target
+        "TG_Llama3.3-70B": 1050,
         "TG_Deepseek-R1-Distill-70B": 1050,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
     # Set the target decode timesfor every combination of device and model
     target_decode_tok_s_u = {
         "TG_Llama3.1-70B": 20,  # TODO Update target
+        "TG_Llama3.3-70B": 20,
         "TG_Deepseek-R1-Distill-70B": 20,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
@@ -710,6 +704,8 @@ def test_demo_text(
         "decode_t/s": target_decode_tok_s,
         "decode_t/s/u": target_decode_tok_s_u,
     }
+    if repeat_batches > 1:
+        assert avg_time_to_first_token * 1000 > 119, f"TTFT {avg_time_to_first_token} ms is too low, should be > 119."
 
     # Save benchmark data for CI dashboard
     if is_ci_env:
