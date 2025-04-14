@@ -1071,7 +1071,13 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
         return nullptr;
     }
 
+    uint32_t corner_chip_connections = 0;
+    constexpr uint32_t corner_chip_id = 0;
     for (const auto& direction : routing_directions) {
+        if (!control_plane->get_intra_chip_neighbors(mesh_chip_id.first, 0, direction).empty()) {
+            corner_chip_connections++;
+        }
+
         auto neighbors = control_plane->get_intra_chip_neighbors(mesh_chip_id.first, mesh_chip_id.second, direction);
         if (neighbors.empty()) {
             continue;
@@ -1100,8 +1106,8 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
 
     // Refactor this once mesh_id has row/col control
-    // This currently checks if a chip is a corner chip
-    bool wrap_around_mesh = chip_neighbors.size() == 2;
+    // This currently checks if chip 0 is a corner chip
+    bool wrap_around_mesh = corner_chip_connections == 2;
 
     for (const auto& [direction, remote_chip_id] : chip_neighbors) {
         bool is_dateline = check_dateline(
@@ -1164,9 +1170,8 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
         }
     };
 
-    // Refactor this once mesh_id has row/col control
-    // for corner chip, fold the internal connections
-    if (wrap_around_mesh) {
+    // if the wrap aroud mesh flag is set and corner chip, fold the internal connections
+    if (wrap_around_mesh && chip_neighbors.size() == 2) {
         auto it = chip_neighbors.begin();
         auto dir1 = it->first;
         it++;
