@@ -35,6 +35,7 @@ enum class BinaryOpType {
     QUANT,
     REQUANT,
     DEQUANT,
+    MAXIMUM,
 };
 
 }  // namespace ttnn::operations::binary

@@ -12,7 +12,7 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
 from models.tt_transformers.tt.generator import Generator
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer as ReferenceTransformer
 from models.utility_functions import (
@@ -50,7 +50,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(lambda model_args: DecodersPrecision.accuracy(model_args.n_layers), id="accuracy"),
+        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
     ],
 )
 def test_chunked_prefill_single_user(
@@ -64,7 +64,6 @@ def test_chunked_prefill_single_user(
     reset_seeds,
     ensure_gc,
     is_ci_env,
-    request,
 ):
     mesh_device.enable_async(True)
 
@@ -72,11 +71,10 @@ def test_chunked_prefill_single_user(
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # This sets the minimum PCC for each iteration based on optimization mode
-    test_id = request.node.callspec.id
-    if test_id == "accuracy":
+    if optimizations == ModelOptimizations.accuracy:
         pcc = 0.91  # TODO Look on improving PCC
     else:  # performance mode
-        assert test_id == "performance"
+        assert optimizations == ModelOptimizations.performance
         pcc = 0.869  # TODO Look on improving PCC
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)

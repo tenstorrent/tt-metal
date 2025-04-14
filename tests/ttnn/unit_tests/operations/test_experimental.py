@@ -54,14 +54,14 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("input_a_is_sharded", [True, False])
 @pytest.mark.parametrize("output_is_sharded", [True, False])
-@pytest.mark.parametrize("m_size, num_cores", [[11264, 44]])
+@pytest.mark.parametrize("m_size, num_cores", [[5632, 22]])
 @pytest.mark.parametrize("k_size, n_size", [[64, 64], [64, 256]])
 @pytest.mark.parametrize("input_a_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("input_b_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_ttnn_linear(
     device, input_a_is_sharded, output_is_sharded, m_size, k_size, n_size, num_cores, input_a_dtype, input_b_dtype
 ):
-    grid_size = (7, 7)
+    grid_size = (6, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
 
     input_shape_a = [1, 1, m_size, k_size]

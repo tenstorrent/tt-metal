@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 5
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 340, "max": 355}, 10: {"min": 180, "max": 200}, 80: {"min": 39, "max": 41}}
+TSU_THRESHOLDS = {1: {"min": 355, "max": 375}, 10: {"min": 180, "max": 200}, 80: {"min": 40, "max": 44}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -319,6 +319,10 @@ def run_llama3_demo(
             current_pos_tensor,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
+        ttnn.plus_one(
+            rot_mat_idxs,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
     # profiler.end(f"plus one position done")
 
     # Capture Trace
@@ -354,7 +358,10 @@ def run_llama3_demo(
             current_pos_tensor,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
-    # ttnn.plus_one(rot_mat_idxs)  # FIXME <- This won't work since embedding requires uint32 and plus_one only works for int32
+        ttnn.plus_one(
+            rot_mat_idxs,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -420,8 +427,6 @@ def run_llama3_demo(
         # If this tensor is int32, it won't be supported by ttnn.embedding
         if not stress_test:
             current_pos += 1
-        rot_mat_idxs_updated = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
-        ttnn.copy_host_to_device_tensor(rot_mat_idxs_updated, rot_mat_idxs)
         # ttnn.synchronize_device(mesh_device)
         # Write to host
         tt_output_torch = ttnn.to_torch(
