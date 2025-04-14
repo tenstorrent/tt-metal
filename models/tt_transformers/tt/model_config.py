@@ -1908,7 +1908,12 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            wrapper = HfDecoderWrapper(layer, self.head_dim, layer.self_attn.rotary_emb)
+            # TODO: Generalize for other HF models
+            model_name_env = os.getenv("HF_MODEL")
+            if model_name_env is not None and "mistral" in model_name_env.lower():
+                wrapper = HfDecoderWrapper(layer, self.head_dim, layer.self_attn.rotary_emb)
+            else:
+                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def reference_attention(self):
@@ -2067,7 +2072,13 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        position_embeddings = self.rotary_emb(x, x.shape[1])
+        # TODO: Generalize for other HF models
+        model_name_env = os.getenv("HF_MODEL")
+        if model_name_env is not None and "mistral" in model_name_env.lower():
+            position_embeddings = self.rotary_emb(x, x.shape[1])
+        else:
+            position_embeddings = self.rotary_emb(x, position_ids)
+
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
