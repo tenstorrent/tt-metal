@@ -110,7 +110,6 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleTensixCoresL1) {
     for (IDevice* device : this->devices_) {
         for (uint32_t core_x = 0; core_x < device->compute_with_storage_grid_size().x; ++core_x) {
             for (uint32_t core_y = 0; core_y < device->compute_with_storage_grid_size().y; ++core_y) {
-                tt::log_info("Writing to core: {}, {}", core_x, core_y);
                 const CoreCoord core = device->worker_core_from_logical_core({core_x, core_y});
                 device->command_queue().enqueue_write_to_core_l1(
                     core, src_data.data(), address, num_elements * sizeof(uint32_t), false);
@@ -120,11 +119,9 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleTensixCoresL1) {
         std::vector<std::vector<uint32_t>> all_cores_dst_data(
             device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y,
             std::vector<uint32_t>(num_elements, 0));
-        tt::log_info("all_cores_dst_data size: {}", all_cores_dst_data.size());
         uint32_t i = 0;
         for (uint32_t core_x = 0; core_x < device->compute_with_storage_grid_size().x; ++core_x) {
             for (uint32_t core_y = 0; core_y < device->compute_with_storage_grid_size().y; ++core_y) {
-                tt::log_info("Reading from core: {}, {}", core_x, core_y);
                 const CoreCoord core = device->worker_core_from_logical_core({core_x, core_y});
                 device->command_queue().enqueue_read_from_core_l1(
                     core, all_cores_dst_data[i].data(), address, num_elements * sizeof(uint32_t), false);
