@@ -127,6 +127,7 @@ ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho
 ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
+ttnn/cpp/ttnn/operations/eltwise/quantization @wenbinlyuTT @patrickroberts @sjameelTT
 ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho @bbradelTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT @nardoTT
