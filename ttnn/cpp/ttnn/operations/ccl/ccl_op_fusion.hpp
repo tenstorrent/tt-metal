@@ -99,7 +99,8 @@ struct MatmulFusedOpSignaler {
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
-    void push_matmul_fused_op_rt_args(std::vector<uint32_t>& out_rt_args, bool use_in1_offset);
+    void push_matmul_fused_op_rt_args(
+        tt::tt_metal::KernelDescriptor::CoreRuntimeArgs& out_rt_args, bool use_in1_offset);
 };
 
 }  // namespace ccl

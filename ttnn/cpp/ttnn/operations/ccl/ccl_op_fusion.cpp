@@ -138,7 +138,8 @@ void MatmulFusedOpSignaler::init_fused_op(
     initialized_fused_op = true;
 }
 
-void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(std::vector<uint32_t>& out_rt_args, bool use_in1_offset) {
+void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
+    tt::tt_metal::KernelDescriptor::CoreRuntimeArgs& out_rt_args, bool use_in1_offset) {
     TT_ASSERT(initialized_all_gather && initialized_fused_op, "MatmulFusedOpSignaler not initialized fully.");
 
     out_rt_args.push_back(static_cast<uint32_t>(this->num_transfers));

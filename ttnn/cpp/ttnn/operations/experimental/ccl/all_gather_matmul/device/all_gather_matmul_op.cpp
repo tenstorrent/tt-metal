@@ -93,7 +93,7 @@ std::vector<Tensor> AllGatherMatmul::create_output_tensors(const std::vector<Ten
     return {all_gather_output_tensor, matmul_output_tensor, datacopy_output_tensor};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program(
+tt::tt_metal::ProgramDescriptor AllGatherMatmul::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {

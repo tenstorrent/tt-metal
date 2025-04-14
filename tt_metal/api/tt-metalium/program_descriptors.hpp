@@ -46,7 +46,7 @@ struct CBDescriptor {
     FormatDescriptors remote_format_descriptors;
 
     Buffer* buffer = nullptr;
-    experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
+    const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
 };
 
 struct SemaphoreDescriptor {

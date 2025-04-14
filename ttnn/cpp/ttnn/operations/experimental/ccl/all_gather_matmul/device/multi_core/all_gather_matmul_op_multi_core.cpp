@@ -190,7 +190,7 @@ DatacopyParams setup_datacopy(
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
-operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_workers(
+tt::tt_metal::ProgramDescriptor experimental::all_gather_matmul_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& all_gather_output_tensor,
     Tensor& datacopy_output_tensor,
@@ -217,179 +217,183 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     bool untilize_out
 
 ) {
-    tt::tt_metal::Program program{};
-    bool use_datacopy = false; /* Enable for debugging purposes */
+    // tt::tt_metal::Program program{};
+    // bool use_datacopy = false; /* Enable for debugging purposes */
 
-    ////////////// Params for fused op signalers //////////////
+    // ////////////// Params for fused op signalers //////////////
 
-    auto tensor_slicer =
-        ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, all_gather_output_tensor, dim, ring_index);
-    bool is_clockwise_direction = true;
-    const uint32_t num_transfers = 4;
-    const uint32_t weight_tensor_width = weight_tensor.get_padded_shape()[3] / 32;
+    // auto tensor_slicer =
+    //     ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, all_gather_output_tensor, dim, ring_index);
+    // bool is_clockwise_direction = true;
+    // const uint32_t num_transfers = 4;
+    // const uint32_t weight_tensor_width = weight_tensor.get_padded_shape()[3] / 32;
 
-    ////////////////////////////////////////////////////////
+    // ////////////////////////////////////////////////////////
 
-    // Create a matmul signal info object that gets populated by the matmul kernel
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
-        ttnn::experimental::ccl::MatmulFusedOpSignaler();
-    matmul_fused_op_signaler->init_all_gather(
-        num_transfers,
-        ring_size,
-        ring_index,
-        tensor_slicer.num_cols,
-        tensor_slicer.output_page_offset,
-        is_clockwise_direction,
-        tensor_slicer.num_cols *
-            weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */
-    );
+    // // Create a matmul signal info object that gets populated by the matmul kernel
+    // std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
+    //     ttnn::experimental::ccl::MatmulFusedOpSignaler();
+    // matmul_fused_op_signaler->init_all_gather(
+    //     num_transfers,
+    //     ring_size,
+    //     ring_index,
+    //     tensor_slicer.num_cols,
+    //     tensor_slicer.output_page_offset,
+    //     is_clockwise_direction,
+    //     tensor_slicer.num_cols *
+    //         weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */
+    // );
 
-    // Matmul
-    std::optional<operation::ProgramWithCallbacks> matmul_program_with_callbacks;
-    std::optional<operation::OverrideRuntimeArgumentsCallback<Tensors>> matmul_override_runtime_arguments_callback;
+    // // Matmul
+    // std::optional<operation::ProgramWithCallbacks> matmul_program_with_callbacks;
+    // std::optional<operation::OverrideRuntimeArgumentsCallback<Tensors>> matmul_override_runtime_arguments_callback;
 
-    std::visit(
-        [&](const auto& config) {
-            using ProgramConfigType = std::decay_t<decltype(config)>;
-            if (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
-                    program,
-                    all_gather_output_tensor,
-                    weight_tensor,
-                    bias,
-                    matmul_output_tensor,
-                    bcast_batch,
-                    compute_kernel_config,
-                    config,
-                    untilize_out,
-                    matmul_fused_op_signaler);
-                matmul_override_runtime_arguments_callback =
-                    matmul_program_with_callbacks->override_runtime_arguments_callback;
-            } else if (std::is_same_v<
-                           ProgramConfigType,
-                           operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
-                    program,
-                    all_gather_output_tensor,
-                    weight_tensor,
-                    bias,
-                    matmul_output_tensor,
-                    bcast_batch,
-                    compute_kernel_config,
-                    config,
-                    untilize_out,
-                    matmul_fused_op_signaler,
-                    std::nullopt,
-                    std::nullopt);
-                matmul_override_runtime_arguments_callback =
-                    matmul_program_with_callbacks->override_runtime_arguments_callback;
-            } else {
-                TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
-            }
-        },
-        program_config);
+    // std::visit(
+    //     [&](const auto& config) {
+    //         using ProgramConfigType = std::decay_t<decltype(config)>;
+    //         if (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
+    //             matmul_program_with_callbacks =
+    //             operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    //                 program,
+    //                 all_gather_output_tensor,
+    //                 weight_tensor,
+    //                 bias,
+    //                 matmul_output_tensor,
+    //                 bcast_batch,
+    //                 compute_kernel_config,
+    //                 config,
+    //                 untilize_out,
+    //                 matmul_fused_op_signaler);
+    //             matmul_override_runtime_arguments_callback =
+    //                 matmul_program_with_callbacks->override_runtime_arguments_callback;
+    //         } else if (std::is_same_v<
+    //                        ProgramConfigType,
+    //                        operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+    //             matmul_program_with_callbacks =
+    //             operations::matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    //                 program,
+    //                 all_gather_output_tensor,
+    //                 weight_tensor,
+    //                 bias,
+    //                 matmul_output_tensor,
+    //                 bcast_batch,
+    //                 compute_kernel_config,
+    //                 config,
+    //                 untilize_out,
+    //                 matmul_fused_op_signaler,
+    //                 std::nullopt,
+    //                 std::nullopt);
+    //             matmul_override_runtime_arguments_callback =
+    //                 matmul_program_with_callbacks->override_runtime_arguments_callback;
+    //         } else {
+    //             TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
+    //         }
+    //     },
+    //     program_config);
 
-    if (!matmul_program_with_callbacks.has_value()) {
-        TT_THROW("Matmul program with callbacks not created");
-    }
+    // if (!matmul_program_with_callbacks.has_value()) {
+    //     TT_THROW("Matmul program with callbacks not created");
+    // }
 
-    // Datacopy
-    const CoreCoord datacopy_core_coord = {0, 7};  // Pick a location that doesn't overlap with all_gather/matmul
-    DatacopyParams datacopy_params;
-    if (use_datacopy) {
-        datacopy_params = setup_datacopy(
-            matmul_program_with_callbacks->program,
-            input_tensor,
-            all_gather_output_tensor,
-            datacopy_output_tensor,
-            dim,
-            num_links,
-            ring_size,
-            ring_index,
-            topology,
-            user_defined_num_workers,
-            user_defined_num_buffers_per_channel,
-            datacopy_core_coord,
-            matmul_fused_op_signaler.value());
-    }
+    // // Datacopy
+    // const CoreCoord datacopy_core_coord = {0, 7};  // Pick a location that doesn't overlap with all_gather/matmul
+    // DatacopyParams datacopy_params;
+    // if (use_datacopy) {
+    //     datacopy_params = setup_datacopy(
+    //         matmul_program_with_callbacks->program,
+    //         input_tensor,
+    //         all_gather_output_tensor,
+    //         datacopy_output_tensor,
+    //         dim,
+    //         num_links,
+    //         ring_size,
+    //         ring_index,
+    //         topology,
+    //         user_defined_num_workers,
+    //         user_defined_num_buffers_per_channel,
+    //         datacopy_core_coord,
+    //         matmul_fused_op_signaler.value());
+    // }
 
-    // Create the all gather fused op signaler
-    std::optional<AllGatherFusedOpSignaler> all_gather_fused_op_signaler = AllGatherFusedOpSignaler();
-    if (use_datacopy) {
-        all_gather_fused_op_signaler->init_fused_op(
-            datacopy_params.datacopy_cores_noc, datacopy_params.datacopy_signal_semaphore_ids);
-    } else {
-        all_gather_fused_op_signaler->init_fused_op(
-            matmul_fused_op_signaler->fused_op_receiver_cores_noc,
-            matmul_fused_op_signaler->fused_op_receiver_signal_semaphores,
-            matmul_fused_op_signaler->fused_op_signaler_mode);
-    }
+    // // Create the all gather fused op signaler
+    // std::optional<AllGatherFusedOpSignaler> all_gather_fused_op_signaler = AllGatherFusedOpSignaler();
+    // if (use_datacopy) {
+    //     all_gather_fused_op_signaler->init_fused_op(
+    //         datacopy_params.datacopy_cores_noc, datacopy_params.datacopy_signal_semaphore_ids);
+    // } else {
+    //     all_gather_fused_op_signaler->init_fused_op(
+    //         matmul_fused_op_signaler->fused_op_receiver_cores_noc,
+    //         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores,
+    //         matmul_fused_op_signaler->fused_op_signaler_mode);
+    // }
 
-    // All Gather
-    tt::tt_metal::operation::ProgramWithCallbacks program_with_callbacks =
-        ttnn::all_gather_multi_core_with_workers_helper(
-            matmul_program_with_callbacks->program,
-            input_tensor,
-            all_gather_output_tensor,
-            dim,
-            num_links,
-            ring_size,
-            ring_index,
-            receiver_device_id,
-            sender_device_id,
-            topology,
-            user_defined_num_workers,
-            user_defined_num_buffers_per_channel,
-            all_gather_fused_op_signaler,
-            core_grid_offset);
-    const auto all_gather_override_runtime_arguments_callback =
-        program_with_callbacks.override_runtime_arguments_callback;
+    // // All Gather
+    // tt::tt_metal::operation::ProgramWithCallbacks program_with_callbacks =
+    //     ttnn::all_gather_multi_core_with_workers_helper(
+    //         matmul_program_with_callbacks->program,
+    //         input_tensor,
+    //         all_gather_output_tensor,
+    //         dim,
+    //         num_links,
+    //         ring_size,
+    //         ring_index,
+    //         receiver_device_id,
+    //         sender_device_id,
+    //         topology,
+    //         user_defined_num_workers,
+    //         user_defined_num_buffers_per_channel,
+    //         all_gather_fused_op_signaler,
+    //         core_grid_offset);
+    // const auto all_gather_override_runtime_arguments_callback =
+    //     program_with_callbacks.override_runtime_arguments_callback;
 
-    // Fuse the override runtime arguments callbacks
-    auto override_runtime_arguments_callback =
-        [use_datacopy,
-         all_gather_override_runtime_arguments_callback,
-         matmul_override_runtime_arguments_callback,
-         datacopy_params](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            if (matmul_override_runtime_arguments_callback.has_value()) {
-                matmul_override_runtime_arguments_callback.value()(
-                    operation,
-                    program,
-                    {input_tensors[1], input_tensors[2]}, /* all gather output tensor, weight tensor */
-                    optional_input_tensors,
-                    {output_tensors[1]} /* matmul output tensor */
-                );
-            }
+    // // Fuse the override runtime arguments callbacks
+    // auto override_runtime_arguments_callback =
+    //     [use_datacopy,
+    //      all_gather_override_runtime_arguments_callback,
+    //      matmul_override_runtime_arguments_callback,
+    //      datacopy_params](
+    //         const void* operation,
+    //         Program& program,
+    //         const std::vector<Tensor>& input_tensors,
+    //         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    //         const std::vector<Tensor>& output_tensors) {
+    //         if (matmul_override_runtime_arguments_callback.has_value()) {
+    //             matmul_override_runtime_arguments_callback.value()(
+    //                 operation,
+    //                 program,
+    //                 {input_tensors[1], input_tensors[2]}, /* all gather output tensor, weight tensor */
+    //                 optional_input_tensors,
+    //                 {output_tensors[1]} /* matmul output tensor */
+    //             );
+    //         }
 
-            if (all_gather_override_runtime_arguments_callback.has_value()) {
-                all_gather_override_runtime_arguments_callback.value()(
-                    operation,
-                    program,
-                    {input_tensors[0], output_tensors[0]}, /* input tensor, all gather output tensor */
-                    optional_input_tensors,
-                    {output_tensors[0]} /* all gather output tensor */
-                );
-            }
+    //         if (all_gather_override_runtime_arguments_callback.has_value()) {
+    //             all_gather_override_runtime_arguments_callback.value()(
+    //                 operation,
+    //                 program,
+    //                 {input_tensors[0], output_tensors[0]}, /* input tensor, all gather output tensor */
+    //                 optional_input_tensors,
+    //                 {output_tensors[0]} /* all gather output tensor */
+    //             );
+    //         }
 
-            if (use_datacopy && datacopy_params.datacopy_override_runtime_arguments_callback.has_value()) {
-                datacopy_params.datacopy_override_runtime_arguments_callback.value()(
-                    operation,
-                    program,
-                    {input_tensors[0], output_tensors[0]}, /* input tensor, all gather output tensor */
-                    optional_input_tensors,
-                    {output_tensors[2]} /* datacopy output tensor */
-                );
-            }
-        };
+    //         if (use_datacopy && datacopy_params.datacopy_override_runtime_arguments_callback.has_value()) {
+    //             datacopy_params.datacopy_override_runtime_arguments_callback.value()(
+    //                 operation,
+    //                 program,
+    //                 {input_tensors[0], output_tensors[0]}, /* input tensor, all gather output tensor */
+    //                 optional_input_tensors,
+    //                 {output_tensors[2]} /* datacopy output tensor */
+    //             );
+    //         }
+    //     };
 
-    program_with_callbacks.override_runtime_arguments_callback = override_runtime_arguments_callback;
+    // program_with_callbacks.override_runtime_arguments_callback = override_runtime_arguments_callback;
 
-    return program_with_callbacks;
+    // return program_with_callbacks;
+
+    TT_THROW("Not implemented");
 }
 
 }  // namespace ttnn
