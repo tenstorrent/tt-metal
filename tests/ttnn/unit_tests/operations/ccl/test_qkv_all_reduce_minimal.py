@@ -137,7 +137,14 @@ def run_all_reduce_qkv_heads_perf_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        ar_core_range_set = ttnn.num_cores_to_corerangeset(output_num_cores, ttnn.CoreCoord(8, 5), row_wise=True)
+        model_config = {}
+        model_config = set_tg_attention_config(model_config, 4096)
+        ar_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(1, 0),
+            output_num_cores,
+            model_config["CREATE_HEAD_OUTPUT_MEMCFG"].shard_spec.grid,
+            row_wise=False,
+        )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -479,14 +486,13 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        ar_core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(x, y),
-                    ttnn.CoreCoord(x, y),
-                )
-                for x, y in CORE_RANGE[:output_num_cores]
-            ]
+        model_config = {}
+        model_config = set_tg_attention_config(model_config, 4096)
+        ar_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(1, 0),
+            output_num_cores,
+            model_config["CREATE_HEAD_OUTPUT_MEMCFG"].shard_spec.grid,
+            row_wise=False,
         )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -532,8 +538,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             )
         ]
 
-        model_config = {}
-        model_config = set_tg_attention_config(model_config, 4096)
         head_dim = N // (8 + 2 * 1)
         qkv_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -759,7 +763,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872}],
+    [{"trace_region_size": 23887872, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 def test_all_reduce_qkv_heads(
@@ -830,7 +834,7 @@ def test_all_reduce_qkv_heads(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872}],
+    [{"trace_region_size": 23887872, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 def test_all_reduce_qkv_heads_fuse(
@@ -901,7 +905,7 @@ def test_all_reduce_qkv_heads_fuse(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872}],
+    [{"trace_region_size": 23887872, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 def test_all_reduce_qkv_heads_perf(
@@ -972,7 +976,7 @@ def test_all_reduce_qkv_heads_perf(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872}],
+    [{"trace_region_size": 23887872, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 def test_all_reduce_qkv_heads_fuse_perf(
