@@ -206,7 +206,7 @@ inline void fabric_send_non_contig(
 }
 
 template <bool DRAM>
-inline void fabric_send_dim3_bf16_dram_remainder0(
+inline void fabric_send_dim3_bf16_dram_remain0(
     uint32_t num_tiles,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
@@ -226,7 +226,7 @@ inline void fabric_send_dim3_bf16_dram_remainder0(
 }
 
 template <bool DRAM>
-inline void fabric_send_dim3_bf16_dram_remainder4_8(
+inline void fabric_send_dim3_bf16_dram_remain4_8(
     uint32_t num_tiles,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
@@ -249,7 +249,7 @@ inline void fabric_send_dim3_bf16_dram_remainder4_8(
 }
 
 template <bool DRAM>
-inline void fabric_dim3_bf8_dram_reminder0(
+inline void fabric_send_dim3_bf8_dram_remain0(
     uint32_t num_tiles,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
@@ -273,7 +273,7 @@ inline void fabric_dim3_bf8_dram_reminder0(
 }
 
 template <bool DRAM>
-inline void fabric_send_dim3_bf8_reminder32(
+inline void fabric_send_dim3_bf8_dram_remain8(
     uint32_t num_tiles,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
@@ -639,7 +639,7 @@ void kernel_main() {
     if constexpr (last_dim) {
         if constexpr (packet_size_in_pages == 2) {  // bf16
             if (is_dram && tile_cols_per_chip % 12 == 0) {
-                fabric_send_dim3_bf16_dram_remainder0<is_dram>(
+                fabric_send_dim3_bf16_dram_remain0<is_dram>(
                     num_tiles_per_chip,
                     ring_size,
                     tile_cols_per_chip,
@@ -648,7 +648,7 @@ void kernel_main() {
                     pkt_hdr_backward,
                     fabric_connection);
             } else if (is_dram && (tile_cols_per_chip % 12 == 8 || tile_cols_per_chip % 12 == 4)) {
-                fabric_send_dim3_bf16_dram_remainder4_8<is_dram>(
+                fabric_send_dim3_bf16_dram_remain4_8<is_dram>(
                     num_tiles_per_chip,
                     ring_size,
                     tile_cols_per_chip,
@@ -667,8 +667,8 @@ void kernel_main() {
                     fabric_connection);
             }
         } else {
-            if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_DRAM_REMAINDER_8) {
-                fabric_send_dim3_bf8_reminder32<is_dram>(
+            if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_DRAM_REMAIN_8) {
+                fabric_send_dim3_bf8_dram_remain8<is_dram>(
                     num_tiles_per_chip,
                     ring_size,
                     tile_cols_per_chip,
@@ -676,8 +676,8 @@ void kernel_main() {
                     pkt_hdr_forward,
                     pkt_hdr_backward,
                     fabric_connection);
-            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_DRAM_REMAINDER_0) {
-                fabric_dim3_bf8_dram_reminder0<is_dram>(
+            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_DRAM_REMAIN_0) {
+                fabric_send_dim3_bf8_dram_remain0<is_dram>(
                     num_tiles_per_chip,
                     ring_size,
                     tile_cols_per_chip,
