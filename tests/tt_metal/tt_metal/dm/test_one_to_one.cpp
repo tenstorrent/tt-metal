@@ -19,10 +19,9 @@ uint32_t runtime_host_id = 0;
 
 // Test config, i.e. test parameters
 struct OneToOneConfig {
-    CoreRangeSet master_core_set = CoreRangeSet();
-    CoreRangeSet slave_core_set = CoreRangeSet();
-
     uint32_t test_id = 0;
+    CoreCoord master_core_coord = CoreCoord();
+    CoreCoord slave_core_coord = CoreCoord();
     uint32_t num_of_transactions = 0;
     uint32_t transaction_size_pages = 0;
     uint32_t page_size_bytes = 0;
@@ -54,8 +53,11 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         test_config.num_of_transactions * test_config.transaction_size_pages * test_config.page_size_bytes;
     const size_t total_size_pages = test_config.num_of_transactions * test_config.transaction_size_pages;
 
+    CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});
+    CoreRangeSet slave_core_set({CoreRange(test_config.slave_core_coord)});
+
     auto master_shard_parameters = ShardSpecBuffer(
-        test_config.master_core_set,
+        master_core_set,
         {1, total_size_bytes / 2},
         ShardOrientation::ROW_MAJOR,
         {1, test_config.page_size_bytes / 2},
@@ -71,7 +73,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     uint32_t master_l1_byte_address = master_l1_buffer->address();
 
     auto slave_shard_parameters = ShardSpecBuffer(
-        test_config.slave_core_set,
+        slave_core_set,
         {1, total_size_bytes / 2},
         ShardOrientation::ROW_MAJOR,
         {1, test_config.page_size_bytes / 2},
@@ -90,26 +92,24 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     vector<uint32_t> sender_compile_args = {
         (uint32_t)master_l1_byte_address,
         (uint32_t)slave_l1_byte_address,
-        // (uint32_t)test_config.num_of_transactions,
+        (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.transaction_size_pages,
         (uint32_t)test_config.page_size_bytes,
-        // (uint32_t)test_config.test_id
-    };
+        (uint32_t)test_config.test_id};
 
     vector<uint32_t> receiver_compile_args = {
         (uint32_t)master_l1_byte_address,
         (uint32_t)slave_l1_byte_address,
-        // (uint32_t)test_config.num_of_transactions,
+        (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.transaction_size_pages,
         (uint32_t)test_config.page_size_bytes,
-        // (uint32_t)test_config.test_id
-    };
+        (uint32_t)test_config.test_id};
 
     // Kernels
     auto sender_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/dm/sender_core_to_core.cpp",
-        test_config.master_core_set,
+        master_core_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
@@ -118,28 +118,20 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     auto receiver_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/dm/receiver_core_to_core.cpp",
-        test_config.slave_core_set,
+        slave_core_set,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
             .compile_args = receiver_compile_args});
 
-    // TODO: Create semaphores here
-    // TODO: Set runtime arguments for both kernels to receive the semaphore address
-
     // Semaphores
-    CoreCoord master_core = {0, 0};
-    CoreCoord slave_core = {1, 1};
-    CoreCoord physical_master_core = device->worker_core_from_logical_core(master_core);
-    CoreCoord physical_slave_core = device->worker_core_from_logical_core(slave_core);
-    log_info("Phsyical master core: {}", physical_master_core);
-    log_info("Phsyical slave core: {}", physical_slave_core);
-    CoreRangeSet sem_core_set = test_config.slave_core_set.merge<CoreRangeSet>(test_config.master_core_set);
-    const uint32_t semaphore = CreateSemaphore(program, sem_core_set, 0);
+    CoreRangeSet sem_core_set = slave_core_set.merge<CoreRangeSet>(master_core_set);
+    const uint32_t sem_id = CreateSemaphore(program, sem_core_set, 0);
+    CoreCoord physical_slave_core = device->worker_core_from_logical_core(test_config.slave_core_coord);
 
     // Runtime Arguments
-    SetRuntimeArgs(program, sender_kernel, test_config.master_core_set, {semaphore});
-    SetRuntimeArgs(program, receiver_kernel, test_config.slave_core_set, {semaphore});
+    SetRuntimeArgs(program, sender_kernel, master_core_set, {sem_id, physical_slave_core.x, physical_slave_core.y});
+    SetRuntimeArgs(program, receiver_kernel, slave_core_set, {sem_id});
 
     // Assign unique id
     log_info("Results for test id: {}", test_config.test_id);
@@ -157,20 +149,14 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     vector<uint32_t> packed_output;
     detail::WriteToBuffer(master_l1_buffer, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-
-    log_info("Before launch");
-
     detail::LaunchProgram(device, program);
-
-    log_info("After launch");
-
     detail::ReadFromBuffer(slave_l1_buffer, packed_output);
 
     // Print output and golden vectors
-    // log_info("Golden vector");
-    // print_vector<uint32_t>(packed_golden);
-    // log_info("Output vector");
-    // print_vector<uint32_t>(packed_output);
+    log_info("Golden vector");
+    print_vector<uint32_t>(packed_golden);
+    log_info("Output vector");
+    print_vector<uint32_t>(packed_output);
 
     // Return comparison
     return is_close_packed_vectors<bfloat16, uint32_t>(
@@ -178,7 +164,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 }
 }  // namespace unit_tests::dm::core_to_core
 
-/* ========== Test case for varying transaction numbers and sizes; Test id = 0 ========== */
+/* ========== Test case for one to one data movement; Test id = 3 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneToOne) {
     // Parameters
     uint32_t num_of_transactions = 1;
@@ -189,17 +175,14 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOne) {
     }
 
     // Cores
-    CoreCoord master_coord = {0, 0};
-    CoreCoord slave_coord = {1, 1};
-    CoreRangeSet master_core_set({CoreRange(master_coord)});
-    CoreRangeSet slave_core_set({CoreRange(slave_coord)});
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord slave_core_coord = {1, 1};
 
     // Test config
     unit_tests::dm::core_to_core::OneToOneConfig test_config = {
-        .master_core_set = master_core_set,
-        .slave_core_set = slave_core_set,
-
-        .test_id = 0,
+        .test_id = 3,
+        .master_core_coord = master_core_coord,
+        .slave_core_coord = slave_core_coord,
         .num_of_transactions = num_of_transactions,
         .transaction_size_pages = transaction_size_pages,
         .page_size_bytes = page_size_bytes,

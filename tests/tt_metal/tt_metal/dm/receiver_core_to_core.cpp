@@ -9,19 +9,14 @@
 void kernel_main() {
     constexpr uint32_t src_addr = get_compile_time_arg_val(0);
     constexpr uint32_t dst_addr = get_compile_time_arg_val(1);
-    // constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
-    constexpr uint32_t transaction_num_pages = get_compile_time_arg_val(2);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(3);
-    // constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(4);
-    // constexpr uint32_t test_id = get_compile_time_arg_val(5);
+    constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
+    constexpr uint32_t transaction_num_pages = get_compile_time_arg_val(3);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t test_id = get_compile_time_arg_val(5);
 
-    auto sem = get_semaphore(get_arg_val<uint32_t>(0));
-    DPRINT << "Get sem result: " << sem << ENDL();
-
-    auto sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem));
+    auto sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(0)));
 
     constexpr uint32_t transaction_size_bytes = transaction_num_pages * page_size_bytes;
-    // constexpr uint32_t total_num_pages = num_of_transactions * transaction_num_pages;
 
     // DeviceTimestampedData("Number of transactions", num_of_transactions);
     // DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
@@ -29,10 +24,6 @@ void kernel_main() {
 
     {
         // DeviceZoneScopedN("RECEIVER");
-
-        DPRINT << "Receiver before sem call" << ENDL();
-        DPRINT << "Sem value: " << *sem_addr << ENDL();
         noc_semaphore_wait(sem_addr, 1);  // TODO: Hanging here
-        DPRINT << "Receiver after sem call" << ENDL();
     }
 }
