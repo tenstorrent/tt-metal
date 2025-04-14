@@ -27,9 +27,11 @@ using LatencyTestWriterSpecs = std::vector<std::optional<WriterSpec>>;
 
 inline void RunPersistent1dFabricLatencyTest(
     // Args for the measured writer
-    const LatencyTestWriterSpecs& writer_specs,
+    LatencyTestWriterSpecs writer_specs,
     size_t line_size,
-    bool enable_fused_payload_with_sync) {
+    bool enable_fused_payload_with_sync,
+    ttnn::ccl::Topology topology) {
+    const bool is_ring = topology == ttnn::ccl::Topology::Ring;
     size_t num_links = 1;
 
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -122,9 +124,9 @@ inline void RunPersistent1dFabricLatencyTest(
         fabric_handle,
         enable_persistent_fabric_mode,
         num_links,
-        ttnn::ccl::Topology::Linear,
+        topology,
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval,
-        true);
+        !is_ring);
 
     for (IDevice* d : devices) {
         tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
@@ -276,8 +278,7 @@ inline void RunPersistent1dFabricLatencyTest(
         // RT ARGS
         std::vector<uint32_t> rt_args = {};
         size_t dest_bank_addr = dest_buffer_addresses.at(i);
-        size_t loopback_distance_to_self = ((line_size - 1) - line_index) * 2;
-        size_t loopback_distance_to_start_of_line = ((line_size - 1) * 2) - line_index;
+        size_t loopback_distance_to_self = is_ring ? line_size : ((line_size - 1) - line_index) * 2;
         if (is_latency_packet_sender) {
             bool in_downstream_writers = false;
             std::vector<size_t> downstream_writer_semaphore_addresses;
@@ -391,6 +392,7 @@ inline void RunPersistent1dFabricLatencyTest(
     for (IDevice* d : devices) {
         tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
+    log_info(tt::LogTest, "Teardown complete, dumping profile results");
     for (size_t i = 0; i < programs.size(); i++) {
         auto d = devices_with_workers.at(i);
         auto& program = programs.at(i);
@@ -417,6 +419,7 @@ int main(int argc, char** argv) {
     std::size_t congestion_writers_message_size = std::stoi(argv[arg_idx++]);
     bool congestion_writers_use_mcast = std::stoi(argv[arg_idx++]) != 0;
     bool enable_fused_payload_with_sync = std::stoi(argv[arg_idx++]) != 0;
+    std::string topology_str = argv[arg_idx++];
     TT_FATAL(arg_idx == argc, "Read past end of args or didn't read all args");
 
     uint32_t test_expected_num_devices = 8;
@@ -425,8 +428,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    auto compute_loopback_distance_to_start_of_line = [line_size](std::size_t line_index) {
-        return ((line_size - 1) * 2) - line_index;
+    const bool is_ring = topology_str == "ring";
+    auto compute_loopback_distance_to_start_of_line = [line_size, is_ring](std::size_t line_index) {
+        return is_ring ? line_size - 1 : ((line_size - 1) * 2) - line_index;
     };
 
     LatencyTestWriterSpecs writer_specs(line_size - 1, std::nullopt);
@@ -469,7 +473,8 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < num_downstream_fabric_congestion_writers; i++) {
         TT_FATAL(congestion_writers_message_size != 0, "downstream congestion writer message size must be non-zero");
         size_t downstream_worker_line_index = latency_measurement_worker_line_index + 1 + i;
-        size_t distance = downstream_worker_line_index - latency_measurement_worker_line_index;
+        size_t distance =
+            is_ring ? line_size - 1 : downstream_worker_line_index - latency_measurement_worker_line_index;
         writer_specs.at(downstream_worker_line_index) = WriterSpec{
             .spec =
                 DatapathBusyDataWriterSpec{
@@ -481,5 +486,17 @@ int main(int argc, char** argv) {
             .message_size_bytes = congestion_writers_message_size};
     }
 
-    RunPersistent1dFabricLatencyTest(writer_specs, line_size, enable_fused_payload_with_sync);
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
+    if (topology_str == "linear") {
+        topology = ttnn::ccl::Topology::Linear;
+    } else if (topology_str == "ring") {
+        topology = ttnn::ccl::Topology::Ring;
+    } else if (topology_str == "mesh") {
+        topology = ttnn::ccl::Topology::Mesh;
+        TT_THROW("Topology \"mesh\" is currently unsupported.");
+    } else {
+        TT_THROW("Invalid topology: {}", topology_str);
+    }
+
+    RunPersistent1dFabricLatencyTest(writer_specs, line_size, enable_fused_payload_with_sync, topology);
 }
