@@ -21,7 +21,6 @@ from tracy import signpost
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
-    num_cores_to_rectangle_grid,
     round_up,
 )
 from models.demos.llama3_subdevices.tt.model_config import set_tg_attention_config
@@ -313,27 +312,14 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             tt_outs = run_op(num_iters, store_all_results=validate_all)
             signpost("stop")
 
-        # After ConcatMesh2dToTensor
-        # [1, 8, 8[32], 128] -> [8, 32, 8[32], 128]
-
         # Get non-distributed tensors
-        # input = [8, 4, 32, 1280]
-        # reduced_input = [8, 32, 1280]
         reduced_input_tensor = input_tensor.sum(dim=1)
 
-        # reduced_input_reshaped = [8, 32, 10, 128]
         reduced_input_tensor_reshaped = reduced_input_tensor.reshape(8, 32, 10, 128)
-
-        # q_output = [8, 32, 8, 128]
         q_output_tensor = reduced_input_tensor_reshaped[:, :, :8, :]
-
-        # k_output = [8, 32, 1, 128]
         k_output_tensor = reduced_input_tensor_reshaped[:, :, 8:9, :]
-
-        # v_output = [8, 32, 1, 128]
         v_output_tensor = reduced_input_tensor_reshaped[:, :, 9:10, :]
 
-        # Get non-distributed tensors
         def run_validate(qkv_heads):
             q_heads_pre_rot_1BQD = qkv_heads[0]
             k_heads_pre_rot_1BKD = qkv_heads[1]
@@ -346,7 +332,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                     mesh_shape=cluster_shape,
                 ),
             )
-            # [1, 8, 1[32], 128] -> [8, 32, 1[32], 128]
             k_non_distributed = ttnn.to_torch(
                 k_heads_pre_rot_1BKD,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -355,7 +340,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                     mesh_shape=cluster_shape,
                 ),
             )
-            # [1, 8, 1[32], 128] -> [8, 32, 1[32], 128]
             v_non_distributed = ttnn.to_torch(
                 v_heads_1BKD,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
