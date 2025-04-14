@@ -21,19 +21,11 @@
 #define GET_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::wormhole {
-static uint32_t get_l1_kernel_config_size() {
-    const char* worker_ringbuffer_size = std::getenv("TT_METAL_WORKER_RINGBUFFER_SIZE");
-    if (!worker_ringbuffer_size) {
-        return 69 * 1024;
-    }
-    return std::stoul(worker_ringbuffer_size);
-}
-
 HalCoreInfoType create_tensix_mem_map() {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     std::vector<DeviceAddr> mem_map_bases;
-    const uint32_t l1_kernel_config_size = get_l1_kernel_config_size();
+    const uint32_t default_l1_kernel_config_size = 69 * 1024;
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_BASE;
@@ -44,14 +36,14 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DPRINT)] = GET_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_MAP_END;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        ((MEM_MAP_END + l1_kernel_config_size - 1) | (max_alignment - 1)) + 1;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_MAILBOX_ADDRESS_HOST(go_message);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
         GET_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LOCAL)] = MEM_LOCAL_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_BANK_TO_NOC_SCRATCH;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
+        ((MEM_MAP_END + default_l1_kernel_config_size - 1) | (max_alignment - 1)) + 1;
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -62,13 +54,12 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT)] = sizeof(dprint_buf_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = l1_kernel_config_size;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)];
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LOCAL)] = MEM_TRISC_LOCAL_SIZE; // TRISC, BRISC, or NCRISC?
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_BANK_TO_NOC_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
+        MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumTensixDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types;

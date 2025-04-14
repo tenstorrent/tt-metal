@@ -60,12 +60,13 @@ constexpr uint32_t downstream_dev_id = get_compile_time_arg_val(30);
 constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(31);
 constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(32);
 constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(33);
-constexpr uint32_t client_interface_addr = get_compile_time_arg_val(34);
+constexpr uint32_t outbound_eth_chan = get_compile_time_arg_val(34);
+constexpr uint32_t client_interface_addr = get_compile_time_arg_val(35);
 
-constexpr uint32_t first_stream_used = get_compile_time_arg_val(35);
+constexpr uint32_t first_stream_used = get_compile_time_arg_val(36);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(36);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(37);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(37);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(38);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -867,27 +868,6 @@ void process_write_packed_large(
 
 static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
-    uint32_t checksum = 0;
-#if 0
-    // Ugh, we are out of code memory for dispatcher+watcher
-    // Hack this off for now, have to revisit soon
-    uint32_t *data = (uint32_t *)((uint32_t)cmd + (uint32_t)sizeof(CQDispatchCmd));
-    uint32_t size = cmd->debug.size;
-    //    DPRINT << "checksum: " << cmd->debug.size << ENDL();
-
-    // Dispatch checksum only handles running checksum on a single page
-    // Host code prevents larger from flowing through
-    // This way this code doesn't have to fetch multiple pages and then run
-    // a cmd within those pages (messing up the implementation of that command)
-    for (uint32_t i = 0; i < size / sizeof(uint32_t); i++) {
-        checksum += *data++;
-    }
-    if (checksum != cmd->debug.checksum) {
-        WAYPOINT("!CHK");
-        ASSERT(0);
-    }
-#endif
-
     return cmd_ptr + cmd->debug.stride;
 }
 

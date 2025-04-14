@@ -86,6 +86,7 @@ tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelick
 tt_metal/include/dataflow_kernel_api.h @davorchap @ntarafdar @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT
 tt_metal/tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
+tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
 
 # metal - profiler
 tt_metal/**/profiler/ @mo-tenstorrent
@@ -211,6 +212,9 @@ models/demos/yolov4 @dvartaniansTT @mbahnasTT @rdraskicTT @mbezuljTT @tenstorren
 models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
 models/experimental/ @sminakov-tt @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
+models/experimental/functional_UFLD_v2 @mbahnasTT @dvartaniansTT @ssinghalTT @arginugaTT
+models/experimental/functional_vgg_unet @mbahnasTT @dvartaniansTT @ssinghalTT @arginugaTT
+models/experimental/functional_vanilla_unet @mbahnasTT @dvartaniansTT @ssinghalTT @arginugaTT
 models/experimental/grok @yieldthought @uaydonat
 models/demos/wormhole/vit @mbahnasTT @dvartaniansTT @uaydonat
 models/demos/vit  @mbahnasTT @dvartaniansTT @uaydonat
@@ -221,6 +225,8 @@ models/perf/perf_report.py @yieldthought @uaydonat
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat
 models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-developers-convolutions
+models/experimental/functional_mobilenetv2 @mbahnasTT @ssinghalTT @dvartaniansTT @arginugaTT
+models/experimental/yolov8s_world @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra

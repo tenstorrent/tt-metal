@@ -23,6 +23,8 @@ from models.tt_transformers.tt.common import (
     get_max_prefill_chunk_size,
 )
 
+from models.tt_transformers.tt.generator import SamplingParams
+
 
 class Generator:
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
@@ -53,7 +55,7 @@ class Generator:
             self.model.switch_mode("prefill")
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
-        output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
+        output_logits = torch.zeros(batch, 1, 1)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
 
         if page_table is not None:
@@ -170,11 +172,11 @@ class Generator:
                 rot_mats=None,
                 user_id=user_id,
                 page_table=page_table_tt,
-                get_last_token=(last_token_idx // 32) * 32,
+                get_last_token=last_token_idx,  # (last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
             )
 
-            logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
+            logits = self.model.process_output_prefill(tt_logits, last_token_idx=last_token_idx)
 
             return logits
 
@@ -198,8 +200,7 @@ class Generator:
             tokens,
             page_table=page_table,
         )
-        logits = self.model.process_output_prefill(tt_out_trace, last_token_idx=(last_token_idx % 32))
-
+        logits = self.model.process_output_prefill(tt_out_trace, last_token_idx=last_token_idx)
         return logits
 
     def _capture_trace_prefill(
@@ -222,7 +223,7 @@ class Generator:
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=(last_token_idx // 32) * 32, user_id=user_id
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, user_id=user_id
         )
         ttnn.synchronize_device(self.mesh_device)
         logger.info("Done Compiling Model")
@@ -230,7 +231,7 @@ class Generator:
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=(last_token_idx // 32) * 32, user_id=user_id
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, user_id=user_id
         )
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
@@ -240,7 +241,7 @@ class Generator:
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_prefill_forward(
-            *transformed_inputs, kv_cache=kv_cache, get_last_token=(last_token_idx // 32) * 32, user_id=user_id
+            *transformed_inputs, kv_cache=kv_cache, get_last_token=last_token_idx, user_id=user_id
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
@@ -266,6 +267,7 @@ class Generator:
         )
 
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+
         return tt_out_trace
 
     def decode_forward_text(
@@ -276,8 +278,13 @@ class Generator:
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
-        argmax_on_device=False,
+        sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
     ):
+        assert (
+            sampling_params is None or sampling_params.temperature == 0
+        ), "Currently only supporting greedy decoding (temperature=0) on device"
+        argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
+
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
         kv_cache = kv_cache[0]
@@ -294,7 +301,7 @@ class Generator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            return self.read_decode_output(tt_logits, tokens.shape[0], argmax_on_device)
+            return self.read_decode_output(tt_logits, tokens.shape[0], is_tokens=(sampling_params is not None))
         else:
             return tt_logits
 
@@ -410,8 +417,8 @@ class Generator:
 
         return trace_logits_rm
 
-    def read_decode_output(self, tt_logits, unpadded_batch, argmax_on_device=False):
-        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1, argmax_on_device=argmax_on_device)
+    def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=False):
+        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1, is_tokens=is_tokens)
         return logits
 
     def chat_completion(
