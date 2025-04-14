@@ -178,23 +178,26 @@ tt::tt_metal::ProgramDescriptor create_program(
         mm_kernel_in1_reader_writer_defines.emplace_back("OUT_SHARDED", "1");
     }
 
-    auto mm_kernel_in0_reader = tt_metal::KernelDescriptor{
-        .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
-        .core_ranges = all_cores.ranges(),
-        .compile_time_args = reader_compile_time_args,
-        .defines = mm_kernel_in0_reader_defines,
-        .config = tt_metal::ReaderConfigDescriptor{},
-    };
+    constexpr auto max_num_kernels = 4;
+    program.kernels.resize(max_num_kernels);
+    size_t num_kernels = 0;
+
+    auto& mm_kernel_in0_reader = program.kernels[num_kernels++];
+    mm_kernel_in0_reader.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp";
+    mm_kernel_in0_reader.core_ranges = all_cores.ranges();
+    mm_kernel_in0_reader.compile_time_args = reader_compile_time_args;
+    mm_kernel_in0_reader.defines = mm_kernel_in0_reader_defines;
+    mm_kernel_in0_reader.config = tt_metal::ReaderConfigDescriptor{};
     mm_kernel_in0_reader.reserve_runtime_args();
 
-    auto mm_kernel_in1_reader_writer = tt_metal::KernelDescriptor{
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
-        .core_ranges = all_cores.ranges(),
-        .compile_time_args = reader_writer_compile_time_args,
-        .defines = mm_kernel_in1_reader_writer_defines,
-        .config = tt_metal::WriterConfigDescriptor{},
-    };
+    auto& mm_kernel_in1_reader_writer = program.kernels[num_kernels++];
+    mm_kernel_in1_reader_writer.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp";
+    mm_kernel_in1_reader_writer.core_ranges = all_cores.ranges();
+    mm_kernel_in1_reader_writer.compile_time_args = reader_writer_compile_time_args;
+    mm_kernel_in1_reader_writer.defines = mm_kernel_in1_reader_writer_defines;
+    mm_kernel_in1_reader_writer.config = tt_metal::WriterConfigDescriptor{};
     mm_kernel_in1_reader_writer.reserve_runtime_args();
 
     tt_metal::KernelDescriptor::CompileTimeArgs compute_kernel_args_group_1 = {
@@ -233,17 +236,17 @@ tt::tt_metal::ProgramDescriptor create_program(
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
 
     // Create compute kernel
-    program.kernels.push_back(tt_metal::KernelDescriptor{
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
-        .core_ranges = core_group_1.ranges(),
-        .compile_time_args = compute_kernel_args_group_1,
-        .defines = mm_kernel_defines,
-        .config = tt_metal::ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-        }});
+    auto& mm_kernel = program.kernels[num_kernels++];
+    mm_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
+    mm_kernel.core_ranges = core_group_1.ranges();
+    mm_kernel.compile_time_args = compute_kernel_args_group_1;
+    mm_kernel.defines = mm_kernel_defines;
+    mm_kernel.config = tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+    };
     if (!core_group_2.ranges().empty()) {
         tt_metal::KernelDescriptor::CompileTimeArgs compute_kernel_args_group_2 = {
             in0_block_w,             // in0_block_w
@@ -266,17 +269,17 @@ tt::tt_metal::ProgramDescriptor create_program(
             out_block_tiles,
 
             untilize_out};
-        program.kernels.push_back(tt_metal::KernelDescriptor{
-            .kernel_source =
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
-            .core_ranges = core_group_2.ranges(),
-            .compile_time_args = compute_kernel_args_group_2,
-            .defines = mm_kernel_defines,
-            .config = tt_metal::ComputeConfigDescriptor{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .math_approx_mode = math_approx_mode,
-            }});
+        auto& mm_kernel_group_2 = program.kernels[num_kernels++];
+        mm_kernel_group_2.kernel_source =
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
+        mm_kernel_group_2.core_ranges = core_group_2.ranges();
+        mm_kernel_group_2.compile_time_args = compute_kernel_args_group_2;
+        mm_kernel_group_2.defines = mm_kernel_defines;
+        mm_kernel_group_2.config = tt_metal::ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+        };
     }
 
     // Create circular buffers
@@ -288,12 +291,7 @@ tt::tt_metal::ProgramDescriptor create_program(
             .buffer_index = src0_cb_index,
             .data_format = in0_data_format,
             .page_size = in0_single_tile_size,
-            .tile =
-                tt_metal::TileDescriptor{
-                    .height = in0_tile.get_height(),
-                    .width = in0_tile.get_width(),
-                    .transpose = in0_tile.get_transpose_of_faces(),
-                },
+            .tile = in0_tile,
         }},
         .buffer = in0_is_sharded ? in0_buffer : nullptr,
     });
@@ -306,12 +304,7 @@ tt::tt_metal::ProgramDescriptor create_program(
             .buffer_index = src1_cb_index,
             .data_format = in1_data_format,
             .page_size = in1_single_tile_size,
-            .tile =
-                tt_metal::TileDescriptor{
-                    .height = in1_tile.get_height(),
-                    .width = in1_tile.get_width(),
-                    .transpose = in1_tile.get_transpose_of_faces(),
-                },
+            .tile = in1_tile,
         }},
         .buffer = in1_is_sharded ? in1_buffer : nullptr,
     });
@@ -326,12 +319,7 @@ tt::tt_metal::ProgramDescriptor create_program(
                 .buffer_index = output_cb_index,
                 .data_format = output_data_format,
                 .page_size = output_single_tile_size,
-                .tile =
-                    tt_metal::TileDescriptor{
-                        .height = output_tile.get_height(),
-                        .width = output_tile.get_width(),
-                        .transpose = output_tile.get_transpose_of_faces(),
-                    },
+                .tile = output_tile,
             }},
             .buffer = output_is_sharded ? out_buffer : nullptr,
         });
@@ -344,12 +332,7 @@ tt::tt_metal::ProgramDescriptor create_program(
                 .buffer_index = interm0_cb_index,
                 .data_format = interm0_data_format,
                 .page_size = interm0_single_tile_size,
-                .tile =
-                    tt_metal::TileDescriptor{
-                        .height = output_tile.get_height(),
-                        .width = output_tile.get_width(),
-                        .transpose = output_tile.get_transpose_of_faces(),
-                    },
+                .tile = output_tile,
             }},
         });
     } else {
@@ -362,23 +345,13 @@ tt::tt_metal::ProgramDescriptor create_program(
                      .buffer_index = output_cb_index,
                      .data_format = output_data_format,
                      .page_size = output_single_tile_size,
-                     .tile =
-                         tt_metal::TileDescriptor{
-                             .height = output_tile.get_height(),
-                             .width = output_tile.get_width(),
-                             .transpose = output_tile.get_transpose_of_faces(),
-                         },
+                     .tile = output_tile,
                  },
                  tt_metal::CBFormatDescriptor{
                      .buffer_index = interm0_cb_index,
                      .data_format = interm0_data_format,
                      .page_size = interm0_single_tile_size,
-                     .tile =
-                         tt_metal::TileDescriptor{
-                             .height = output_tile.get_height(),
-                             .width = output_tile.get_width(),
-                             .transpose = output_tile.get_transpose_of_faces(),
-                         },
+                     .tile = output_tile,
                  }},
             .buffer = output_is_sharded ? out_buffer : nullptr,
         });
@@ -468,9 +441,7 @@ tt::tt_metal::ProgramDescriptor create_program(
         num_blocks_written += num_output_blocks_per_core;
     }
 
-    program.kernels.push_back(std::move(mm_kernel_in0_reader));
-    program.kernels.push_back(std::move(mm_kernel_in1_reader_writer));
-
+    program.kernels.resize(num_kernels);
     return program;
 }
 

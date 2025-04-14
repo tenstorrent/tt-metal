@@ -19,12 +19,18 @@
 
 namespace tt::tt_metal {
 
+struct Tile;
 class Buffer;
 namespace experimental {
 class GlobalCircularBuffer;
 }  // namespace experimental
 
 struct TileDescriptor {
+    TileDescriptor() = default;
+    TileDescriptor(const Tile& tile);
+    TileDescriptor(uint32_t height, uint32_t width, bool transpose) :
+        height(height), width(width), transpose(transpose) {}
+
     uint32_t height = constants::TILE_HEIGHT;
     uint32_t width = constants::TILE_WIDTH;
     bool transpose = false;

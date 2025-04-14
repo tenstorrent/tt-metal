@@ -561,36 +561,43 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
     tt_metal::NOC in0_split_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     tt_metal::NOC in1_split_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
 
-    tt::tt_metal::KernelDescriptor mm_kernel_in0_sender;
-    std::optional<tt::tt_metal::KernelDescriptor> mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid;
+    constexpr auto max_num_kernels = 8;
+    program.kernels.resize(max_num_kernels);
+    size_t num_kernels = 0;
+
+    auto& mm_kernel_in0_sender = program.kernels[num_kernels++];
+    tt::tt_metal::KernelDescriptor* mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid = nullptr;
     if (in0_block_sharded) {
-        mm_kernel_in0_sender = tt_metal::KernelDescriptor{
-            .kernel_source =
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
-            .core_ranges = {all_cores_with_work},  // in0_mcast_cores_with_work_and_in_receiver_grid
-            .compile_time_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_sharded_defines,
-            .config = tt_metal::DataMovementConfigDescriptor{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = in0_noc,
-            }};
+        mm_kernel_in0_sender.kernel_source =
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+            "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp";
+        mm_kernel_in0_sender.core_ranges = {all_cores_with_work};  // in0_mcast_cores_with_work_and_in_receiver_grid
+        mm_kernel_in0_sender.compile_time_args = in0_sender_compile_time_args;
+        mm_kernel_in0_sender.defines = mm_kernel_in0_sender_sharded_defines;
+        mm_kernel_in0_sender.config = tt_metal::DataMovementConfigDescriptor{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = in0_noc,
+        };
         mm_kernel_in0_sender.reserve_runtime_args();
 
         if (in0_mcast_cores_without_work_and_not_in_receiver_grid.has_value()) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
             in0_sender_compile_time_args[1] = 0;  // core_in_in0_receiver_mcast_grid
-            mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid = tt_metal::KernelDescriptor{
-                .kernel_source =
-                    "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                    "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
-                .core_ranges = {in0_mcast_cores_without_work_and_not_in_receiver_grid.value()},
-                .compile_time_args = in0_sender_compile_time_args,
-                .defines = mm_kernel_in0_sender_sharded_defines,
-                .config = tt_metal::DataMovementConfigDescriptor{
+            mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid = &program.kernels[num_kernels++];
+            mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid->kernel_source =
+                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp";
+            mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid->core_ranges = {
+                in0_mcast_cores_without_work_and_not_in_receiver_grid.value()};
+            mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid->compile_time_args =
+                in0_sender_compile_time_args;
+            mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid->defines =
+                mm_kernel_in0_sender_sharded_defines;
+            mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid->config =
+                tt_metal::DataMovementConfigDescriptor{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
-                }};
+                };
             mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid->reserve_runtime_args();
         }
     } else {
@@ -599,87 +606,88 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
             fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
         }
 
-        mm_kernel_in0_sender = tt_metal::KernelDescriptor{
-            .kernel_source =
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
-            .core_ranges = {in0_sender_interleaved},
-            .compile_time_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_interleaved_defines,
-            .config = tt_metal::DataMovementConfigDescriptor{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = in0_noc,
-            }};
+        mm_kernel_in0_sender.kernel_source =
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp";
+        mm_kernel_in0_sender.core_ranges = {in0_sender_interleaved};
+        mm_kernel_in0_sender.compile_time_args = in0_sender_compile_time_args;
+        mm_kernel_in0_sender.defines = mm_kernel_in0_sender_interleaved_defines;
+        mm_kernel_in0_sender.config = tt_metal::DataMovementConfigDescriptor{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = in0_noc,
+        };
         mm_kernel_in0_sender.reserve_runtime_args();
     }
 
-    auto mm_kernel_in1_sender_writer = tt_metal::KernelDescriptor{
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-            "reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
-        .core_ranges = {in1_sender},
-        .compile_time_args = in1_sender_writer_compile_time_args,
-        .defines = mm_kernel_in1_sender_writer_defines,
-        .config = tt_metal::DataMovementConfigDescriptor{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = in1_noc,
-        }};
+    auto mm_kernel_in1_sender_writer = program.kernels[num_kernels++];
+    mm_kernel_in1_sender_writer.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "reader_bmm_tile_layout_in1_sender_writer_padding.cpp";
+    mm_kernel_in1_sender_writer.core_ranges = {in1_sender};
+    mm_kernel_in1_sender_writer.compile_time_args = in1_sender_writer_compile_time_args;
+    mm_kernel_in1_sender_writer.defines = mm_kernel_in1_sender_writer_defines;
+    mm_kernel_in1_sender_writer.config = tt_metal::DataMovementConfigDescriptor{
+        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = in1_noc,
+    };
     mm_kernel_in1_sender_writer.reserve_runtime_args();
 
-    std::optional<tt::tt_metal::KernelDescriptor> mm_kernel_in1_receiver_writer;
+    tt::tt_metal::KernelDescriptor* mm_kernel_in1_receiver_writer = nullptr;
     if (in1_receiver.num_cores() > 0) {
-        mm_kernel_in1_receiver_writer = tt_metal::KernelDescriptor{
-            .kernel_source =
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
-            .core_ranges = in1_receiver.ranges(),
-            .compile_time_args = in1_receiver_writer_compile_time_args,
-            .defines = mm_kernel_in1_receiver_writer_defines,
-            .config = tt_metal::DataMovementConfigDescriptor{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = in1_noc,
-            }};
+        mm_kernel_in1_receiver_writer = &program.kernels[num_kernels++];
+        mm_kernel_in1_receiver_writer->kernel_source =
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+            "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp";
+        mm_kernel_in1_receiver_writer->core_ranges = in1_receiver.ranges();
+        mm_kernel_in1_receiver_writer->compile_time_args = in1_receiver_writer_compile_time_args;
+        mm_kernel_in1_receiver_writer->defines = mm_kernel_in1_receiver_writer_defines;
+        mm_kernel_in1_receiver_writer->config = tt_metal::DataMovementConfigDescriptor{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = in1_noc,
+        };
         mm_kernel_in1_receiver_writer->reserve_runtime_args();
     }
 
-    std::optional<tt::tt_metal::KernelDescriptor> mm_kernel_in0_receiver;
+    tt::tt_metal::KernelDescriptor* mm_kernel_in0_receiver = nullptr;
     if (!in0_block_sharded and in0_receiver_interleaved.num_cores() > 0) {
-        mm_kernel_in0_receiver = tt_metal::KernelDescriptor{
-            .kernel_source =
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-            .core_ranges = in0_receiver_interleaved.ranges(),
-            .compile_time_args = in0_receiver_compile_time_args,
-            .config = tt_metal::DataMovementConfigDescriptor{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = in0_noc,
-            }};
+        mm_kernel_in0_receiver = &program.kernels[num_kernels++];
+        mm_kernel_in0_receiver->kernel_source =
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp";
+        mm_kernel_in0_receiver->core_ranges = in0_receiver_interleaved.ranges();
+        mm_kernel_in0_receiver->compile_time_args = in0_receiver_compile_time_args;
+        mm_kernel_in0_receiver->config = tt_metal::DataMovementConfigDescriptor{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = in0_noc,
+        };
         mm_kernel_in0_receiver->reserve_runtime_args();
     }
 
-    std::optional<tt::tt_metal::KernelDescriptor> mm_kernel_in1_receiver_writer_other_noc_setup;
-    std::optional<tt::tt_metal::KernelDescriptor> mm_kernel_in0_receiver_other_noc_setup;
+    tt::tt_metal::KernelDescriptor* mm_kernel_in1_receiver_writer_other_noc_setup = nullptr;
+    tt::tt_metal::KernelDescriptor* mm_kernel_in0_receiver_other_noc_setup = nullptr;
     if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
-        mm_kernel_in1_receiver_writer_other_noc_setup = tt_metal::KernelDescriptor{
-            .kernel_source =
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
-            .core_ranges = {in0_receiver_in1_receiver_interleaved_other_cores.value()},
-            .compile_time_args = in1_receiver_writer_compile_time_args,
-            .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines,
-            .config = tt_metal::DataMovementConfigDescriptor{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = in1_split_noc,
-            }};
+        mm_kernel_in1_receiver_writer_other_noc_setup = &program.kernels[num_kernels++];
+        mm_kernel_in1_receiver_writer_other_noc_setup->kernel_source =
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+            "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp";
+        mm_kernel_in1_receiver_writer_other_noc_setup->core_ranges = {
+            in0_receiver_in1_receiver_interleaved_other_cores.value()};
+        mm_kernel_in1_receiver_writer_other_noc_setup->compile_time_args = in1_receiver_writer_compile_time_args;
+        mm_kernel_in1_receiver_writer_other_noc_setup->defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines;
+        mm_kernel_in1_receiver_writer_other_noc_setup->config = tt_metal::DataMovementConfigDescriptor{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = in1_split_noc,
+        };
         mm_kernel_in1_receiver_writer_other_noc_setup->reserve_runtime_args();
 
-        mm_kernel_in0_receiver_other_noc_setup = tt_metal::KernelDescriptor{
-            .kernel_source =
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-            .core_ranges = {in0_receiver_in1_receiver_interleaved_other_cores.value()},
-            .compile_time_args = in0_receiver_compile_time_args,
-            .config = tt_metal::DataMovementConfigDescriptor{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = in0_split_noc,
-            }};
+        mm_kernel_in0_receiver_other_noc_setup = &program.kernels[num_kernels++];
+        mm_kernel_in0_receiver_other_noc_setup->kernel_source =
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp";
+        mm_kernel_in0_receiver_other_noc_setup->core_ranges = {
+            in0_receiver_in1_receiver_interleaved_other_cores.value()};
+        mm_kernel_in0_receiver_other_noc_setup->compile_time_args = in0_receiver_compile_time_args;
+        mm_kernel_in0_receiver_other_noc_setup->config = tt_metal::DataMovementConfigDescriptor{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = in0_split_noc,
+        };
         mm_kernel_in0_receiver_other_noc_setup->reserve_runtime_args();
     }
 
@@ -719,17 +727,17 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
     // bool fp32_dest_acc_en = true;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
-    auto mm_kernel = tt_metal::KernelDescriptor{
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
-        .core_ranges = {all_cores_with_work},
-        .compile_time_args = compute_kernel_args,
-        .defines = mm_kernel_defines,
-        .config = tt_metal::ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-        }};
+    auto& mm_kernel = program.kernels[num_kernels++];
+    mm_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
+    mm_kernel.core_ranges = {all_cores_with_work};
+    mm_kernel.compile_time_args = compute_kernel_args;
+    mm_kernel.defines = mm_kernel_defines;
+    mm_kernel.config = tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+    };
     mm_kernel.reserve_runtime_args();
 
     // Create circular buffers
@@ -741,12 +749,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
             .buffer_index = src0_cb_index,
             .data_format = in0_data_format,
             .page_size = in0_single_tile_size,
-            .tile =
-                tt_metal::TileDescriptor{
-                    .height = in0_tile.get_height(),
-                    .width = in0_tile.get_width(),
-                    .transpose = in0_tile.get_transpose_of_faces(),
-                },
+            .tile = in0_tile,
         }},
         .buffer = in0_height_sharded ? in0_buffer : nullptr,
     });
@@ -766,12 +769,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
             .buffer_index = src1_cb_index,
             .data_format = in1_data_format,
             .page_size = in1_single_tile_size,
-            .tile =
-                tt_metal::TileDescriptor{
-                    .height = in1_tile.get_height(),
-                    .width = in1_tile.get_width(),
-                    .transpose = in1_tile.get_transpose_of_faces(),
-                },
+            .tile = in1_tile,
         }},
         .buffer = in1_is_sharded && !in1_is_dram ? in1_buffer : nullptr,
     });
@@ -792,12 +790,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 .buffer_index = src2_cb_index,
                 .data_format = in0_data_format,
                 .page_size = in0_single_tile_size,
-                .tile =
-                    tt_metal::TileDescriptor{
-                        .height = in0_tile.get_height(),
-                        .width = in0_tile.get_width(),
-                        .transpose = in0_tile.get_transpose_of_faces(),
-                    },
+                .tile = in0_tile,
             }},
             .buffer = in0_buffer,
         });
@@ -836,12 +829,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 .buffer_index = output_cb_index,
                 .data_format = output_data_format,
                 .page_size = output_single_tile_size,
-                .tile =
-                    tt_metal::TileDescriptor{
-                        .height = output_tile.get_height(),
-                        .width = output_tile.get_width(),
-                        .transpose = output_tile.get_transpose_of_faces(),
-                    },
+                .tile = output_tile,
             }},
             .buffer = output_is_sharded ? out_buffer : nullptr,
         });
@@ -853,12 +841,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 .buffer_index = interm0_cb_index,
                 .data_format = interm0_data_format,
                 .page_size = interm0_single_tile_size,
-                .tile =
-                    tt_metal::TileDescriptor{
-                        .height = output_tile.get_height(),
-                        .width = output_tile.get_width(),
-                        .transpose = output_tile.get_transpose_of_faces(),
-                    },
+                .tile = output_tile,
             }},
         });
         log_debug(
@@ -878,23 +861,13 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                      .buffer_index = output_cb_index,
                      .data_format = output_data_format,
                      .page_size = output_single_tile_size,
-                     .tile =
-                         tt_metal::TileDescriptor{
-                             .height = output_tile.get_height(),
-                             .width = output_tile.get_width(),
-                             .transpose = output_tile.get_transpose_of_faces(),
-                         },
+                     .tile = output_tile,
                  },
                  tt_metal::CBFormatDescriptor{
                      .buffer_index = interm0_cb_index,
                      .data_format = interm0_data_format,
                      .page_size = interm0_single_tile_size,
-                     .tile =
-                         tt_metal::TileDescriptor{
-                             .height = output_tile.get_height(),
-                             .width = output_tile.get_width(),
-                             .transpose = output_tile.get_transpose_of_faces(),
-                         },
+                     .tile = output_tile,
                  }},
             .buffer = output_is_sharded ? out_buffer : nullptr,
         });
@@ -918,12 +891,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 .buffer_index = src3_cb_index,
                 .data_format = bias_data_format,
                 .page_size = bias_single_tile_size,
-                .tile =
-                    tt_metal::TileDescriptor{
-                        .height = bias_tile.get_height(),
-                        .width = bias_tile.get_width(),
-                        .transpose = bias_tile.get_transpose_of_faces(),
-                    },
+                .tile = bias_tile,
             }},
         });
         log_debug(
@@ -1026,34 +994,37 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
         // in0 sender
         if (in0_block_sharded) {
             uint32_t in0_mcast_receiver_grid_same_coord;
-            tt_metal::KernelDescriptor::CoreRuntimeArgs mm_in0_sender_args;
+
+            tt_metal::KernelDescriptor::CoreRuntimeArgs* mm_in0_sender_args = nullptr;
+            if (in1_idx < num_blocks_x) {
+                mm_in0_sender_args = &mm_kernel_in0_sender.runtime_args[core.x][core.y];
+            } else {
+                mm_in0_sender_args =
+                    &mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid->runtime_args[core.x][core.y];
+            }
+
             if (transpose_mcast) {
                 in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;
-                mm_in0_sender_args.push_back(core.y);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_end);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
-                mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
+                mm_in0_sender_args->push_back(core.y);
+                mm_in0_sender_args->push_back(in0_mcast_receiver_grid_same_coord);
+                mm_in0_sender_args->push_back(in0_mcast_receiver_grid_diff_coord_start);
+                mm_in0_sender_args->push_back(in0_mcast_receiver_grid_same_coord);
+                mm_in0_sender_args->push_back(in0_mcast_receiver_grid_diff_coord_end);
+                mm_in0_sender_args->push_back(in0_mcast_receiver_grid_same_coord);
+                mm_in0_sender_args->insert(mm_in0_sender_args->end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
             } else {
                 in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).y;
-                mm_in0_sender_args.push_back(core.x);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_start);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_diff_coord_end);
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
-                mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
-                mm_in0_sender_args.push_back(in0_mcast_receiver_grid_same_coord);
-            }
-            if (in1_idx < num_blocks_x) {
-                mm_kernel_in0_sender.runtime_args[core.x][core.y] = mm_in0_sender_args;  // RISCV_0_default
-            } else {
-                mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid->runtime_args[core.x][core.y] =
-                    mm_in0_sender_args;  // RISCV_0_default
+                mm_in0_sender_args->push_back(core.x);
+                mm_in0_sender_args->push_back(in0_mcast_receiver_grid_diff_coord_start);
+                mm_in0_sender_args->push_back(in0_mcast_receiver_grid_same_coord);
+                mm_in0_sender_args->push_back(in0_mcast_receiver_grid_diff_coord_end);
+                mm_in0_sender_args->push_back(in0_mcast_receiver_grid_same_coord);
+                mm_in0_sender_args->insert(mm_in0_sender_args->end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
+                mm_in0_sender_args->push_back(in0_mcast_receiver_grid_same_coord);
             }
         } else if (in1_idx == 0) {
-            tt_metal::KernelDescriptor::CoreRuntimeArgs mm_in0_sender_args = {
+            auto& mm_in0_sender_args = mm_kernel_in0_sender.runtime_args[core.x][core.y];
+            mm_in0_sender_args = {
                 // in0 tensor args
                 (std::uint32_t)in0_buffer->address(),
                 (std::uint32_t)K * per_core_M * in0_idx,  // in0_tensor_start_tile_id
@@ -1073,30 +1044,29 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
             if (fuse_op) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
-
-            mm_kernel_in0_sender.runtime_args[core.x][core.y] = mm_in0_sender_args;  // RISCV_0_default
-
-            // in0 receiver
         } else {
-            tt_metal::KernelDescriptor::CoreRuntimeArgs mm_in0_receiver_args = {
+            tt_metal::KernelDescriptor::CoreRuntimeArgs* mm_in0_receiver_args = nullptr;
+            // left half
+            if (core.x <= half_core || (!transpose_mcast and core.y == start_core_y)) {
+                mm_in0_receiver_args = &mm_kernel_in0_receiver->runtime_args[core.x][core.y];
+            }
+            // right half
+            else {
+                mm_in0_receiver_args = &mm_kernel_in0_receiver_other_noc_setup->runtime_args[core.x][core.y];
+            }
+
+            *mm_in0_receiver_args = {
                 // in0 mcast args
                 (std::uint32_t)in0_mcast_sender.x,  // in0_mcast_sender_noc_x
                 (std::uint32_t)in0_mcast_sender.y   // in0_mcast_sender_noc_y
             };
-            // left half
-            if (core.x <= half_core || (!transpose_mcast and core.y == start_core_y)) {
-                mm_kernel_in0_receiver->runtime_args[core.x][core.y] = mm_in0_receiver_args;
-            }
-            // right half
-            else {
-                mm_kernel_in0_receiver_other_noc_setup->runtime_args[core.x][core.y] = mm_in0_receiver_args;
-            }
         }
 
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
             // in1 sender
             if (in0_idx == 0) {
-                tt_metal::KernelDescriptor::CoreRuntimeArgs mm_in1_sender_writer_args = {
+                auto& mm_in1_sender_writer_args = mm_kernel_in1_sender_writer.runtime_args[core.x][core.y];
+                mm_in1_sender_writer_args = {
                     // READER
                     // in1 tensor args
                     (std::uint32_t)in1_buffer->address(),
@@ -1222,12 +1192,21 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 if (fuse_op) {
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
                 }
-                mm_kernel_in1_sender_writer.runtime_args[core.x][core.y] =
-                    mm_in1_sender_writer_args;  // RISCV_1_default
 
                 // in1 receiver
             } else {
-                tt_metal::KernelDescriptor::CoreRuntimeArgs mm_in1_receiver_writer_args = {
+                tt_metal::KernelDescriptor::CoreRuntimeArgs* mm_in1_receiver_writer_args = nullptr;
+                // left half
+                if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
+                    mm_in1_receiver_writer_args = &mm_kernel_in1_receiver_writer->runtime_args[core.x][core.y];
+                }
+                // right half
+                else {
+                    mm_in1_receiver_writer_args =
+                        &mm_kernel_in1_receiver_writer_other_noc_setup->runtime_args[core.x][core.y];
+                }
+
+                *mm_in1_receiver_writer_args = {
                     // READER
                     // in1 mcast args
                     (std::uint32_t)in1_mcast_sender.x,  // in1_mcast_sender_noc_x
@@ -1241,98 +1220,70 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
 
                 if (in1_idx == in1_end_idx and in0_idx == in0_end_idx) {  // bottom-right core when no transpose_mcast
                     // padding args (WRITER)
-                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
-                    mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
-                    mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
-                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_w);
-                    mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_w);
-                    mm_in1_receiver_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
-                    mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_w_skip);
+                    mm_in1_receiver_writer_args->push_back(out_block_h / out_subblock_h);
+                    mm_in1_receiver_writer_args->push_back(last_block_num_nonzero_subblocks_h);
+                    mm_in1_receiver_writer_args->push_back(last_subblock_of_last_block_h);
+                    mm_in1_receiver_writer_args->push_back(last_block_padded_block_tiles_h_skip);
+                    mm_in1_receiver_writer_args->push_back(out_block_w / out_subblock_w);
+                    mm_in1_receiver_writer_args->push_back(last_block_num_nonzero_subblocks_w);
+                    mm_in1_receiver_writer_args->push_back(last_subblock_of_last_block_w);
+                    mm_in1_receiver_writer_args->push_back(last_block_padded_subblock_tiles_addr_skip);
+                    mm_in1_receiver_writer_args->push_back(last_block_padded_block_tiles_w_skip);
                 } else if (in0_idx == in0_end_idx) {  // bottom cores except bottom-right when no transpose_mcast
                     // padding args (WRITER)
-                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
-                    mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
-                    mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_h_skip);
-                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(0);
-                    mm_in1_receiver_writer_args.push_back(0);
+                    mm_in1_receiver_writer_args->push_back(out_block_h / out_subblock_h);
+                    mm_in1_receiver_writer_args->push_back(last_block_num_nonzero_subblocks_h);
+                    mm_in1_receiver_writer_args->push_back(last_subblock_of_last_block_h);
+                    mm_in1_receiver_writer_args->push_back(last_block_padded_block_tiles_h_skip);
+                    mm_in1_receiver_writer_args->push_back(out_block_w / out_subblock_w);
+                    mm_in1_receiver_writer_args->push_back(out_block_w / out_subblock_w);
+                    mm_in1_receiver_writer_args->push_back(out_subblock_w);
+                    mm_in1_receiver_writer_args->push_back(0);
+                    mm_in1_receiver_writer_args->push_back(0);
                 } else if (in1_idx == in1_end_idx) {  // right cores except bottom when no transpose_mcast
                     // padding args (WRITER)
-                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_receiver_writer_args.push_back(out_subblock_h);
-                    mm_in1_receiver_writer_args.push_back(0);
-                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_w);
-                    mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_w);
-                    mm_in1_receiver_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
-                    mm_in1_receiver_writer_args.push_back(last_block_padded_block_tiles_w_skip);
+                    mm_in1_receiver_writer_args->push_back(out_block_h / out_subblock_h);
+                    mm_in1_receiver_writer_args->push_back(out_block_h / out_subblock_h);
+                    mm_in1_receiver_writer_args->push_back(out_subblock_h);
+                    mm_in1_receiver_writer_args->push_back(0);
+                    mm_in1_receiver_writer_args->push_back(out_block_w / out_subblock_w);
+                    mm_in1_receiver_writer_args->push_back(last_block_num_nonzero_subblocks_w);
+                    mm_in1_receiver_writer_args->push_back(last_subblock_of_last_block_w);
+                    mm_in1_receiver_writer_args->push_back(last_block_padded_subblock_tiles_addr_skip);
+                    mm_in1_receiver_writer_args->push_back(last_block_padded_block_tiles_w_skip);
                 } else {
                     // padding args (WRITER)
-                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_receiver_writer_args.push_back(out_subblock_h);
-                    mm_in1_receiver_writer_args.push_back(0);
-                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(out_block_w / out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(out_subblock_w);
-                    mm_in1_receiver_writer_args.push_back(0);
-                    mm_in1_receiver_writer_args.push_back(0);
+                    mm_in1_receiver_writer_args->push_back(out_block_h / out_subblock_h);
+                    mm_in1_receiver_writer_args->push_back(out_block_h / out_subblock_h);
+                    mm_in1_receiver_writer_args->push_back(out_subblock_h);
+                    mm_in1_receiver_writer_args->push_back(0);
+                    mm_in1_receiver_writer_args->push_back(out_block_w / out_subblock_w);
+                    mm_in1_receiver_writer_args->push_back(out_block_w / out_subblock_w);
+                    mm_in1_receiver_writer_args->push_back(out_subblock_w);
+                    mm_in1_receiver_writer_args->push_back(0);
+                    mm_in1_receiver_writer_args->push_back(0);
                 }
                 if (!output_is_sharded) {
                     if (in1_idx == in1_end_idx and
                         in0_idx == in0_end_idx) {  // bottom-right core when no transpose_mcast
-                        mm_in1_receiver_writer_args.push_back(last_out_num_blocks_h);
-                        mm_in1_receiver_writer_args.push_back(last_out_num_blocks_w);
+                        mm_in1_receiver_writer_args->push_back(last_out_num_blocks_h);
+                        mm_in1_receiver_writer_args->push_back(last_out_num_blocks_w);
                     } else if (in0_idx == in0_end_idx) {  // bottom cores except bottom-right when no transpose_mcast
-                        mm_in1_receiver_writer_args.push_back(last_out_num_blocks_h);
-                        mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
+                        mm_in1_receiver_writer_args->push_back(last_out_num_blocks_h);
+                        mm_in1_receiver_writer_args->push_back(out_num_blocks_x);
                     } else if (in1_idx == in1_end_idx) {  // right cores except bottom when no transpose_mcast
-                        mm_in1_receiver_writer_args.push_back(out_num_blocks_y);
-                        mm_in1_receiver_writer_args.push_back(last_out_num_blocks_w);
+                        mm_in1_receiver_writer_args->push_back(out_num_blocks_y);
+                        mm_in1_receiver_writer_args->push_back(last_out_num_blocks_w);
                     } else {
-                        mm_in1_receiver_writer_args.push_back(out_num_blocks_y);
-                        mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
+                        mm_in1_receiver_writer_args->push_back(out_num_blocks_y);
+                        mm_in1_receiver_writer_args->push_back(out_num_blocks_x);
                     }
-                }
-
-                // left half
-                if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
-                    mm_kernel_in1_receiver_writer->runtime_args[core.x][core.y] = mm_in1_receiver_writer_args;
-                }
-                // right half
-                else {
-                    mm_kernel_in1_receiver_writer_other_noc_setup->runtime_args[core.x][core.y] =
-                        mm_in1_receiver_writer_args;
                 }
             }
         }
     }
 
-    program.kernels.push_back(std::move(mm_kernel_in0_sender));
-    if (mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid.has_value()) {
-        program.kernels.push_back(std::move(*mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid));
-    }
-    program.kernels.push_back(std::move(mm_kernel_in1_sender_writer));
-    if (mm_kernel_in1_receiver_writer.has_value()) {
-        program.kernels.push_back(std::move(*mm_kernel_in1_receiver_writer));
-    }
-    if (mm_kernel_in1_receiver_writer_other_noc_setup.has_value()) {
-        program.kernels.push_back(std::move(*mm_kernel_in1_receiver_writer_other_noc_setup));
-    }
-    if (mm_kernel_in0_receiver.has_value()) {
-        program.kernels.push_back(std::move(*mm_kernel_in0_receiver));
-    }
-    if (mm_kernel_in0_receiver_other_noc_setup.has_value()) {
-        program.kernels.push_back(std::move(*mm_kernel_in0_receiver_other_noc_setup));
-    }
-    program.kernels.push_back(std::move(mm_kernel));
-
+    program.kernels.resize(num_kernels);
     return program;
 }
 

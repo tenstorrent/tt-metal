@@ -384,30 +384,34 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
         mm_kernel_defines.emplace_back("IN1_TRANSPOSE_TILE", "1");
     }
 
-    auto mm_kernel_in0_sender = tt_metal::KernelDescriptor{
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-            "reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
-        .core_ranges = all_cores_in_rect_grid.ranges(),
-        .compile_time_args = in0_sender_compile_time_args,
-        .defines = mm_kernel_in0_sender_define,
-        .config = tt_metal::DataMovementConfigDescriptor{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = in0_noc,
-        }};
+    constexpr auto max_num_kernels = 3;
+    program.kernels.resize(max_num_kernels);
+    size_t num_kernels = 0;
+
+    auto& mm_kernel_in0_sender = program.kernels[num_kernels++];
+    mm_kernel_in0_sender.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "reader_bmm_tile_layout_in0_sender_dram_sharded.cpp";
+    mm_kernel_in0_sender.core_ranges = all_cores_in_rect_grid.ranges();
+    mm_kernel_in0_sender.compile_time_args = in0_sender_compile_time_args;
+    mm_kernel_in0_sender.defines = mm_kernel_in0_sender_define;
+    mm_kernel_in0_sender.config = tt_metal::DataMovementConfigDescriptor{
+        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+        .noc = in0_noc,
+    };
     mm_kernel_in0_sender.reserve_runtime_args();
 
-    auto mm_kernel_in1_sender_writer = tt_metal::KernelDescriptor{
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-            "reader_bmm_tile_layout_in1_sender_dram_sharded.cpp",
-        .core_ranges = all_cores_in_rect_grid.ranges(),
-        .compile_time_args = in1_sender_writer_compile_time_args,
-        .defines = mm_kernel_in1_sender_writer_defines,
-        .config = tt_metal::DataMovementConfigDescriptor{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = in1_noc,
-        }};
+    auto& mm_kernel_in1_sender_writer = program.kernels[num_kernels++];
+    mm_kernel_in1_sender_writer.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "reader_bmm_tile_layout_in1_sender_dram_sharded.cpp";
+    mm_kernel_in1_sender_writer.core_ranges = all_cores_in_rect_grid.ranges();
+    mm_kernel_in1_sender_writer.compile_time_args = in1_sender_writer_compile_time_args;
+    mm_kernel_in1_sender_writer.defines = mm_kernel_in1_sender_writer_defines;
+    mm_kernel_in1_sender_writer.config = tt_metal::DataMovementConfigDescriptor{
+        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+        .noc = in1_noc,
+    };
     mm_kernel_in1_sender_writer.reserve_runtime_args();
 
     // Compute kernel compile time args
@@ -441,17 +445,17 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
     };
 
     // Create compute kernel
-    auto mm_kernel = tt_metal::KernelDescriptor{
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
-        .core_ranges = all_cores_in_rect_grid.ranges(),
-        .compile_time_args = compute_kernel_args,
-        .defines = mm_kernel_defines,
-        .config = tt_metal::ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-        }};
+    auto& mm_kernel = program.kernels[num_kernels++];
+    mm_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
+    mm_kernel.core_ranges = all_cores_in_rect_grid.ranges();
+    mm_kernel.compile_time_args = compute_kernel_args;
+    mm_kernel.defines = mm_kernel_defines;
+    mm_kernel.config = tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+    };
     mm_kernel.reserve_runtime_args();
 
     log_debug(LogOp, "in1_single_tile_size: {}", in1_single_tile_size);
@@ -465,12 +469,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
             .buffer_index = src0_cb_index,
             .data_format = in0_data_format,
             .page_size = in0_single_tile_size,
-            .tile =
-                tt_metal::TileDescriptor{
-                    .height = in0_tile.get_height(),
-                    .width = in0_tile.get_width(),
-                    .transpose = in0_tile.get_transpose_of_faces(),
-                },
+            .tile = in0_tile,
         }}});
     log_debug(
         LogOp,
@@ -488,12 +487,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
             .buffer_index = src1_cb_index,
             .data_format = in1_data_format,
             .page_size = in1_single_tile_size,
-            .tile =
-                tt_metal::TileDescriptor{
-                    .height = in1_tile.get_height(),
-                    .width = in1_tile.get_width(),
-                    .transpose = in1_tile.get_transpose_of_faces(),
-                },
+            .tile = in1_tile,
         }},
     });
     log_debug(
@@ -512,12 +506,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
             .buffer_index = src2_cb_index,
             .data_format = in0_data_format,
             .page_size = in0_single_tile_size,
-            .tile =
-                tt_metal::TileDescriptor{
-                    .height = in0_tile.get_height(),
-                    .width = in0_tile.get_width(),
-                    .transpose = in0_tile.get_transpose_of_faces(),
-                },
+            .tile = in0_tile,
         }},
         .buffer = in0_buffer,
     });
@@ -540,12 +529,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
                 .buffer_index = output_cb_index,
                 .data_format = output_data_format,
                 .page_size = output_single_tile_size,
-                .tile =
-                    tt_metal::TileDescriptor{
-                        .height = output_tile.get_height(),
-                        .width = output_tile.get_width(),
-                        .transpose = output_tile.get_transpose_of_faces(),
-                    },
+                .tile = output_tile,
             }},
         });
         // interm0
@@ -556,12 +540,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
                 .buffer_index = interm0_cb_index,
                 .data_format = interm0_data_format,
                 .page_size = interm0_single_tile_size,
-                .tile =
-                    tt_metal::TileDescriptor{
-                        .height = output_tile.get_height(),
-                        .width = output_tile.get_width(),
-                        .transpose = output_tile.get_transpose_of_faces(),
-                    },
+                .tile = output_tile,
             }},
         });
         log_debug(
@@ -582,23 +561,13 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
                      .buffer_index = output_cb_index,
                      .data_format = output_data_format,
                      .page_size = output_single_tile_size,
-                     .tile =
-                         tt_metal::TileDescriptor{
-                             .height = output_tile.get_height(),
-                             .width = output_tile.get_width(),
-                             .transpose = output_tile.get_transpose_of_faces(),
-                         },
+                     .tile = output_tile,
                  },
                  tt_metal::CBFormatDescriptor{
                      .buffer_index = interm0_cb_index,
                      .data_format = interm0_data_format,
                      .page_size = interm0_single_tile_size,
-                     .tile =
-                         tt_metal::TileDescriptor{
-                             .height = output_tile.get_height(),
-                             .width = output_tile.get_width(),
-                             .transpose = output_tile.get_transpose_of_faces(),
-                         },
+                     .tile = output_tile,
                  }},
         });
     }
@@ -619,12 +588,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
             .buffer_index = output_reshard_cb_index,
             .data_format = output_data_format,
             .page_size = output_single_tile_size,
-            .tile =
-                tt_metal::TileDescriptor{
-                    .height = output_tile.get_height(),
-                    .width = output_tile.get_width(),
-                    .transpose = output_tile.get_transpose_of_faces(),
-                },
+            .tile = output_tile,
         }},
         .buffer = out_buffer,
     });
@@ -638,12 +602,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
                 .buffer_index = src3_cb_index,
                 .data_format = bias_data_format,
                 .page_size = bias_single_tile_size,
-                .tile =
-                    tt_metal::TileDescriptor{
-                        .height = bias_tile.get_height(),
-                        .width = bias_tile.get_width(),
-                        .transpose = bias_tile.get_transpose_of_faces(),
-                    },
+                .tile = bias_tile,
             }},
         });
         log_debug(
@@ -673,7 +632,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
 
     uint32_t sender_id = 0;
     for (auto core : mcast_senders_coords) {
-        tt_metal::KernelDescriptor::CoreRuntimeArgs mm_in0_sender_args;
+        auto& mm_in0_sender_args = mm_kernel_in0_sender.runtime_args[core.x][core.y];
 
         // mcast sender - 1, mcast sender + compute core - 2
         uint32_t worker_core_type;
@@ -690,8 +649,6 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
         mm_in0_sender_args.insert(
             mm_in0_sender_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
 
-        mm_kernel_in0_sender.runtime_args[core.x][core.y] = std::move(mm_in0_sender_args);
-
         sender_id++;
     }
 
@@ -700,7 +657,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
         auto core = mcast_receiver_coords[i];
 
         // in0 receivers rt args
-        tt_metal::KernelDescriptor::CoreRuntimeArgs mm_in0_receiver_args;
+        auto& mm_in0_receiver_args = mm_kernel_in0_sender.runtime_args[core.x][core.y];
         // mcast receiver - 3
         uint32_t worker_core_type = 3;
         mm_in0_receiver_args.push_back((std::uint32_t)worker_core_type);
@@ -709,8 +666,6 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
             mm_in0_receiver_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
         mm_in0_receiver_args.insert(
             mm_in0_receiver_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
-
-        mm_kernel_in0_sender.runtime_args[core.x][core.y] = std::move(mm_in0_receiver_args);
     }
 
     for (auto core : all_cores_in_rect_grid_vec) {
@@ -763,7 +718,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
 
         // in1 reader rt args
         bool is_worker_core = true;
-        tt_metal::KernelDescriptor::CoreRuntimeArgs mm_in1_sender_writer_args;
+        auto& mm_in1_sender_writer_args = mm_kernel_in1_sender_writer.runtime_args[core.x][core.y];
         mm_in1_sender_writer_args.push_back((std::uint32_t)is_worker_core);
         mm_in1_sender_writer_args.push_back(in1_buffer->address());
         if (bias_buffer != nullptr) {
@@ -910,8 +865,6 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
 
             mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 5, num_cores_write_back);
         }
-
-        mm_kernel_in1_sender_writer.runtime_args[core.x][core.y] = std::move(mm_in1_sender_writer_args);
     }
 
     TT_ASSERT(
@@ -920,10 +873,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
         expected_max_total_width,
         total_tensor_width_written_back);
 
-    program.kernels.push_back(std::move(mm_kernel_in0_sender));
-    program.kernels.push_back(std::move(mm_kernel_in1_sender_writer));
-    program.kernels.push_back(std::move(mm_kernel));
-
+    program.kernels.resize(num_kernels);
     return program;
 }
 }  // namespace reuse_dram_sharded_optimized_helpers

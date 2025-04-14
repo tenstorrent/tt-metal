@@ -19,6 +19,9 @@ namespace matmul {
 
 tt::tt_metal::ProgramDescriptor matmul_multi_core(const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
     tt_metal::ProgramDescriptor program;
+    constexpr auto max_num_kernels = 4;
+    program.kernels.resize(max_num_kernels);
+    size_t num_kernels = 0;
 
     const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
@@ -107,60 +110,51 @@ tt::tt_metal::ProgramDescriptor matmul_multi_core(const Tensor& a, const Tensor&
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
 
-    auto reader_kernel = tt_metal::KernelDescriptor{
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
-        .core_ranges = all_cores.ranges(),
-        .compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram},
-        .config = tt_metal::ReaderConfigDescriptor{},
-    };
+    auto& reader_kernel = program.kernels[num_kernels++];
+    reader_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp";
+    reader_kernel.core_ranges = all_cores.ranges();
+    reader_kernel.compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+    reader_kernel.config = tt_metal::ReaderConfigDescriptor{};
     reader_kernel.reserve_runtime_args();
 
-    auto writer_kernel = tt_metal::KernelDescriptor{
-        .kernel_source =
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        .core_ranges = all_cores.ranges(),
-        .compile_time_args = {(uint32_t)output_cb_index, (uint32_t)dst_is_dram},
-        .config = tt_metal::WriterConfigDescriptor{},
-    };
+    auto& writer_kernel = program.kernels[num_kernels++];
+    writer_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    writer_kernel.core_ranges = all_cores.ranges();
+    writer_kernel.compile_time_args = {(uint32_t)output_cb_index, (uint32_t)dst_is_dram};
+    writer_kernel.config = tt_metal::WriterConfigDescriptor{};
     writer_kernel.reserve_runtime_args();
 
-    program.kernels.push_back(tt_metal::KernelDescriptor{
-        .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
-        .core_ranges = core_group_1.ranges(),
-        .compile_time_args =
-            {
-                1,                                 // B
-                1,                                 // Mt
-                Kt,                                // Kt
-                num_output_tiles_per_core_group_1  // Nt
-            },  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only
-                // set Nt for simplicity
-        .config =
-            tt_metal::ComputeConfigDescriptor{
-                .math_fidelity = math_fidelity,
-                .dst_full_sync_en = true,
-            },
-    });
+    auto& bmm_kernel = program.kernels[num_kernels++];
+    bmm_kernel.kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp";
+    bmm_kernel.core_ranges = core_group_1.ranges();
+    bmm_kernel.compile_time_args = {
+        1,                                 // B
+        1,                                 // Mt
+        Kt,                                // Kt
+        num_output_tiles_per_core_group_1  // Nt
+    };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only
+        // set Nt for simplicity
+    bmm_kernel.config = tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .dst_full_sync_en = true,
+    };
 
     if (!core_group_2.ranges().empty()) {
-        program.kernels.push_back(tt_metal::KernelDescriptor{
-            .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
-            .core_ranges = core_group_2.ranges(),
-            .compile_time_args =
-                {
-                    1,                                 // B
-                    1,                                 // Mt
-                    Kt,                                // Kt
-                    num_output_tiles_per_core_group_2  // Nt
-                },  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so
-                    // only set Nt for simplicity
-            .config =
-                tt_metal::ComputeConfigDescriptor{
-                    .math_fidelity = math_fidelity,
-                    .dst_full_sync_en = true,
-                },
-        });
+        auto& bmm_kernel_2 = program.kernels[num_kernels++];
+        bmm_kernel_2.kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp";
+        bmm_kernel_2.core_ranges = core_group_2.ranges();
+        bmm_kernel_2.compile_time_args = {
+            1,
+            1,
+            Kt,
+            num_output_tiles_per_core_group_2};  // bmm compute kernel the B, Mt, Nt are just 3 for loops that
+                                                 // technically act as 1 large loop, so only set Nt for simplicity
+        bmm_kernel_2.config = tt_metal::ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .dst_full_sync_en = true,
+        };
     }
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
@@ -190,8 +184,7 @@ tt::tt_metal::ProgramDescriptor matmul_multi_core(const Tensor& a, const Tensor&
         writer_kernel.runtime_args[core.x][core.y] = {dst_addr, num_output_tiles_per_core, num_tiles_written};
         num_tiles_written += num_output_tiles_per_core;
     }
-    program.kernels.push_back(std::move(reader_kernel));
-    program.kernels.push_back(std::move(writer_kernel));
+    program.kernels.resize(num_kernels);
 
     return program;
 }

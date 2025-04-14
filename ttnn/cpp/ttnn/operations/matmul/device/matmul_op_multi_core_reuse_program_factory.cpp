@@ -144,30 +144,34 @@ tt_metal::ProgramDescriptor create_program(
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     tt_metal::KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)out_is_dram};
 
+    constexpr auto max_num_kernels = 3;
+    program.kernels.resize(max_num_kernels);
+    size_t num_kernels = 0;
+
     // Create reader and writer kernels per core
-    auto mm_reader_kernel = tt_metal::KernelDescriptor{
-        .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout.cpp",
-        .core_ranges = all_cores.ranges(),
-        .compile_time_args = reader_compile_time_args,
-        .config = tt_metal::ReaderConfigDescriptor{},
-    };
+    auto& mm_reader_kernel = program.kernels[num_kernels++];
+    mm_reader_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout.cpp";
+    mm_reader_kernel.core_ranges = all_cores.ranges();
+    mm_reader_kernel.compile_time_args = reader_compile_time_args;
+    mm_reader_kernel.config = tt_metal::ReaderConfigDescriptor{};
     mm_reader_kernel.reserve_runtime_args();
 
-    auto unary_writer_kernel = tt_metal::KernelDescriptor{
-        .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_tile_layout.cpp",
-        .core_ranges = all_cores.ranges(),
-        .compile_time_args = writer_compile_time_args,
-        .config = tt_metal::WriterConfigDescriptor{},
-    };
+    auto& unary_writer_kernel = program.kernels[num_kernels++];
+    unary_writer_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_tile_layout.cpp";
+    unary_writer_kernel.core_ranges = all_cores.ranges();
+    unary_writer_kernel.compile_time_args = writer_compile_time_args;
+    unary_writer_kernel.config = tt_metal::WriterConfigDescriptor{};
     unary_writer_kernel.reserve_runtime_args();
 
     // Create compute kernel
-    program.kernels.push_back(tt_metal::KernelDescriptor{
-        .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm.cpp",
-        .core_ranges = all_cores.ranges(),
-        .compile_time_args = compute_kernel_args,
-        .config = tt_metal::ComputeConfigDescriptor{.math_fidelity = math_fidelity},
-    });
+    auto& mm_kernel = program.kernels[num_kernels++];
+    mm_kernel.kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm.cpp";
+    mm_kernel.core_ranges = all_cores.ranges();
+    mm_kernel.compile_time_args = compute_kernel_args;
+    mm_kernel.config = tt_metal::ComputeConfigDescriptor{.math_fidelity = math_fidelity};
+    mm_kernel.reserve_runtime_args();
 
     for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
         for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
@@ -176,7 +180,7 @@ tt_metal::ProgramDescriptor create_program(
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
             // Write runtime args to device
-            tt_metal::KernelDescriptor::CoreRuntimeArgs mm_reader_args = {
+            mm_reader_kernel.runtime_args[core.x][core.y] = {
                 (std::uint32_t)in0_buffer->address(),          // in0_tensor_addr
                 (std::uint32_t)K * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)1,                              // in0_tensor_stride_w
@@ -205,7 +209,7 @@ tt_metal::ProgramDescriptor create_program(
                 (std::uint32_t)bcast_batch  // bcast_B
             };
 
-            tt_metal::KernelDescriptor::CoreRuntimeArgs writer_args = {
+            unary_writer_kernel.runtime_args[core.x][core.y] = {
                 (std::uint32_t)out_buffer->address(),                                      // out_tensor_addr
                 (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * N,  // out_tensor_start_tile_id
                 (std::uint32_t)1,                                                          // out_tensor_stride_w
@@ -223,16 +227,11 @@ tt_metal::ProgramDescriptor create_program(
                 (std::uint32_t)B       // batch
             };
 
-            mm_reader_kernel.runtime_args[core.x][core.y] = mm_reader_args;
-            unary_writer_kernel.runtime_args[core.x][core.y] = writer_args;
-
             num_blocks_read++;
         }
     }
 
-    program.kernels.push_back(std::move(mm_reader_kernel));
-    program.kernels.push_back(std::move(unary_writer_kernel));
-
+    program.kernels.resize(num_kernels);
     return program;
 }
 

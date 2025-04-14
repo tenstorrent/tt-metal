@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt-metalium/program_descriptors.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tile.hpp>
 
 #include "tt_stl/overloaded.hpp"
 
@@ -15,6 +16,9 @@ inline size_t hash_combine(size_t seed, size_t value) {
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
+TileDescriptor::TileDescriptor(const Tile& tile) :
+    height(tile.get_height()), width(tile.get_width()), transpose(tile.get_transpose_of_faces()) {}
 
 size_t ProgramDescriptor::calculate_program_hash() const {
     using namespace CMAKE_UNIQUE_NAMESPACE;
