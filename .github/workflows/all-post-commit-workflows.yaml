@@ -191,7 +191,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   run-profiler-regression:
-    if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact-profiler
     strategy:
       fail-fast: false
