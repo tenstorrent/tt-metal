@@ -87,7 +87,7 @@ class MambaConv:
         input_tensor_splits = self.prepare_input(input_tensor)
         output_tensor_splits = []
         for i in range(self.config.channels_split_factor):
-            [tt_output_tensor_on_device, out_length, [weights_device, _]] = ttnn.Conv1d(
+            [tt_output_tensor_on_device, out_length, [weights_device, _]] = ttnn.conv1d(
                 input_tensor=input_tensor_splits[i],
                 weight_tensor=self.tt_weight_tensor_splits[i],
                 in_channels=self.config.input_channels // self.config.channels_split_factor,
