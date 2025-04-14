@@ -25,9 +25,9 @@ from models.utility_functions import (
     indirect=True,
 )
 @pytest.mark.parametrize(
-    ("model_name", "batch_size", "prompt_sequence_length", "height", "width"),
+    ("model_name", "batch_size", "prompt_sequence_length", "spatial_sequence_length", "height", "width"),
     [
-        ("large", 1, 333, 1024, 1024),
+        ("large", 2, 333, 4096, 1024, 1024),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192, "trace_region_size": 15157248}], indirect=True)
@@ -37,6 +37,7 @@ def test_transformer(
     model_name,
     batch_size: int,
     prompt_sequence_length: int,
+    spatial_sequence_length: int,
     height: int,
     width: int,
 ) -> None:
@@ -70,17 +71,23 @@ def test_transformer(
     else:
         num_heads = torch_model.config.num_attention_heads
 
-    tt_model = TtSD3Transformer2DModel(parameters, num_heads=num_heads, device=mesh_device)
+    guidance_cond = 1
+    if batch_size == 2:
+        guidance_cond = 2
+    tt_model = TtSD3Transformer2DModel(parameters, guidance_cond=guidance_cond, num_heads=num_heads, device=mesh_device)
 
     torch.manual_seed(0)
     spatial = torch.randn((batch_size, 16, height // 8, width // 8))
-    prompt = torch.randn((batch_size, prompt_sequence_length, 4096))
+    prompt = torch.randn((batch_size, prompt_sequence_length, spatial_sequence_length))
     pooled_projection = torch.randn((batch_size, 2048))
     timestep = torch.randint(1000, (batch_size,), dtype=torch_dtype)
 
     with torch.no_grad():
         torch_output = torch_model(
-            spatial=spatial, prompt_embed=prompt, pooled_projections=pooled_projection, timestep=timestep
+            spatial=spatial,
+            prompt_embed=prompt,
+            pooled_projections=pooled_projection,
+            timestep=timestep,
         )
 
     """
@@ -167,10 +174,15 @@ def test_transformer(
     #     timestep=tt_timestep_host,
     # )
     tt_output = tt_model(
-        spatial=tt_spatial, prompt=tt_prompt, pooled_projection=tt_pooled_projection, timestep=tt_timestep
+        spatial=tt_spatial,
+        prompt=tt_prompt,
+        pooled_projection=tt_pooled_projection,
+        timestep=tt_timestep,
+        N=spatial_sequence_length,
+        L=prompt_sequence_length,
     )
 
+    torch_output = torch.unsqueeze(torch_output, 1)
     print(f"tt_output shape {tt_output.shape} torch_output {torch_output.shape}")
-    tt_output = ttnn.squeeze(tt_output, 0)
     assert_quality(torch_output, tt_output, pcc=0.999_500, shard_dim=0, num_devices=mesh_device.get_num_devices())
     #  mse=0.1,

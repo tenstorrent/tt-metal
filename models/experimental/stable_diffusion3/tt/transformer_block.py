@@ -233,7 +233,7 @@ class TtTransformerBlock:
             spatial_scale_attn = None
 
         if self._context_pre_only:
-            print(f"chunking prompt_time for context pre only: {prompt_time.shape}")
+            # print(f"chunking prompt_time for context pre only: {prompt_time.shape}")
             [
                 prompt_scale_attn,
                 prompt_shift_attn,
@@ -244,7 +244,7 @@ class TtTransformerBlock:
             prompt_scale_ff = None
             prompt_gate_ff = None
         else:
-            print(f"not context pre only: {prompt_time.shape}")
+            # print(f"not context pre only: {prompt_time.shape}")
             [
                 prompt_shift_attn,
                 prompt_scale_attn,
@@ -336,3 +336,12 @@ class TtTransformerBlock:
 def chunk_time(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
     return [t[:, :, :, i * size : (i + 1) * size] for i in range(count)]
+
+
+def chunk_device_tensors(ttnn_tensor: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
+    size = ttnn_tensor.shape[-1] // count
+    device_slices = []
+    for i, device_tensor in enumerate(ttnn.get_device_tensors(ttnn_tensor)):
+        device_slice = device_tensor[:, :, :, i * size : (i + 1) * size]
+        device_slices.append(device_slice)
+    return device_slices

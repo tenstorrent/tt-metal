@@ -120,9 +120,7 @@ class TtConv2d:
         patch_size = 2
         stride_h = patch_size
         stride_w = 1
-
         unfolded_permuted_x = ttnn.fold(x, stride_h, stride_w)
-        folded_shape = unfolded_permuted_x.shape
         unfolded_permuted_x = ttnn.to_layout(unfolded_permuted_x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
         ttnn.deallocate(x)

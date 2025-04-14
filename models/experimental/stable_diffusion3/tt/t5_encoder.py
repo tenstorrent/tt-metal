@@ -12,7 +12,7 @@ import ttnn
 
 from .linear import TtLinear, TtLinearParameters
 from .substate import indexed_substates, substate
-from .utils import from_torch_fast
+from .utils import from_torch_fast, from_torch, to_torch
 
 
 @dataclass
@@ -44,7 +44,13 @@ class TtT5EncoderParameters:
         device: ttnn.Device,
     ) -> TtT5EncoderParameters:
         return cls(
-            token_embedding=ttnn.from_torch(state["encoder.embed_tokens.weight"], dtype=dtype, device=device),
+            token_embedding=from_torch(
+                state["encoder.embed_tokens.weight"],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=dtype,
+                mesh_device=device,
+                shard_dim=None,
+            ),
             blocks=[
                 TtT5BlockParameters.from_torch(s, dtype=dtype, device=device)
                 for s in indexed_substates(state, "encoder.block")
@@ -52,10 +58,12 @@ class TtT5EncoderParameters:
             norm=TtT5LayerNormParameters.from_torch(
                 substate(state, "encoder.final_layer_norm"), dtype=dtype, device=device
             ),
-            attention_bias=ttnn.from_torch(
+            attention_bias=from_torch(
                 state["encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight"],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 dtype=dtype,
-                device=device,
+                mesh_device=device,
+                shard_dim=None,
             ),
         )
 
@@ -75,12 +83,11 @@ class TtT5Encoder:
         ]
         self._norm = TtT5LayerNorm(parameters.norm, eps=layer_norm_epsilon)
         self._attention_bias = parameters.attention_bias
-
         self._num_heads = num_heads
         self._relative_attention_num_buckets = relative_attention_num_buckets
         self._relative_attention_max_distance = relative_attention_max_distance
 
-    def __call__(self, input_ids: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(self, input_ids: ttnn.Tensor, device) -> ttnn.Tensor:
         _batch_size, seq_length = input_ids.shape
 
         # TODO: Remove the conversion to row major layout once ttnn.embedding works with tiled input
@@ -90,7 +97,7 @@ class TtT5Encoder:
 
         position_bias = _compute_bias(
             seq_length=seq_length,
-            device=input_ids.device(),
+            device=device,
             relative_attention_num_buckets=self._relative_attention_num_buckets,
             relative_attention_max_distance=self._relative_attention_max_distance,
             relative_attention_bias=self._attention_bias,
@@ -182,10 +189,10 @@ class TtT5AttentionParameters:
         device: ttnn.Device,
     ) -> TtT5AttentionParameters:
         return cls(
-            q_proj=TtLinearParameters.from_torch(substate(state, "q"), dtype=dtype, device=device, on_host=True),
-            k_proj=TtLinearParameters.from_torch(substate(state, "k"), dtype=dtype, device=device, on_host=True),
-            v_proj=TtLinearParameters.from_torch(substate(state, "v"), dtype=dtype, device=device, on_host=True),
-            o_proj=TtLinearParameters.from_torch(substate(state, "o"), dtype=dtype, device=device, on_host=True),
+            q_proj=TtLinearParameters.from_torch(substate(state, "q"), dtype=dtype, device=device, shard_dim=None),
+            k_proj=TtLinearParameters.from_torch(substate(state, "k"), dtype=dtype, device=device, shard_dim=None),
+            v_proj=TtLinearParameters.from_torch(substate(state, "v"), dtype=dtype, device=device, shard_dim=None),
+            o_proj=TtLinearParameters.from_torch(substate(state, "o"), dtype=dtype, device=device, shard_dim=None),
         )
 
 
@@ -209,8 +216,8 @@ class TtT5Attention:
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv, num_heads=self._num_heads, transpose_key=True
         )
-
-        scores = ttnn.matmul(q, k) + position_bias
+        scores = ttnn.matmul(q, k)
+        scores = scores + position_bias
         attn_weights = ttnn.softmax(scores, dim=-1)
         attn = ttnn.matmul(attn_weights, v)
         attn = ttnn.transformer.concatenate_heads(attn)
@@ -265,9 +272,9 @@ class TtT5DenseGatedActDenseParameters:
         device: ttnn.Device,
     ) -> TtT5DenseGatedActDenseParameters:
         return cls(
-            wi0=TtLinearParameters.from_torch(substate(state, "wi_0"), dtype=dtype, device=device, on_host=True),
-            wi1=TtLinearParameters.from_torch(substate(state, "wi_1"), dtype=dtype, device=device, on_host=True),
-            wo=TtLinearParameters.from_torch(substate(state, "wo"), dtype=dtype, device=device, on_host=True),
+            wi0=TtLinearParameters.from_torch(substate(state, "wi_0"), dtype=dtype, device=device, shard_dim=None),
+            wi1=TtLinearParameters.from_torch(substate(state, "wi_1"), dtype=dtype, device=device, shard_dim=None),
+            wo=TtLinearParameters.from_torch(substate(state, "wo"), dtype=dtype, device=device, shard_dim=None),
         )
 
 
@@ -297,7 +304,7 @@ class TtT5LayerNormParameters:
         device: ttnn.Device,
     ) -> TtT5LayerNormParameters:
         return cls(
-            weight=from_torch_fast(state["weight"], layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device),
+            weight=from_torch(state["weight"], layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_device=device),
         )
 
 
@@ -353,12 +360,16 @@ def _compute_bias(
         max_distance=relative_attention_max_distance,
     )
 
+    relative_attention_bias = ttnn.get_device_tensors(relative_attention_bias)[0]
     torch_relative_attention_bias = ttnn.to_torch(relative_attention_bias)
+    # torch_relative_attention_bias = to_torch(relative_attention_bias, mesh_device=device, dtype=relative_attention_bias.get_dtype(), shard_dim=None)
     output = torch.nn.functional.embedding(relative_position_bucket, torch_relative_attention_bias)
     output = output.permute([2, 0, 1]).unsqueeze(0)
     output = output[:, :, -seq_length:, :]
 
-    return from_torch_fast(output, device=device, layout=ttnn.TILE_LAYOUT)
+    return from_torch(
+        output, mesh_device=device, dtype=relative_attention_bias.get_dtype(), shard_dim=None, layout=ttnn.TILE_LAYOUT
+    )
 
 
 def new_gelu_activation(x: ttnn.Tensor) -> ttnn.Tensor:

@@ -28,7 +28,7 @@ class TtLinearParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
-        shard_dim: int,
+        shard_dim: int = None,
     ) -> TtLinearParameters:
         if "bias" in state:
             bias = state["bias"].unsqueeze(0)
