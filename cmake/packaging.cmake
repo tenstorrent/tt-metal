@@ -57,7 +57,6 @@ get_cmake_property(CPACK_COMPONENTS_ALL COMPONENTS)
 list(
     REMOVE_ITEM
     CPACK_COMPONENTS_ALL
-    umd-dev # FIXME: -dev packages will come later
     tt_pybinds # Wow this one is big!
     tar # TODO: Remove that tarball entirely
     # Deps that define install targets that we can't (or haven't) disabled
@@ -72,10 +71,11 @@ cpack_add_component(jit-build GROUP metalium-jit)
 
 cpack_add_component(metalium-runtime GROUP metalium)
 cpack_add_component(umd-runtime GROUP metalium)
-cpack_add_component(dev GROUP metalium) # FIXME: delete this line when we bump UMD submodule
 cpack_add_component_group(metalium)
 
 cpack_add_component(fmt-core GROUP metalium-dev)
+cpack_add_component(json-dev GROUP metalium-dev)
+cpack_add_component(umd-dev GROUP metalium-dev)
 cpack_add_component_group(metalium-dev)
 
 cpack_add_component(gtest GROUP metalium-validation)

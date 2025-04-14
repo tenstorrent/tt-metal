@@ -135,6 +135,8 @@ CPMAddPackage(
     NAME nlohmann_json
     GITHUB_REPOSITORY nlohmann/json
     GIT_TAG v3.11.3
+    PATCHES
+        json.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "JSON_Install ON"

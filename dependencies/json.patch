@@ -1,0 +1,29 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index fa77a5a..17b07ac 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -131,10 +131,12 @@ if(JSON_Install)
+     install(
+         DIRECTORY ${NLOHMANN_JSON_INCLUDE_BUILD_DIR}
+         DESTINATION ${NLOHMANN_JSON_INCLUDE_INSTALL_DIR}
++        COMPONENT json-dev
+     )
+     install(
+         FILES ${NLOHMANN_JSON_CMAKE_PROJECT_CONFIG_FILE} ${NLOHMANN_JSON_CMAKE_VERSION_CONFIG_FILE}
+         DESTINATION ${NLOHMANN_JSON_CONFIG_INSTALL_DIR}
++        COMPONENT json-dev
+     )
+     if (NLOHMANN_ADD_NATVIS)
+         install(
+@@ -156,9 +158,11 @@ endif()
+         EXPORT ${NLOHMANN_JSON_TARGETS_EXPORT_NAME}
+         NAMESPACE ${PROJECT_NAME}::
+         DESTINATION ${NLOHMANN_JSON_CONFIG_INSTALL_DIR}
++        COMPONENT json-dev
+     )
+     install(
+         FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.pc"
+         DESTINATION ${NLOHMANN_JSON_PKGCONFIG_INSTALL_DIR}
++        COMPONENT json-dev
+     )
+ endif()
