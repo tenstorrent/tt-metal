@@ -29,7 +29,7 @@ def calculate_bytes(shape, dtype):
 @pytest.mark.parametrize(
     "bw_target",
     [
-        123.0,
+        238.0,
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -42,7 +42,7 @@ def test_dram_prefetcher_perf(
 
     subdir = "llama_tg_perf"
     command = f"pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py::test_run_prefetcher_llama_perf"
-    cols = ["DEVICE KERNEL"]
+    cols = ["DEVICE NCRISC KERNEL"]
     op_name = "DramPrefetcher"
 
     profiler.start("run")
@@ -60,7 +60,7 @@ def test_dram_prefetcher_perf(
     total_bytes = sum(total_bytes)
     effective_bw = total_bytes / measured_duration_ns  # GB/s
 
-    logger.info(f"Measured BW (GB/s): {effective_bw:.3f} us vs. target: {bw_target} us")
+    logger.info(f"Measured BW (GB/s): {effective_bw:.3f} vs. target: {bw_target}")
 
     # Save the measurement
     benchmark_data.add_measurement(profiler, 0, step_name, f"dram-prefetcher-effective-bw", effective_bw)

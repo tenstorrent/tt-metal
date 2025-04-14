@@ -9,6 +9,8 @@
 
 #include "debug/dprint.h"
 
+constexpr bool skip_ptr_update = true;
+
 void kernel_main() {
     // Compile time args
     constexpr uint32_t num_layers = get_compile_time_arg_val(0);
@@ -68,7 +70,7 @@ void kernel_main() {
                 // Issue noc async read commands for current block
                 uint32_t temp_l1_write_addr = l1_write_addr;
                 for (uint32_t h = 0; h < curr_block_num_pages; ++h) {
-                    noc_async_read_tile_dram_sharded_with_state_with_trid(
+                    noc_async_read_tile_dram_sharded_with_state_with_trid<skip_ptr_update>(
                         src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
                     src_read_addr += curr_page_size;
                     temp_l1_write_addr += curr_page_size;
