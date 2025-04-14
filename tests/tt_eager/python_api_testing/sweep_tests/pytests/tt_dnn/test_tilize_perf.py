@@ -6,6 +6,7 @@ import pytest
 import torch
 from functools import partial
 from loguru import logger
+import numpy as np
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
