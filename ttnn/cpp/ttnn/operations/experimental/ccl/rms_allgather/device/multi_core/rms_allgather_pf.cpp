@@ -1346,8 +1346,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     CBHandle cb_output_reshard = 0;
     if (!skip_write_back) {
         output_reshard_cb_config = output_reshard_cb_config.set_globally_allocated_address(*output.buffer());
-        cb_output_reshard =
-            tt::tt_metal::CreateCircularBuffer(program, all_worker_and_storage_cores, output_reshard_cb_config);
+        cb_output_reshard = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_reshard_cb_config);
     }
 
     const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
@@ -1673,7 +1672,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             write_back_writer_args.push_back(num_tiles_to_write_back);                   // num_bytes_to_write_back
             write_back_writer_args.push_back(storage_core_noc_x[current_storage_core]);  // current_storage_core_noc_x
             write_back_writer_args.push_back(storage_core_noc_y[current_storage_core]);  // current_storage_core_noc_y
-
             worker_core_current_offset += num_tiles_to_write_back;
             current_storage_core_offset += num_tiles_to_write_back;
 

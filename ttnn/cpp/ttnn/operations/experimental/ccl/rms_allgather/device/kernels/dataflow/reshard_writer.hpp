@@ -42,10 +42,11 @@ inline void write_minimal_resharded_data(
 
         for (uint32_t w = 0; w < num_tiles_to_write_in_current_segment; ++w) {
             num_tiles_in_write_queue += 1;
-            cb_wait_front(cb_out, num_tiles_in_write_queue);
+            cb_wait_front(cb_out, 1);
             noc_async_write(worker_core_read_addr, remote_storage_core_write_addr, out_single_tile_size_bytes);
             worker_core_read_addr += out_single_tile_size_bytes;
             remote_storage_core_write_addr += out_single_tile_size_bytes;
+            cb_pop_front(cb_out, 1);
         }
         worker_core_read_addr += worker_core_stride_w_bytes;
         remote_storage_core_write_addr += storage_core_stride_w_bytes;
