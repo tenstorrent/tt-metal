@@ -12,6 +12,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision, ModelOptimizations, CheckpointType
 from models.tt_transformers.tt.model import Transformer
+
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
