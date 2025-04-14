@@ -16,18 +16,16 @@ namespace ttnn {
 
 namespace operations::pool {
 
-TensorMemoryLayout determine_pool_config_for_auto_shard(
-    uint32_t batch_size,
-    uint32_t channels,
-    uint32_t output_height,
-    uint32_t output_width,
-    uint32_t input_height,
-    uint32_t input_width,
-    const CoreCoord& compute_grid_size,
-    Layout input_tensor_layout,
-    const std::array<uint32_t, 2>& kernel_size,
-    const DeviceComputeKernelConfig& compute_config,
-    const DataType& input_dtype);
+sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
+    const Tensor& input_tensor, const sliding_window::SlidingWindowConfig& sliding_window_config, uint32_t channels);
 
+uint32_t calculate_L1_usage(
+    const Tensor& input,
+    const uint32_t kernel_h,
+    const uint32_t kernel_w,
+    const uint32_t out_h,
+    const uint32_t out_w,
+    const MemoryConfig& input_memory,
+    const MemoryConfig& output_memory);
 }  // namespace operations::pool
 }  // namespace ttnn

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_op.hpp"
+#include "ttnn/operations/pool/generic/pool2d_utils.hpp"
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_types.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
@@ -216,6 +217,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             max_pool_partials_cb_npages);
     }
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
+
+    auto l1_usage = pool::calculate_L1_usage(
+        input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config());
+
+    TT_FATAL(
+        program.get_cb_memory_size() == l1_usage,
+        "Calculated CB size {} does not match the actual CB size {}",
+        program.get_cb_memory_size(),
+        l1_usage);
 
 #if 1
     {  // debug

@@ -73,45 +73,33 @@ Tensor Pool2DOp<pool_type>::invoke(
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED; // default to height sharding
     if (!out_memory_config.shard_spec.has_value()) { //true
         // Input is not sharded. Perform sharding.
-        if (applied_shard_scheme.has_value()) {
+        if (applied_shard_scheme.has_value())
+        {
             TT_FATAL((applied_shard_scheme.value() == TensorMemoryLayout::HEIGHT_SHARDED) ||
                      (applied_shard_scheme.value() == TensorMemoryLayout::WIDTH_SHARDED) ||
                      (applied_shard_scheme.value() == TensorMemoryLayout::BLOCK_SHARDED),
                      "Only height, width, or block sharding strategies are supported.");
             shard_layout = applied_shard_scheme.value();
+            parallel_config = conv::determine_parallel_config(
+                                                shard_layout,    //HEIGHT_SHARDED
+                                                batch_size,     //1
+                                                channels,       //6144
+                                                output_shape[1],    //6
+                                                output_shape[2],    //6
+                                                channels,       //6144
+                                                input_tensor.device()->compute_with_storage_grid_size(),    //8,8
+                                                ShardOrientation::ROW_MAJOR,
+                                                false,
+                                                false);
         }
         else { //auto-sharding
-            const auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();//{8,8}
-            DeviceComputeKernelConfig compute_config = conv::get_conv_default_compute_kernel_config(input_tensor.device());
-            const uint32_t output_height = ((input_h - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
-            const uint32_t output_width = ((input_w - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
-
-
-            shard_layout = pool::determine_pool_config_for_auto_shard(
-                batch_size,
-                channels,
-                output_height,
-                output_width,
-                input_h,
-                input_w,
-                compute_grid_size,
-                input_tensor.layout(),
-                kernel_size,
-                compute_config,
-                input_tensor.dtype());
+            parallel_config = pool::determine_pool_config_for_auto_shard(
+                input_tensor,
+                sliding_window_config,
+                channels
+                );
         }
 
-        parallel_config = conv::determine_parallel_config(
-                                            shard_layout,    //HEIGHT_SHARDED
-                                            batch_size,     //1
-                                            channels,       //6144
-                                            output_shape[1],    //6
-                                            output_shape[2],    //6
-                                            channels,       //6144
-                                            input_tensor.device()->compute_with_storage_grid_size(),    //8,8
-                                            ShardOrientation::ROW_MAJOR,
-                                            false,
-                                            false);
         //parallel_config.grid = {(0,0;7,3),(0,4;3,4)}, shard_scheme = HEIGHT_SHARDED, shard_orientation = ROW_MAJOR,
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);  //36
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);   //1
@@ -160,7 +148,7 @@ Tensor Pool2DOp<pool_type>::invoke(
     // Call the halo uop
     auto haloed_tensor = ttnn::halo(
         queue_id,
-        input_tensor_sharded,
+        input_tensor_sharded,   //1,1,36,6144
         sliding_window_config,
         get_bf16_pool_init_value(pool_type), // pad_val, 65408
         false,
@@ -171,7 +159,7 @@ Tensor Pool2DOp<pool_type>::invoke(
 
     auto output_tensor = ttnn::prim::pool2d(
         queue_id,
-        haloed_tensor,
+        haloed_tensor,  //1,1,100,6144
         sliding_window_config,
         pool_type,
         DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
