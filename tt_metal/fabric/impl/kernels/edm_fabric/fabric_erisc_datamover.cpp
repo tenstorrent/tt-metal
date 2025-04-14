@@ -290,23 +290,10 @@ FORCE_INLINE void init_ptr_val(int32_t val) {
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct OutboundReceiverChannelPointers {
-    static constexpr bool is_pow2 = is_power_of_2(RECEIVER_NUM_BUFFERS);
+    BufferIndex remote_receiver_buffer_index{0};
+    uint8_t num_free_slots = RECEIVER_NUM_BUFFERS;
 
-    tt::tt_fabric::ChannelBufferPointer<RECEIVER_NUM_BUFFERS> wrptr;
-    tt::tt_fabric::ChannelBufferPointer<RECEIVER_NUM_BUFFERS> ack_ptr;
-    tt::tt_fabric::ChannelBufferPointer<RECEIVER_NUM_BUFFERS> completion_ptr;
-
-    FORCE_INLINE bool has_space_for_packet() const {
-        return completion_ptr.distance_behind(wrptr) < RECEIVER_NUM_BUFFERS;
-    }
-
-    FORCE_INLINE bool has_unacknowledged_eth_packets() const { return ack_ptr.get_ptr() != wrptr.get_ptr(); }
-
-    FORCE_INLINE bool has_incomplete_eth_packets() const { return completion_ptr.get_ptr() != wrptr.get_ptr(); }
-
-    FORCE_INLINE bool has_unacknowledged_or_incomplete_eth_packets() const {
-        return has_incomplete_eth_packets() || has_unacknowledged_eth_packets();
-    }
+    FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
 };
 
 /*
@@ -366,7 +353,8 @@ FORCE_INLINE void send_next_data(
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
     tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& receiver_buffer_channel,
     uint8_t sender_channel_index) {
-    auto& remote_receiver_wrptr = outbound_to_receiver_channel_pointers.wrptr;
+    auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
+    auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     auto& local_sender_wrptr = sender_worker_interface.local_wrptr;
     auto local_sender_wrptr_buffer_index = local_sender_wrptr.get_buffer_index();
 
@@ -383,7 +371,7 @@ FORCE_INLINE void send_next_data(
     pkt_header->src_ch_id = sender_channel_index;
 
     auto src_addr = (uint32_t)pkt_header;
-    auto dest_addr = receiver_buffer_channel.get_buffer_address(remote_receiver_wrptr.get_buffer_index());
+    auto dest_addr = receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index);
     while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
     };
     internal_::eth_send_packet_bytes_unsafe(DEFAULT_ETH_TXQ, src_addr, dest_addr, payload_size_bytes);
@@ -391,12 +379,17 @@ FORCE_INLINE void send_next_data(
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
     local_sender_wrptr.increment();
+
+    // TODO: Put in fn
+    remote_receiver_buffer_index =
+        BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
+    remote_receiver_num_free_slots--;
+
     // update the remote reg
     static constexpr uint32_t words_to_forward = 1;
     while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
     };
     remote_update_ptr_val<to_receiver_pkts_sent_id>(words_to_forward);
-    remote_receiver_wrptr.increment();
 }
 
 /////////////////////////////////////////////
@@ -600,7 +593,7 @@ void run_sender_channel_step(
     int32_t completions_since_last_check = get_ptr_val(to_sender_packets_completed_streams[sender_channel_index]);
     if (completions_since_last_check) {
         auto& sender_rdptr = local_sender_channel_worker_interface.local_rdptr;
-        outbound_to_receiver_channel_pointers.completion_ptr.increment_n(completions_since_last_check);
+        outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_rdptr.increment_n(completions_since_last_check);
         increment_local_update_ptr_val(
             to_sender_packets_completed_streams[sender_channel_index], -completions_since_last_check);
