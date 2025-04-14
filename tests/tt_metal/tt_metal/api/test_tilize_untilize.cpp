@@ -6,7 +6,6 @@
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <initializer_list>
 #include <vector>
 #include <random>
 
@@ -15,9 +14,8 @@
 #include "span.hpp"
 
 namespace reference {
-// Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
 template <typename T>
-std::vector<T> convert_layout_row_major_to_tile_swizzled(
+std::vector<T> untilize_nchw(
     tt::stl::Span<const T> in, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
     std::vector<T> result;
     if (in.size() == 0) {
@@ -55,7 +53,7 @@ std::vector<T> convert_layout_row_major_to_tile_swizzled(
 
 // Converts a linear non-zero-padded row-major tensor to 32-swizzled tilized row-major tensor
 template <typename T>
-std::vector<T> convert_layout_tile_swizzled_to_row_major(
+std::vector<T> tilize_nchw(
     tt::stl::Span<const T> in_rowmajor, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
     std::vector<T> tilized_result;
     if (in_rowmajor.size() == 0) {
@@ -91,7 +89,7 @@ std::vector<T> convert_layout_tile_swizzled_to_row_major(
 }
 
 template <class T>
-std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
+std::vector<T> convert_to_tile_layout(
     tt::stl::Span<const T> data,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
@@ -176,12 +174,12 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
 }
 
 template <class T>
-std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
+std::vector<T> convert_to_flat_layout(
     tt::stl::Span<const T> data,
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
-    const bool transpose_face_order) {
+    const bool /*transpose_face_order*/) {
     std::vector<T> result;
     if (data.size() == 0) {
         return result;
@@ -268,20 +266,20 @@ std::vector<T> convert_layout(
     switch (inL) {
         case TensorLayoutType::TILED_SWIZZLED:
             if (outL == TensorLayoutType::TILED_NFACES) {
-                return reference::convert_layout_tile_swizzled_to_tile_nfaces<T>(
+                return convert_to_tile_layout<T>(
                     inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else if (outL == TensorLayoutType::LIN_ROW_MAJOR) {
-                return reference::convert_layout_row_major_to_tile_swizzled<T>(inp, shape, tile_shape);
+                return untilize_nchw<T>(inp, shape, tile_shape);
             } else {
                 TT_ASSERT(false && "Unsupported conversion.");
             }
             break;
         case TensorLayoutType::LIN_ROW_MAJOR:
             if (outL == TensorLayoutType::TILED_SWIZZLED) {
-                return reference::convert_layout_tile_swizzled_to_row_major<T>(inp, shape, tile_shape);
+                return tilize_nchw<T>(inp, shape, tile_shape);
             } else if (outL == TensorLayoutType::TILED_NFACES) {
-                auto swiz32 = convert_layout_tile_swizzled_to_row_major<T>(inp, shape, tile_shape);
-                return reference::convert_layout_tile_swizzled_to_tile_nfaces<T>(
+                auto swiz32 = tilize_nchw<T>(inp, shape, tile_shape);
+                return convert_to_tile_layout<T>(
                     swiz32, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else {
                 TT_ASSERT(false && "Unsupported conversion.");
@@ -289,12 +287,12 @@ std::vector<T> convert_layout(
             break;
         case TensorLayoutType::TILED_NFACES:
             if (outL == TensorLayoutType::TILED_SWIZZLED) {
-                return reference::convert_layout_tile_nfaces_to_tile_swizzled<T>(
+                return convert_to_flat_layout<T>(
                     inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else if (outL == TensorLayoutType::LIN_ROW_MAJOR) {
-                auto swiz32 = reference::convert_layout_tile_nfaces_to_tile_swizzled<T>(
-                    inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
-                return reference::convert_layout_row_major_to_tile_swizzled<T>(swiz32, shape, tile_shape);
+                auto swiz32 =
+                    convert_to_flat_layout<T>(inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+                return untilize_nchw<T>(swiz32, shape, tile_shape);
             } else {
                 TT_ASSERT(false && "Unsupported conversion");
             }
@@ -304,25 +302,6 @@ std::vector<T> convert_layout(
     return std::vector<T>();
 }
 
-template <typename T>
-std::vector<T> convert_layout(
-    tt::stl::Span<const T> inp,
-    tt::stl::Span<const uint32_t> shape,
-    TensorLayoutType inL,
-    TensorLayoutType outL,
-    std::optional<PhysicalSize> tile_shape,
-    std::optional<PhysicalSize> face_shape,
-    const bool transpose_within_face,
-    const bool transpose_of_faces) {
-    TT_ASSERT(shape.size() >= 2, "Shape size {} must be at least rank 2!", shape.size());
-    uint32_t H = shape[shape.size() - 2];
-    uint32_t W = shape[shape.size() - 1];
-    for (int i = 0; i < shape.size() - 2; i++) {
-        H *= shape[i];
-    }
-    return convert_layout(
-        inp, PhysicalSize{H, W}, inL, outL, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
-}
 }  // namespace reference
 
 template <typename T>
@@ -379,8 +358,17 @@ TEST_P(TilizeUntilizeTestsFixture, ConvertLayout) {
         return;
     }
 
-    if (transpose_of_faces && from_layout == TensorLayoutType::TILED_NFACES) {
-        GTEST_SKIP() << "Transpose of faces is not supported in reference TILED_NFACES->XXX";
+    if ((transpose_within_face || transpose_of_faces) && from_layout == TensorLayoutType::TILED_NFACES) {
+        GTEST_SKIP() << "Transpose of faces / within faces is not supported in reference TILED_NFACES->XXX";
+    }
+
+    // reference doesn't work well with to_layout == TILED_NFACES when tile_shape == face_shape
+    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+    auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
+    auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
+    if (to_layout == TensorLayoutType::TILED_NFACES && tile_H <= face_H && tile_W <= face_W) {
+        GTEST_SKIP() << "Reference doesn't work well with TILED_NFACES->TILED_SWIZZLED when tile_shape == face_shape";
     }
 
     uint32_t n_rows = shape[0];
@@ -422,10 +410,6 @@ TEST_P(TilizeUntilizeTestsFixture, TilizeUntilize) {
 
     if (from_layout == to_layout) {
         return;
-    }
-
-    if (transpose_of_faces && from_layout == TensorLayoutType::TILED_NFACES) {
-        GTEST_SKIP() << "Transpose of faces is not supported in reference TILED_NFACES->XXX";
     }
 
     uint32_t n_rows = shape[0];
@@ -475,7 +459,7 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(
             std::nullopt, PhysicalSize{16, 16}),  // tile_shape. Sometimes tile shape == face shape in real scenarios
         ::testing::Values(std::nullopt),          // face_shape
-        ::testing::Values(false),                 // transpose_within_face  true doesn't work even in reference
+        ::testing::Bool(),                        // transpose_within_face  true doesn't work even in reference
         ::testing::Bool()                         // transpose_of_faces     true doesn't work even in reference
         ));
 

@@ -7,7 +7,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
-#include <type_traits>
 #include <ostream>
 
 #include "assert.hpp"
@@ -142,68 +141,38 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
 
-    // No conversion is required is tile shape is the same as face shape
-    if (tile_H == face_H && tile_W == face_W) {
-        return std::vector<T>(in_tile_swizzled.begin(), in_tile_swizzled.end());
-    }
-
     TT_FATAL(in_tile_swizzled.size() % tile_HW == 0, "Input size must be divisible by tile size");
-    TT_FATAL(
-        tile_H == face_H * 2 && tile_W == face_W * 2,
-        "Tile shape must be twice the face shape. Tile: {}x{}, Face: {}x{}",
-        tile_H,
-        tile_W,
-        face_H,
-        face_W);  // Check if we actually might need tile_H > face_H * 2
-    result.reserve(in_tile_swizzled.size());
+    result.resize(in_tile_swizzled.size());
     int num_tiles = in_tile_swizzled.size() / tile_HW;
-    for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        std::vector<T> top_left, top_right, bottom_left, bottom_right;
-        top_left.resize(face_HW);
-        top_right.resize(face_HW);
-        bottom_left.resize(face_HW);
-        bottom_right.resize(face_HW);
+    auto num_faces_col = tile_W / face_W;
+    auto num_faces_row = tile_H / face_H;
 
-        if (transpose_face) {
-            int tile_offset = tile_idx * tile_HW;
-            for (int col = 0; col < face_H; col++) {
-                for (int row = 0; row < face_W; row++) {
-                    size_t dst_index = row * face_H + col;
-                    top_left[dst_index] = in_tile_swizzled[tile_offset + (col)*tile_W + row];
-                    top_right[dst_index] = in_tile_swizzled[tile_offset + (col)*tile_W + row + face_W];
-                    bottom_left[dst_index] = in_tile_swizzled[tile_offset + (col + face_H) * tile_W + row];
-                    bottom_right[dst_index] = in_tile_swizzled[tile_offset + (col + face_H) * tile_W + row + face_W];
+    for (int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
+        int tile_offset = tile_idx * tile_HW;
+        for (int face_y = 0; face_y < num_faces_row; face_y++) {
+            for (int face_x = 0; face_x < num_faces_col; face_x++) {
+                size_t face_y_dst = transpose_face_order ? face_x : face_y;
+                size_t face_x_dst = transpose_face_order ? face_y : face_x;
+
+                if (transpose_face) {
+                    for (int row = 0; row < face_W; row++) {
+                        for (int col = 0; col < face_H; col++) {
+                            size_t src_index =
+                                tile_offset + face_y * (face_H * tile_W) + face_x * face_W + row * tile_W + col;
+                            size_t dst_index = tile_offset + face_y_dst * (face_H * tile_W) + face_x_dst * face_HW +
+                                               col * face_W + row;
+                            result[dst_index] = in_tile_swizzled[src_index];
+                        }
+                    }
+                } else {
+                    for (int row = 0; row < face_H; row++) {
+                        size_t src_index = tile_offset + face_y * (face_H * tile_W) + face_x * face_W + row * tile_W;
+                        size_t dst_index =
+                            tile_offset + face_y_dst * (face_H * tile_W) + face_x_dst * face_HW + row * face_W;
+                        std::memcpy(&result[dst_index], &in_tile_swizzled[src_index], face_W * sizeof(T));
+                    }
                 }
             }
-        } else {
-            int index = tile_idx * tile_HW;
-            for (int row = 0; row < face_H; row++) {
-                std::memcpy(&top_left[row * face_W], &in_tile_swizzled[index], face_W * sizeof(T));
-                std::memcpy(&top_right[row * face_W], &in_tile_swizzled[index + face_W], face_W * sizeof(T));
-                std::memcpy(&bottom_left[row * face_W], &in_tile_swizzled[index + tile_W * face_H], face_W * sizeof(T));
-                std::memcpy(
-                    &bottom_right[row * face_W],
-                    &in_tile_swizzled[index + tile_W * face_H + face_W],
-                    face_W * sizeof(T));
-
-                index += tile_W;
-            }
-        }
-        TT_ASSERT(top_left.size() == face_HW);
-        TT_ASSERT((top_right.size() == 0) or (top_right.size() == face_HW));
-        TT_ASSERT((bottom_left.size() == 0) or (bottom_left.size() == face_HW));
-        TT_ASSERT((bottom_right.size() == 0) or (bottom_right.size() == face_HW));
-
-        if (transpose_face_order) {
-            result.insert(result.end(), top_left.begin(), top_left.end());
-            result.insert(result.end(), bottom_left.begin(), bottom_left.end());
-            result.insert(result.end(), top_right.begin(), top_right.end());
-            result.insert(result.end(), bottom_right.begin(), bottom_right.end());
-        } else {
-            result.insert(result.end(), top_left.begin(), top_left.end());
-            result.insert(result.end(), top_right.begin(), top_right.end());
-            result.insert(result.end(), bottom_left.begin(), bottom_left.end());
-            result.insert(result.end(), bottom_right.begin(), bottom_right.end());
         }
     }
 
@@ -237,34 +206,18 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
         int tile_start = tile_idx * tile_HW;
 
         if (transpose_face) {
-            if (num_faces_row >= 1 && num_faces_col <= 1) {  // e.g. 32x16 case
-                for (int face_y = 0; face_y < num_faces_row; face_y++) {
-                    const int start = tile_start + face_y * (face_H * tile_W);
-                    for (int col = 0; col < face_W; col++) {
-                        for (int row = 0; row < face_H; row++) {
-                            result[dest_idx++] = in_tile_nfaces[start + col + row * face_W];
-                        }
-                    }
-                }
-            } else if (num_faces_row <= 1 && num_faces_col >= 1) {  // e.g. 16x32 case
-                for (int col = 0; col < face_W; col++) {
-                    const int start = tile_start + col;
-                    for (int face_x = 0; face_x < num_faces_col; face_x++) {
-                        const int offset = face_x * face_HW;
-                        for (int row = 0; row < face_H; row++) {
-                            result[dest_idx++] = in_tile_nfaces[start + offset + row * face_W];
-                        }
-                    }
-                }
-            } else {
+            for (int face_y = 0; face_y < num_faces_row; face_y++) {
                 for (int face_x = 0; face_x < num_faces_col; face_x++) {
-                    for (int col = 0; col < face_W; col++) {
-                        const int start = tile_start + face_x * face_HW + col;
-                        for (int face_y = 0; face_y < num_faces_row; face_y++) {
-                            const int offset = face_y * (face_H * tile_W);
-                            for (int row = 0; row < face_H; row++) {
-                                result[dest_idx++] = in_tile_nfaces[start + offset + row * face_W];
-                            }
+                    size_t face_y_src = transpose_face_order ? face_x : face_y;
+                    size_t face_x_src = transpose_face_order ? face_y : face_x;
+                    // Note: coalescted reads, strided writes
+                    for (int row = 0; row < face_H; row++) {
+                        for (int col = 0; col < face_W; col++) {
+                            size_t src_idx =
+                                tile_start + face_y_src * (face_H * tile_W) + face_x_src * face_HW + row * face_W + col;
+                            size_t dst_idx =
+                                tile_start + face_y * (face_H * tile_W) + face_x * face_W + col * tile_W + row;
+                            result[dst_idx] = in_tile_nfaces[src_idx];
                         }
                     }
                 }
@@ -329,10 +282,18 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
         tilized_input.resize(offset + face_height * face_width);
         T* dst = tilized_input.data() + offset;
         const T* src = in_row_major.data() + face_idx;
-        for (uint32_t i = 0; i < face_height; i++) {
-            std::memcpy(dst, src, face_width * sizeof(T));
-            dst += face_width;
-            src += stride;
+        if (!transpose_face) {
+            for (uint32_t row = 0; row < face_height; row++) {
+                std::memcpy(dst, src, face_width * sizeof(T));
+                dst += face_width;
+                src += stride;
+            }
+        } else {
+            for (uint32_t row = 0; row < face_height; row++) {
+                for (uint32_t col = 0; col < face_width; col++) {
+                    dst[col * face_height + row] = src[row * stride + col];
+                }
+            }
         }
     };
 
@@ -402,15 +363,33 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
                           uint32_t row_tile_start,
                           uint32_t face_h_index_src,
                           uint32_t face_w_index_src,
-                          uint32_t face_h_index_dst,
-                          uint32_t face_w_index_dst,
-                          uint32_t tile_row) {
-        for (uint32_t h = 0; h < face_H; h++) {
-            size_t src_idx = row_tile_start + tile_row * tile_H * tile_W + face_h_index_src * face_H * tile_W +
-                             face_w_index_src * face_H * face_W + h * face_H;
-            size_t dst_idx =
-                row_tile_start + (face_h_index_dst * face_H + h) * W + tile_row * tile_W + face_w_index_dst * face_W;
-            std::memcpy(&out_data[dst_idx], &in_data[src_idx], face_W * sizeof(T));
+                          uint32_t col_tile) {
+        uint32_t face_h_index_dst = face_h_index_src;
+        uint32_t face_w_index_dst = face_w_index_src;
+        if (transpose_face_order) {
+            face_h_index_dst = face_w_index_src;
+            face_w_index_dst = face_h_index_src;
+        }
+        if (!transpose_face) {
+            for (uint32_t row = 0; row < face_H; row++) {
+                size_t src_idx = row_tile_start + col_tile * tile_H * tile_W + face_h_index_src * face_H * tile_W +
+                                 face_w_index_src * face_H * face_W + row * face_H;
+                size_t dst_idx = row_tile_start + (face_h_index_dst * face_H + row) * W + col_tile * tile_W +
+                                 face_w_index_dst * face_W;
+                std::memcpy(&out_data[dst_idx], &in_data[src_idx], face_W * sizeof(T));
+            }
+        } else {
+            for (uint32_t row = 0; row < face_H; row++) {
+                for (uint32_t col = 0; col < face_W; col++) {
+                    size_t src_idx = row_tile_start + col_tile * tile_H * tile_W + face_h_index_src * face_H * tile_W +
+                                     face_w_index_src * face_H * face_W + row * face_H + col;
+
+                    size_t dst_idx = row_tile_start + (face_h_index_dst * face_H + col) * W + col_tile * tile_W +
+                                     face_w_index_dst * face_W + row;
+
+                    out_data[dst_idx] = in_data[src_idx];
+                }
+            }
         }
     };
 
@@ -418,18 +397,10 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     for (size_t i = 0; i < B; i++) {
         uint32_t row_tile_start = batch_start;
         for (uint32_t row_tile = 0; row_tile < row_tiles; row_tile++) {
-            uint32_t face_stride = face_H * face_W;
-
-            for (uint32_t j = 0; j < W / tile_W; j++) {
+            for (uint32_t col_tile = 0; col_tile < W / tile_W; col_tile++) {
                 for (uint32_t face_h_idx = 0; face_h_idx < tile_H / face_H; face_h_idx++) {
                     for (uint32_t face_w_idx = 0; face_w_idx < tile_W / face_W; face_w_idx++) {
-                        if (!transpose_face_order) {
-                            write_face(
-                                output, in_nfaces, row_tile_start, face_h_idx, face_w_idx, face_h_idx, face_w_idx, j);
-                        } else {
-                            write_face(
-                                output, in_nfaces, row_tile_start, face_h_idx, face_w_idx, face_w_idx, face_h_idx, j);
-                        }
+                        write_face(output, in_nfaces, row_tile_start, face_h_idx, face_w_idx, col_tile);
                     }
                 }
             }
