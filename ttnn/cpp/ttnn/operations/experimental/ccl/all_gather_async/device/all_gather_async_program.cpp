@@ -128,6 +128,7 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
 //   (in other words, disable the "bidirectional" send flag)
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -144,20 +145,19 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     const bool lower_command_stream_to_noc_commands =
         ttnn::ccl::worker_detail::can_command_stream_be_lowered_to_noc_commands(input_tensor);
 
-    IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        sender_device->id(),
         is_first_chip,
         is_last_chip);
 
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
         enable_persistent_fabric_mode
             ? ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-                  device,
+                  sender_device,
                   forward_device.value_or(nullptr),
                   backward_device.value_or(nullptr),
                   &program,
@@ -165,7 +165,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
                   num_links,
                   topology)
             : ccl::EdmLineFabricOpInterface(
-                  device,
+                  sender_device,
                   forward_device.value_or(nullptr),
                   backward_device.value_or(nullptr),
                   &program,
@@ -191,8 +191,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
+    const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
+        num_links, num_workers_per_link, enable_persistent_fabric_mode, sender_device, sub_device_id);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
@@ -234,7 +234,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             sender_worker_core_range,
             tt::tt_metal::ReaderDataMovementConfig{},
             1,  // num_command_streams
-            device->id());
+            sender_device->id());
 
     tt::tt_metal::KernelHandle worker_sender_writer_kernel_id =
         ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
@@ -244,7 +244,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             sender_worker_core_range,
             tt::tt_metal::WriterDataMovementConfig{},
             1,  // num_command_streams
-            device->id());
+            sender_device->id());
     size_t num_targets_forward = 0;
     size_t num_targets_backward = 0;
     if (topology == ccl::Topology::Linear) {
@@ -286,7 +286,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
         CoreCoord core = sender_worker_cores[link];
         if (link == 0) {
             // drain sync core is the first worker core
-            drain_sync_core = device->worker_core_from_logical_core(core);
+            drain_sync_core = sender_device->worker_core_from_logical_core(core);
         }
         std::size_t worker_tensor_slice_index = link;
 
@@ -302,12 +302,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             !forward_device.has_value()
                 ? std::nullopt
                 : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
+                      sender_device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
         std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
             !backward_device.has_value()
                 ? std::nullopt
                 : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
+                      sender_device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         log_trace(
             tt::LogOp,
@@ -337,7 +337,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             worker_sender_reader_kernel_id,
             {&input_tensor},
             {op_config.get_page_size()},
-            input_tensor.device(),
+            sender_device,
             num_pages_per_packet,
             {core},
             reader_cmd_stream,
@@ -375,7 +375,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
         bool generate_teardown_commands = !enable_persistent_fabric_mode && link == 0;
         if (generate_teardown_commands) {
             // 5, increment the termination semaphore for local device for local teardown only for the drain sync core
-            auto termination_infos = local_fabric_handle->generate_local_chip_fabric_termination_infos(device);
+            auto termination_infos = local_fabric_handle->generate_local_chip_fabric_termination_infos(sender_device);
             for (auto& info : termination_infos) {
                 if (info.distance != 0) {
                     continue;
@@ -401,7 +401,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
             worker_sender_writer_kernel_id,
             {&output_tensor},
             {op_config.get_page_size()},
-            output_tensor.device(),
+            sender_device,
             num_pages_per_packet,  // num_pages_per_edm_buffer
             {core},
             writer_cmd_stream,

@@ -55,6 +55,7 @@ void append_fabric_connection_rt_args(
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
     const Tensor& input_tensor,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -72,19 +73,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         enable_persistent_fabric_mode,
         "only persistent fabric mode is supported for all_gather_async_minimal_interleaved_dim3_1_1_32_any");
 
-    IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        sender_device->id(),
         is_first_chip,
         is_last_chip);
 
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
         ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device,
+            sender_device,
             forward_device.value_or(nullptr),
             backward_device.value_or(nullptr),
             &program,
@@ -101,8 +101,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
+    const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
+        num_links, num_workers_per_link, enable_persistent_fabric_mode, sender_device, sub_device_id);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
@@ -188,18 +188,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         CoreCoord core = sender_worker_cores[link];
         if (link == 0) {
             // drain sync core is the first worker core
-            drain_sync_core = device->worker_core_from_logical_core(core);
+            drain_sync_core = sender_device->worker_core_from_logical_core(core);
         }
         std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
             !forward_device.has_value()
                 ? std::nullopt
                 : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
+                      sender_device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
         std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
             !backward_device.has_value()
                 ? std::nullopt
                 : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
+                      sender_device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
         uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
@@ -276,6 +276,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -292,19 +293,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     TT_FATAL(
         enable_persistent_fabric_mode, "only persistent fabric mode is supported for all_gather_async_llama_sharded");
 
-    IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        sender_device->id(),
         is_first_chip,
         is_last_chip);
 
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
         ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device,
+            sender_device,
             forward_device.value_or(nullptr),
             backward_device.value_or(nullptr),
             &program,
@@ -321,8 +321,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
+    const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
+        num_links, num_workers_per_link, enable_persistent_fabric_mode, sender_device, sub_device_id);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -446,14 +446,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         for (uint32_t i = input_tile_id_start / input_tensor_shard_num_pages;
              i < (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages;
              i++) {
-            auto this_core = device->worker_core_from_logical_core(input_cores_vec[i]);
+            auto this_core = sender_device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
         }
         for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
              i < (input_tile_id_end + output_tensor_shard_num_pages - 1) / output_tensor_shard_num_pages;
              i++) {
-            auto this_core = device->worker_core_from_logical_core(output_cores_this_device[i]);
+            auto this_core = sender_device->worker_core_from_logical_core(output_cores_this_device[i]);
             output_tensor_cores_x.push_back(this_core.x);
             output_tensor_cores_y.push_back(this_core.y);
         }
@@ -470,18 +470,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
 
         if (link == 0) {
             // drain sync core is the first worker core
-            drain_sync_core = device->worker_core_from_logical_core(core);
+            drain_sync_core = sender_device->worker_core_from_logical_core(core);
         }
         std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
             !forward_device.has_value()
                 ? std::nullopt
                 : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
+                      sender_device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
         std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
             !backward_device.has_value()
                 ? std::nullopt
                 : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
+                      sender_device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
