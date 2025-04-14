@@ -21,6 +21,7 @@ from tracy import signpost
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
+    PREFETCHER_NOC1_GRID,
     round_up,
 )
 from models.demos.llama3_subdevices.tt.model_config import set_tg_attention_config
@@ -32,6 +33,16 @@ if LINEAR_TOPOLOGY:
 else:
     ALL_GATHER_TOPOLOGY = ttnn.Topology.Ring
     WRAP_MESH = True
+
+RING_CRS = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(
+            ttnn.CoreCoord(x, y),
+            ttnn.CoreCoord(x, y),
+        )
+        for x, y in PREFETCHER_NOC1_GRID
+    ]
+)
 
 
 def check_mesh_tensor_alloc(tensor):
@@ -78,10 +89,9 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     ##################################
     ##### Set up fabric stuff
     ##################################
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
+    model_config = {}
+    model_config = set_tg_attention_config(model_config, 4096)
+    ccl_sub_device_crs = model_config["CREATE_HEAD_OUTPUT_MEMCFG"].shard_spec.grid
     worker_sub_device = ttnn.SubDevice(
         [
             ccl_sub_device_crs,
@@ -121,27 +131,16 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
         input_shape = [*cluster_shape, M, N]  # [8, 4, 32, 1280]
         intermediate_shape = [*input_shape[:-1], N * cluster_shape[cluster_axis]]
 
-        CORE_RANGE = [(x, y) for y in range(compute_grid_size.y) for x in range(compute_grid_size.x)]
-        core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(x, y),
-                    ttnn.CoreCoord(x, y),
-                )
-                for x, y in CORE_RANGE[:input_num_cores]
-            ]
-        )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                core_range_set,
+                RING_CRS,
                 [M, N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        model_config = {}
-        model_config = set_tg_attention_config(model_config, 4096)
+
         ar_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
             ttnn.CoreCoord(1, 0),
             output_num_cores,
