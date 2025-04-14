@@ -132,13 +132,16 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           apt-get update && apt-get install -y strace
-          strace -f -e trace=open,openat -o file_access.log ${{ matrix.test-group.cmd }}
+          suffix=$(echo "${{ matrix.test-group.name }}" | awk '{print $NF}')
+          trace_log="file_access.${suffix}.log"
+          echo "TRACE_LOG=$trace_log" >> $GITHUB_ENV
+          strace -f -e trace=open,openat -o "$trace_log" ${{ matrix.test-group.cmd }}
 
       - name: Upload trace log
         uses: actions/upload-artifact@v4
         with:
-          name: file-access-log
-          path: /work/file_access.log
+          name: ${{ env.TRACE_LOG }}
+          path: /work/${{ env.TRACE_LOG }}
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
