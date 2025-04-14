@@ -55,7 +55,6 @@ from models.utility_functions import skip_for_grayskull
         128,
     ),
 )
-@pytest.mark.timeout(600)
 def test_decoder_inference(
     max_seq_len,
     paged_attention,

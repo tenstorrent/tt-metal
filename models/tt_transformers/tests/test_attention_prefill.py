@@ -56,7 +56,6 @@ from models.utility_functions import skip_for_grayskull
         # 1024 * 64,
     ),
 )
-@pytest.mark.timeout(600)
 def test_attention_inference(
     max_seq_len,
     paged_attention,
