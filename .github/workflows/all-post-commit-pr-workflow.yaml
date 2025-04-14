@@ -2,7 +2,8 @@ name: "PR - All post-commit tests"
 
 on:
   pull_request:
-    branches: ["*"]
+    branches:
+      - main
 
 permissions:
   actions: read
