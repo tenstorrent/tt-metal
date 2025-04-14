@@ -176,7 +176,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram.cpp",
         reader_core_range,
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = reader_ct_args});
@@ -197,7 +197,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/writer_l1.cpp",
         reader_core_range,
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = writer_ct_args});
@@ -233,14 +233,15 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
         /* reader kernel */
         uint32_t bank_id = core_index;
-        uint32_t vc = bank_id & 0x1;
+        uint32_t vc = (bank_id & 0x1) + 2;
         bank_ids.push_back(bank_id);
 
         // Compare with previous cores' vc
         for (size_t j = 0; j < core_index; ++j) {
             const CoreCoord& prev_core = reader_cores[j];
-            if (prev_core.y == core.y and ((bank_id & 0x1) == (bank_ids[j] & 0x1))) {  // same vc and same row
-                vc = (vc + 1) & 0x1;
+            if (prev_core.y == core.y and
+                (((bank_id & 0x1) + 2) == ((bank_ids[j] & 0x1) + 2))) {  // same vc and same row
+                vc = ((vc + 1) & 0x1) + 2;
                 break;
             }
         }
