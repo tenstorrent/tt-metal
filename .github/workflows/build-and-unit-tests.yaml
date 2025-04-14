@@ -22,6 +22,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   cpp-unit-tests-slow-dispatch:
@@ -75,6 +79,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           # Unsure why these C++ tests need the wheel...  a cleanup to do separately
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
