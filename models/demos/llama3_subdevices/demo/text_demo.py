@@ -13,7 +13,7 @@ import pytest
 import os
 import ttnn
 
-from models.demos.llama3_subdevices.tt.generator import Generator
+from models.demos.llama3_subdevices.tt.generator import Generator, SamplingParams
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
@@ -169,19 +169,6 @@ def create_tt_model(
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only",
     [
-        (  # Batch-1 run (Latency) - single user, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            1,  # batch_size
-            150,  # max_generated_tokens
-            False,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-        ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -262,7 +249,6 @@ def create_tt_model(
         ),
     ],
     ids=[
-        "batch-1",  # latency
         "batch-32",  # throughput
         "repeat2",  # throughput with 5 repeat batches
         "long-context",  # max-length
@@ -279,7 +265,14 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 25000000, "num_command_queues": 1, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    [
+        {
+            "trace_region_size": 25000000,
+            "num_command_queues": 1,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "worker_l1_size": 1344544,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -316,8 +309,8 @@ def test_demo_text(
         pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG
-    if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
-        pytest.skip("TG only supports batch 1 and 32")
+    if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [32]:
+        pytest.skip("Llama TG only supports batch-32")
 
     mesh_device.enable_async(True)
     enable_trace = True  # Use tracing for better perf
@@ -474,6 +467,11 @@ def test_demo_text(
         # TODO Argmax on device is only supported for batch_size=1
         argmax_on_device = True  # False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
 
+        if argmax_on_device:
+            device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
+        else:
+            device_sampling_params = None
+
         # Initial positions
         current_pos = torch.tensor([decoding_pos[0] for b in range(batch_size)])
 
@@ -505,7 +503,7 @@ def test_demo_text(
                     enable_trace=enable_trace,
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
-                    argmax_on_device=argmax_on_device,
+                    sampling_params=device_sampling_params,
                 )
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
@@ -707,7 +705,7 @@ def test_demo_text(
         "decode_t/s/u": target_decode_tok_s_u,
     }
     if repeat_batches > 1:
-        assert avg_time_to_first_token > 119, f"TTFT {avg_time_to_first_token}ms is too low, should be > 119."
+        assert avg_time_to_first_token * 1000 > 119, f"TTFT {avg_time_to_first_token} ms is too low, should be > 119."
 
     # Save benchmark data for CI dashboard
     if is_ci_env:
