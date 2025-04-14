@@ -12,6 +12,8 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
+constexpr bool flush = false;
+
 template <uint8_t noc_ind = noc_index>
 FORCE_INLINE std::uint64_t static_noc_multicast_addr(
     std::uint32_t noc_x_start,
@@ -126,8 +128,12 @@ void kernel_main() {
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
                 const auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
 
-                unicast_packet_header->to_noc_unicast_write(
-                    tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, curr_packet_size_bytes);
+                const uint64_t sem_noc_addr =
+                    get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address);
+                unicast_packet_header->to_noc_fused_unicast_write_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                        noc0_dest_noc_addr, sem_noc_addr, 1, 32, flush),
+                    curr_packet_size_bytes);
 
                 fabric_conn.wait_for_empty_write_slot();
 
@@ -142,12 +148,6 @@ void kernel_main() {
                 num_pages_sent += curr_packet_num_pages;
                 packet++;
             }
-
-            // Write the mcast packet (forward)
-            sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
-            fabric_conn.wait_for_empty_write_slot();
-
-            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)sem_inc_packet_header, packet_header_size);
         }
 
         if (fabric_connection.is_logically_connected()) {

@@ -22,6 +22,10 @@ on:
       docker-image:
         required: true
         type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       arch:
@@ -50,6 +54,10 @@ on:
       docker-image:
         required: true
         type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   profiler-regression:
@@ -93,6 +101,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
