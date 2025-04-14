@@ -68,7 +68,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -87,7 +87,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral-7B-v0.3, resnet50, yolov4, whisper, yolov8s_world, yolov9c, stable_diffusion_xl_base, vgg_unet, ufld_v2, mobilenetv2, functional_vanilla_unet, yolov10, openpdn_mnist]
+        model: [common_models, functional_unet, llama3.2-1B, qwen, ttt-mistral-7B-v0.3, resnet50, yolov4, whisper, yolov8s_world, yolov9c, stable_diffusion_xl_base, vgg_unet, ufld_v2, mobilenetv2, functional_vanilla_unet, yolov10, openpdn_mnist]
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     defaults:
       run:
@@ -119,7 +119,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -127,10 +127,10 @@ jobs:
           # Due to host OOM issues in CI vm, we currently only run llama-1B in the model matrix.
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           run_args: |
-            if [[ "${{ matrix.model }}" == *"llama3"* || "${{ matrix.model }}" == *"mistral-7B"* ]]; then
+            if [[ "${{ matrix.model }}" == *"ttt"* ]]; then
               WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/nightly/single_card/tt_transformers -k ${{ matrix.model }}
             else
-              WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/nightly/single_card/${{ matrix.model }}
+              pytest tests/nightly/single_card/${{ matrix.model }}
             fi
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
@@ -192,7 +192,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
