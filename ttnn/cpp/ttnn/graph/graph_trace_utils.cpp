@@ -7,6 +7,8 @@
 #include <cstdlib>  // std::strtoul
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 #include "graph_consts.hpp"
 #include "graph_processor.hpp"
 #include <tt-metalium/assert.hpp>
