@@ -29,7 +29,6 @@
 #include "dispatch/host_runtime_commands.hpp"
 #include "dprint_server.hpp"
 #include "event/dispatch.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include "program_device_map.hpp"
