@@ -192,15 +192,11 @@ def run_reduce_scatter_test(
                         tile_id += 1
     for i, canonical_input_tensor in enumerate(input_tensors):
         logger.info(f"Creating input tensor on device {mesh_device.get_device_ids()[i]}")
-        tt_input_tensors.append(
-            ttnn.Tensor(canonical_input_tensor, input_dtype)
-            .to(layout)
-            .to(mesh_device.get_device(mesh_device.get_device_ids()[i]), input_mem_config)
-        )
+        tt_input_tensors.append(ttnn.Tensor(canonical_input_tensor, input_dtype).to(layout))
 
     assert len(tt_input_tensors) == num_devices
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
     # Run the op
     if trace_mode:

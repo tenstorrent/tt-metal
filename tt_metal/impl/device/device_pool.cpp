@@ -653,7 +653,7 @@ void DevicePool::init_firmware_on_active_devices() const {
             }
         }
     }
-    this->init_profiler_devices();
+    this->init_profiler();
     this->initialize_active_devices();
 }
 

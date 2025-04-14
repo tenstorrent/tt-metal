@@ -238,7 +238,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             Finish(device->command_queue());
         }
     } else {
-        tt_metal::detail::WaitProgramDone(device, *sync_program, false);
+        tt_metal::detail::WaitProgramDone(device, sync_program, false);
     }
 
     log_info("SYNC PROGRAM FINISH IS DONE ON {}", device_id);

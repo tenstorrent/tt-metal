@@ -209,22 +209,32 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     auto mesh_device = input_tensors[0].mesh_device();
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
+    std::vector<IDevice*> devices_to_use = {};
+    if (this->cluster_axis.has_value()) {
+        // User specified the cluster-axis. Derive devices based on the current coordinate
+        // and the cluster-axis.
+        const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+        devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
+                                                           : mesh_view.get_devices_on_row(coord[0]);
+    } else {
+        devices_to_use = devices;
+    }
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < this->ring_size; ++i) {
-        if (devices.at(i) == target_device) {
+        if (devices_to_use.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
-                backward_device = devices.at(i - 1);
+                backward_device = devices_to_use.at(i - 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(this->ring_size - 1);
+                backward_device = devices_to_use.at(this->ring_size - 1);
             }
             if (i != this->ring_size - 1) {
-                forward_device = devices.at(i + 1);
+                forward_device = devices_to_use.at(i + 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
+                forward_device = devices_to_use.at(0);
             }
         }
     }
@@ -233,7 +243,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
 
     switch (version) {
         case AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32:
-            log_trace(
+            log_info(
                 tt::LogOp,
                 "Detected all gather specialized shape. all_gather_async_minimal_interleaved_dim3_1_1_32_any is "
                 "called");
@@ -252,7 +262,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 this->sub_device_id);
 
         case AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED:
-            log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_sharded is called");
+            log_info(tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_sharded is called");
             return all_gather_async_llama_sharded(
                 input_tensors[0],
                 target_device,
@@ -334,7 +344,6 @@ Tensor all_gather_async_impl(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode,
     const std::vector<IDevice*>& devices) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
@@ -364,7 +373,6 @@ Tensor all_gather_async_impl(
                    ccl_topology,
                    multi_device_global_semaphore,
                    sub_device_id,
-                   enable_persistent_fabric_mode,
                    /*cluster_axis=*/std::nullopt),
                {input_tensor})
         .at(0);
@@ -380,13 +388,11 @@ Tensor all_gather_async_impl(
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     const auto mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    auto devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(0) : mesh_view.get_devices_on_row(0);
 
     int32_t rank = input_tensor.get_logical_shape().rank();
 
@@ -406,7 +412,7 @@ Tensor all_gather_async_impl(
 
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync{
-                   devices,
+                   {},
                    gather_dim,
                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
                    num_devices,
@@ -414,7 +420,6 @@ Tensor all_gather_async_impl(
                    topology,
                    multi_device_global_semaphore,
                    sub_device_id,
-                   enable_persistent_fabric_mode,
                    cluster_axis},
                {input_tensor},
                {},
@@ -430,22 +435,13 @@ Tensor all_gather_async(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     std::vector<IDevice*> devices;
     for (const auto& spec : input_tensor.device_storage().specs) {
         devices.push_back(input_tensor.mesh_device()->get_device(spec.first));
     }
     return all_gather_async_impl(
-        input_tensor,
-        dim,
-        multi_device_global_semaphore,
-        num_links,
-        memory_config,
-        topology,
-        sub_device_id,
-        enable_persistent_fabric_mode,
-        devices);
+        input_tensor, dim, multi_device_global_semaphore, num_links, memory_config, topology, sub_device_id, devices);
 }
 
 std::vector<Tensor> all_gather_async(
@@ -455,8 +451,7 @@ std::vector<Tensor> all_gather_async(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     std::vector<IDevice*> devices;
     devices.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
@@ -473,7 +468,6 @@ std::vector<Tensor> all_gather_async(
             memory_config,
             topology,
             sub_device_id,
-            enable_persistent_fabric_mode,
             devices));
     }
     return output_tensors;
@@ -489,8 +483,7 @@ Tensor all_gather_async(
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     return all_gather_async_impl(
         input_tensor,
         dim,
@@ -501,8 +494,7 @@ Tensor all_gather_async(
         persistent_output_tensor,
         memory_config,
         num_preferred_links,
-        sub_device_id,
-        enable_persistent_fabric_mode);
+        sub_device_id);
 }
 
 std::vector<Tensor> all_gather_async(
@@ -515,8 +507,7 @@ std::vector<Tensor> all_gather_async(
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); i++) {
@@ -530,8 +521,7 @@ std::vector<Tensor> all_gather_async(
             persistent_output_tensor,
             memory_config,
             num_preferred_links,
-            sub_device_id,
-            enable_persistent_fabric_mode));
+            sub_device_id));
     }
     return output_tensors;
 }

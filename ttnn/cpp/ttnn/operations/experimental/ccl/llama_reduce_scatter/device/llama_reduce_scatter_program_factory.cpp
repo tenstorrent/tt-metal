@@ -720,26 +720,26 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
             sender_core_idx++;
 
             writer_runtime_args.push_back(forward_fabric_connection);
-            if (forward_fabric_connection) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    device->id(),
-                    operation_attributes.forward_device.value()->id(),
-                    link_idx,
-                    program,
-                    core,
-                    writer_runtime_args);
-            }
+            // if (forward_fabric_connection) {
+            //     tt::tt_fabric::append_fabric_connection_rt_args(
+            //         device->id(),
+            //         operation_attributes.forward_device.value()->id(),
+            //         link_idx,
+            //         program,
+            //         core,
+            //         writer_runtime_args);
+            // }
 
-            writer_runtime_args.push_back(backward_fabric_connection);
-            if (backward_fabric_connection) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    device->id(),
-                    operation_attributes.backward_device.value()->id(),
-                    link_idx,
-                    program,
-                    core,
-                    writer_runtime_args);
-            }
+            // writer_runtime_args.push_back(backward_fabric_connection);
+            // if (backward_fabric_connection) {
+            //     tt::tt_fabric::append_fabric_connection_rt_args(
+            //         device->id(),
+            //         operation_attributes.backward_device.value()->id(),
+            //         link_idx,
+            //         program,
+            //         core,
+            //         writer_runtime_args);
+            // }
 
             link_idx++;
         } else if (packet_worker_cores_grid.contains(core)) {

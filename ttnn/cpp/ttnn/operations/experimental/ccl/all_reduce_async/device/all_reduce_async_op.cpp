@@ -236,8 +236,7 @@ Tensor all_reduce_async(
     const std::optional<DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     return all_reduce_async_impl(
         input_tensor,
         buffer_tensor,
@@ -248,8 +247,7 @@ Tensor all_reduce_async(
         dtype,
         memory_config,
         num_preferred_links,
-        subdevice_id,
-        enable_persistent_fabric_mode);
+        subdevice_id);
 }
 
 std::vector<Tensor> all_reduce_async(
@@ -262,8 +260,7 @@ std::vector<Tensor> all_reduce_async(
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -277,8 +274,7 @@ std::vector<Tensor> all_reduce_async(
             dtype,
             memory_config,
             num_preferred_links,
-            subdevice_id,
-            enable_persistent_fabric_mode));
+            subdevice_id));
     }
     return output_tensors;
 }

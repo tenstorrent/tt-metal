@@ -91,6 +91,7 @@ tt::tt_metal::operation::ProgramWithCallbacks build_reduce_scatter_async_program
     Tensor& partial_output_tensor_to_backward_direction,
     std::optional<Tensor>& foreward_direction_remote_output_tensor,
     std::optional<Tensor>& backward_direction_remote_output_tensor,
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     ttnn::operations::binary::BinaryOpType reduce_op,
@@ -117,8 +118,7 @@ Tensor reduce_scatter(
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt,   // TODO make reference
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);  // TODO make reference
 std::vector<Tensor> reduce_scatter(
     const std::vector<Tensor>& input_tensors,
     const int32_t dim,
@@ -141,8 +141,7 @@ Tensor reduce_scatter(
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt,   // TODO make reference
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);  // TODO make reference
 std::vector<Tensor> reduce_scatter(
     const std::vector<Tensor>& input_tensors,
     const int32_t dim,

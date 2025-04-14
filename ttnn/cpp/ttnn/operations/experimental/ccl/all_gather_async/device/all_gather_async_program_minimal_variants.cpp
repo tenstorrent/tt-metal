@@ -220,12 +220,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                input_tensor.device()->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                input_tensor.device()->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
@@ -490,12 +490,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                input_tensor.device()->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                input_tensor.device()->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);

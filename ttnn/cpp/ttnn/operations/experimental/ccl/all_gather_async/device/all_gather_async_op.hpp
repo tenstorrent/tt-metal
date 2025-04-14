@@ -40,7 +40,6 @@ struct AllGatherAsync {
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    bool enable_persistent_fabric_mode;
     std::optional<uint32_t> cluster_axis;
 
     AllGatherAsync(
@@ -52,7 +51,6 @@ struct AllGatherAsync {
         ccl::Topology topology,
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        bool enable_persistent_fabric_mode,
         std::optional<uint32_t> cluster_axis) :
         devices(std::move(devices)),
         dim(dim),
@@ -62,7 +60,6 @@ struct AllGatherAsync {
         topology(topology),
         semaphore(semaphore),
         sub_device_id(sub_device_id),
-        enable_persistent_fabric_mode(enable_persistent_fabric_mode),
         cluster_axis(cluster_axis) {}
 
     // Add attributes method for reflection
@@ -163,8 +160,7 @@ std::vector<Tensor> all_gather_async(
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -176,8 +172,7 @@ Tensor all_gather_async(
     const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 std::vector<Tensor> all_gather_async(
     const std::vector<Tensor>& input_tensors,

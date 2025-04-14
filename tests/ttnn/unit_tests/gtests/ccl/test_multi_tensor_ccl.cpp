@@ -96,7 +96,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AllGatherAsync) {
     }
     auto semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
     auto all_gathered = ttnn::experimental::all_gather_async(
-        tensors, 0, semaphore, 1, std::nullopt, ttnn::ccl::Topology::Linear, SubDeviceId(0), true);
+        tensors, 0, semaphore, 1, std::nullopt, ttnn::ccl::Topology::Linear, SubDeviceId(0));
     for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
         auto data = all_gathered[dev_idx].to_vector<bfloat16>();
         for (int i = 0; i < data.size(); i++) {
