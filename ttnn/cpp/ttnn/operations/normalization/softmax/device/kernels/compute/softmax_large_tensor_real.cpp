@@ -118,7 +118,53 @@ void MAIN {
         // unpackconfig
         // reduce_init
         // extra cb for holding partial reduces
+#if FUSED_SCALE_MASK
+        cb_wait_front(cb_fused_scale, 1);
+#endif
         for (uint32_t wt_block = 0; wt_block < Wt_blocks; wt_block += blocks) {
+            // pack and unpack hardware configs
+            for (uint_32t b = 0; b < block and wt_block + b < Wt; b += ndst) {
+                // tile_reg
+                cb_wait_front(cb_in0, ndst);
+                cb_reserve_back(cb_scale_mask, ndst);
+                for (int dst_reg = 0; dst_reg < ndst; dst_reg++) {
+                    // reduced
+                    mul_tiles_bcast_scalar(cb_in0, cb_fused_scale, dst_reg, 0, dst_reg);  // mul bcast-HW -> DST[wt8]
+                }
+                for (int dst_reg = 0; dst_reg < ndst; dst_reg++) {
+                    pack_tile(dst_reg, cb_scale_mask);
+                }
+                // cb_pop_front
+            }
+#ifdef CAUSAL_MASK
+            add_tiles_init(cb_scale_mask, cb_fused_attn);
+#else
+            add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
+#endif
+            for (uint_32t b = 0; b < block and wt_block + b < Wt; b += ndst) {
+                cb_wait_front(cb_scale_mask, ndst);
+#ifdef CAUSAL_MASK
+                cb_wait_front(cb_fused_attn, ndst);  // cumulative wait for up to Wt tiles
+                for (uint32_t dst_reg = 0; dst_reg < ndst; dst_reg++) {
+                    add_tiles(cb_scale_mask, cb_fused_attn, dst_reg, dst_reg, wt8);  // tile *= 1/(sum(exp(x)))
+                }
+#else
+                if (wait_mask) {
+                    cb_wait_front(cb_fused_attn, wt + ndst);  // cumulative wait for up to Wt tiles, only at first ht
+                }
+
+                for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+                    add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, wt8, wt + wt8, wt8);  // tile *= 1/(sum(exp(x)))
+                }
+#endif
+            }
+            for (uint_32t b = 0; b < block and wt_block + b < Wt; b += ndst) {
+                // cb_wait_fronts
+                for (int dst_reg = 0; dst_reg < ndst; dst_reg++) {
+                    // reduced
+                }
+                // cb_pop_front
+            }
             for (uint_32t b = 0; b < block and wt_block + b < Wt; b += ndst) {
                 // cb_wait_fronts
                 for (int dst_reg = 0; dst_reg < ndst; dst_reg++) {
