@@ -8,6 +8,10 @@ on:
           required: false
           type: string
           default: 'BH'
+      enable-watcher:
+          description: 'Enable watcher in BH Post commit'
+          default: false
+          type: boolean
   workflow_dispatch:
     inputs:
       runner-label:
@@ -25,11 +29,17 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
+      enable-watcher:
+        description: 'Enable watcher in BH Post commit'
+        default: false
+        type: boolean
   schedule:
     - cron: "0 */4 * * *"
   # Pause this since not enough runners to support every commit to main
   # push:
   #  branches: ["main"]
+
+run-name: ${{ inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled) ' || 'Blackhole post-commit tests' }}
 
 permissions:
   actions: read
@@ -67,6 +77,7 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher }}
   umd-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -87,6 +98,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher }}
   fd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
@@ -97,6 +109,7 @@ jobs:
       runner-label: ${{ inputs.runner-label || 'BH' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher }}
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -109,6 +122,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher }}
   models-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -119,6 +133,7 @@ jobs:
       timeout: 20
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher }}
 
 #   profiler-regression:
 #     needs: build-artifact-profiler
