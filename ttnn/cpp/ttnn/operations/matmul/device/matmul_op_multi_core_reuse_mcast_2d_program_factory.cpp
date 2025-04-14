@@ -618,7 +618,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
         mm_kernel_in0_sender.reserve_runtime_args();
     }
 
-    auto mm_kernel_in1_sender_writer = program.kernels[num_kernels++];
+    auto& mm_kernel_in1_sender_writer = program.kernels[num_kernels++];
     mm_kernel_in1_sender_writer.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
         "reader_bmm_tile_layout_in1_sender_writer_padding.cpp";
