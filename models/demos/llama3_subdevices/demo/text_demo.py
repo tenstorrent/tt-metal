@@ -13,7 +13,7 @@ import pytest
 import os
 import ttnn
 
-from models.demos.llama3_subdevices.tt.generator import Generator
+from models.demos.llama3_subdevices.tt.generator import Generator, SamplingParams
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
@@ -280,7 +280,14 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872, "num_command_queues": 1, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    [
+        {
+            "trace_region_size": 23887872,
+            "num_command_queues": 1,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "worker_l1_size": 1344544,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -469,6 +476,11 @@ def test_demo_text(
         # TODO Argmax on device is only supported for batch_size=1
         argmax_on_device = True  # False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
 
+        if argmax_on_device:
+            device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
+        else:
+            device_sampling_params = None
+
         # Initial positions
         current_pos = torch.tensor([decoding_pos[0] for b in range(batch_size)])
 
@@ -500,7 +512,7 @@ def test_demo_text(
                     enable_trace=enable_trace,
                     page_table=page_table,
                     kv_cache=tt_kv_cache,
-                    argmax_on_device=argmax_on_device,
+                    sampling_params=device_sampling_params,
                 )
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
