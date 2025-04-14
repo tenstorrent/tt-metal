@@ -73,7 +73,6 @@ class TtSegformerDecodeHead:
             )
             encoder_hidden_state = ttnn.to_memory_config(encoder_hidden_state, memory_config=input_memory_config)
 
-            # workaround hack until upscaling buffer assert is fixed in metal
             encoder_hidden_state = ttnn.upsample(
                 encoder_hidden_state,
                 scale_factor=(128 // encoder_hidden_state.shape[2], 128 // encoder_hidden_state.shape[2]),
