@@ -1404,12 +1404,16 @@ Program CreateProgram(ProgramDescriptor&& descriptor) {
         program.add_circular_buffer(std::move(cb_descriptor));
     }
 
-    for (auto& semaphore_descriptor : descriptor.semaphores) {
-        CreateSemaphore(
+    for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
+        auto& semaphore_descriptor = descriptor.semaphores[i];
+        auto semaphore_id = CreateSemaphore(
             program,
             CoreRangeSet(std::move(semaphore_descriptor.core_ranges)),
             semaphore_descriptor.initial_value,
             semaphore_descriptor.core_type);
+        if (i != semaphore_id) {
+            TT_THROW("Semaphore id mismatch: expected {}, got {}", i, semaphore_id);
+        }
     }
 
     for (auto& kernel_descriptor : descriptor.kernels) {

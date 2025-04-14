@@ -1599,6 +1599,7 @@ void Device::disable_and_clear_program_cache() {
         program_cache_.disable();
     }
     program_cache_.clear();
+    program_cache_v2_.cache.clear();
 }
 std::size_t Device::num_program_cache_entries() {
     this->synchronize();

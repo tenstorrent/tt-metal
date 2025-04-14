@@ -1388,7 +1388,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
-    program.kernels.push_back(tt_metal::KernelDescriptor{
+    auto mm_kernel = tt_metal::KernelDescriptor{
         .kernel_source =
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         .core_ranges = all_cores.ranges(),
@@ -1398,12 +1398,14 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-        }});
+        }};
+    mm_kernel.reserve_runtime_args();
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     program.cbs.push_back(tt_metal::CBDescriptor{
         .total_size = in0_CB_size,
+        .core_ranges = all_cores.ranges(),
         .format_descriptors =
             {
                 tt_metal::CBFormatDescriptor{
@@ -1742,6 +1744,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
     if (mm_kernel_in1_receiver_writer.has_value()) {
         program.kernels.push_back(std::move(*mm_kernel_in1_receiver_writer));
     }
+    program.kernels.push_back(std::move(mm_kernel));
     return program;
 }
 

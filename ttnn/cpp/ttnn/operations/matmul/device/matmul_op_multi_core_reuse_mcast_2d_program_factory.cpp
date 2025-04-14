@@ -889,6 +889,12 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                      .buffer_index = interm0_cb_index,
                      .data_format = interm0_data_format,
                      .page_size = interm0_single_tile_size,
+                     .tile =
+                         tt_metal::TileDescriptor{
+                             .height = output_tile.get_height(),
+                             .width = output_tile.get_width(),
+                             .transpose = output_tile.get_transpose_of_faces(),
+                         },
                  }},
             .buffer = output_is_sharded ? out_buffer : nullptr,
         });
