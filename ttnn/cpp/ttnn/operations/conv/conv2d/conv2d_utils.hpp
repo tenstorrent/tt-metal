@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <optional>
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -17,7 +18,8 @@ namespace operations::conv {
 using namespace conv2d;
 using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
-using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
+using OptionalTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
+using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, OptionalTensor>;
 
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor);
 
