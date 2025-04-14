@@ -367,7 +367,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("activation") = "",
         py::arg("input_channels_alignment") = 32,
         py::arg("deallocate_activation") = false,
-        py::arg("reallocate_halo_output") = false,
+        py::arg("reallocate_halo_output") = true,
         py::arg("act_block_h_override") = 0,
         py::arg("act_block_w_div") = 1,
         py::arg("reshard_if_not_optimal") = false,
