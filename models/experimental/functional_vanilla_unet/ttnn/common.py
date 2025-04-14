@@ -54,6 +54,7 @@ class Conv:
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            reallocate_halo_output=False,
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
