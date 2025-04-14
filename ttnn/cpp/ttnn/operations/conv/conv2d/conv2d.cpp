@@ -461,8 +461,7 @@ Result conv2d_L1(
                 device,
                 groups,
                 opt_conv_op_block_config.act_block_h_ntiles,
-                input_width,
-                true);
+                input_width);
         }
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required

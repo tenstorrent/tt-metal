@@ -62,8 +62,8 @@ import ttnn
         (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
     ),
 )
-@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
-@pytest.mark.parametrize("has_bias", [True, False], ids=["has_bias", "no_bias"])
+@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
+@pytest.mark.parametrize("owned_storage", [True, False], ids=["owned", "borrowed"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_conv_weights(
     batch_size,
@@ -78,10 +78,10 @@ def test_prepare_conv_weights(
     pad_h,
     pad_w,
     use_1d_systolic_array,
-    packer_l1_acc,
     config_override,
-    has_bias,
+    on_device,
     device,
+    owned_storage,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
@@ -91,11 +91,19 @@ def test_prepare_conv_weights(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
+    if on_device and owned_storage:
+        pytest.skip("Skipping test because borrowed storage is not defined on device")
+
+    has_bias = True
     inp_shape = (batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels, filter_height, filter_width)
-    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16)
+    if owned_storage:
+        torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16)
+        torch_bias_tensor = torch.ones((1, 1, 1, output_channels), dtype=torch.bfloat16) if has_bias else None
+    else:
+        torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16)
+        torch_bias_tensor = torch.randn((1, 1, 1, output_channels), dtype=torch.bfloat16) if has_bias else None
     torch_input_tensor = torch.randn(inp_shape, dtype=torch.bfloat16)
-    torch_bias_tensor = torch.randn((1, 1, 1, output_channels), dtype=torch.bfloat16) if has_bias else None
 
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor,
@@ -108,8 +116,12 @@ def test_prepare_conv_weights(
     ).permute(0, 2, 3, 1)
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor.transpose(-3, -2).transpose(-2, -1), ttnn.bfloat16)
-    tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
-    tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
+    if owned_storage:
+        tt_weight_tensor = ttnn.ones(conv_weight_shape, dtype=ttnn.bfloat16)
+        tt_bias_tensor = ttnn.ones((1, 1, 1, output_channels), dtype=ttnn.bfloat16) if has_bias else None
+    else:
+        tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
+        tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
 
     conv_config = ttnn.Conv2dConfig(
         dtype=ttnn.bfloat16,
@@ -119,7 +131,7 @@ def test_prepare_conv_weights(
         enable_split_reader=False,
         enable_subblock_padding=False,
     )
-    compute_config = ttnn.init_device_compute_kernel_config(device.arch(), packer_l1_acc=packer_l1_acc)
+    compute_config = ttnn.init_device_compute_kernel_config(device.arch())
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
 
@@ -149,6 +161,11 @@ def test_prepare_conv_weights(
     }
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
+    if on_device:
+        tt_weight_tensor = ttnn.to_device(tt_weight_tensor, device)
+        tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device) if has_bias else None
+
+    print(tt_weight_tensor.storage_type())
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
         weight_tensor=tt_weight_tensor,
         weights_format="OIHW",
@@ -197,8 +214,7 @@ def test_prepare_conv_weights(
         (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
     ),
 )
-@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
-@pytest.mark.parametrize("has_bias", [True, False], ids=["has_bias", "no_bias"])
+@pytest.mark.parametrize("has_bias", [True], ids=["has_bias"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_bias(
     batch_size,
@@ -213,7 +229,6 @@ def test_prepare_bias(
     pad_h,
     pad_w,
     use_1d_systolic_array,
-    packer_l1_acc,
     config_override,
     has_bias,
     device,
@@ -254,7 +269,7 @@ def test_prepare_bias(
         enable_split_reader=False,
         enable_subblock_padding=False,
     )
-    compute_config = ttnn.init_device_compute_kernel_config(device.arch(), packer_l1_acc=packer_l1_acc)
+    compute_config = ttnn.init_device_compute_kernel_config(device.arch())
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
 
@@ -285,6 +300,7 @@ def test_prepare_bias(
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
 
+    tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device)
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
             bias_tensor=tt_bias_tensor, input_memory_config=tt_input_tensor.memory_config(), **conv_kwargs

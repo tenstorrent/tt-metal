@@ -116,8 +116,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     T* device,
     uint32_t groups,
     uint32_t act_block_h_ntiles,
-    uint32_t input_width,
-    const bool parameters_on_device);
+    uint32_t input_width);
 
 template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(
