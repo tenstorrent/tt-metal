@@ -361,7 +361,8 @@ from ttnn.operations.conv2d import (
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
-from ttnn.operations.conv1d import Conv1d, Conv1dConfig
+
+Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
 
