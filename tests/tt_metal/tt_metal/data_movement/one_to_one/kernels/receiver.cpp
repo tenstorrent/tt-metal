@@ -18,12 +18,12 @@ void kernel_main() {
 
     constexpr uint32_t transaction_size_bytes = transaction_num_pages * page_size_bytes;
 
-    // DeviceTimestampedData("Number of transactions", num_of_transactions);
-    // DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
-    // DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Number of transactions", num_of_transactions);
+    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
+    DeviceTimestampedData("Test id", test_id);
 
     {
-        // DeviceZoneScopedN("RECEIVER");
-        noc_semaphore_wait(sem_addr, 1);  // TODO: Hanging here
+        DeviceZoneScopedN("RECEIVER");
+        noc_semaphore_wait(sem_addr, 1);
     }
 }

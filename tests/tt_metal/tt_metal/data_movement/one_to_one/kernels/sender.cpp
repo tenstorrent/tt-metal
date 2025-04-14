@@ -22,12 +22,12 @@ void kernel_main() {
 
     constexpr uint32_t transaction_size_bytes = transaction_num_pages * page_size_bytes;
 
-    // DeviceTimestampedData("Number of transactions", num_of_transactions);
-    // DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
-    // DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Number of transactions", num_of_transactions);
+    DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
+    DeviceTimestampedData("Test id", test_id);
 
     {
-        // DeviceZoneScopedN("SENDER");
+        DeviceZoneScopedN("SENDER");
         uint64_t dst_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, dst_addr);
 
         noc_async_write(src_addr, dst_noc_addr, transaction_size_bytes);

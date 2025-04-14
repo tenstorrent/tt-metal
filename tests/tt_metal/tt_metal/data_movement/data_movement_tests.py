@@ -8,14 +8,19 @@ import os
 import sys
 from argparse import ArgumentParser
 from loguru import logger  # type: ignore
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # type: ignore
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 # Corresponding test ids for each test
-test_id_to_name = {0: "DRAM Interleaved Packet Sizes", 1: "DRAM Interleaved Core Locations", 2: "DRAM Sharded"}
+test_id_to_name = {
+    0: "DRAM Interleaved Packet Sizes",
+    1: "DRAM Interleaved Core Locations",
+    2: "DRAM Sharded",
+    3: "One to One Core",
+}
 
 
 def run_dm_tests(profile, gtest_filter):
@@ -36,14 +41,14 @@ def run_dm_tests(profile, gtest_filter):
         "reader_kernel_analysis": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "BRISC", "zone_name": "BRISC-KERNEL"},
-            "end": {"risc": "BRISC", "zone_name": "BRISC-KERNEL"},
+            "start": {"risc": "ANY", "zone_name": "READER"},
+            "end": {"risc": "ANY", "zone_name": "READER"},
         },
         "writer_kernel_analysis": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
-            "end": {"risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
+            "start": {"risc": "ANY", "zone_name": "WRITER"},
+            "end": {"risc": "ANY", "zone_name": "WRITER"},
         },
         "reader_events": {
             "across": "device",
