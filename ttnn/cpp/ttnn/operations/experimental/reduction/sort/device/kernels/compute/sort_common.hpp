@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 namespace NAMESPACE {
+
 void sort_Wt_tiles_row_to_bitonic_sequence(
     const uint32_t input_cb_index,
     const uint32_t index_cb_index,
@@ -22,6 +23,7 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         cb_wait_front(input_cb_index, 2);
         cb_wait_front(index_cb_index, 2);
 
+        // topk_local_sort sorts by columns - transpose input tiles for sorting
         reconfig_data_format_srca(input_cb_index);
         transpose_wh_init_short(input_cb_index);
         transpose_wh_tile(input_cb_index, 0, 0);
@@ -50,6 +52,7 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
 
         release_dst();
 
+        // Switch sorting direction for bitonic merge sort
         ascending_local = switch_dir ? !ascending_local : ascending_local;
     }
 
@@ -60,6 +63,7 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
 void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, uint32_t Wt) {
     constexpr uint32_t one_tile = 1;
 
+    // Transpose from sorting by column to right structure
     reconfig_data_format_srca(transposed_cb_index);
     transpose_wh_init_short(transposed_cb_index);
     pack_reconfig_data_format(transposed_cb_index);

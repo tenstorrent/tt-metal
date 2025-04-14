@@ -31,12 +31,12 @@ void kernel_main() {
     // Index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_output_cb_index);
     const DataFormat index_tensor_output_data_format = get_dataformat(index_tensor_output_cb_index);
-
     const InterleavedAddrGenFast<index_tensor_is_dram> interleaved_accessor1 = {
         .bank_base_address = index_tensor_buffer_addr,
         .page_size = index_tensor_output_tile_size_bytes,
         .data_format = index_tensor_output_data_format};
 
+    // Move data from L1 to DRAMs
     for (uint32_t h = 0; h < Ht; h++) {
         // Value tensor
         for (uint32_t w = 0; w < Wt; w++) {
@@ -55,6 +55,5 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(index_tensor_output_cb_index, one_tile);
         }
-
     }  // Ht loop
 }
