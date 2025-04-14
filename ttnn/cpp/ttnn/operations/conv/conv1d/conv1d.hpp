@@ -28,6 +28,7 @@ using Conv1dConfig = ttnn::operations::conv::conv2d::Conv2dConfig;
 
 template <typename T>
 Result conv1d(
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     T* device,
