@@ -12,6 +12,7 @@
 #define APPROX false
 #include "compute_kernel_api/add_int32_sfpu.h"
 #include "compute_kernel_api/common.h"
+#include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -61,22 +62,23 @@ void MAIN {
             cb_wait_front(cb_in, 1);
             copy_tile_to_dst_init_short(cb_in);
             copy_tile(cb_in, first_tile, TILE_DEST);
-            cb_pop_front(cb_in, 1);
 
             // [UNPACK]: Accumulator (db_intermed) => TILE_ACC
             cb_wait_front(cb_intermed, 1);
             copy_tile_to_dst_init_short(cb_intermed);
             copy_tile(cb_intermed, first_tile, TILE_ACC);
-            cb_pop_front(cb_intermed, 1);
 
             // MATH
             tile_regs_acquire();  // acquire 8 tile registers
 
-            add_int32_tile_init();  // Why is this always int32 ?
-            add_int32_tile(TILE_DEST, TILE_ACC);
+            add_tiles_init(cb_in, cb_intermed);
+            add_tiles(cb_in, cb_intermed, 0, 0, TILE_DEST);
+
+            // MATH(dprint_tensix_dest_reg(TILE_DEST));
             tile_regs_commit();
-            // compute
-            // add_tiles()
+
+            cb_pop_front(cb_in, 1);
+            cb_pop_front(cb_intermed, 1);
 
             // [PACK]: Write back results
             tile_regs_wait();

@@ -17,8 +17,8 @@ static inline unsigned get_tile_id(
 void kernel_main() {
     DPRINT << "[Cumsum Reader] start" << ENDL();
 
-    uint32_t input_dram_base_addr = get_arg_val<uint32_t>(0);   // input base addr (DRAM)
-    uint32_t intermed_sram_addr = get_arg_val<uint32_t>(1);     //
+    uint32_t input_dram_base_addr = get_arg_val<uint32_t>(0);  // input base addr (DRAM)
+    uint32_t intermed_sram_addr = get_arg_val<uint32_t>(1);    //
     uint32_t num_rows = get_arg_val<uint32_t>(2);
     uint32_t tiles_per_row = get_arg_val<uint32_t>(3);  // number of tiles in a row / along axis
     uint32_t PHi = get_arg_val<uint32_t>(4);
@@ -29,7 +29,7 @@ void kernel_main() {
     constexpr uint32_t cb_zero = tt::CBIndex::c_16;
     // constexpr uint32_t cb_intermed = tt::CBIndex::c_24;
 
-    const auto& input_data_format = get_dataformat(cb_out);  // Note: we don't use CB for now so that's OK
+    const auto& input_data_format = get_dataformat(cb_out);
 
     // single tile ublock
     uint32_t ublock_size_bytes = get_tile_size(cb_out);
@@ -48,6 +48,7 @@ void kernel_main() {
     uint32_t bytes_per_element = 4;
     switch (input_data_format) {
         case DataFormat::Float32: scaler.f32 = 0.f; bytes_per_element = 4;
+        case DataFormat::Float16_b:
         case DataFormat::Float16:
             scaler.i32 = 0;  // {bin(0.h), bin(0.h)} == {0x0, 0x0} == 0u32
             bytes_per_element = 2;
@@ -70,14 +71,14 @@ void kernel_main() {
     cb_push_back(cb_zero, 1);
 
     DPRINT << "[Cumsum Reader] #tiles/row = " << tiles_per_row << ", tile size = " << ublock_size_bytes
-           << ", tile  card = " << tile_card << ", num rows = " << num_rows << ", PHi = " << PHi << ", PLo = " << PLo
-           << ", HtWt = " << HtWt << ENDL();
+           << ", Bytes/Element = " << bytes_per_element << ", tile  card = " << tile_card << ", num rows = " << num_rows
+           << ", PHi = " << PHi << ", PLo = " << PLo << ", HtWt = " << HtWt << ENDL();
 
     for (unsigned i0 = 0; i0 < PLo; i0++) {
         for (unsigned i1 = 0; i1 < PHi * HtWt; i1++) {
             for (unsigned j = 0; j < tiles_per_row; j++) {
                 uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, PLo, PHi, HtWt);
-                DPRINT << "[Cumsum Reader] tile = " << tileid << ENDL();
+                // DPRINT << "[Cumsum Reader] tile = " << tileid << ENDL();
 
                 cb_reserve_back(cb_out, 1);
 

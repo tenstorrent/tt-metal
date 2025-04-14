@@ -39,6 +39,8 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     // Parameters setup
 
     const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_dtype = input_tensor.dtype();
+    const auto& output_dtype = output_tensor.dtype();
 
     constexpr CoreCoord core{0, 0};
     constexpr uint32_t TILE_SIZE = 1024;
@@ -54,19 +56,18 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     // 2) If dim is x or y axis => permute dim with axis=0 and then do operation on dim=0
     // Then permute back matching axes
 
-    TT_FATAL(input_tensor.get_dtype() == output_tensor.get_dtype(), "Type conversion not supported yet");
+    TT_FATAL(input_dtype == output_dtype, "Type conversion not supported yet");
 
-    const auto& output_dtype = output_tensor.dtype();
     TT_FATAL(
-        output_dtype == DataType::FLOAT32 || output_dtype == DataType::INT32,
+        output_dtype == DataType::FLOAT32 || output_dtype == DataType::INT32 || output_dtype == DataType::BFLOAT16,
         "Only float32 and int32 data type supported for now");
 
     TT_FATAL(output_tensor.get_layout() == Layout::TILE, "Only supported layout is TILE");
 
-    TT_FATAL(input_tensor.get_padded_shape().rank() >= 3, "Only support 4D tensor");
+    TT_FATAL(input_tensor.get_padded_shape().rank() >= 3, "Only support 3D tensor and above");
 
     TT_FATAL(
-        input_tensor.buffer()->size() == input_tensor.volume() * sizeof(float),
+        input_tensor.buffer()->size() == input_tensor.volume() * input_tensor.element_size(),
         "Input tensor size does not match expected volume");
 
     TT_FATAL(input_tensor.get_logical_volume() > 0, "Input must not be empty");
@@ -82,7 +83,7 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         output_tensor.buffer()->address());
 
     // Buffer setup
-    const uint32_t single_tile_size = sizeof(float) * TILE_SIZE;
+    const uint32_t single_tile_size = output_tensor.element_size() * TILE_SIZE;
 
     InterleavedBufferConfig dram_config{
         .device = device, .size = single_tile_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
@@ -100,22 +101,25 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     constexpr uint32_t cb_intermed_index = CBIndex::c_24;
 
     DataFormat in_df = datatype_to_dataformat_converter(output_dtype);
-    ;
+
     DataFormat out_df = in_df;
 
     CircularBufferConfig cb_in_config =
         CircularBufferConfig(single_tile_size, {{cb_in_index, in_df}}).set_page_size(cb_in_index, single_tile_size);
+
     CircularBufferConfig cb_out_config =
-        CircularBufferConfig(single_tile_size, {{cb_out_index, in_df}}).set_page_size(cb_out_index, single_tile_size);
-    CircularBufferConfig cb_zero_config =
-        CircularBufferConfig(single_tile_size, {{cb_zero_index, in_df}}).set_page_size(cb_zero_index, single_tile_size);
-    CircularBufferConfig cb_intermed_config = CircularBufferConfig(single_tile_size, {{cb_intermed_index, in_df}})
+        CircularBufferConfig(single_tile_size, {{cb_out_index, out_df}}).set_page_size(cb_out_index, single_tile_size);
+
+    CircularBufferConfig cb_zero_config = CircularBufferConfig(single_tile_size, {{cb_zero_index, out_df}})
+                                              .set_page_size(cb_zero_index, single_tile_size);
+
+    CircularBufferConfig cb_intermed_config = CircularBufferConfig(single_tile_size, {{cb_intermed_index, out_df}})
                                                   .set_page_size(cb_intermed_index, single_tile_size);
 
-    CBHandle cb_in = CreateCircularBuffer(program, core, cb_in_config);
-    CBHandle cb_out = CreateCircularBuffer(program, core, cb_out_config);
-    CBHandle cb_zero = CreateCircularBuffer(program, core, cb_zero_config);
-    CBHandle cb_intermed = CreateCircularBuffer(program, core, cb_intermed_config);
+    CreateCircularBuffer(program, core, cb_in_config);
+    CreateCircularBuffer(program, core, cb_out_config);
+    CreateCircularBuffer(program, core, cb_zero_config);
+    CreateCircularBuffer(program, core, cb_intermed_config);
 
     KernelHandle cumsum_reader_handle_id = CreateKernel(
         program,
@@ -141,15 +145,10 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
             .compile_args = compute_kernel_args});
 
     // Parameters setup
-
     const auto& input_shape = input_tensor.get_padded_shape();
     const uint32_t input_dim = input_shape.rank();
 
-    // for dim != rank-1 && dim != rank-2
-
-    // TOOD: If dim == x-axis or y-axis then transform both input and output
-
-    uint32_t num_tiles = output_tensor.volume() / TILE_SIZE;  // TODO: Not sure
+    uint32_t num_tiles = output_tensor.volume() / TILE_SIZE;
     const uint32_t xy_volume = input_shape[input_dim - 1] * input_shape[input_dim - 2];  // W * H
     const uint32_t num_tiles_per_row = input_shape[dim];      // each row contains N independent tiles
     const uint32_t num_rows = num_tiles / num_tiles_per_row;  // total number of rows in tensor

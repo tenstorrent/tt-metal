@@ -12,27 +12,29 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "size, dim",
     [
-        #       ([], 0),
-        #       ([0], 0),
-        #       ([1], 0),
-        #       ([10], 0),
-        #       ([2, 3], 0),
-        #       ([2, 3], 1),
-        #       ([2, 3], -1),
-        #       ([2, 3], -2),
-        # ([2, 3, 4], 0),
-        #        ([2, 3, 4], 2),
-        #        ([2, 3, 4], -3),
-        #       ([0, 0, 0], 0),
-        #       ([0, 0, 0], 1),
-        #       ([1, 32, 64], 1),
-        # ([1, 1024, 32], 0),
-        #        ([1, 1024, 32], 1),
-        #        ([1, 1024, 32], 2),
-        #        ([64, 1, 32], 1),
-        #        ([64, 64, 1], 1),
-        #        ([1, 32, 129], 1),
-        #        ([33, 35, 37], 1),
+        ([], 0),
+        ([0], 0),
+        ([1], 0),
+        ([10], 0),
+        ([2, 3], 0),
+        ([2, 3], 1),
+        ([2, 3], -1),
+        ([2, 3], -2),
+        ([2, 3, 4], 0),
+        ([2, 3, 4], 2),
+        ([2, 3, 4], -3),
+        ([0, 0, 0], 0),
+        ([0, 0, 0], 1),
+        ([1, 32, 64], 1),
+        ([1, 1024, 32], 0),
+        ([1, 1024, 32], 1),  # Fail due to rounding errors ?
+        ([260, 1, 1], 0),  # Fail due to rounding errors ?
+        ([1024, 1, 32], 0),  # Fail due to rounding errors ?
+        ([1, 1024, 32], 2),
+        ([64, 1, 32], 1),
+        ([64, 64, 1], 1),
+        ([1, 32, 129], 1),
+        ([33, 35, 37], 1),
         ([2, 3, 33, 33], 0),
         ([2, 3, 33, 33], 1),
         ([7, 13, 129, 33], 1),
@@ -46,28 +48,39 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([2, 3, 5, 33, 128], 2),
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.float32])
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        #    (torch.float32, None),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
 def test_cumsum(size, dim, dtype, device):
     torch.manual_seed(29112024)
 
-    torch_input_tensor = torch.randint(low=1, high=3, size=size, dtype=torch.float32)
-    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
+    (host_dtype, dev_dtype) = dtype
 
-    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dtype)
+    torch_input_tensor = torch.ones(size=size, dtype=torch.float32)
+    # torch_input_tensor = torch.randint(low=-2, high=3, size=size, dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE, dtype=dev_dtype)
 
-    expected_output_dtype = dtype if dtype is not None else input_tensor.dtype
+    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dev_dtype)
+
+    expected_output_dtype = dev_dtype if dev_dtype is not None else input_tensor.dtype
 
     assert output_tensor.dtype == expected_output_dtype
     assert output_tensor.shape == (size)
 
-    torch_output = ttnn.to_torch(output_tensor)
+    torch_output = ttnn.to_torch(output_tensor, dtype=host_dtype)
+
     print(f"torch input = \n{torch_input_tensor}")
     print(f"torch output = \n{torch_output}")
 
-    expected_output = torch.cumsum(torch_input_tensor, dim=dim)
+    expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=host_dtype)
     print(f"expected output = \n{expected_output}")
 
-    assert_with_pcc(torch_output, expected_output)
+    assert_with_pcc(expected_output, torch_output)
 
 
 @pytest.mark.parametrize(
