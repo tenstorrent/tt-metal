@@ -1164,10 +1164,11 @@ ttnn::Tensor prepare_conv_weights(
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (weight_tensor.is_device_tensor() || conv_config.preprocess_weights_on_device) {
         if (conv_config.preprocess_weights_on_device == false) {
-            log_warning(tt::LogOp,"
-                Conv2D prepare weights was invoked with device tensors, but the conv_config.preprocess_weights_on_device flag was not set to True.
-                This will use the device to prepare weights, which is not fully supported.
-                ");
+            log_warning(
+                tt::LogOp,
+                "Conv2D prepare weights was invoked with device tensors, but the "
+                "conv_config.preprocess_weights_on_device flag was not set to True. \n This will use the device to "
+                "prepare weights, which is not fully supported.");
         }
         if (groups > 1) {
             TT_THROW(
@@ -1290,7 +1291,6 @@ ttnn::Tensor prepare_conv_bias(
     TT_FATAL(bias_tensor_.get_logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
 
     if (bias_tensor_.is_device_tensor()) {
-        log_info(tt::LogOp, "Preparing Bias on Device");
         bias_tensor_ = prepare_bias_on_device(
             bias_tensor_,
             conv_config.weights_dtype,

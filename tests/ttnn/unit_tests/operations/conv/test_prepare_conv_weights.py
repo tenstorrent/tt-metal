@@ -130,6 +130,7 @@ def test_prepare_conv_weights(
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
+        preprocess_weights_on_device=on_device,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
     if config_override and "act_block_h" in config_override:
