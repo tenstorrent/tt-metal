@@ -1,12 +1,14 @@
 @PACKAGE_INIT@
 
+set(PROJECT_NAME "TT-@PROJECT_NAME@")
 # Set package as found
-set(@PROJECT_NAME@_FOUND TRUE)
+set(${PROJECT_NAME}_FOUND TRUE)
+set(TT-Metalium_FOUND TRUE)
 
 # Include the exported targets
-include("${CMAKE_CURRENT_LIST_DIR}/@PROJECT_NAME@Targets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/@PROJECT_NAME@.cmake")
 
 # Set the directory containing the CMake files for the project
 get_filename_component(@PROJECT_NAME@_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
 
-message(STATUS "Found @PROJECT_NAME@ at ${@PROJECT_NAME@_CMAKE_DIR}")
+message(STATUS "Found ${PROJECT_NAME} at ${@PROJECT_NAME@_CMAKE_DIR}")
