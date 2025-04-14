@@ -369,7 +369,6 @@ Result conv2d_L1(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
-
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
@@ -385,7 +384,7 @@ Result conv2d_L1(
             out_channels,
             output_height,
             output_width,
-            weight_tensor.get_logical_shape()[3],
+            kernel_size[1],
             input_height,
             input_width,
             compute_grid_size,

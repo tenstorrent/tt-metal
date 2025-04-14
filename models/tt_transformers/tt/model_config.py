@@ -75,7 +75,7 @@ class MathFidelitySetting(Enum):
 
 class ModelOptimizations:
     @classmethod
-    def accuracy(cls, model_name=None):
+    def accuracy(cls, model_name):
         """Configuration optimized for accuracy
         Only 70B models uses bfp4 MLPs in this configuration
         """
@@ -87,7 +87,7 @@ class ModelOptimizations:
         return inst
 
     @classmethod
-    def performance(cls, model_name=None):
+    def performance(cls, model_name):
         """Configuration optimized for performance
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
@@ -235,54 +235,7 @@ def parse_optimizations(string):
         value = MathFidelitySetting(value.strip())
         settings["OpFidelity"][key] = value
 
-    model_opt = ModelOptimizations(settings)
-
-    def apply_settings(model_args):
-        return DecodersPrecision(model_args.n_layers, model_opt)
-
-    apply_settings.__name__ = model_opt.__name__
-    return apply_settings
-
-
-def parse_decoder_json(json_file_path):
-    """
-    Reads a JSON file and returns a DecodersPrecision instance.
-    """
-    if not json_file_path:
-        return None
-
-    json_file_path = Path(json_file_path)
-    if not json_file_path.exists():
-        raise FileNotFoundError(f"JSON configuration file not found: {json_file_path}")
-
-    try:
-        with open(json_file_path, "r") as f:
-            config_data = json.load(f)
-
-        if "decoders" not in config_data:
-            raise ValueError("Invalid JSON format: Missing 'decoders' key")
-
-        num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
-        decoders_precision = DecodersPrecision(num_decoders)
-
-        for decoder_id, settings in config_data["decoders"].items():
-            decoder_id = int(decoder_id)
-
-            tensor_precision = {
-                TensorGroup[key]: PrecisionSetting[value] for key, value in settings.get("precision_cfg", {}).items()
-            }
-
-            op_fidelity = {
-                OpGroup[key]: MathFidelitySetting[value] for key, value in settings.get("fidelity_cfg", {}).items()
-            }
-
-            custom_opt = ModelOptimizations({"TensorPrecision": tensor_precision, "OpFidelity": op_fidelity})
-            decoders_precision.set_decoder_conf(decoder_id, custom_opt)
-
-        return decoders_precision
-
-    except Exception as e:
-        raise ValueError(f"Error loading JSON configuration: {e}")
+    return ModelOptimizations(settings)
 
 
 class CheckpointType(Enum):
@@ -331,7 +284,7 @@ class ModelArgs:
         dummy_weights=False,
         max_batch_size=1,
         max_seq_len=1024 * 128,
-        optimizations=None,
+        optimizations=ModelOptimizations.accuracy,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -471,7 +424,7 @@ class ModelArgs:
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
         if callable(optimizations):
-            self.optimizations = optimizations(self)
+            self.optimizations = optimizations(self.model_name)
         else:
             self.optimizations = optimizations
 
@@ -558,9 +511,26 @@ class ModelArgs:
             )
 
             # Configure data precision and math fidelity for tensors and kernels
-            if self.optimizations is None:
-                self.optimizations = DecodersPrecision(num_decoders=self.n_layers)
-            self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
+            self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+            precision_setting_lookup = {
+                PrecisionSetting.BFP4: ttnn.bfloat4_b,
+                PrecisionSetting.BFP8: ttnn.bfloat8_b,
+                PrecisionSetting.BF16: ttnn.bfloat16,
+                None: None,  # this signals that original dtype should be used
+            }
+            for tensor_group, precision in self.optimizations.tensor_dtype_settings.items():
+                dtype = precision_setting_lookup[precision]
+                self.model_config[f"{tensor_group.value.upper()}_DTYPE"] = dtype
+            math_fidelity_setting_lookup = {
+                MathFidelitySetting.LOFI: self.compute_kernel_config_lofi,
+                MathFidelitySetting.HIFI2: self.compute_kernel_config_hifi2,
+                MathFidelitySetting.HIFI2_NA: self.compute_kernel_config_hifi2_na,
+                MathFidelitySetting.HIFI2_FP16: self.compute_kernel_config_hifi2_fp16,
+                MathFidelitySetting.HIFI4: self.compute_kernel_config_hifi4,
+            }
+            for op_group, math_fidelity in self.optimizations.op_fidelity_settings.items():
+                math_cfg = math_fidelity_setting_lookup[math_fidelity]
+                self.model_config[f"{op_group.value.upper()}_COMPUTE_KERNEL_CFG"] = math_cfg
 
             # Create memory config for sharded tensors
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
@@ -2080,52 +2050,6 @@ class HfModelWrapper:
 
     def eval(self):
         self.model.eval()
-
-
-class DecodersPrecision:
-    @classmethod
-    def accuracy(cls, num_decoders):
-        inst = cls(num_decoders, ModelOptimizations.accuracy())
-        inst.__name__ = "accuracy"
-        return inst
-
-    @classmethod
-    def performance(cls, num_decoders):
-        inst = cls(num_decoders, ModelOptimizations.performance())
-        inst.__name__ = "performance"
-        return inst
-
-    def __init__(self, num_decoders, decoder_conf: dict = ModelOptimizations.accuracy()):
-        self.decoder_optimizations = {decoder_id: decoder_conf for decoder_id in range(num_decoders)}
-        self._update_full_name()
-
-    def set_decoder_conf(self, decoder_id, conf: ModelOptimizations):
-        self.decoder_optimizations[decoder_id] = conf
-        self._update_full_name()
-
-    def get_tensor_dtype(self, decoder_id, tensor: TensorGroup):
-        precision_setting_lookup = {
-            PrecisionSetting.BFP4: ttnn.bfloat4_b,
-            PrecisionSetting.BFP8: ttnn.bfloat8_b,
-            PrecisionSetting.BF16: ttnn.bfloat16,
-            None: None,  # this signals that original dtype should be used
-        }
-        return precision_setting_lookup[self.decoder_optimizations[decoder_id].tensor_dtype_settings[tensor]]
-
-    def get_math_fidelity(self, decoder_id, op: OpGroup, configuration: ModelArgs):
-        math_fidelity_setting_lookup = {
-            MathFidelitySetting.LOFI: configuration.compute_kernel_config_lofi,
-            MathFidelitySetting.HIFI2: configuration.compute_kernel_config_hifi2,
-            MathFidelitySetting.HIFI2_NA: configuration.compute_kernel_config_hifi2_na,
-            MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
-            MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
-        }
-        return math_fidelity_setting_lookup[self.decoder_optimizations[decoder_id].op_fidelity_settings[op]]
-
-    def _update_full_name(self):
-        self._full_name = " | ".join(
-            f"Decoder {decoder_id}: {conf._full_name}" for decoder_id, conf in self.decoder_optimizations.items()
-        )
 
 
 def num_to_corerange(x):
