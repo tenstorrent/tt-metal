@@ -783,7 +783,6 @@ void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile
             not_done_cores.insert(physical_core);
         }
     }
-    // Wait for all cores to be done
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
     if (dump_device_profile_results) {
         DumpDeviceProfileResults(device, program);

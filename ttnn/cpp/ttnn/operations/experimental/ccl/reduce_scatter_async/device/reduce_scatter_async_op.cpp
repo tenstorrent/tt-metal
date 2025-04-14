@@ -202,8 +202,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
         this->num_links_preferred,
         this->from_remote_sem,
         this->to_remote_sem,
-        this->sub_device_id,
-        this->fabric_handle);
+        this->sub_device_id);
 }
 
 operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -252,7 +251,6 @@ Tensor reduce_scatter_impl(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_links_preferred,
     std::optional<SubDeviceId> worker_subdevice_id_opt,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle,
     const std::vector<IDevice*>& devices) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
@@ -295,8 +293,7 @@ Tensor reduce_scatter_impl(
          num_devices,
          num_links_preferred,
          output_tensors,
-         worker_subdevice_id_opt,
-         fabric_handle](
+         worker_subdevice_id_opt](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -315,7 +312,6 @@ Tensor reduce_scatter_impl(
                     from_remote_multi_device_global_semaphore,
                     to_remote_multi_device_global_semaphore,
                     worker_subdevice_id_opt,
-                    fabric_handle,
                     /*cluster_axis=*/std::nullopt),
                 {input_tensor},
                 optional_input_tensors,
@@ -337,8 +333,7 @@ Tensor reduce_scatter_impl(
     const MemoryConfig& output_mem_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_links_preferred,
-    std::optional<SubDeviceId> worker_subdevice_id_opt,  // TODO make reference
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle) {
+    std::optional<SubDeviceId> worker_subdevice_id_opt /* TODO make reference */) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(reduce_op);
@@ -375,7 +370,6 @@ Tensor reduce_scatter_impl(
          num_links_preferred,
          output_tensors,
          worker_subdevice_id_opt,
-         fabric_handle,
          mesh_device = &mesh_device](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -395,7 +389,6 @@ Tensor reduce_scatter_impl(
                     from_remote_multi_device_global_semaphore,
                     to_remote_multi_device_global_semaphore,
                     worker_subdevice_id_opt,
-                    fabric_handle,
                     /*cluster_axis=*/cluster_axis),
                 {input_tensor},
                 optional_input_tensors,

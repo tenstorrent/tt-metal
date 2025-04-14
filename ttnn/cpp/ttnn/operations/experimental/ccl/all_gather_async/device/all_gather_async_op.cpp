@@ -134,7 +134,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     // Check for minimal interleaved case
     if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
         input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-        input_tensor_page_layout == tt::tt_metal::Layout::TILE && this->enable_persistent_fabric_mode) {
+        input_tensor_page_layout == tt::tt_metal::Layout::TILE) {
         return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
     }
 
@@ -249,8 +249,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 device_index,
                 this->topology,
                 this->semaphore,
-                this->sub_device_id,
-                this->enable_persistent_fabric_mode);
+                this->sub_device_id);
 
         case AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED:
             log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_sharded is called");
@@ -266,8 +265,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 device_index,
                 this->topology,
                 this->semaphore,
-                this->sub_device_id,
-                this->enable_persistent_fabric_mode);
+                this->sub_device_id);
 
         case AllGatherAsyncVersion::GENERIC:
         default:
@@ -284,8 +282,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 device_index,
                 this->topology,
                 this->semaphore,
-                this->sub_device_id,
-                this->enable_persistent_fabric_mode);
+                this->sub_device_id);
     }
 }
 

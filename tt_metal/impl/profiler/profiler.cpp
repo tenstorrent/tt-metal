@@ -45,6 +45,12 @@ namespace tt_metal {
 static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
+std::shared_ptr<Buffer> get_control_buffer_view(
+    IDevice* device, uint32_t address, uint32_t size, CoreCoord logical_worker_core) {
+    auto shard_parameters = ShardSpecBuffer({logical_worker_core}, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    return tt::tt_metal::Buffer::create(
+        device, address, size, size, BufferType::L1, TensorMemoryLayout::HEIGHT_SHARDED, shard_parameters);
+}
 
 void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
@@ -57,10 +63,12 @@ void DeviceProfiler::readRiscProfilerResults(
 
     HalProgrammableCoreType CoreType;
     int riscCount;
-
+    CoreCoord logical_worker_core;
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(worker_core, device_id)) {
         CoreType = HalProgrammableCoreType::TENSIX;
         riscCount = 5;
+        logical_worker_core = soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
     } else {
         auto active_eth_cores =
             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
@@ -81,12 +89,24 @@ void DeviceProfiler::readRiscProfilerResults(
             worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
-    std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
-        device_id,
-        worker_core,
-        reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-        kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
-
+    std::vector<uint32_t> control_buffer;
+    if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
+        // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
+        // generic API to read from an address instead of a buffer. (#15015)
+        auto control_buffer_view = get_control_buffer_view(
+            device,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+            logical_worker_core);
+        control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE / sizeof(uint32_t));
+        EnqueueReadBuffer(device->command_queue(), control_buffer_view, control_buffer.data(), true);
+    } else {
+        control_buffer = tt::llrt::read_hex_vec_from_core(
+            device_id,
+            worker_core,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+    }
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
         return;
@@ -266,9 +286,19 @@ void DeviceProfiler::readRiscProfilerResults(
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
     control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
     control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
-
-    tt::llrt::write_hex_vec_to_core(
-        device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+    if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
+        // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
+        // generic API to read from an address instead of a buffer. (#15015)
+        auto control_buffer_view = get_control_buffer_view(
+            device,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE,
+            logical_worker_core);
+        EnqueueWriteBuffer(device->command_queue(), control_buffer_view, control_buffer_reset, true);
+    } else {
+        tt::llrt::write_hex_vec_to_core(
+            device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+    }
 }
 
 void DeviceProfiler::firstTimestamp(uint64_t timestamp) {

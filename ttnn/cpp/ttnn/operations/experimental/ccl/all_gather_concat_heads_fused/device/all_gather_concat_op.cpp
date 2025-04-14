@@ -149,7 +149,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
         this->topology,
         this->semaphore,
         this->sub_device_id,
-        this->enable_persistent_fabric_mode,
         this->num_heads);
 }
 
@@ -189,8 +188,7 @@ Tensor all_gather_concat(
     const std::optional<uint32_t> num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     TT_FATAL(
         topology == ttnn::ccl::Topology::Linear,
         "This all_gather API with cluster_axis is currently supported only for the Linear topology");
@@ -224,7 +222,6 @@ Tensor all_gather_concat(
          topology,
          global_semaphore,
          sub_device_id,
-         enable_persistent_fabric_mode,
          num_heads](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -240,7 +237,6 @@ Tensor all_gather_concat(
                     topology,
                     global_semaphore,
                     sub_device_id,
-                    enable_persistent_fabric_mode,
                     num_heads,
                     cluster_axis},
                 {input_tensor, buffer_tensor});

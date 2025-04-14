@@ -33,7 +33,6 @@ struct AllReduceAsync {
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    bool enable_persistent_fabric_mode;
     uint32_t cluster_axis;
     const distributed::MeshDevice* mesh_device;
 
@@ -45,7 +44,6 @@ struct AllReduceAsync {
         ccl::Topology topology,
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        bool enable_persistent_fabric_mode,
         uint32_t cluster_axis,
         const distributed::MeshDevice* mesh_device) :
         num_links(num_links),
@@ -55,7 +53,6 @@ struct AllReduceAsync {
         topology(topology),
         semaphore(semaphore),
         sub_device_id(sub_device_id),
-        enable_persistent_fabric_mode(enable_persistent_fabric_mode),
         cluster_axis(cluster_axis),
         mesh_device(mesh_device) {}
 
@@ -97,8 +94,7 @@ AllReduceAsync create_all_reduce_async_struct(
     const std::vector<IDevice*>& devices,
     const ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 
 }  // namespace all_reduce_async_detail
 }  // namespace ccl
@@ -118,8 +114,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
 namespace operations {
 namespace experimental {
@@ -148,8 +143,7 @@ std::vector<Tensor> all_reduce_async(
     const std::optional<const DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental

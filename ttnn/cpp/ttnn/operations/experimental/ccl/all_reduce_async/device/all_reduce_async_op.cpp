@@ -147,8 +147,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         device_index,
         this->topology,
         this->semaphore,
-        this->sub_device_id,
-        this->enable_persistent_fabric_mode);
+        this->sub_device_id);
 }
 
 tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -183,8 +182,7 @@ Tensor all_reduce_async_impl(
     const std::optional<DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     const auto mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
@@ -202,7 +200,6 @@ Tensor all_reduce_async_impl(
          topology,
          multi_device_global_semaphore,
          subdevice_id,
-         enable_persistent_fabric_mode,
          mesh_device = &mesh_device](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -219,7 +216,6 @@ Tensor all_reduce_async_impl(
                     topology,
                     multi_device_global_semaphore,
                     subdevice_id,
-                    enable_persistent_fabric_mode,
                     cluster_axis,
                     mesh_device},
                 {input_tensor, buffer_tensor});

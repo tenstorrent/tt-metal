@@ -9,10 +9,6 @@ import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
-)
 
 
 def run_all_reduce_test(
@@ -29,20 +25,11 @@ def run_all_reduce_test(
     enable_async=True,
     num_iters=1,
     topology=ttnn.Topology.Linear,
-    # New ccl-async and persistent fabric params
-    enable_persistent_fabric=False,
-    create_persistent_fabric=False,
-    teardown_persistent_fabric=False,
 ):
     if len(mesh_device.get_device_ids()) < num_devices:
         pytest.skip(
             f"Not enough devices on machine to implement test case. Wanted {num_devices} but found {len(mesh_device.get_device_ids())}"
         )
-
-    if create_persistent_fabric:
-        assert enable_persistent_fabric
-    if teardown_persistent_fabric:
-        assert enable_persistent_fabric
 
     ttnn.synchronize_device(mesh_device)
 
@@ -53,13 +40,9 @@ def run_all_reduce_test(
     )
     worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
     worker_sub_device_id = ttnn.SubDeviceId(0)
-    if create_persistent_fabric:
-        logger.info("Create persistent fabric interface")
-        mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-            mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
-        )
-        logger.info("Done Create persistent fabric interface")
-        sub_device_stall_group = [worker_sub_device_id]
+    sub_device_stall_group = [worker_sub_device_id]
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
     from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
@@ -107,15 +90,10 @@ def run_all_reduce_test(
             topology=topology,
             subdevice_id=worker_sub_device_id,
         )
-        if enable_persistent_fabric:
-            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
-    if enable_persistent_fabric and teardown_persistent_fabric:
-        logger.info("Tearing down persistent fabric interface")
-        mesh_device.reset_sub_device_stall_group()
-        teardown_fabric_interface(mesh_device)
-        logger.info("Done tearing down persistent fabric interface")
+    mesh_device.reset_sub_device_stall_group()
 
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
     logger.info(f"Compare")
@@ -193,6 +171,7 @@ def run_all_reduce_test(
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_ring_all_reduce_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -220,9 +199,6 @@ def test_ring_all_reduce_post_commit(
         function_level_defaults,
         num_iters=num_iters,
         enable_async=enable_async,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
     )
 
 
@@ -261,8 +237,9 @@ def test_ring_all_reduce_post_commit(
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_ring_all_reduce_post_commit_2chip(
-    pcie_mesh_device,
+    t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
     num_links,
@@ -276,7 +253,7 @@ def test_ring_all_reduce_post_commit_2chip(
     num_iters=2,
 ):
     run_all_reduce_test(
-        pcie_mesh_device,
+        t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
         num_links,
@@ -289,9 +266,6 @@ def test_ring_all_reduce_post_commit_2chip(
         num_iters=num_iters,
         enable_async=enable_async,
         topology=ttnn.Topology.Linear,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
     )
 
 
@@ -310,17 +284,8 @@ def run_all_reduce_with_mesh_tensor_along_row(
     num_all_reduce_instances: int = 1,
     num_iters: int = 1,
     cluster_axis: int = 0,
-    # New ccl-async and persistent fabric params
-    enable_persistent_fabric=False,
-    create_persistent_fabric=False,
-    teardown_persistent_fabric=False,
 ):
     mem_config = ttnn.MemoryConfig(buffer_type=buffer_type)
-
-    if create_persistent_fabric:
-        assert enable_persistent_fabric
-    if teardown_persistent_fabric:
-        assert enable_persistent_fabric
 
     ttnn.synchronize_device(mesh_device)
 
@@ -331,13 +296,9 @@ def run_all_reduce_with_mesh_tensor_along_row(
     )
     worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
     worker_sub_device_id = ttnn.SubDeviceId(0)
-    if create_persistent_fabric:
-        logger.info("Create persistent fabric interface")
-        mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-            mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
-        )
-        logger.info("Done Create persistent fabric interface")
-        sub_device_stall_group = [worker_sub_device_id]
+    sub_device_stall_group = [worker_sub_device_id]
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
     from_remote_semaphore_handles = create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
@@ -402,17 +363,12 @@ def run_all_reduce_with_mesh_tensor_along_row(
                 topology=ttnn.Topology.Linear,
                 subdevice_id=worker_sub_device_id,
             )
-            if enable_persistent_fabric:
-                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     except Exception as e:
         raise e
     finally:
-        if enable_persistent_fabric and teardown_persistent_fabric:
-            logger.info("Tearing down persistent fabric interface")
-            mesh_device.reset_sub_device_stall_group()
-            teardown_fabric_interface(mesh_device)
-            logger.info("Done tearing down persistent fabric interface")
+        mesh_device.reset_sub_device_stall_group()
 
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
     logger.info(f"Compare")
@@ -469,6 +425,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_reduce_on_TG_rows_post_commit(
     mesh_device,
     num_devices,
@@ -502,9 +459,6 @@ def test_line_all_reduce_on_TG_rows_post_commit(
         num_iters=num_iters,
         num_all_reduce_instances=replication_factor,
         cluster_axis=1,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
     )
 
 
@@ -531,6 +485,7 @@ def test_line_all_reduce_on_TG_rows_post_commit(
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_reduce_on_TG_cols_post_commit(
     mesh_device,
     num_devices,
@@ -564,7 +519,4 @@ def test_line_all_reduce_on_TG_cols_post_commit(
         num_iters=num_iters,
         num_all_reduce_instances=replication_factor,
         cluster_axis=0,
-        enable_persistent_fabric=True,
-        create_persistent_fabric=True,
-        teardown_persistent_fabric=True,
     )

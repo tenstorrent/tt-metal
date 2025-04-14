@@ -108,12 +108,12 @@ bool do_sync_on_close = true;
 std::set<chip_id_t> sync_set_devices;
 constexpr CoreCoord SYNC_CORE = {0, 0};
 
-void setControlBuffer(chip_id_t device_id, std::vector<uint32_t>& control_buffer) {
+void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
 #if defined(TRACY_ENABLE)
+    chip_id_t device_id = device->id();
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
     control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM] = soc_d.profiler_ceiled_core_count_perf_dram_bank;
-
     for (auto core :
          tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id)) {
         HalProgrammableCoreType CoreType;
@@ -140,8 +140,21 @@ void setControlBuffer(chip_id_t device_id, std::vector<uint32_t>& control_buffer
         profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
-        tt::llrt::write_hex_vec_to_core(
-            device_id, curr_core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+        if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
+            // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
+            // generic API to read from an address instead of a buffer. (#15015)
+            CoreCoord logical_worker_core =
+                soc_d.translate_coord_to(curr_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+            auto control_buffer_view = get_control_buffer_view(
+                device,
+                reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+                logical_worker_core);
+            EnqueueWriteBuffer(device->command_queue(), control_buffer_view, control_buffer, true);
+        } else {
+            tt::llrt::write_hex_vec_to_core(
+                device_id, curr_core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+        }
     }
 #endif
 }
@@ -179,13 +192,18 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             .defines = kernel_defines});
 
     // Using MeshDevice APIs if the current device is managed by MeshDevice
-    if (auto mesh_device = device->get_mesh_device()) {
-        auto device_coord = mesh_device->get_view().find_device(device_id);
-        distributed::MeshWorkload workload;
-        workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(sync_program));
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    if (device->dispatch_firmware_active()) {
+        if (auto mesh_device = device->get_mesh_device()) {
+            auto device_coord = mesh_device->get_view().find_device(device_id);
+            distributed::MeshWorkload workload;
+            workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(sync_program));
+            distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        } else {
+            EnqueueProgram(device->command_queue(), sync_program, false);
+        }
     } else {
-        EnqueueProgram(device->command_queue(), sync_program, false);
+        tt_metal::detail::LaunchProgram(
+            device, sync_program, false /* wait_until_cores_done */, /* force_slow_dispatch */ true);
     }
 
     std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
@@ -213,11 +231,14 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             &sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
-
-    if (auto mesh_device = device->get_mesh_device()) {
-        mesh_device->mesh_command_queue().finish();
+    if (device->dispatch_firmware_active()) {
+        if (auto mesh_device = device->get_mesh_device()) {
+            mesh_device->mesh_command_queue().finish();
+        } else {
+            Finish(device->command_queue());
+        }
     } else {
-        Finish(device->command_queue());
+        tt_metal::detail::WaitProgramDone(device, *sync_program, false);
     }
 
     log_info("SYNC PROGRAM FINISH IS DONE ON {}", device_id);
@@ -400,11 +421,17 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
     }
 
     if (device_sender != nullptr and device_receiver != nullptr) {
+        FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+        TT_FATAL(
+            fabric_config != FabricConfig::DISABLED,
+            "Cannot support device to device synchronization when TT-Fabric is disabled.");
+        log_info("Calling {} when TT-Fabric is enabled. This may take a while", __FUNCTION__);
+
         constexpr std::uint16_t sample_count = 240;
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;
 
-        const auto& active_eth_cores = device_sender->get_active_ethernet_cores(true);
+        const auto& active_eth_cores = device_sender->get_active_ethernet_cores(false);
         auto eth_sender_core_iter = active_eth_cores.begin();
         tt_xy_pair eth_receiver_core;
         tt_xy_pair eth_sender_core;
@@ -446,10 +473,18 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
             eth_receiver_core,
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
 
+        try {
+            tt::tt_metal::detail::CompileProgram(device_sender, program_sender);
+            tt::tt_metal::detail::CompileProgram(device_receiver, program_receiver);
+        } catch (std::exception& e) {
+            log_error("Failed compile: {}", e.what());
+            throw e;
+        }
         tt_metal::detail::LaunchProgram(
             device_sender, program_sender, false /* wait_until_cores_done */, true /* force_slow_dispatch */);
         tt_metal::detail::LaunchProgram(
             device_receiver, program_receiver, false /* wait_until_cores_done */, true /* force_slow_dispatch */);
+
         tt_metal::detail::WaitProgramDone(device_sender, program_sender, false);
         tt_metal::detail::WaitProgramDone(device_receiver, program_receiver, false);
 
@@ -520,7 +555,7 @@ void ProfilerSync(ProfilerSyncState state) {
         for (int sender_device_id = 0; sender_device_id < TOTAL_DEVICE_COUNT; sender_device_id++) {
             if (tt::DevicePool::instance().is_device_active(sender_device_id)) {
                 auto sender_device = tt::DevicePool::instance().get_active_device(sender_device_id);
-                const auto& active_eth_cores = sender_device->get_active_ethernet_cores(true);
+                const auto& active_eth_cores = sender_device->get_active_ethernet_cores(false);
 
                 chip_id_t receiver_device_id;
                 tt_xy_pair receiver_eth_core;
@@ -626,9 +661,8 @@ void ProfilerSync(ProfilerSyncState state) {
 
 void ClearProfilerControlBuffer(IDevice* device) {
 #if defined(TRACY_ENABLE)
-    auto device_id = device->id();
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    setControlBuffer(device_id, control_buffer);
+    setControlBuffer(device, control_buffer);
 #endif
 }
 
@@ -690,10 +724,19 @@ void InitDeviceProfiler(IDevice* device) {
 
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer_ptr->address();
-        setControlBuffer(device_id, control_buffer);
+        setControlBuffer(device, control_buffer);
 
         std::vector<uint32_t> inputs_DRAM(output_dram_buffer_ptr->size() / sizeof(uint32_t), 0);
-        tt_metal::detail::WriteToBuffer(*output_dram_buffer_ptr, inputs_DRAM);
+
+        if (device->dispatch_firmware_active()) {
+            EnqueueWriteBuffer(
+                device->command_queue(),
+                tt_metal_device_profiler_map.at(device_id).output_dram_buffer,
+                inputs_DRAM,
+                true);
+        } else {
+            tt_metal::detail::WriteToBuffer(tt_metal_device_profiler_map.at(device_id).output_dram_buffer, inputs_DRAM);
+        }
     }
 #endif
 }
@@ -830,7 +873,6 @@ void DumpDeviceProfileResults(
             }
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
             tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, state, metadata);
-
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the
                 // last owner. Sync program also contains a buffer so it is safter to release it here
