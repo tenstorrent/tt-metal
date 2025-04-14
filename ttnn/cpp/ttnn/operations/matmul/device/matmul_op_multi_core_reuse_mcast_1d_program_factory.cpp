@@ -468,7 +468,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
     tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
 
-    /*if (fuse_op) {
+    if (fuse_op) {
         // Create semaphores
         fused_op_signaler->init_fused_op(
             program,
@@ -476,7 +476,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
             in0_mcast_sender_cores,
             in0_is_sharded ? ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE
                            : ttnn::experimental::ccl::FusedOpSignalerMode::MULTI);
-    }*/
+    }
 
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid = tt_metal::KernelDescriptor{
         .kernel_source = in0_is_sharded ? "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
@@ -490,6 +490,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
         }};
+    mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid.reserve_runtime_args();
 
     std::optional<tt_metal::KernelDescriptor> mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid;
     std::optional<tt_metal::KernelDescriptor> mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid;
@@ -508,6 +509,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                 }};
+            mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid->reserve_runtime_args();
         }
         if (in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
@@ -523,6 +525,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                 }};
+            mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid->reserve_runtime_args();
         }
     }
 
@@ -533,11 +536,11 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
                 "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
             .core_ranges = in0_mcast_receivers.ranges(),
             .compile_time_args = in0_receiver_compile_time_args,
-            .defines = mm_kernel_in0_sender_writer_defines,
             .config = tt_metal::DataMovementConfigDescriptor{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
             }};
+        mm_kernel_in0_receiver->reserve_runtime_args();
     }
 
     auto mm_kernel_in1_sender_writer = tt_metal::KernelDescriptor{
@@ -551,7 +554,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
         }};
-
+    mm_kernel_in1_sender_writer.reserve_runtime_args();
     // Compute kernel compile time args
 
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
@@ -600,6 +603,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
         }};
+    mm_kernel.reserve_runtime_args();
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -696,16 +700,9 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
 
     uint32_t output_cb_index = tt::CBIndex::c_4;
     uint32_t interm0_cb_index = tt::CBIndex::c_5;
-    tt_metal::CBDescriptor output_cb = {
-        .total_size = 0,
-        .core_ranges = all_cores.ranges(),
-        .format_descriptors = {tt_metal::CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = output_data_format,
-        }}};
     if (do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) ||
         (untilize_out && (in1_num_subblocks > 1))) {
-        output_cb = {
+        program.cbs.push_back(tt_metal::CBDescriptor{
             .total_size = out_CB_size,
             .core_ranges = all_cores.ranges(),
             .format_descriptors = {tt_metal::CBFormatDescriptor{
@@ -718,7 +715,9 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
                         .width = output_tile.get_width(),
                         .transpose = output_tile.get_transpose_of_faces(),
                     },
-            }}};
+            }},
+            .buffer = output_is_sharded ? out_buffer : nullptr,
+        });
         // interm0
         program.cbs.push_back(tt_metal::CBDescriptor{
             .total_size = interm0_CB_size,
@@ -743,40 +742,36 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
             interm0_CB_size);
     } else {
         // share buffer
-        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-            {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
-        output_cb = {
+        program.cbs.push_back(tt_metal::CBDescriptor{
             .total_size = out_CB_size,
             .core_ranges = all_cores.ranges(),
-            .format_descriptors = {
-                tt_metal::CBFormatDescriptor{
-                    .buffer_index = output_cb_index,
-                    .data_format = output_data_format,
-                    .page_size = output_single_tile_size,
-                    .tile =
-                        tt_metal::TileDescriptor{
-                            .height = output_tile.get_height(),
-                            .width = output_tile.get_width(),
-                            .transpose = output_tile.get_transpose_of_faces(),
-                        },
-                },
-                tt_metal::CBFormatDescriptor{
-                    .buffer_index = interm0_cb_index,
-                    .data_format = interm0_data_format,
-                    .page_size = interm0_single_tile_size,
-                    .tile =
-                        tt_metal::TileDescriptor{
-                            .height = output_tile.get_height(),
-                            .width = output_tile.get_width(),
-                            .transpose = output_tile.get_transpose_of_faces(),
-                        },
-                }}};
+            .format_descriptors =
+                {tt_metal::CBFormatDescriptor{
+                     .buffer_index = output_cb_index,
+                     .data_format = output_data_format,
+                     .page_size = output_single_tile_size,
+                     .tile =
+                         tt_metal::TileDescriptor{
+                             .height = output_tile.get_height(),
+                             .width = output_tile.get_width(),
+                             .transpose = output_tile.get_transpose_of_faces(),
+                         },
+                 },
+                 tt_metal::CBFormatDescriptor{
+                     .buffer_index = interm0_cb_index,
+                     .data_format = interm0_data_format,
+                     .page_size = interm0_single_tile_size,
+                     .tile =
+                         tt_metal::TileDescriptor{
+                             .height = output_tile.get_height(),
+                             .width = output_tile.get_width(),
+                             .transpose = output_tile.get_transpose_of_faces(),
+                         },
+                 }},
+            .buffer = output_is_sharded ? out_buffer : nullptr,
+        });
     }
 
-    if (output_is_sharded) {
-        output_cb.buffer = out_buffer;
-    }
-    program.cbs.push_back(std::move(output_cb));
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -1323,6 +1318,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
         }};
+    mm_kernel_in0_sender.reserve_runtime_args();
 
     auto mm_kernel_in1_sender_writer = tt_metal::KernelDescriptor{
         .kernel_source =
@@ -1335,6 +1331,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
         }};
+    mm_kernel_in1_sender_writer.reserve_runtime_args();
 
     std::optional<tt::tt_metal::KernelDescriptor> mm_kernel_in1_receiver_writer;
     if (in1_mcast_receivers.num_cores() > 0) {
@@ -1349,6 +1346,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_noc,
             }};
+        mm_kernel_in1_receiver_writer->reserve_runtime_args();
     }
 
     // Compute kernel compile time args
@@ -1390,7 +1388,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
-    auto mm_kernel = tt_metal::KernelDescriptor{
+    program.kernels.push_back(tt_metal::KernelDescriptor{
         .kernel_source =
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         .core_ranges = all_cores.ranges(),
@@ -1400,7 +1398,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-        }};
+        }});
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -1739,6 +1737,11 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
         };
         mm_kernel_in0_sender.runtime_args[core.x][core.y] = std::move(mm_in0_sender_args);  // RISCV_1_default
     }
+    program.kernels.push_back(std::move(mm_kernel_in0_sender));
+    program.kernels.push_back(std::move(mm_kernel_in1_sender_writer));
+    if (mm_kernel_in1_receiver_writer.has_value()) {
+        program.kernels.push_back(std::move(*mm_kernel_in1_receiver_writer));
+    }
     return program;
 }
 
@@ -1973,6 +1976,7 @@ tt::tt_metal::ProgramDescriptor create_program_gather_in0(
             .noc = in0_noc,
             .noc_mode = noc_mode,
         }};
+    mm_kernel_in0.reserve_runtime_args();
 
     tt_metal::KernelDescriptor mm_kernel_in1_sender_writer = {
         .kernel_source =
@@ -1985,6 +1989,7 @@ tt::tt_metal::ProgramDescriptor create_program_gather_in0(
             .noc = in1_noc,
             .noc_mode = noc_mode,
         }};
+    mm_kernel_in1_sender_writer.reserve_runtime_args();
 
     tt_metal::KernelDescriptor mm_kernel = {
         .kernel_source =
@@ -1999,6 +2004,7 @@ tt::tt_metal::ProgramDescriptor create_program_gather_in0(
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
         }};
+    mm_kernel.reserve_runtime_args();
 
     /* Create circular buffers */
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -2304,6 +2310,10 @@ tt::tt_metal::ProgramDescriptor create_program_gather_in0(
             (std::uint32_t)core_type,
         };
     }
+
+    program.kernels.push_back(std::move(mm_kernel_in0));
+    program.kernels.push_back(std::move(mm_kernel_in1_sender_writer));
+    program.kernels.push_back(std::move(mm_kernel));
 
     return program;
 }

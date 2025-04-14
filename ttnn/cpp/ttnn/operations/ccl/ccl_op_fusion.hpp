@@ -94,7 +94,7 @@ struct MatmulFusedOpSignaler {
         uint32_t weight_tensor_width);
 
     void init_fused_op(
-        tt::tt_metal::Program& program,
+        tt::tt_metal::ProgramDescriptor& program,
         const tt::tt_metal::IDevice* device,
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);

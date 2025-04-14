@@ -395,6 +395,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
         }};
+    mm_kernel_in0_sender.reserve_runtime_args();
 
     auto mm_kernel_in1_sender_writer = tt_metal::KernelDescriptor{
         .kernel_source =
@@ -407,6 +408,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
         }};
+    mm_kernel_in1_sender_writer.reserve_runtime_args();
 
     // Compute kernel compile time args
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
@@ -450,6 +452,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
         }};
+    mm_kernel.reserve_runtime_args();
 
     log_debug(LogOp, "in1_single_tile_size: {}", in1_single_tile_size);
 
@@ -916,6 +919,10 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
         "more datums written back to sharded tensor, L1 corruption, expected: {}, actual: {}",
         expected_max_total_width,
         total_tensor_width_written_back);
+
+    program.kernels.push_back(std::move(mm_kernel_in0_sender));
+    program.kernels.push_back(std::move(mm_kernel_in1_sender_writer));
+    program.kernels.push_back(std::move(mm_kernel));
 
     return program;
 }

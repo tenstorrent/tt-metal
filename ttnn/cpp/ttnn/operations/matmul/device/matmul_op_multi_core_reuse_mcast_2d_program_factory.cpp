@@ -575,6 +575,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
             }};
+        mm_kernel_in0_sender.reserve_runtime_args();
 
         if (in0_mcast_cores_without_work_and_not_in_receiver_grid.has_value()) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
@@ -590,11 +591,12 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                 }};
+            mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid->reserve_runtime_args();
         }
     } else {
         if (fuse_op) {
             // Create semaphores
-            // fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
+            fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
         }
 
         mm_kernel_in0_sender = tt_metal::KernelDescriptor{
@@ -607,6 +609,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
             }};
+        mm_kernel_in0_sender.reserve_runtime_args();
     }
 
     auto mm_kernel_in1_sender_writer = tt_metal::KernelDescriptor{
@@ -620,6 +623,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
         }};
+    mm_kernel_in1_sender_writer.reserve_runtime_args();
 
     std::optional<tt::tt_metal::KernelDescriptor> mm_kernel_in1_receiver_writer;
     if (in1_receiver.num_cores() > 0) {
@@ -634,6 +638,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_noc,
             }};
+        mm_kernel_in1_receiver_writer->reserve_runtime_args();
     }
 
     std::optional<tt::tt_metal::KernelDescriptor> mm_kernel_in0_receiver;
@@ -647,21 +652,26 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
             }};
+        mm_kernel_in0_receiver->reserve_runtime_args();
     }
 
+    std::optional<tt::tt_metal::KernelDescriptor> mm_kernel_in1_receiver_writer_other_noc_setup;
+    std::optional<tt::tt_metal::KernelDescriptor> mm_kernel_in0_receiver_other_noc_setup;
     if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
-        program.kernels.push_back(tt_metal::KernelDescriptor{
-            .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                             "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+        mm_kernel_in1_receiver_writer_other_noc_setup = tt_metal::KernelDescriptor{
+            .kernel_source =
+                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
             .core_ranges = {in0_receiver_in1_receiver_interleaved_other_cores.value()},
             .compile_time_args = in1_receiver_writer_compile_time_args,
             .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines,
             .config = tt_metal::DataMovementConfigDescriptor{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_split_noc,
-            }});
+            }};
+        mm_kernel_in1_receiver_writer_other_noc_setup->reserve_runtime_args();
 
-        program.kernels.push_back(tt_metal::KernelDescriptor{
+        mm_kernel_in0_receiver_other_noc_setup = tt_metal::KernelDescriptor{
             .kernel_source =
                 "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
             .core_ranges = {in0_receiver_in1_receiver_interleaved_other_cores.value()},
@@ -669,7 +679,8 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
             .config = tt_metal::DataMovementConfigDescriptor{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_split_noc,
-            }});
+            }};
+        mm_kernel_in0_receiver_other_noc_setup->reserve_runtime_args();
     }
 
     // Compute kernel compile time args
@@ -719,6 +730,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
         }};
+    mm_kernel.reserve_runtime_args();
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -1071,7 +1083,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
             }
             // right half
             else {
-                mm_kernel_in0_receiver->runtime_args[core.x][core.y] = mm_in0_receiver_args;
+                mm_kernel_in0_receiver_other_noc_setup->runtime_args[core.x][core.y] = mm_in0_receiver_args;
             }
         }
 
@@ -1289,11 +1301,31 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 }
                 // right half
                 else {
-                    mm_kernel_in1_receiver_writer->runtime_args[core.x][core.y] = mm_in1_receiver_writer_args;
+                    mm_kernel_in1_receiver_writer_other_noc_setup->runtime_args[core.x][core.y] =
+                        mm_in1_receiver_writer_args;
                 }
             }
         }
     }
+
+    program.kernels.push_back(std::move(mm_kernel_in0_sender));
+    if (mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid.has_value()) {
+        program.kernels.push_back(std::move(*mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid));
+    }
+    program.kernels.push_back(std::move(mm_kernel_in1_sender_writer));
+    if (mm_kernel_in1_receiver_writer.has_value()) {
+        program.kernels.push_back(std::move(*mm_kernel_in1_receiver_writer));
+    }
+    if (mm_kernel_in1_receiver_writer_other_noc_setup.has_value()) {
+        program.kernels.push_back(std::move(*mm_kernel_in1_receiver_writer_other_noc_setup));
+    }
+    if (mm_kernel_in0_receiver.has_value()) {
+        program.kernels.push_back(std::move(*mm_kernel_in0_receiver));
+    }
+    if (mm_kernel_in0_receiver_other_noc_setup.has_value()) {
+        program.kernels.push_back(std::move(*mm_kernel_in0_receiver_other_noc_setup));
+    }
+    program.kernels.push_back(std::move(mm_kernel));
 
     return program;
 }

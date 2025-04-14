@@ -185,6 +185,7 @@ tt::tt_metal::ProgramDescriptor create_program(
         .defines = mm_kernel_in0_reader_defines,
         .config = tt_metal::ReaderConfigDescriptor{},
     };
+    mm_kernel_in0_reader.reserve_runtime_args();
 
     auto mm_kernel_in1_reader_writer = tt_metal::KernelDescriptor{
         .kernel_source =
@@ -194,6 +195,7 @@ tt::tt_metal::ProgramDescriptor create_program(
         .defines = mm_kernel_in1_reader_writer_defines,
         .config = tt_metal::WriterConfigDescriptor{},
     };
+    mm_kernel_in1_reader_writer.reserve_runtime_args();
 
     tt_metal::KernelDescriptor::CompileTimeArgs compute_kernel_args_group_1 = {
         in0_block_w,             // in0_block_w
@@ -465,6 +467,9 @@ tt::tt_metal::ProgramDescriptor create_program(
 
         num_blocks_written += num_output_blocks_per_core;
     }
+
+    program.kernels.push_back(std::move(mm_kernel_in0_reader));
+    program.kernels.push_back(std::move(mm_kernel_in1_reader_writer));
 
     return program;
 }

@@ -151,6 +151,7 @@ tt_metal::ProgramDescriptor create_program(
         .compile_time_args = reader_compile_time_args,
         .config = tt_metal::ReaderConfigDescriptor{},
     };
+    mm_reader_kernel.reserve_runtime_args();
 
     auto unary_writer_kernel = tt_metal::KernelDescriptor{
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_tile_layout.cpp",
@@ -158,14 +159,15 @@ tt_metal::ProgramDescriptor create_program(
         .compile_time_args = writer_compile_time_args,
         .config = tt_metal::WriterConfigDescriptor{},
     };
+    unary_writer_kernel.reserve_runtime_args();
 
     // Create compute kernel
-    auto mm_kernel = tt_metal::KernelDescriptor{
+    program.kernels.push_back(tt_metal::KernelDescriptor{
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm.cpp",
         .core_ranges = all_cores.ranges(),
         .compile_time_args = compute_kernel_args,
         .config = tt_metal::ComputeConfigDescriptor{.math_fidelity = math_fidelity},
-    };
+    });
 
     for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
         for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
@@ -227,6 +229,9 @@ tt_metal::ProgramDescriptor create_program(
             num_blocks_read++;
         }
     }
+
+    program.kernels.push_back(std::move(mm_reader_kernel));
+    program.kernels.push_back(std::move(unary_writer_kernel));
 
     return program;
 }
