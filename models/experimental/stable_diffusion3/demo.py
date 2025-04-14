@@ -7,32 +7,57 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+import os
 
 from .tt import TtStableDiffusion3Pipeline
 
-if TYPE_CHECKING:
-    import ttnn
+# if TYPE_CHECKING:
+import ttnn
 
 
 @pytest.mark.parametrize(
-    "model_name, image_w, image_h, guidance_scale, num_inference_steps",
+    "mesh_device",
     [
-        #        ("medium", 512, 512, 4.5, 40),
-        #        ("medium", 1024, 1024, 4.5, 40),
-        #        ("large", 512, 512, 3.5, 28),
-        ("large", 1024, 1024, 3.5, 28),
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "model_name, image_w, image_h, guidance_scale, num_inference_steps",  # "prompt_sequence_length", "spatial_sequence_length",
+    [
+        #        ("medium", 512, 512, 4.5, 40, 333, 1024),
+        #        ("medium", 1024, 1024, 4.5, 40, 333, 4096),
+        #        ("large", 512, 512, 3.5, 28, 333, 1024),
+        ("large", 1024, 1024, 3.5, 28),  # , 333, 4096),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192, "trace_region_size": 15210496}], indirect=True)
-@pytest.mark.usefixtures("use_program_cache")
-def test_sd3(*, device: ttnn.Device, model_name, image_w, image_h, guidance_scale, num_inference_steps) -> None:
+# @pytest.mark.usefixtures("use_program_cache")
+def test_sd3(
+    *, mesh_device: ttnn.MeshDevice, model_name, image_w, image_h, guidance_scale, num_inference_steps
+) -> None:  # , prompt_sequence_length, spatial_sequence_length,) -> None:
+    if guidance_scale > 1:
+        guidance_cond = 2
+    else:
+        guidance_cond = 1
+
     pipeline = TtStableDiffusion3Pipeline(
         checkpoint=f"stabilityai/stable-diffusion-3.5-{model_name}",
-        device=device,
+        device=mesh_device,
         enable_t5_text_encoder=True,
+        guidance_cond=guidance_cond,
     )
 
-    pipeline.prepare(batch_size=1, width=image_w, height=image_h, guidance_scale=guidance_scale)
+    pipeline.prepare(
+        batch_size=1,
+        width=image_w,
+        height=image_h,
+        guidance_scale=guidance_scale,
+        prompt_sequence_length=333,
+        spatial_sequence_length=4096,
+    )
 
     prompt = (
         "An epic, high-definition cinematic shot of a rustic snowy cabin glowing "

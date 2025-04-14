@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 
 import torch
+import os
 import tqdm
 import ttnn
 from diffusers.image_processor import VaeImageProcessor
@@ -20,11 +21,17 @@ from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderMo
 
 from .t5_encoder import TtT5Encoder, TtT5EncoderParameters
 from .transformer import TtSD3Transformer2DModel, TtSD3Transformer2DModelParameters
+from ..tt.utils import from_torch, assert_quality, to_torch
 
 
 class TtStableDiffusion3Pipeline:
-    def __init__(self, *, checkpoint: str, device: ttnn.Device, enable_t5_text_encoder: bool = True) -> None:
+    def __init__(
+        self, *, checkpoint: str, device: ttnn.MeshDevice, enable_t5_text_encoder: bool = True, guidance_cond: int
+    ) -> None:
         self._device = device
+        device.enable_async(True)
+        torch_dtype = torch.float32
+        ttnn_dtype = ttnn.bfloat16  # ttnn.bfloat8_b
 
         logger.info("loading models...")
         self._tokenizer_1 = CLIPTokenizer.from_pretrained(checkpoint, subfolder="tokenizer")
@@ -37,8 +44,9 @@ class TtStableDiffusion3Pipeline:
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint, subfolder="scheduler")
         self._vae = AutoencoderKL.from_pretrained(checkpoint, subfolder="vae")
         torch_transformer = SD3Transformer2DModel.from_pretrained(
-            checkpoint, subfolder="transformer", torch_dtype=torch.bfloat16
+            checkpoint, subfolder="transformer", torch_dtype=torch_dtype
         )
+        torch_transformer.eval()
 
         assert isinstance(self._tokenizer_1, CLIPTokenizer)
         assert isinstance(self._tokenizer_2, CLIPTokenizer)
@@ -51,11 +59,30 @@ class TtStableDiffusion3Pipeline:
 
         logger.info("creating TT-NN transformer...")
 
+        if checkpoint == "stabilityai/stable-diffusion-3.5-medium":
+            embedding_dim = 1536
+        else:
+            embedding_dim = 2432
+
         parameters = TtSD3Transformer2DModelParameters.from_torch(
-            torch_transformer.state_dict(), device=device, dtype=ttnn.bfloat8_b
+            torch_transformer.state_dict(),
+            num_heads=torch_transformer.config.num_attention_heads,
+            embedding_dim=embedding_dim,
+            device=self._device,
+            dtype=ttnn_dtype,
         )
+
+        ## heads padding for T3K TP
+        pad_40_heads = 0
+        if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
+            pad_40_heads = 1
+            embedding_dim_padding = 128
+            num_heads = 40
+        else:
+            num_heads = torch_transformer.config.num_attention_heads
+
         self._tt_transformer = TtSD3Transformer2DModel(
-            parameters, num_attention_heads=torch_transformer.config.num_attention_heads
+            parameters, guidance_cond=guidance_cond, num_heads=num_heads, device=self._device
         )
         self._num_channels_latents = torch_transformer.config.in_channels
         self._joint_attention_dim = torch_transformer.config.joint_attention_dim
@@ -71,7 +98,9 @@ class TtStableDiffusion3Pipeline:
             logger.info("creating TT-NN text encoder...")
 
             parameters = TtT5EncoderParameters.from_torch(
-                torch_text_encoder_3.state_dict(), device=device, dtype=ttnn.bfloat16
+                torch_text_encoder_3.state_dict(),
+                device=self._device,
+                dtype=ttnn_dtype,
             )
             self._text_encoder_3 = TtT5Encoder(
                 parameters,
@@ -92,6 +121,8 @@ class TtStableDiffusion3Pipeline:
         height: int = 1024,
         guidance_scale: float = 4.5,
         max_t5_sequence_length: int = 256,
+        prompt_sequence_length: int = 333,
+        spatial_sequence_length: int = 4096,
     ) -> None:
         self._prepared_batch_size = batch_size
         self._prepared_num_images_per_prompt = num_images_per_prompt
@@ -99,7 +130,9 @@ class TtStableDiffusion3Pipeline:
         self._prepared_height = height
         self._prepared_guidance_scale = guidance_scale
         self._prepared_max_t5_sequence_length = max_t5_sequence_length
+        self._prepared_prompt_sequence_length = prompt_sequence_length
 
+        """
         do_classifier_free_guidance = guidance_scale > 1
 
         prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
@@ -114,22 +147,30 @@ class TtStableDiffusion3Pipeline:
             do_classifier_free_guidance=do_classifier_free_guidance,
         )
 
+        # TODO: pass the patch_size value
+        patch_size = 2
         latents_shape = (
             batch_size * num_images_per_prompt,
             height // self._vae_scale_factor,
-            width // self._vae_scale_factor,
-            self._num_channels_latents,
+            (width // self._vae_scale_factor) // patch_size,
+            self._num_channels_latents * patch_size,
         )
 
         tt_prompt_embeds = ttnn.from_torch(
-            prompt_embeds, device=self._device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+            prompt_embeds, device=self._device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
         )
         tt_pooled_prompt_embeds = ttnn.from_torch(
-            pooled_prompt_embeds, device=self._device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            pooled_prompt_embeds, device=self._device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
+
         )
-        tt_timestep = ttnn.allocate_tensor_on_device([1, 1], ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, self._device)
+
+        tt_timestep = ttnn.allocate_tensor_on_device([batch_size * num_images_per_prompt * (1+do_classifier_free_guidance), 1], ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, self._device)
         tt_sigma_difference = ttnn.allocate_tensor_on_device([1, 1], ttnn.bfloat16, ttnn.TILE_LAYOUT, self._device)
-        tt_latents = ttnn.allocate_tensor_on_device(latents_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, self._device)
+        tt_latents = ttnn.allocate_tensor_on_device(latents_shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self._device)
+
+        self._device.disable_and_clear_program_cache()
 
         # cache
         self._step(
@@ -140,6 +181,19 @@ class TtStableDiffusion3Pipeline:
             pooled_prompt_embeds=tt_pooled_prompt_embeds,
             guidance_scale=guidance_scale,
             sigma_difference=tt_sigma_difference,
+            prompt_sequence_length=prompt_sequence_length,
+            spatial_sequence_length=spatial_sequence_length,
+        )
+        self._step(
+            timestep=tt_timestep,
+            latents=tt_latents,
+            do_classifier_free_guidance=do_classifier_free_guidance,
+            prompt_embeds=tt_prompt_embeds,
+            pooled_prompt_embeds=tt_pooled_prompt_embeds,
+            guidance_scale=guidance_scale,
+            sigma_difference=tt_sigma_difference,
+            prompt_sequence_length=prompt_sequence_length,
+            spatial_sequence_length=spatial_sequence_length,
         )
 
         # trace
@@ -152,6 +206,8 @@ class TtStableDiffusion3Pipeline:
             pooled_prompt_embeds=tt_pooled_prompt_embeds,
             guidance_scale=guidance_scale,
             sigma_difference=tt_sigma_difference,
+            prompt_sequence_length=prompt_sequence_length,
+            spatial_sequence_length=spatial_sequence_length,
         )
         ttnn.end_trace_capture(self._device, tid)
 
@@ -160,9 +216,10 @@ class TtStableDiffusion3Pipeline:
             spatial_input_output=tt_latents,
             prompt_input=tt_prompt_embeds,
             pooled_projection_input=tt_pooled_prompt_embeds,
-            timestep_input=tt_timestep,
-            sigma_difference_input=tt_sigma_difference,
+            prompt_sequence_length=prompt_sequence_length,
+            spatial_sequence_length=spatial_sequence_length,
         )
+        """
 
     def __call__(
         self,
@@ -191,11 +248,13 @@ class TtStableDiffusion3Pipeline:
         assert batch_size == len(prompt_1)
 
         do_classifier_free_guidance = guidance_scale > 1
+        # TODO: pass the patch_size value
+        patch_size = 2
         latents_shape = (
             batch_size * num_images_per_prompt,
-            self._num_channels_latents,
             height // self._vae_scale_factor,
             width // self._vae_scale_factor,
+            self._num_channels_latents,
         )
 
         logger.info("encoding prompts...")
@@ -223,31 +282,76 @@ class TtStableDiffusion3Pipeline:
 
         if seed is not None:
             torch.manual_seed(seed)
-        latents = torch.randn(latents_shape, dtype=prompt_embeds.dtype).permute([0, 2, 3, 1])
+        latents = torch.randn(latents_shape, dtype=prompt_embeds.dtype)  # .permute([0, 2, 3, 1])
 
-        tt_prompt_embeds = ttnn.from_torch(prompt_embeds, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-        tt_pooled_prompt_embeds = ttnn.from_torch(pooled_prompt_embeds, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_initial_latents = ttnn.from_torch(latents, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        TILE_SIZE = 32
+        prompt_extra = self._prepared_prompt_sequence_length % TILE_SIZE
+        if prompt_extra > 0:
+            prompt_padding = TILE_SIZE - prompt_extra
+        else:
+            prompt_padding = 0
+        prompt_embeds_padded = torch.nn.functional.pad(
+            prompt_embeds, pad=(0, 0, 0, prompt_padding), mode="constant", value=0.0
+        )
+
+        tt_prompt_embeds = ttnn.from_torch(
+            prompt_embeds_padded,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            device=self._device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
+        )
+        tt_pooled_prompt_embeds = ttnn.from_torch(
+            pooled_prompt_embeds,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            device=self._device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
+        )
+        tt_initial_latents = ttnn.from_torch(
+            latents,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            device=self._device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
+        )
 
         logger.info("denoising...")
         denoising_start_time = time.time()
 
-        ttnn.copy_host_to_device_tensor(tt_prompt_embeds, self._trace.prompt_input)
-        ttnn.copy_host_to_device_tensor(tt_pooled_prompt_embeds, self._trace.pooled_projection_input)
-        ttnn.copy_host_to_device_tensor(tt_initial_latents, self._trace.spatial_input_output)
+        # ttnn.copy_host_to_device_tensor(tt_prompt_embeds, self._trace.prompt_input)
+        # ttnn.copy_host_to_device_tensor(tt_pooled_prompt_embeds, self._trace.pooled_projection_input)
+        # ttnn.copy_host_to_device_tensor(tt_initial_latents, self._trace.spatial_input_output)
+
+        latents_step = tt_initial_latents
 
         for i, t in enumerate(tqdm.tqdm(timesteps)):
-            tt_timestep = ttnn.full([1, 1], fill_value=t, dtype=ttnn.float32)
+            tt_timestep = ttnn.full([1, 1], fill_value=t, dtype=ttnn.float32, device=self._device)
 
             sigma_difference = self._scheduler.sigmas[i + 1] - self._scheduler.sigmas[i]
             tt_sigma_difference = ttnn.full(
-                [1, 1], fill_value=sigma_difference, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+                [1, 1],
+                fill_value=sigma_difference,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                device=self._device,
             )
 
-            ttnn.copy_host_to_device_tensor(tt_timestep, self._trace.timestep_input)
-            ttnn.copy_host_to_device_tensor(tt_sigma_difference, self._trace.sigma_difference_input)
+            # ttnn.copy_host_to_device_tensor(tt_timestep, self._trace.timestep_input)
+            # ttnn.copy_host_to_device_tensor(tt_sigma_difference, self._trace.sigma_difference_input)
+            # self._trace.execute()
 
-            self._trace.execute()
+            latents_step = self._step(
+                timestep=tt_timestep,
+                latents=latents_step,  # tt_latents,
+                do_classifier_free_guidance=do_classifier_free_guidance,
+                prompt_embeds=tt_prompt_embeds,
+                pooled_prompt_embeds=tt_pooled_prompt_embeds,
+                guidance_scale=guidance_scale,
+                sigma_difference=tt_sigma_difference,
+                prompt_sequence_length=333,
+                spatial_sequence_length=4096,
+            )
 
         denoising_end_time = time.time()
 
@@ -255,7 +359,10 @@ class TtStableDiffusion3Pipeline:
 
         image_decoding_start_time = time.time()
 
-        latents = ttnn.to_torch(self._trace.spatial_input_output).to(torch.float32)
+        # latents = ttnn.to_torch(self._trace.spatial_input_output).to(torch.float32)
+        latents = to_torch(
+            latents_step, mesh_device=latents_step.device(), dtype=latents_step.get_dtype(), shard_dim=0
+        ).to(torch.float32)
         latents = (latents.permute([0, 3, 1, 2]) / self._vae_scaling_factor) + self._vae_shift_factor
 
         with torch.no_grad():
@@ -286,11 +393,47 @@ class TtStableDiffusion3Pipeline:
         pooled_prompt_embeds: ttnn.Tensor,
         prompt_embeds: ttnn.Tensor,
         sigma_difference: ttnn.Tensor,
+        prompt_sequence_length: int,
+        spatial_sequence_length: int,
     ) -> None:
         latent_model_input = ttnn.concat([latents, latents]) if do_classifier_free_guidance else latents
-        latent_model_batch_size = latent_model_input.shape[0]
 
-        timestep = ttnn.repeat(timestep, ttnn.Shape([latent_model_batch_size, 1]))
+        ########
+        ## Pre-processing for the ttnn.fold
+        batch_size, img_h, img_w, img_c = latent_model_input.shape  # permuted input NHWC
+        patch_size = 2
+        latent_model_input = ttnn.reshape(
+            latent_model_input, (batch_size, img_h, img_w // patch_size, patch_size, img_c)
+        )
+        latent_model_input = ttnn.reshape(
+            latent_model_input, (batch_size, img_h, img_w // patch_size, patch_size * img_c)
+        )
+        N, H, W, C = latent_model_input.shape
+        shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 7),
+                ),
+            }
+        )
+        n_cores = 64
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
+
+        latent_model_input = ttnn.to_layout(latent_model_input, ttnn.ROW_MAJOR_LAYOUT)
+        latent_model_input = ttnn.to_memory_config(
+            latent_model_input,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                shard_spec,
+            ),
+            dtype=ttnn.bfloat16,
+        )
+
+        ########
+
+        # timestep = ttnn.repeat(timestep, ttnn.Shape([latent_model_batch_size, 1]))
         timestep = ttnn.to_layout(timestep, ttnn.TILE_LAYOUT)
 
         noise_pred = self._tt_transformer(
@@ -298,12 +441,14 @@ class TtStableDiffusion3Pipeline:
             prompt=prompt_embeds,
             pooled_projection=pooled_prompt_embeds,
             timestep=timestep,
+            N=spatial_sequence_length,
+            L=prompt_sequence_length,
         )
 
         noise_pred = _reshape_noise_pred(
             noise_pred,
-            height=latent_model_input.shape[-3],
-            width=latent_model_input.shape[-2],
+            height=latents.shape[-3],
+            width=latents.shape[-2],
             patch_size=self._tt_transformer.patch_size,
         )
 
@@ -314,6 +459,8 @@ class TtStableDiffusion3Pipeline:
             noise_pred = uncond + guidance_scale * (cond - uncond)
 
         ttnn.add_(latents, sigma_difference * noise_pred)
+
+        return latents
 
     def _encode_prompts(
         self,
@@ -523,8 +670,9 @@ def _get_t5_prompt_embeds(
             f" {max_sequence_length} tokens: {removed_text}"
         )
 
-    tt_text_input_ids = ttnn.from_torch(text_input_ids, device=device, layout=ttnn.TILE_LAYOUT)
-    tt_prompt_embeds = text_encoder(tt_text_input_ids)
+    tt_text_input_ids = from_torch(text_input_ids, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_device=device)
+    tt_prompt_embeds = text_encoder(tt_text_input_ids, device)
+    tt_prompt_embeds = ttnn.get_device_tensors(tt_prompt_embeds)[0]
     prompt_embeds = ttnn.to_torch(tt_prompt_embeds)
 
     prompt_embeds = prompt_embeds.to(device=torch_device)
