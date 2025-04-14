@@ -11,28 +11,12 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 
 namespace ttnn::operations::experimental::reduction::sort {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-
-template <class Tuple, class T = std::decay_t<std::tuple_element_t<0, std::decay_t<Tuple>>>>
-std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
-    return std::apply(
-        [](auto&&... elems) { return std::vector<std::optional<T>>{std::forward<decltype(elems)>(elems)...}; },
-        std::forward<Tuple>(tuple));
-}
-
-Tensor perform_transpose(
-    const Tensor& input_tensor, const bool is_dim_last_idx, const int8_t dim1 = -1, const int8_t dim2 = -1) {
-    return is_dim_last_idx ? input_tensor : ttnn::transpose(input_tensor, dim1, dim2, input_tensor.memory_config());
-}
-
-Tensor transform_to_4d_tensor(const Tensor& input_tensor, const bool is_rank_le_4d) {
-    return is_rank_le_4d ? ttnn::unsqueeze_to_4D(input_tensor) : data_movement::squeeze_from_ND_to_4D(input_tensor);
-}
 
 Tensor pre_sort_transform_tensor(
     const Tensor& input_tensor,
@@ -46,9 +30,9 @@ Tensor pre_sort_transform_tensor(
         return input_tensor;
     }
     // If dim is not last dimension transpose it
-    const Tensor transposed_tensor = perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    const Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
     // If input is not rank 4 transorm it to 4D
-    const Tensor transformed_tensor = transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
+    const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
     // Add padding if needed
     const Tensor padded_tensor = ttnn::fill_implicit_tile_padding(
         transformed_tensor, descending ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max());
@@ -121,7 +105,7 @@ std::vector<Tensor> ExecuteSort::invoke(
 
     std::vector<std::optional<Tensor>> output_tensors;
     if (optional_output_tensors.has_value()) {
-        output_tensors = CMAKE_UNIQUE_NAMESPACE::tuple_to_vector_optional(*optional_output_tensors);
+        output_tensors = reduction_common::tuple_to_vector_optional(*optional_output_tensors);
         output_tensors[0] = CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
             output_tensors[0].value(), dim, is_dim_last_idx, is_rank_le_4d, descending);
         output_tensors[1] = CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
