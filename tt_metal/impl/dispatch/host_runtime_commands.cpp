@@ -37,7 +37,6 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"

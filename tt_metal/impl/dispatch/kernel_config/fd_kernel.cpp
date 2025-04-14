@@ -18,12 +18,15 @@
 #include "dprint_server.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
+#include "fabric_types.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "mux.hpp"
 #include "prefetch.hpp"
 #include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_cluster.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
@@ -135,8 +138,12 @@ void FDKernel::configure_kernel_variant(
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
     }
-    if (tt::llrt::RunTimeOptions::get_instance().watcher_dispatch_disabled()) {
+    auto& rt_options = tt::llrt::RunTimeOptions::get_instance();
+    if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
+    }
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config() != FabricConfig::FABRIC_2D_PUSH) {
+        defines["FVC_MODE_PULL"] = "1";
     }
     if (!DPrintServerReadsDispatchCores(device_->id())) {
         defines["FORCE_DPRINT_OFF"] = "1";

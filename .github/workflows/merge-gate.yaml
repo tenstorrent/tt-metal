@@ -54,7 +54,8 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
 
   build:
-    if: ${{ needs.find-changes.outputs.cmake-changed == 'true' ||
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.any-code-changed == 'true' ||
             needs.find-changes.outputs.docs-changed == 'true'
         }}
@@ -80,7 +81,8 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   build-tsan:
-    if: ${{ needs.find-changes.outputs.cmake-changed == 'true' ||
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.any-code-changed == 'true' ||
             needs.find-changes.outputs.docs-changed == 'true'
         }}
@@ -95,11 +97,11 @@ jobs:
 
   smoke-tests:
     needs: [find-changes, build-tsan]
-    if: ${{
-        needs.find-changes.outputs.cmake-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-      }}
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
     strategy:
       fail-fast: false
       matrix:

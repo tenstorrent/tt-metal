@@ -241,7 +241,9 @@ DECODER_OP_END_IDX = -11
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}], indirect=True
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872, "worker_l1_size": 1344544}],
+    indirect=True,
 )
 def test_llama_demo(
     weights,
@@ -407,6 +409,28 @@ def average_per_instance_dict(input_dict):
     return averaged_dict
 
 
+def min_per_instance_dict(input_dict):
+    min_dict = {}
+    for op_code_with_id in input_dict:
+        min_dict[op_code_with_id] = min(input_dict[op_code_with_id])
+    return min_dict
+
+
+def max_per_instance_dict(input_dict):
+    max_dict = {}
+    for op_code_with_id in input_dict:
+        max_dict[op_code_with_id] = max(input_dict[op_code_with_id])
+    return max_dict
+
+
+def print_dict(input_dict, dict_name):
+    # print dict as a readable python dict
+    print(f"\n{dict_name} = {{")
+    for op_code_with_id in input_dict:
+        print(f'"{op_code_with_id}": {input_dict[op_code_with_id]},')
+    print("}")
+
+
 @pytest.mark.parametrize(
     "abs_tolerance_ns",
     (2200,),
@@ -433,7 +457,7 @@ def average_per_instance_dict(input_dict):
 )
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG TT_METAL_WORKER_RINGBUFFER_SIZE=122880 TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
+# Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
 # Copy the printed kernel_duration_per_instance_averaged_dict and dispatch_duration_per_instance_averaged_dict dictionaries
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
@@ -497,11 +521,17 @@ def test_llama_TG_perf_device(
     kernel_duration_per_instance_averaged_dict = average_per_instance_dict(kernel_duration_per_instance_dict)
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
 
+    kernel_duration_per_instance_min_dict = min_per_instance_dict(kernel_duration_per_instance_dict)
+    dispatch_duration_per_instance_min_dict = min_per_instance_dict(dispatch_duration_per_instance_dict)
+
+    kernel_duration_per_instance_max_dict = max_per_instance_dict(kernel_duration_per_instance_dict)
+    dispatch_duration_per_instance_max_dict = max_per_instance_dict(dispatch_duration_per_instance_dict)
+
     if len(kernel_duration_per_instance_averaged_dict) != len(perf_targets):
         print(f"perf_targets: {perf_targets}")
 
-    print(f"kernel_duration_per_instance_averaged_dict: {kernel_duration_per_instance_averaged_dict}")
-    print(f"dispatch_duration_per_instance_averaged_dict: {dispatch_duration_per_instance_averaged_dict}")
+    print_dict(kernel_duration_per_instance_averaged_dict, "kernel_duration_per_instance_averaged_dict")
+    print_dict(dispatch_duration_per_instance_averaged_dict, "dispatch_duration_per_instance_averaged_dict")
 
     assert len(kernel_duration_per_instance_averaged_dict) == len(
         perf_targets
@@ -513,8 +543,33 @@ def test_llama_TG_perf_device(
             expected_time = perf_targets[op_code_with_id]["kernel_duration"]
             op_name = perf_targets[op_code_with_id]["op_name"]
             avg_dispatch_duration = dispatch_duration_per_instance_averaged_dict[op_code_with_id]
+            # average
             benchmark_data.add_measurement(profiler, 0, step_name, op_name, avg_kernel_duration)
             benchmark_data.add_measurement(profiler, 0, step_name, op_name + "_op_to_op", avg_dispatch_duration)
+
+            # min
+            benchmark_data.add_measurement(
+                profiler, 0, step_name, op_name + "_min", kernel_duration_per_instance_min_dict[op_code_with_id]
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "_op_to_op_min",
+                dispatch_duration_per_instance_min_dict[op_code_with_id],
+            )
+
+            # max
+            benchmark_data.add_measurement(
+                profiler, 0, step_name, op_name + "_max", kernel_duration_per_instance_max_dict[op_code_with_id]
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "_op_to_op_max",
+                dispatch_duration_per_instance_max_dict[op_code_with_id],
+            )
 
             # Verify kernel duration is within tolerance
             if "AllReduceAsync" in op_code_with_id:
@@ -603,7 +658,7 @@ def test_llama_TG_perf_device(
 )
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG TT_METAL_WORKER_RINGBUFFER_SIZE=122880 TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
+# Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
 # Copy the printed dispatch_duration_per_instance_averaged_dict dictionary
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
@@ -654,6 +709,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     # Average over all iterations of each op instance
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
+    dispatch_duration_per_instance_min_dict = min_per_instance_dict(dispatch_duration_per_instance_dict)
+    dispatch_duration_per_instance_max_dict = max_per_instance_dict(dispatch_duration_per_instance_dict)
 
     print(f"dispatch_duration_per_instance_averaged_dict: {dispatch_duration_per_instance_averaged_dict}")
 
@@ -666,7 +723,23 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         if op_code_with_id in perf_targets:
             expected_time = perf_targets[op_code_with_id]["non-overlapped-dispatch-time"]
             op_name = perf_targets[op_code_with_id]["op_name"]
+
             benchmark_data.add_measurement(profiler, 0, step_name, op_name + "_dispatch", avg_dispatch_duration)
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "_dispatch_min",
+                dispatch_duration_per_instance_min_dict[op_code_with_id],
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "_dispatch_max",
+                dispatch_duration_per_instance_max_dict[op_code_with_id],
+            )
+
             if "AllReduceAsync" in op_code_with_id:
                 tolerance = abs_tolerance_ns_all_reduce
             elif "LlamaReduceScatterDeviceOperation" in op_code_with_id:

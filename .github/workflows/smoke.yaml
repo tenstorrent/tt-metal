@@ -85,35 +85,7 @@ jobs:
           path: /work/test-reports/
           prefix: "test_reports_"
 
-      # Arbitrary limit that's higher than we would like, but the JIT build seems inconsistent.
-      # Keep it here as a guardrail to keep Smoke tests fast.  We can adjust as needed.
       - name: Check for slow tests
-        shell: python3 {0}
-        run: |
-          import os
-          import xml.etree.ElementTree as ET
-          import sys
-
-          # Find all XML files in the /work/test-reports directory
-          report_files = [os.path.join(root, file) for root, dirs, files in os.walk("/work/test-reports/") for file in files if file.endswith(".xml")]
-          if not report_files:
-              print("No test reports found.")
-              sys.exit(1)
-
-          slow_tests = []
-
-          for report_file in report_files:
-              try:
-                  tree = ET.parse(report_file)
-                  root = tree.getroot()
-                  for tc in root.findall(".//testcase"):
-                      time = float(tc.get("time", 0))
-                      if time > float(${{ inputs.per-test-timeout }}):
-                          slow_tests.append(f"{report_file}: {tc.get('classname', 'Unknown')}.{tc.get('name', 'Unknown')} ({time:.3f}s)")
-              except Exception as e:
-                  print(f"Error parsing {report_file}: {e}")
-                  sys.exit(2)
-
-          if slow_tests:
-              print("Some tests exceeded float(${{ inputs.per-test-timeout }})s:\n" + "\n".join(slow_tests))
-              sys.exit(3)
+        uses: tenstorrent/tt-metal/.github/actions/detect-slow-tests@main
+        with:
+          threshold: ${{ inputs.per-test-timeout }}
