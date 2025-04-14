@@ -128,7 +128,7 @@ jobs:
       skip-tt-train: false
       publish-artifact: false
 
-  sanity-tests:
+  basic-tests:
     if: ${{ true ||
         needs.find-changes.outputs.cmake-changed == 'true' ||
         needs.find-changes.outputs.tt-metalium-changed == 'true' ||
@@ -141,7 +141,7 @@ jobs:
         platform: [
           "tt-beta-ubuntu-2204-n150-large-stable",
         ]
-    uses: ./.github/workflows/sanity.yaml
+    uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}

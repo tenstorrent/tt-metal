@@ -16,14 +16,14 @@ install(
         COMPONENT metalium-validation
 )
 
-# Sanity
-add_executable(tt-metalium-validation-sanity)
+# Basic
+add_executable(tt-metalium-validation-basic)
 
-target_link_libraries(tt-metalium-validation-sanity PRIVATE TT::Metalium::Test::Dispatch::Sanity)
+target_link_libraries(tt-metalium-validation-basic PRIVATE TT::Metalium::Test::Dispatch::Basic)
 
 install(
     TARGETS
-        tt-metalium-validation-sanity
+        tt-metalium-validation-basic
     RUNTIME
         DESTINATION libexec/tt-metalium/validation
         COMPONENT metalium-validation
