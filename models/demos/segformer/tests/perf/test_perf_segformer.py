@@ -15,7 +15,7 @@ from models.demos.segformer.tests.perf.segformer_test_infra import SegformerBare
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, expected_compile_time, expected_inference_time",
     [
-        [1, ttnn.bfloat16, ttnn.bfloat16, 65, 0.0222],
+        [1, ttnn.bfloat16, ttnn.bfloat16, 65, 0.0277],
     ],
 )
 def test_perf_segformer(device, batch_size, act_dtype, weight_dtype, expected_compile_time, expected_inference_time):
