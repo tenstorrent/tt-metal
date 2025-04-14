@@ -5,6 +5,7 @@
 #pragma once
 
 namespace tt::tt_fabric {
+// fabric mode macro for (mainly) kernel code
 #define FABRIC_MODE_UNDEFINED 0x0000
 #define FABRIC_MODE_1D 0x0001
 #define FABRIC_MODE_2D 0x0002
@@ -27,8 +28,21 @@ namespace tt::tt_fabric {
 #define FABRIC_MODE_2D_MESH_DYNAMIC (FABRIC_MODE_2D_MESH | FABRIC_MODE_DYNAMIC)
 #define FABRIC_MODE_2D_TORUS_DYNAMIC (FABRIC_MODE_2D_TORUS | FABRIC_MODE_DYNAMIC)
 
-// type for host to refer FABRIC_MODE macros in fabric_types.hpp
-using FABRIC_MODE_ = std::uint16_t;
+// fabric mode type for host code
+enum class FabricMode : uint16_t {
+    FabricModeUndefined = FABRIC_MODE_UNDEFINED,
+    FabricMode1DLine = FABRIC_MODE_1D_LINE,
+    FabricMode1DRing = FABRIC_MODE_1D_RING,
+    FabricMode1DLineLowLatency = FABRIC_MODE_1D_LINE_LOW_LATENCY,
+    FabricMode1DRingLowLatency = FABRIC_MODE_1D_RING_LOW_LATENCY,
+    FabricMode2DMesh = FABRIC_MODE_2D_MESH,
+    FabricMode2DTorus = FABRIC_MODE_2D_TORUS,
+    FabricMode2DMeshLowLatency = FABRIC_MODE_2D_MESH_LOW_LATENCY,
+    FabricMode2DTorusLowLatency = FABRIC_MODE_2D_TORUS_LOW_LATENCY,
+    FabricMode2DMeshDynamic = FABRIC_MODE_2D_MESH_DYNAMIC,
+    FabricMode2DTorusDynamic = FABRIC_MODE_2D_TORUS_DYNAMIC
+};
+
 }  // namespace tt::tt_fabric
 
 namespace tt::tt_metal {

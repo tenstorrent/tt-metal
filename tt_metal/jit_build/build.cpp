@@ -719,13 +719,6 @@ void JitBuildState::compile_one(
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
-    if (!this->is_fw_ && this->target_name_ == "erisc") {
-        auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-        auto mode = control_plane->get_fabric_mode();
-        if (mode != FABRIC_MODE_UNDEFINED) {
-            defines += "-DFABRIC_MODE=" + to_string(static_cast<int>(mode)) + " ";
-        }
-    }
 
     if (settings) {
         // Append user args
