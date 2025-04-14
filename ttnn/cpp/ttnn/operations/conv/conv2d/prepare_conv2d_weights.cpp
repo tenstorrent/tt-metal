@@ -1162,8 +1162,19 @@ ttnn::Tensor prepare_conv_weights(
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt;
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-    if (weight_tensor.is_device_tensor()) {
-        log_info(tt::LogOp, "Preparing Weights on Device");
+    if (weight_tensor.is_device_tensor() || conv_config.preprocess_weights_on_device) {
+        if (conv_config.preprocess_weights_on_device == false) {
+            log_warning(tt::LogOp,"
+                Conv2D prepare weights was invoked with device tensors, but the conv_config.preprocess_weights_on_device flag was not set to True.
+                This will use the device to prepare weights, which is not fully supported.
+                ");
+        }
+        if (groups > 1) {
+            TT_THROW(
+                "Weights preparation on device doesn't support grouped convolutions. Please use host preparation by "
+                "passing a host tensor and setting conv_config.preprocess_weights_on_device to False");
+        }
+
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
             weight_tensor,
             bias_tensor,
