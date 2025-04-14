@@ -114,6 +114,11 @@ def create_tt_model(
         max_seq_len=max_seq_len,
     )
 
+    if max_seq_len > tt_model_args.max_context_len:
+        pytest.skip(
+            f"{tt_model_args.model_name} has a maximum context length of {tt_model_args.max_context_len} tokens and max_seq_len is currently set at {max_seq_len} tokens."
+        )
+
     # Avoid loading state_dict for every DP model
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()
@@ -212,7 +217,9 @@ def prepare_generator_args(
         use_paged_kv_cache=paged_attention,
     )
     # Host code, safe to reuse tokenizer from the 1st model
-    tokenizer = model_args[0].tokenizer
+    tokenizer = model_args[
+        0
+    ].tokenizer  # TODO Should we support Data Parallel different models? If so, we need to support multiple tokenizers
     return model_args, model, page_table, tt_kv_cache, tokenizer
 
 
@@ -262,7 +269,7 @@ def prepare_generator_args(
             False,  # ci_only
             1,  # data_parallel
         ),
-        (  # Long-context 64k run - Single user, long prompt (adapted to the model being used and architecture)
+        (  # Long-context 64k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -270,13 +277,13 @@ def prepare_generator_args(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
         ),
-        (  # Long-context 16k run - Single user, long prompt (adapted to the model being used and architecture)
+        (  # Long-context 16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -284,7 +291,7 @@ def prepare_generator_args(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -410,7 +417,7 @@ def prepare_generator_args(
         "batch-1",  # latency
         "batch-32",  # throughput
         "long-context-64k",  # 64k context, max_seq_len=128k
-        "long-context-16k",  # 32k context, max_seq_len=32k
+        "long-context-16k",  # 16k context, max_seq_len=32k
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
         "ci-32",  # CI batch 32
@@ -494,10 +501,6 @@ def test_demo_text(
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
 
-    model_name_env = os.getenv("HF_MODEL")
-    if max_seq_len > 32 * 1024 and model_name_env and "Mistral-7B" in model_name_env:
-        pytest.skip("Mistral-7B models do not support seq_len > {32*1024}")
-
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
 
@@ -565,7 +568,6 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
     )
-
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
