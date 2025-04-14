@@ -97,6 +97,8 @@ def test_tilize(device):
         with open(log_file, mode="w", newline="") as file:
             if perf in ["op", "op_no_dm"] and perf_scope == "op":
                 get_op_duration = True
+            else:
+                get_op_duration = False
             writer = csv.writer(file)
             csv_header = [
                 "rt_dim",
