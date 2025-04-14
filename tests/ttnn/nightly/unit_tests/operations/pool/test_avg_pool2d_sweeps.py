@@ -50,7 +50,7 @@ parameters = {
 }
 
 
-@skip_for_blackhole()
+@skip_for_blackhole("Nigthly CI tests failing, ticket #20492")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("input_spec", parameters["input_specs"])
 def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
