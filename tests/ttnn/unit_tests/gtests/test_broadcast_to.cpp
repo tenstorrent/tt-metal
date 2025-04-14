@@ -18,10 +18,10 @@ namespace broadcast_to {
 namespace test {
 
 struct BroadcastParam {
-    uint32_t n;  // input tensor batch
-    uint32_t c;  // input tensor channel
-    uint32_t h;  // input tensor height
-    uint32_t w;  // input tensor width
+    uint32_t n = 0;  // input tensor batch
+    uint32_t c = 0;  // input tensor channel
+    uint32_t h = 0;  // input tensor height
+    uint32_t w = 0;  // input tensor width
     std::vector<uint32_t> broadcast_shape;
 };
 
@@ -76,6 +76,33 @@ INSTANTIATE_TEST_SUITE_P(
         BroadcastParam{1, 1, 64, 64, {1, 32, 64, 64}},         // large channel
         BroadcastParam{1, 1, 64, 64, {32, 1, 64, 64}}          // large batch
         ));
+
+// Combined dimension broadcasts (N, C, H, W simultaneously)
+INSTANTIATE_TEST_SUITE_P(
+    CombinedDimensions,
+    Broadcast_toFixture,
+    ::testing::Values(
+        BroadcastParam{1, 1, 1, 1, {8, 16, 32, 64}},    // scalar to 4D tensor
+        BroadcastParam{1, 3, 1, 1, {8, 3, 32, 64}},     // broadcast N, H, W (preserve C)
+        BroadcastParam{2, 1, 4, 1, {2, 16, 4, 64}},     // broadcast C and W
+        BroadcastParam{1, 1, 32, 32, {8, 16, 32, 32}},  // broadcast N and C (preserve H, W)
+        BroadcastParam{1, 3, 1, 4, {8, 3, 32, 4}}       // broadcast N and H (preserve C, W)
+        ));
+
+// Non tile aligned dimension broadcasts
+INSTANTIATE_TEST_SUITE_P(
+    NonAlignedDimensions,
+    Broadcast_toFixture,
+    ::testing::Values(
+        BroadcastParam{1, 1, 17, 1, {1, 1, 17, 51}},   // odd height, non-aligned width
+        BroadcastParam{1, 1, 1, 23, {1, 1, 47, 23}},   // non-aligned height, odd width
+        BroadcastParam{1, 1, 7, 13, {1, 1, 7, 13}},    // small prime dimensions (no broadcast, just validation)
+        BroadcastParam{1, 1, 1, 1, {1, 1, 19, 31}},    // scalar to non-aligned 2D
+        BroadcastParam{1, 1, 30, 30, {1, 5, 30, 30}},  // almost-aligned dimensions
+        BroadcastParam{1, 3, 15, 29, {4, 3, 15, 29}},  // preserve odd dimensions, broadcast batch
+        BroadcastParam{2, 1, 33, 65, {2, 7, 33, 65}}   // odd-plus-32 dimensions
+        ));
+
 }  // namespace test
 }  // namespace broadcast_to
 }  // namespace experimental
