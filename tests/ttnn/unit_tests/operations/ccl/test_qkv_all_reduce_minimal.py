@@ -103,7 +103,10 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)]
+    num_buffers = 2
+    ccl_semaphore_handles = [
+        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, i) for i in range(num_buffers)
+    ]
 
     logger.info(f"Output shape: {output_shape}")
 
@@ -179,8 +182,9 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
         check_mesh_tensor_alloc(tt_qkv)
 
         intermediate_tensor = torch.zeros(intermediate_shape)
-        tt_intermediate_tensors = [
-            ttnn.from_torch(
+        tt_intermediate_tensors = []
+        for i in range(num_buffers):
+            tt_intermediate_tensor = ttnn.from_torch(
                 intermediate_tensor,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
@@ -188,7 +192,9 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 memory_config=intermediate_mem_config,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
             )
-        ]
+            # Validate that the tensor is allocated in same location across devices
+            check_mesh_tensor_alloc(tt_intermediate_tensor)
+            tt_intermediate_tensors.append(tt_intermediate_tensor)
 
         head_dim = N // (8 + 2 * 1)
         qkv_mem_config = ttnn.MemoryConfig(
@@ -200,9 +206,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-
-        # Validate that the tensor is allocated in same location across devices
-        check_mesh_tensor_alloc(tt_intermediate_tensors[0])
 
         # Select batch_offset with create_qkv_heads_decode instead of selection matmul
         batch_offset = [0, 8, 16, 24]
@@ -235,10 +238,10 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                     v_heads_1BKD,
                 ) = ttnn.experimental.all_reduce_create_qkv_heads(
                     tt_qkv,
-                    tt_intermediate_tensors[0],
+                    tt_intermediate_tensors[i % num_buffers],
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
-                    multi_device_global_semaphore=ccl_semaphore_handles[0],
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
                     num_heads=8,
                     memory_config=output_mem_config,
                     topology=ALL_GATHER_TOPOLOGY,
