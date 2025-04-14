@@ -57,6 +57,10 @@ Tensor CumSumOperation::invoke(
 
             adjusted_input_tensor = ttnn::reshape(adjusted_input_tensor, new_shape);
 
+            if (optional_output_tensor.has_value()) {
+                optional_output_tensor = ttnn::reshape(optional_output_tensor.value(), new_shape);
+            }
+
             tensor_rank += 2;
             dim += 2;  // update dim parameter to target updated axis
         }
@@ -70,6 +74,11 @@ Tensor CumSumOperation::invoke(
         // Permute dimensions
         Tensor permuted_tensor =
             ttnn::permute(adjusted_input_tensor, permutation, adjusted_input_tensor.memory_config());
+
+        if (optional_output_tensor.has_value()) {
+            optional_output_tensor =
+                ttnn::permute(optional_output_tensor.value(), permutation, optional_output_tensor->memory_config());
+        }
 
         // Compute cumsum on permuted tensor (now accumulation is on dim=0)
         Tensor output_tensor = ttnn::prim::cumsum(queue_id, permuted_tensor, 0, dtype, optional_output_tensor);

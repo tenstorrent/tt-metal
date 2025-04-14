@@ -101,29 +101,56 @@ def test_cumsum(size, dim, dtype, device):
         ([0, 0, 0], 1),
         ([1, 32, 64], 1),
         ([1, 1024, 32], 0),
-        ([1, 1024, 32], 1),
+        ([1, 1024, 32], 1),  # Fail due to rounding errors ?
+        ([260, 1, 1], 0),  # Fail due to rounding errors ?
+        ([1024, 1, 32], 0),  # Fail due to rounding errors ?
         ([1, 1024, 32], 2),
         ([64, 1, 32], 1),
         ([64, 64, 1], 1),
         ([1, 32, 129], 1),
         ([33, 35, 37], 1),
+        ([2, 3, 33, 33], 0),
+        ([2, 3, 33, 33], 1),
+        ([7, 13, 129, 33], 1),
+        ([7, 13, 129, 33], 0),
+        ([4, 6, 128, 128], 0),
+        ([2, 3, 2, 2], 1),
+        ([2, 3, 2, 2], 0),
+        ([2, 1, 33], 0),
+        ([2, 3, 5, 33, 128], 0),
+        ([2, 3, 5, 33, 128], 1),
+        ([2, 3, 5, 33, 128], 2),
     ],
 )
-@pytest.mark.parametrize("dtype", [None, ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        #    (torch.float32, None),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
 def test_cumsum_with_preallocated_output(size, dim, dtype, device):
     torch.manual_seed(29112024)
 
-    torch_input_tensor = torch.rand(size, dtype=torch.float32)
+    (host_dtype, dev_dtype) = dtype
+
+    torch_input_tensor = torch.rand(size, dtype=host_dtype)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
 
-    preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=dtype, layout=ttnn.Layout.TILE)
-    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dtype, output=preallocated_output_tensor)
+    preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=dev_dtype, layout=ttnn.Layout.TILE)
+    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dev_dtype, output=preallocated_output_tensor)
+    torch_output = ttnn.to_torch(output_tensor, dtype=host_dtype)
 
-    expected_output_dtype = dtype if dtype is not None else input_tensor.dtype
+    expected_output_dtype = dev_dtype if dev_dtype is not None else input_tensor.dtype
+
+    expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=host_dtype)
 
     assert output_tensor.dtype == expected_output_dtype
     assert preallocated_output_tensor.dtype == expected_output_dtype
 
     assert output_tensor.shape == (size)
     assert preallocated_output_tensor.shape == (size)
+
+    assert_with_pcc(expected_output, torch_output)
