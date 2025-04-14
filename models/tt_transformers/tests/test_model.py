@@ -10,7 +10,7 @@ from models.tt_transformers.tt.common import (
     sample_host,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.model_config import CheckpointType, ModelArgs
 from models.tt_transformers.tt.model import Transformer
 from models.utility_functions import (
     comp_pcc,
