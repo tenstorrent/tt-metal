@@ -8,7 +8,6 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
 
 #include "sort_common.hpp"
 
