@@ -24,6 +24,24 @@ from models.tt_transformers.tt.common import (
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 
+import re
+
+# Regex patterns to detect Japanese and Arabic
+_japanese_char_pattern = re.compile(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]')
+_arabic_char_pattern = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
+
+def find_japanese_chars(text: str) -> list:
+    """
+    Returns a list of all Japanese characters (Hiragana, Katakana, Kanji)
+    found in 'text'.
+    """
+    return _japanese_char_pattern.findall(text)
+
+def find_arabic_chars(text: str) -> list:
+    """
+    Returns a list of all Arabic-script characters found in 'text'.
+    """
+    return _arabic_char_pattern.findall(text)
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
     cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
@@ -712,6 +730,17 @@ def test_demo_text(
                         model_args[0].encode_prompt(prompt, instruct=instruct)
                     )
                     text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
+                    # Find all Japanese and Arabic characters
+                    jp_chars = find_japanese_chars(text_after_prompt)
+                    ar_chars = find_arabic_chars(text_after_prompt)
+                    if jp_chars:
+                        logger.warning(
+                            f"[User {i}] Japanese characters found in output: {''.join(jp_chars)}"
+                        )
+                    if ar_chars:
+                        logger.warning(
+                            f"[User {i}] Arabic characters found in output: {''.join(ar_chars)}"
+                        )
                     if print_to_file:
                         with open(output_filename, "a") as f:
                             f.write(
