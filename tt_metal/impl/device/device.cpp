@@ -472,6 +472,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
     uint32_t processor_class_count = MetalContext::instance().hal().get_processor_classes_count(core_type);
     auto jit_build_config = MetalContext::instance().hal().get_jit_build_config(
         core_type_idx, 0, 0);  // Only the first risc needs to be programmed
+    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
 
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
@@ -490,7 +491,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                     }
                     log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
 
-                    if (not tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
+                    if (not rtoptions.get_skip_loading_fw()) {
                         llrt::test_load_write_read_risc_binary(
                             binary_mem, this->id(), virtual_core, core_type_idx, processor_class, riscv_id);
                     }
@@ -531,7 +532,7 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                 tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                     tt_cxy_pair(this->id(), virtual_core), reset_val);
             }
-            if (not tt_metal::MetalContext::instance().rtoptions().get_skip_loading_fw()) {
+            if (not rtoptions.get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states =
                         MetalContext::instance().hal().get_processor_types_count(core_type_idx, processor_class);

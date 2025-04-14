@@ -187,7 +187,7 @@ const std::string& RunTimeOptions::get_root_dir() const {
     return root_dir;
 }
 
-const std::string& RunTimeOptions::get_cache_dir() {
+const std::string& RunTimeOptions::get_cache_dir() const {
     if (!this->is_cache_dir_specified()) {
         TT_THROW("Env var {} is not set.", TT_METAL_CACHE_ENV_VAR);
     }

@@ -154,7 +154,7 @@ public:
     const std::string& get_root_dir() const;
 
     inline bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
-    const std::string& get_cache_dir();
+    const std::string& get_cache_dir() const;
 
     inline bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
     const std::string& get_kernel_dir() const;
@@ -190,12 +190,12 @@ public:
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
-    inline bool get_feature_enabled(RunTimeDebugFeatures feature) { return feature_targets[feature].enabled; }
+    inline bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
     inline void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) {
         feature_targets[feature].enabled = enabled;
     }
     // Note: dprint cores are logical
-    inline std::map<CoreType, std::vector<CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) {
+    inline const std::map<CoreType, std::vector<CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].cores;
     }
     inline void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
@@ -205,8 +205,8 @@ public:
     inline void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, int all_cores) {
         feature_targets[feature].all_cores[core_type] = all_cores;
     }
-    inline int get_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type) {
-        return feature_targets[feature].all_cores[core_type];
+    inline int get_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type) const {
+        return feature_targets[feature].all_cores.at(core_type);
     }
     // Note: core range is inclusive
     inline void set_feature_core_range(
@@ -218,7 +218,7 @@ public:
             }
         }
     }
-    inline std::vector<int>& get_feature_chip_ids(RunTimeDebugFeatures feature) {
+    inline const std::vector<int>& get_feature_chip_ids(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].chip_ids;
     }
     inline void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
@@ -228,30 +228,32 @@ public:
     inline void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
         feature_targets[feature].all_chips = all_chips;
     }
-    inline bool get_feature_all_chips(RunTimeDebugFeatures feature) { return feature_targets[feature].all_chips; }
-    inline uint32_t get_feature_riscv_mask(RunTimeDebugFeatures feature) { return feature_targets[feature].riscv_mask; }
+    inline bool get_feature_all_chips(RunTimeDebugFeatures feature) const { return feature_targets[feature].all_chips; }
+    inline uint32_t get_feature_riscv_mask(RunTimeDebugFeatures feature) const {
+        return feature_targets[feature].riscv_mask;
+    }
     inline void set_feature_riscv_mask(RunTimeDebugFeatures feature, uint32_t riscv_mask) {
         feature_targets[feature].riscv_mask = riscv_mask;
     }
-    inline std::string get_feature_file_name(RunTimeDebugFeatures feature) {
+    inline std::string get_feature_file_name(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].file_name;
     }
     inline void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
         feature_targets[feature].file_name = file_name;
     }
-    inline bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) {
+    inline bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].one_file_per_risc;
     }
     inline void set_feature_one_file_per_risc(RunTimeDebugFeatures feature, bool one_file_per_risc) {
         feature_targets[feature].one_file_per_risc = one_file_per_risc;
     }
-    inline bool get_feature_prepend_device_core_risc(RunTimeDebugFeatures feature) {
+    inline bool get_feature_prepend_device_core_risc(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].prepend_device_core_risc;
     }
     inline void set_feature_prepend_device_core_risc(RunTimeDebugFeatures feature, bool prepend_device_core_risc) {
         feature_targets[feature].prepend_device_core_risc = prepend_device_core_risc;
     }
-    inline TargetSelection get_feature_targets(RunTimeDebugFeatures feature) { return feature_targets[feature]; }
+    inline TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
     inline void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
         feature_targets[feature] = targets;
     }

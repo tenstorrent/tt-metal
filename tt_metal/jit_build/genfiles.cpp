@@ -65,15 +65,13 @@ static fs::path get_file_path_relative_to_dir(const string& dir, const fs::path&
 static fs::path get_relative_file_path_from_config(const fs::path& file_path) {
     fs::path file_path_relative_to_dir;
 
-    if (tt_metal::MetalContext::instance().rtoptions().is_root_dir_specified()) {
-        file_path_relative_to_dir =
-            get_file_path_relative_to_dir(tt_metal::MetalContext::instance().rtoptions().get_root_dir(), file_path);
+    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.is_root_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_root_dir(), file_path);
     }
 
-    if (!fs::exists(file_path_relative_to_dir) &&
-        tt_metal::MetalContext::instance().rtoptions().is_kernel_dir_specified()) {
-        file_path_relative_to_dir =
-            get_file_path_relative_to_dir(tt_metal::MetalContext::instance().rtoptions().get_kernel_dir(), file_path);
+    if (!fs::exists(file_path_relative_to_dir) && rtoptions.is_kernel_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_kernel_dir(), file_path);
     }
 
     return file_path_relative_to_dir;
