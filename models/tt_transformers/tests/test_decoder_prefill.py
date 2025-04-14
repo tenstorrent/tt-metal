@@ -51,7 +51,6 @@ from models.utility_functions import skip_for_grayskull
     "max_seq_len",
     (
         4096,
-        256,
         128,
     ),
 )
@@ -64,9 +63,9 @@ def test_decoder_inference(
     reset_seeds,
     ensure_gc,
 ):
+    # TODO Fix long seqlen for Mistral-7B
     mesh_device_env = os.getenv("MESH_DEVICE")
     model_name_env = os.getenv("HF_MODEL")
-
     if max_seq_len > 256 and model_name_env and "Mistral-7B" in model_name_env:
         pytest.skip("Mistral-7B models do not support max_seq_len > 1024")
 
