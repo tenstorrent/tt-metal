@@ -780,6 +780,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
+    bool is_in_tiled,
     IDevice* device,
     uint32_t max_out_nsticks_per_core,
     uint32_t in_nsticks_per_core,
@@ -897,7 +898,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         return flattened_config;
     };
 
-    auto flatten_local_config = [in_place, max_out_nsticks_per_core, in_nsticks_per_core](
+    auto flatten_local_config = [in_place, max_out_nsticks_per_core, in_nsticks_per_core, is_in_tiled](
                                     auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
         // find max length
         size_t max_len = 0;
@@ -912,7 +913,11 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         max_len += 6;  // account for the key tuple and null plug
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        int32_t in_out_shard_size_delta = max_out_nsticks_per_core - in_nsticks_per_core;
+        int32_t in_out_shard_size_delta =
+            (in_place && is_in_tiled)
+                ? 0
+                : max_out_nsticks_per_core - in_nsticks_per_core;  // for in place with tilized data we untilize
+                                                                   // directly into the output buffer so delta is zero
         for (const auto& [key, data] : config) {
             auto [nocx, nocy, len] = key;
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
