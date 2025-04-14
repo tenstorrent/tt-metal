@@ -24,6 +24,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     num_cores_to_rectangle_grid,
     round_up,
 )
+from models.demos.llama3_subdevices.tt.model_config import set_tg_attention_config
 
 LINEAR_TOPOLOGY = True
 if LINEAR_TOPOLOGY:
@@ -478,7 +479,15 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        ar_core_range_set = ttnn.num_cores_to_corerangeset(output_num_cores, ttnn.CoreCoord(8, 5), row_wise=True)
+        ar_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in CORE_RANGE[:output_num_cores]
+            ]
+        )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -497,7 +506,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-
         logger.info(f"Input shape: {input_shape[2:]}, Padded shape: {[M, N_per_shard * input_num_cores]}")
         input_tensor = torch.randn(input_shape)
 
@@ -524,19 +532,17 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             )
         ]
 
-        sub_core_grid = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-            ]
-        )
-        qkv_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-            ttnn.CoreCoord(1, 0), 24, sub_core_grid, row_wise=True
-        )
+        model_config = {}
+        model_config = set_tg_attention_config(model_config, 4096)
         head_dim = N // (8 + 2 * 1)
         qkv_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(qkv_core_range_set, [M, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(
+                model_config["CREATE_HEAD_OUTPUT_MEMCFG"].shard_spec.grid,
+                [M, head_dim],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
         )
 
         # Validate that the tensor is allocated in same location across devices
