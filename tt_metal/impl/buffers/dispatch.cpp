@@ -268,14 +268,9 @@ int32_t calculate_num_pages_available_in_cq(
     return num_pages_available;
 }
 
-uint32_t calculate_max_data_size(const CoreType& dispatch_core_type) {
-    return DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size() -
-           (MetalContext::instance().hal().get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
-}
-
 bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer) {
     const CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    const uint32_t max_data_size = calculate_max_data_size(dispatch_core_type);
+    const uint32_t max_data_size = calculate_max_data_size_bytes(dispatch_core_type);
     return buffer.aligned_page_size() > max_data_size;
 }
 
@@ -286,7 +281,7 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
 
     buf_dispatch_constants.issue_queue_cmd_limit = sysmem_manager.get_issue_queue_limit(cq_id);
     buf_dispatch_constants.max_prefetch_cmd_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
-    buf_dispatch_constants.max_data_sizeB = calculate_max_data_size(dispatch_core_type);
+    buf_dispatch_constants.max_data_sizeB = calculate_max_data_size_bytes(dispatch_core_type);
 
     return buf_dispatch_constants;
 }

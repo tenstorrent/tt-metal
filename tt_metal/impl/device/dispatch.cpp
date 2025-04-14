@@ -12,8 +12,9 @@ namespace tt_metal {
 
 uint32_t calculate_max_data_size_bytes(const CoreType& dispatch_core_type) {
     return DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size() -
-           (hal_ref.get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
+           (MetalContext::instance().hal().get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
 }
+
 namespace device_dispatch {
 
 void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_params) {

@@ -318,20 +318,23 @@ void HWCommandQueue::enqueue_read_from_core_l1(
         "Region to read from in L1 is out of bounds");
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-    device_dispatch::L1ReadDispatchParams dispatch_params(
-        virtual_core,
-        address,
-        size_bytes,
-        this->device_,
-        this->id_,
-        this->get_dispatch_core_type(),
-        this->expected_num_workers_completed_,
-        sub_device_ids);
-    device_dispatch::issue_l1_read_command_sequence(dispatch_params);
 
-    this->issued_completion_q_reads_.push(
-        std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadL1DataDescriptor>, dst, size_bytes));
-    this->increment_num_entries_in_completion_q();
+    if (size_bytes > 0) {
+        device_dispatch::L1ReadDispatchParams dispatch_params(
+            virtual_core,
+            address,
+            size_bytes,
+            this->device_,
+            this->id_,
+            this->get_dispatch_core_type(),
+            this->expected_num_workers_completed_,
+            sub_device_ids);
+        device_dispatch::issue_l1_read_command_sequence(dispatch_params);
+
+        this->issued_completion_q_reads_.push(
+            std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadL1DataDescriptor>, dst, size_bytes));
+        this->increment_num_entries_in_completion_q();
+    }
 
     if (blocking) {
         this->finish(sub_device_ids);
@@ -354,17 +357,30 @@ void HWCommandQueue::enqueue_write_to_core_l1(
         "Region to write to in L1 is out of bounds");
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-    device_dispatch::L1WriteDispatchParams dispatch_params{
-        virtual_core,
-        address,
-        size_bytes,
-        this->device_,
-        this->id_,
-        this->get_dispatch_core_type(),
-        this->expected_num_workers_completed_,
-        sub_device_ids,
-        src};
-    device_dispatch::issue_l1_write_command_sequence(dispatch_params);
+
+    while (size_bytes > 0) {
+        const uint32_t size_bytes_to_write = std::min(
+            size_bytes,
+            DispatchMemMap::get(this->get_dispatch_core_type(), this->device_->num_hw_cqs())
+                    .max_prefetch_command_size() -
+                calculate_max_data_size_bytes(this->get_dispatch_core_type()));
+
+        device_dispatch::L1WriteDispatchParams dispatch_params{
+            virtual_core,
+            address,
+            size_bytes_to_write,
+            this->device_,
+            this->id_,
+            this->get_dispatch_core_type(),
+            this->expected_num_workers_completed_,
+            sub_device_ids,
+            src};
+        device_dispatch::issue_l1_write_command_sequence(dispatch_params);
+
+        size_bytes -= size_bytes_to_write;
+        address += size_bytes_to_write;
+        src = (uint8_t*)src + size_bytes_to_write;
+    }
 
     if (blocking) {
         this->finish(sub_device_ids);
