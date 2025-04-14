@@ -61,10 +61,10 @@ When running the demo, do not forget to setup the `$QWEN_DIR` environment variab
 Currently, this model is only supported on N150 (single-device). If you are running this demo on a multi-chip device, please make sure FAKE_DEVICE is set to N150.
 
 # Run a single continuous batch with instruct weights
-FAKE_DEVICE=N150 pytest models/demos/qwen/demo/demo.py -k 'instruct and 1_batch'
+FAKE_DEVICE=N150 pytest models/demos/qwen/demo/demo.py -k 'instruct_weights-1_batch'
 
 # Run 2 continuous batches with general weights
-FAKE_DEVICE=N150 pytest models/demos/qwen/demo/demo.py -k 'general and 2_batch'
+FAKE_DEVICE=N150 pytest models/demos/qwen/demo/demo.py -k 'general_weights-2_batch'
 ```
 
 ## Known Issues
