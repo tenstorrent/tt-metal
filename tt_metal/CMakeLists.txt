@@ -25,6 +25,78 @@ target_sources(
         graph/graph_tracking.cpp
         hal.cpp
 )
+target_sources(
+    tt_metal
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api
+        FILES
+            api/tt-metalium/allocator.hpp
+            api/tt-metalium/allocator_types.hpp
+            api/tt-metalium/assert.hpp
+            api/tt-metalium/base_types.hpp
+            api/tt-metalium/bfloat16.hpp
+            api/tt-metalium/bfloat4.hpp
+            api/tt-metalium/bfloat8.hpp
+            api/tt-metalium/blockfloat_common.hpp
+            api/tt-metalium/buffer.hpp
+            api/tt-metalium/buffer_constants.hpp
+            api/tt-metalium/circular_buffer.hpp
+            api/tt-metalium/circular_buffer_constants.h
+            api/tt-metalium/circular_buffer_types.hpp
+            api/tt-metalium/command_queue.hpp
+            api/tt-metalium/command_queue_interface.hpp
+            api/tt-metalium/core_coord.hpp
+            api/tt-metalium/core_descriptor.hpp
+            api/tt-metalium/data_format.hpp
+            api/tt-metalium/data_types.hpp
+            api/tt-metalium/dev_msgs.h
+            api/tt-metalium/device.hpp
+            api/tt-metalium/device_impl.hpp
+            api/tt-metalium/device_pool.hpp
+            api/tt-metalium/dispatch_core_common.hpp
+            api/tt-metalium/dispatch_settings.hpp
+            api/tt-metalium/event.hpp
+            api/tt-metalium/fabric_host_interface.h
+            api/tt-metalium/global_circular_buffer.hpp
+            api/tt-metalium/global_circular_buffer_impl.hpp
+            api/tt-metalium/global_semaphore.hpp
+            api/tt-metalium/graph_tracking.hpp
+            api/tt-metalium/hal.hpp
+            api/tt-metalium/hlk_desc.hpp
+            api/tt-metalium/host_api.hpp
+            api/tt-metalium/kernel.hpp
+            api/tt-metalium/kernel_types.hpp
+            api/tt-metalium/launch_message_ring_buffer_state.hpp
+            api/tt-metalium/logger.hpp
+            api/tt-metalium/memory_reporter.hpp
+            api/tt-metalium/mesh_config.hpp
+            api/tt-metalium/mesh_device.hpp
+            api/tt-metalium/mesh_device_view.hpp
+            api/tt-metalium/metal_soc_descriptor.h
+            api/tt-metalium/persistent_kernel_cache.hpp
+            api/tt-metalium/program_cache.hpp
+            api/tt-metalium/program_device_map.hpp
+            api/tt-metalium/runtime_args_data.hpp
+            api/tt-metalium/semaphore.hpp
+            api/tt-metalium/shape.hpp
+            api/tt-metalium/sub_device.hpp
+            api/tt-metalium/sub_device_manager_tracker.hpp
+            api/tt-metalium/sub_device_types.hpp
+            api/tt-metalium/system_mesh.hpp
+            api/tt-metalium/tile.hpp
+            api/tt-metalium/trace.hpp
+            api/tt-metalium/trace_buffer.hpp
+            api/tt-metalium/tt_align.hpp
+            api/tt-metalium/tt_backend_api_types.hpp
+            api/tt-metalium/tt_memory.h
+            api/tt-metalium/tt_metal.hpp
+            api/tt-metalium/util.hpp
+            api/tt-metalium/utils.hpp
+            api/tt-metalium/work_split.hpp
+            api/tt-metalium/worker_config_buffer.hpp
+)
 
 # TODO(afuller): this should be self-describing modules.
 #   For now just cherry-pick all the files I discovered empirally by trying to run a test.
