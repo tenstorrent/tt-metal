@@ -217,7 +217,9 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
+        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+            w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
+        )
         w3_out = ttnn.linear(
             x,
             self.w3,
@@ -231,18 +233,9 @@ class TtLlamaMLP(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # ttnn.deallocate(x)
-
-        try:
-            w1_out_reduced = self.tt_ccl.line_reduce_scatter(
-                w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1", dim=3
-            )
-            w3_out_reduced = self.tt_ccl.line_reduce_scatter(
-                w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
-            )
-
-        except Exception as e:
-            print(e)
-            self.tt_ccl.close()
+        w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+            w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
+        )
 
         w2_in = ttnn.mul(
             w1_out_reduced,
