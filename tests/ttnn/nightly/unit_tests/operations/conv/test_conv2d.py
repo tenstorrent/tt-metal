@@ -100,6 +100,7 @@ def run_conv(
     transpose_shards=True,  # https://github.com/tenstorrent/tt-metal/issues/17897
     fp32_accum=False,
     packer_l1_acc=False,
+    input_layout=ttnn.ROW_MAJOR_LAYOUT,
     output_layout=ttnn.TILE_LAYOUT,
     deallocate_activation=False,
     groups=1,
@@ -206,6 +207,7 @@ def run_conv(
         torch_input_tensor,
         activations_dtype if activations_dtype == ttnn.float32 else ttnn.bfloat16,
         mesh_mapper=input_mesh_mapper,
+        layout=input_layout,
     )
 
     conv_config = ttnn.Conv2dConfig(
@@ -1863,24 +1865,25 @@ def test_unet_conv_groups_2_wh(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant, in_place",
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant, in_place, input_layout",
     (
-        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
-        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
-        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False),
-        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False),
-        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False),
-        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False),
-        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
-        (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
-        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, True),
-        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False, False),
+        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.ROW_MAJOR_LAYOUT),
+        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.ROW_MAJOR_LAYOUT),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.ROW_MAJOR_LAYOUT),
+        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
+        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
+        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
+        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
+        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False, ttnn.ROW_MAJOR_LAYOUT),
+        (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.ROW_MAJOR_LAYOUT),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False, ttnn.ROW_MAJOR_LAYOUT),
+        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, True, ttnn.ROW_MAJOR_LAYOUT),
+        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, True, ttnn.TILE_LAYOUT),
+        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False, False, ttnn.ROW_MAJOR_LAYOUT),
     ),
 )
 @pytest.mark.parametrize(
@@ -1914,6 +1917,7 @@ def test_unet_conv_groups_4_6_wh(
     shard_layout,
     config_override,
     use_shallow_conv_variant,
+    input_layout,
     output_layout,
     groups,
     in_place,
@@ -1946,6 +1950,7 @@ def test_unet_conv_groups_4_6_wh(
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
         transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
+        input_layout=input_layout,
         output_layout=output_layout,
         groups=groups,
         in_place=in_place,
