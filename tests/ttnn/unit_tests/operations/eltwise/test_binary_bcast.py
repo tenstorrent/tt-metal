@@ -1830,6 +1830,13 @@ def test_binary_sharded_invalid_row_major_layout(
 
 
 @pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    (
+        [torch.bfloat16, ttnn.bfloat16],
+        [torch.int32, ttnn.int32],
+    ),
+)
+@pytest.mark.parametrize(
     "a_shape, b_shape, shard_type, shard_size, core_range",
     (
         [
@@ -1848,7 +1855,9 @@ def test_binary_sharded_invalid_row_major_layout(
         ],
     ),
 )
-def test_binary_sharded_row_major_layout(a_shape, b_shape, shard_type, shard_size, core_range, device):
+def test_binary_sharded_row_major_layout(
+    dtype_pt, dtype_tt, a_shape, b_shape, shard_type, shard_size, core_range, device
+):
     torch.manual_seed(0)
     a_sharded_config = ttnn.create_sharded_memory_config(
         shard_size,
@@ -1865,11 +1874,11 @@ def test_binary_sharded_row_major_layout(a_shape, b_shape, shard_type, shard_siz
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
-    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
     a_tt = ttnn.from_torch(
         a_pt,
-        dtype=ttnn.bfloat16,
+        dtype=dtype_tt,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=a_sharded_config,
@@ -1877,7 +1886,7 @@ def test_binary_sharded_row_major_layout(a_shape, b_shape, shard_type, shard_siz
 
     b_tt = ttnn.from_torch(
         b_pt,
-        dtype=ttnn.bfloat16,
+        dtype=dtype_tt,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=b_sharded_config,
