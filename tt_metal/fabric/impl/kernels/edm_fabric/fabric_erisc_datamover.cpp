@@ -977,10 +977,14 @@ template <size_t NUM_SENDER_CHANNELS, uint8_t SENDER_NUM_BUFFERS>
 void __attribute__((noinline)) wait_for_static_connection_to_ready(
     std::array<tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>&
         local_sender_channel_worker_interfaces) {
+    DPRINT << "wait_for_static_connection_to_ready\n";
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         if (sender_ch_live_check_skip[i]) {
+            DPRINT << "Initial Liveness check for channel " << (uint32_t)i << " skipped\n";
             while (!connect_is_requested(*local_sender_channel_worker_interfaces[i].connection_live_semaphore));
+            DPRINT << "\tpassed\n";
             establish_connection(local_sender_channel_worker_interfaces[i]);
+            DPRINT << "\tcompleting connection establishment\n";
         }
     }
 }
@@ -1359,8 +1363,6 @@ void kernel_main() {
         }
     }
 
-    wait_for_static_connection_to_ready(local_sender_channel_worker_interfaces);
-
     if constexpr (is_handshake_sender) {
         erisc::datamover::handshake::sender_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
     } else {
@@ -1391,6 +1393,8 @@ void kernel_main() {
                 tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
         }
     }
+
+    wait_for_static_connection_to_ready(local_sender_channel_worker_interfaces);
 
     //////////////////////////////
     //////////////////////////////
