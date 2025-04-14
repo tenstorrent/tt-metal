@@ -59,7 +59,14 @@ Cluster& MetalContext::get_cluster() {
     return *cluster_;
 }
 
-Hal& MetalContext::hal() {
+const llrt::RunTimeOptions& MetalContext::rtoptions() const { return rtoptions_; }
+
+const Cluster& MetalContext::get_cluster() const {
+    TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
+    return *cluster_;
+}
+
+const Hal& MetalContext::hal() const {
     TT_FATAL(hal_, "Trying to get hal before intializing it.");
     return *hal_;
 }

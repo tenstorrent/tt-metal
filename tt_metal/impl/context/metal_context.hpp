@@ -36,7 +36,9 @@ public:
 
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
-    Hal& hal();
+    const Cluster& get_cluster() const;
+    const llrt::RunTimeOptions& rtoptions() const;
+    const Hal& hal() const;
     dispatch_core_manager& get_dispatch_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
 

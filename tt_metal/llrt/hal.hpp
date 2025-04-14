@@ -206,7 +206,6 @@ public:
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
     CoreType get_core_type(uint32_t programmable_core_type_index) const;
     uint32_t get_processor_classes_count(std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const;
-    uint32_t get_processor_class_type_index(HalProcessorClassType processor_class);
     uint32_t get_processor_types_count(
         std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const;
 
@@ -232,15 +231,15 @@ public:
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
-    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
+    uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) const {
         return relocate_func_(addr, local_init_addr);
     }
 
-    uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) { return erisc_iram_relocate_func_(addr); }
+    uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }
 
-    uint32_t valid_reg_addr(uint32_t addr) { return valid_reg_addr_func_(addr); }
+    uint32_t valid_reg_addr(uint32_t addr) const { return valid_reg_addr_func_(addr); }
 
-    uint32_t get_stack_size(uint32_t type) { return stack_size_func_(type); }
+    uint32_t get_stack_size(uint32_t type) const { return stack_size_func_(type); }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }

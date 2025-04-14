@@ -88,7 +88,7 @@ inline std::string get_soc_description_file(
 }  // namespace
 namespace tt {
 
-Cluster::Cluster(llrt::RunTimeOptions& rtoptions, tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
+Cluster::Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
     ZoneScoped;
     log_info(tt::LogDevice, "Opening user mode device driver");
 

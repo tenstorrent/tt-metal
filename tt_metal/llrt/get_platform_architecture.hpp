@@ -48,7 +48,7 @@ namespace tt::tt_metal {
  * @see tt::get_arch_from_string
  * @see PCIDevice::enumerate_devices_info
  */
-inline tt::ARCH get_platform_architecture(tt::llrt::RunTimeOptions& rtoptions) {
+inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtoptions) {
     auto arch = tt::ARCH::Invalid;
     if (rtoptions.get_simulator_enabled()) {
         tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
