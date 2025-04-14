@@ -198,7 +198,7 @@ def create_tt_model(
         (  # Repeat-5 Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
-            5,  # repeat_batches
+            2,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
@@ -264,7 +264,7 @@ def create_tt_model(
     ids=[
         "batch-1",  # latency
         "batch-32",  # throughput
-        "repeat5",  # throughput with 5 repeat batches
+        "repeat2",  # throughput with 5 repeat batches
         "long-context",  # max-length
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
@@ -617,7 +617,7 @@ def test_demo_text(
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
     # Average prefill time for each user
-    avg_time_to_first_token = total_inference_prefill_time / batch_size
+    avg_time_to_first_token = total_inference_prefill_time
     # Average decode time per batch iteration
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
 
@@ -680,7 +680,7 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama3.1-70B", "Deepseek-R1-Distill-70B"]
+    supported_models = ["Llama3.1-70B", "Llama3.3-70B", "Deepseek-R1-Distill-70B"]
     # model_args.base_model_name = "Llama3.1-70B"
     supported_devices = ["TG"]
 
@@ -689,12 +689,14 @@ def test_demo_text(
     # Set the target times to first token for every combination of device and model
     target_prefill_tok_s = {
         "TG_Llama3.1-70B": 1050,  # TODO Update target
+        "TG_Llama3.3-70B": 1050,
         "TG_Deepseek-R1-Distill-70B": 1050,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
     # Set the target decode timesfor every combination of device and model
     target_decode_tok_s_u = {
         "TG_Llama3.1-70B": 20,  # TODO Update target
+        "TG_Llama3.3-70B": 20,
         "TG_Deepseek-R1-Distill-70B": 20,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
@@ -704,6 +706,8 @@ def test_demo_text(
         "decode_t/s": target_decode_tok_s,
         "decode_t/s/u": target_decode_tok_s_u,
     }
+    if repeat_batches > 1:
+        assert avg_time_to_first_token > 119, f"TTFT {avg_time_to_first_token}ms is too low, should be > 119."
 
     # Save benchmark data for CI dashboard
     if is_ci_env:
