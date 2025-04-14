@@ -55,6 +55,7 @@ jobs:
         run: |
           pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick";
           pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "quick";
+          pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py;
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
