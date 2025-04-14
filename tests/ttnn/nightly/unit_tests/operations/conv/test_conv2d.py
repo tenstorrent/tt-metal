@@ -266,6 +266,7 @@ def run_conv(
         return_output_dim=True,
         return_weights_and_bias=True,
     )
+
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,

@@ -42,7 +42,7 @@ template <typename T>
 Result conv2d(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    ttnn::Tensor& weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -54,7 +54,7 @@ Result conv2d(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
+    OptionalTensor bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
@@ -116,7 +116,7 @@ template <typename T>
 Result conv2d_DRAM(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    ttnn::Tensor& weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -128,7 +128,7 @@ Result conv2d_DRAM(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
+    OptionalTensor bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
@@ -159,7 +159,7 @@ Result conv2d_DRAM(
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
     ttnn::Tensor weight_tensor_on_device;
-    std::optional<ttnn::Tensor> bias_tensor_on_device;
+    OptionalTensor bias_tensor_on_device;
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
     TT_FATAL(
@@ -313,7 +313,7 @@ Result conv2d_DRAM(
                 std::array<uint32_t, 4>({pad_top, pad_bottom, pad_left, pad_right}),
                 dilation,
                 groups,
-                first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
+                first_run ? bias_tensor : bias_tensor_on_device,
                 conv_config_l1,
                 compute_config_,
                 memory_config_);
@@ -347,7 +347,7 @@ template <typename T>
 Result conv2d_L1(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    ttnn::Tensor& weight_tensor,
     T* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -359,7 +359,7 @@ Result conv2d_L1(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
+    OptionalTensor bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
@@ -372,7 +372,9 @@ Result conv2d_L1(
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
-
+    if (bias_tensor.has_value()) {
+        log_info(" Start Bias Tensor = {}", bias_tensor->get());
+    }
     bool auto_shard = false;
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
         // In this case we deduce the shard layout.
@@ -427,14 +429,14 @@ Result conv2d_L1(
         compute_grid_size);
 
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
-    ttnn::Tensor weight_tensor_on_device = weight_tensor;
-    std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (!weight_is_on_device || conv_config.always_preprocess_weights) {
+        std::optional<ttnn::Tensor> bias_tensor_on_device = std::nullopt;
+        log_info("Preparing weights");
         // prepare weights in desired layout and move to device
 
         // TODO: Implement heuristic to decide if weights should be preprocessed on device.
         if (!conv_config.preprocess_weights_on_device) {
-            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
+            tie(weight_tensor, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
                 weight_tensor,
                 bias_tensor,
                 conv_config.input_channels_alignment,
@@ -450,7 +452,7 @@ Result conv2d_L1(
                 bias_tensor.has_value(),
                 true);
         } else {
-            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
+            tie(weight_tensor, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
                 weight_tensor,
                 bias_tensor,
                 conv_config.input_channels_alignment,
@@ -465,6 +467,9 @@ Result conv2d_L1(
                 input_width,
                 bias_tensor.has_value());
         }
+        if (bias_tensor_on_device.has_value()) {
+            bias_tensor->get() = bias_tensor_on_device.value();
+        }
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     if (mm_conv) {
@@ -474,6 +479,9 @@ Result conv2d_L1(
     // call optimized conv op or matmul micro op
     bool input_is_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
+    if (bias_tensor.has_value()) {
+        log_info(" Conv Bias Tensor = {}", bias_tensor->get());
+    }
 
     if (!mm_conv) {
         // call halo op
@@ -528,8 +536,8 @@ Result conv2d_L1(
         // call conv micro op
         auto conv_output = optimized_conv_new(
             input_tensor_post_tm,
-            weight_tensor_on_device,
-            bias_tensor_on_device,
+            weight_tensor,
+            bias_tensor.has_value() ? std::optional<ttnn::Tensor>(bias_tensor->get()) : std::nullopt,
             sliding_window_config,
             out_channels,
             groups,
@@ -548,7 +556,7 @@ Result conv2d_L1(
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
         }
-        return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        return {conv_output, output_height, output_width, weight_tensor, bias_tensor};
     } else {
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
@@ -572,8 +580,8 @@ Result conv2d_L1(
         }
         Tensor matmul_output = ttnn::linear(
             input_tensor_post_tm,
-            weight_tensor_on_device,
-            bias_tensor_on_device,
+            weight_tensor,
+            bias_tensor.has_value() ? std::optional<ttnn::Tensor>(bias_tensor->get()) : std::nullopt,
             false,
             false,
             mm_output_memory_config,
@@ -585,14 +593,14 @@ Result conv2d_L1(
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
 
-        return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        return {matmul_output, output_height, output_width, weight_tensor, bias_tensor};
     }
 }
 
 template Result conv2d<IDevice>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    ttnn::Tensor& weight_tensor,
     IDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -604,7 +612,7 @@ template Result conv2d<IDevice>(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
+    OptionalTensor bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
@@ -613,7 +621,7 @@ template Result conv2d<IDevice>(
 template Result conv2d<MeshDevice>(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    ttnn::Tensor& weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -625,7 +633,7 @@ template Result conv2d<MeshDevice>(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
+    OptionalTensor bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
@@ -634,7 +642,7 @@ template Result conv2d<MeshDevice>(
 Result Conv2dOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    ttnn::Tensor& weight_tensor,
     IDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -646,7 +654,7 @@ Result Conv2dOperation::invoke(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
+    OptionalTensor bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
@@ -676,7 +684,7 @@ Result Conv2dOperation::invoke(
 Result Conv2dOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
+    ttnn::Tensor& weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -688,7 +696,7 @@ Result Conv2dOperation::invoke(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
+    OptionalTensor bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
