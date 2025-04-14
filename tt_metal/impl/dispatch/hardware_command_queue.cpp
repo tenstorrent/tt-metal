@@ -359,11 +359,8 @@ void HWCommandQueue::enqueue_write_to_core_l1(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     while (size_bytes > 0) {
-        const uint32_t size_bytes_to_write = std::min(
-            size_bytes,
-            DispatchMemMap::get(this->get_dispatch_core_type(), this->device_->num_hw_cqs())
-                    .max_prefetch_command_size() -
-                calculate_max_data_size_bytes(this->get_dispatch_core_type()));
+        const uint32_t size_bytes_to_write =
+            std::min(size_bytes, calculate_max_data_size_bytes(this->get_dispatch_core_type()));
 
         device_dispatch::L1WriteDispatchParams dispatch_params{
             virtual_core,
