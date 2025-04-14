@@ -126,21 +126,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         "Block size must be a multiple of tile height (was {})",
         clamped_block_size_height);
 
-    uint32_t input_to_writer_cb_id0 = cb_indices.src_cb_id;
-    uint32_t input_to_writer_cb_id1 = cb_indices.src_cb_id;
-    if (!skip_untilize) {
-        cb_indices.untilize_out_cb_id0 = cb_indices.get_next_cb_id();
-        cb_indices.untilize_out_cb_id1 = cb_indices.get_next_cb_id();
-        input_to_writer_cb_id0 = cb_indices.untilize_out_cb_id0;
-        input_to_writer_cb_id1 = cb_indices.untilize_out_cb_id1;
-        const uint32_t output_ntiles = (clamped_block_size_height / TILE_HEIGHT) * ntiles_per_block;
-        const uint32_t untilize_out_cb_num_pages = ENABLE_UNTILIZE_DOUBLE_BUFFERING ? 2 * output_ntiles : output_ntiles;
-        auto untilize_out_cb0 = create_circular_buffer(
-            program, all_cores, cb_indices.untilize_out_cb_id0, out_df, untilize_out_cb_num_pages, out_tile_size);
-        auto untilize_out_cb1 = create_circular_buffer(
-            program, all_cores, cb_indices.untilize_out_cb_id1, out_df, untilize_out_cb_num_pages, out_tile_size);
-    }
-
     uint32_t out_cb_pagesize = out_stick_nbytes;
     uint32_t out_cb_npages = max_out_nsticks_per_core;
     cb_indices.out_cb_id = cb_indices.get_next_cb_id();
@@ -157,7 +142,20 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
     uint32_t pagesize = 0;
 
+    uint32_t input_to_writer_cb_id0 = cb_indices.src_cb_id;
+    uint32_t input_to_writer_cb_id1 = cb_indices.src_cb_id;
     if (!skip_untilize) {
+        cb_indices.untilize_out_cb_id0 = cb_indices.get_next_cb_id();
+        cb_indices.untilize_out_cb_id1 = cb_indices.get_next_cb_id();
+        input_to_writer_cb_id0 = cb_indices.untilize_out_cb_id0;
+        input_to_writer_cb_id1 = cb_indices.untilize_out_cb_id1;
+        const uint32_t output_ntiles = (clamped_block_size_height / TILE_HEIGHT) * ntiles_per_block;
+        const uint32_t untilize_out_cb_num_pages = ENABLE_UNTILIZE_DOUBLE_BUFFERING ? 2 * output_ntiles : output_ntiles;
+        auto untilize_out_cb0 = create_circular_buffer(
+            program, all_cores, cb_indices.untilize_out_cb_id0, out_df, untilize_out_cb_num_pages, out_tile_size);
+        auto untilize_out_cb1 = create_circular_buffer(
+            program, all_cores, cb_indices.untilize_out_cb_id1, out_df, untilize_out_cb_num_pages, out_tile_size);
+
         const std::string compute_kernel_name =
             "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize.cpp";
         const std::vector<uint32_t> compute_ct_args = {
@@ -306,6 +304,7 @@ struct InplaceCBIndices {
     uint32_t padding_config_cb_id = 32;
     uint32_t local_config_cb_id = 32;
     uint32_t remote_config_cb_id = 32;
+    uint32_t untilize_out_cb_id = 32;
     uint32_t get_next_cb_id() { return next_cb_id++; }
 
 private:
@@ -332,8 +331,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "In-place halo only supports row-major inputs for now");
-
     auto input_shape = input_tensor.get_padded_shape();
     auto output_shape = output_tensor.get_padded_shape();
 
@@ -356,17 +353,19 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     uint32_t in_page_size = tt::tt_metal::detail::TileSize(in_df);
     uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
-    uint32_t in_nbytes = datum_size(in_df);
-    in_page_size = input_shard_shape[1] * in_nbytes;
-    input_npages = remapped_input_shard_shape_for_output_grid;
+    const bool skip_untilize = input_tensor.get_layout() == Layout::ROW_MAJOR;
+    bool wide_tensor = ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH;
+    if (skip_untilize) {
+        uint32_t in_nbytes = datum_size(in_df);
+        in_page_size = input_shard_shape[1] * in_nbytes;
+        input_npages = remapped_input_shard_shape_for_output_grid;
+    }
 
     // Construct CBs
     InplaceCBIndices cb_indices = InplaceCBIndices();
     cb_indices.src_cb_id = cb_indices.get_next_cb_id();
     auto src_cb =
         create_circular_buffer(program, all_cores, cb_indices.src_cb_id, in_df, input_npages, in_page_size, src_buffer);
-
-    uint32_t input_to_writer_cb_id = cb_indices.src_cb_id;
 
     uint32_t out_cb_pagesize = out_stick_nbytes;
     uint32_t out_cb_npages = max_out_nsticks_per_core;
@@ -384,6 +383,49 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     uint32_t config_nbytes =
         tt::datum_size(kernel_config_df) * 2;  // each config is a pair "start, size", so double the size
     uint32_t pagesize = 0;
+
+    uint32_t temp_cb_id = 0;
+    uint32_t input_to_writer_cb_id = cb_indices.src_cb_id;
+    if (!skip_untilize) {
+        cb_indices.untilize_out_cb_id = cb_indices.get_next_cb_id();
+        input_to_writer_cb_id = cb_indices.untilize_out_cb_id;
+        // output of untilize from compute kernel goes into this CB
+        uint32_t output_ntiles = ntiles_per_block * input_nblocks_per_core;
+        auto untilize_out_cb_config =
+            CircularBufferConfig(output_ntiles * out_tile_size, {{cb_indices.untilize_out_cb_id, out_df}})
+                .set_page_size(cb_indices.untilize_out_cb_id, out_tile_size)
+                .set_globally_allocated_address(*dst_buffer);  // untilize into the dst buffer for in place untilize
+        auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
+        log_debug(
+            tt::LogOp,
+            "CB {} :: npages = {}, pagesize = {}",
+            cb_indices.untilize_out_cb_id,
+            output_ntiles,
+            out_tile_size);
+
+        // compute kernel
+        std::string compute_kernel;
+        std::vector<uint32_t> compute_ct_args;
+        if (wide_tensor) {
+            // wide tensors use a different compute kernel which requires use of a temp buffer for the intermediate
+            // untilized results
+            temp_cb_id = cb_indices.get_next_cb_id();
+            auto temp_cb =
+                create_circular_buffer(program, all_cores, temp_cb_id, out_df, ntiles_per_block, out_tile_size);
+            log_debug(
+                tt::LogOp,
+                "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
+                ntiles_per_block,
+                MAX_PACK_UNTILIZE_WIDTH);
+            compute_ct_args = {input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, temp_cb_id};
+            compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        } else {
+            compute_ct_args = {input_nblocks_per_core, ntiles_per_block, cb_indices.src_cb_id, input_to_writer_cb_id};
+            compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
+        }
+        KernelHandle untilize_kernel_id =
+            CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});
+    }
 
     TT_ASSERT(padding_config.get_dtype() == DataType::UINT16);
     TT_ASSERT(local_config.get_dtype() == DataType::UINT16);
@@ -432,6 +474,9 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     std::vector<uint32_t> output_tensor_cores_x;
     std::vector<uint32_t> output_tensor_cores_y;
     int32_t in_out_buffer_start_delta = max_out_nsticks_per_core - input_npages;
+    if (!skip_untilize) {
+        in_out_buffer_start_delta = 0;
+    }
     const auto delta = output_tensor.buffer()->aligned_size_per_bank() - input_tensor.buffer()->aligned_size_per_bank();
     TT_ASSERT(
         src_buffer->sharded_page_address(0, 0) == dst_buffer->sharded_page_address(0, 0) + delta,
@@ -489,7 +534,10 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         true,
         cores.size(),
         semaphore_id,
-        max_out_nsticks_per_core};
+        in_out_buffer_start_delta,
+        temp_cb_id,
+        ntiles_per_block,
+        input_nblocks_per_core};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = cb_indices.local_config_cb_id;
