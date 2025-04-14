@@ -19,6 +19,8 @@ struct ReadL1DataDescriptor {
     uint32_t size_bytes;
 };
 
+uint32_t calculate_max_data_size_bytes(const CoreType& dispatch_core_type);
+
 namespace device_dispatch {
 
 struct L1ReadDispatchParams {

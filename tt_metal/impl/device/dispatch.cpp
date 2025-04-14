@@ -9,6 +9,11 @@
 
 namespace tt {
 namespace tt_metal {
+
+uint32_t calculate_max_data_size_bytes(const CoreType& dispatch_core_type) {
+    return DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size() -
+           (hal_ref.get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
+}
 namespace device_dispatch {
 
 void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_params) {
@@ -103,7 +108,7 @@ void read_l1_data_from_completion_queue(
     SystemMemoryManager& sysmem_manager,
     std::atomic<bool>& exit_condition) {
     uint32_t completion_queue_read_offset = sizeof(CQDispatchCmd);
-    const uint32_t num_bytes_to_read = read_descriptor.size_bytes - completion_queue_read_offset;
+    const uint32_t num_bytes_to_read = read_descriptor.size_bytes;
     uint32_t num_bytes_read = 0;
     while (num_bytes_read < num_bytes_to_read) {
         const uint32_t completion_queue_write_ptr_and_toggle =
@@ -139,7 +144,8 @@ void read_l1_data_from_completion_queue(
             channel);
 
         num_bytes_read += num_bytes_to_copy;
-        const uint32_t num_pages_read = div_up(num_bytes_to_copy, DispatchSettings::TRANSFER_PAGE_SIZE);
+        const uint32_t num_pages_read =
+            div_up(num_bytes_to_copy + completion_queue_read_offset, DispatchSettings::TRANSFER_PAGE_SIZE);
         sysmem_manager.completion_queue_pop_front(num_pages_read, cq_id);
         completion_queue_read_offset = 0;
     }
