@@ -13,9 +13,9 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 from models.utility_functions import (
     profiler,
 )
-from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
-from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8xModel
-from models.experimental.functional_yolov8x.reference import yolov8x
+from models.experimental.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
+from models.experimental.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel
+from models.experimental.yolov8x.reference import yolov8x
 
 
 def get_expected_times(name):
@@ -46,7 +46,7 @@ def test_yolov8x(device, input_tensor, use_weights_from_ultralytics):
     parameters = custom_preprocessor(device, state_dict)
 
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_model = YOLOv8xModel(device, parameters)
+    ttnn_model = TtYolov8xModel(device, parameters)
     logger.info(f"Compiling model with warmup run")
     profiler.start(f"inference_and_compile_time")
     ttnn_output_tensor = ttnn_model(ttnn_input)
