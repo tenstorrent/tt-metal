@@ -83,24 +83,6 @@ class TtTransformerBlock(LightweightModule):
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
-                output_mem_config=None,
-            ),
-            args,
-            TG=args.is_galaxy,
-            tt_ccl=tt_ccl,
-        )
-        self.min_attention_norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", layer_num),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="attention_norm",
-                is_distributed=self.args.is_distributed_norm,
-                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 output_mem_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
             ),
             args,
@@ -108,24 +90,6 @@ class TtTransformerBlock(LightweightModule):
             tt_ccl=tt_ccl,
         )
         self.ff_norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", layer_num),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="ffn_norm",
-                is_distributed=self.args.is_distributed_norm,
-                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
-                output_mem_config=None,
-            ),
-            args,
-            TG=args.is_galaxy,
-            tt_ccl=tt_ccl,
-        )
-        self.min_ff_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
@@ -173,7 +137,7 @@ class TtTransformerBlock(LightweightModule):
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         try:
-            attn_in_sharded, h = self.min_attention_norm(x, None, mode)
+            attn_in_sharded, h = self.attention_norm(x, None, mode)
         except Exception as e:
             print(e)
             print("failed to run attention norm")
@@ -199,7 +163,7 @@ class TtTransformerBlock(LightweightModule):
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
         # x.deallocate(True)
         # attn_out.deallocate(True)
-        ff_in_sharded, _ = self.min_ff_norm(h, None, mode)
+        ff_in_sharded, _ = self.ff_norm(h, None, mode)
         # print("ff norm done", ff_in)
         # if TG and mode == "decode":
         #     ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])

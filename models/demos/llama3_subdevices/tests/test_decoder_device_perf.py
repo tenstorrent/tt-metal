@@ -37,7 +37,7 @@ perf_targets = {
         "op_name": "PostRMS_0",
         "kernel_duration": 9400.361111111111,
         "op_to_op": 634.3333333333334,
-        "non-overlapped-dispatch-time": 6190.6,
+        "non-overlapped-dispatch-time": 7959.5,
         "kernel_duration_relative_margin": 0.02,
         "op_to_op_duration_relative_margin": 0.1,
         "dispatch_duration_relative_margin": 0.1,

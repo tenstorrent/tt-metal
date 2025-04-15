@@ -91,7 +91,7 @@ void kernel_main() {
         uint64_t noc0_dest_noc_addr =
             get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
-        semaphore_and_write_and_advance_local_read_address_for_fabric_write(
+        fused_write_atomic_and_advance_local_read_address_for_fabric_write(
             noc0_dest_noc_addr,
             pkt_hdr_forward,
             pkt_hdr_backward,

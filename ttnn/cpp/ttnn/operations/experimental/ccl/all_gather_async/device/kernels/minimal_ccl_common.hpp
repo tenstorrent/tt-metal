@@ -47,7 +47,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     l1_read_addr += payload_size_bytes;
 }
 
-FORCE_INLINE void semaphore_and_write_and_advance_local_read_address_for_fabric_write(
+FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
