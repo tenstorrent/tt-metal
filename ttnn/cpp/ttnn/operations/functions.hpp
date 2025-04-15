@@ -348,35 +348,24 @@ static Tensor prod_result_computation_WH_B0(
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(1);  // output
     auto input_buffer = detail::to_host_buffer<T>(input_tensor);
     const ttnn::Shape input_tensor_strides = input_tensor.strides();
-    auto result = static_cast<T>(1.0f);
-    // need to access the last 4 rows and alternating columns of index 17 ,19, 21, 23, 25, 27, 29, 31
-    for (uint32_t i = s_a[0] - 1; i < s_a[0]; i++) {
-        for (int32_t j = s_a[1] - 1; j < s_a[1]; j++) {
-            for (int32_t k = s_a[2] - 32; k < s_a[2]; k++) {  // access last tile
-                for (int32_t l = s_a[3] - 32; l < s_a[3]; l++) {
-                    auto input_index =
-                        l + input_tensor_strides[2] * k + input_tensor_strides[1] * j + input_tensor_strides[0] * i;
-                    if (k >= s_a[2] - 4 && (l == s_a[3] - 15 || l == s_a[3] - 13 || l == s_a[3] - 11 ||
-                                            l == s_a[3] - 9 || l == s_a[3] - 7 || l == s_a[3] - 5 || l == s_a[3] - 3 ||
-                                            l == s_a[3] - 1)) {  // to access 4*16 elements placed alternatively
-                                                                 // starting from index 17W in TILE layout
-                        result = result * static_cast<T>(input_buffer[input_index]);
-                    }
-                }
-            }
-        }
+    T result = static_cast<T>(1.0f);
+
+    // Calculate the product of all elements in the last tile
+    for (int i = 0; i < tt::constants::TILE_HW; ++i) {
+        result = result * static_cast<T>(input_buffer[i]);
     }
+
     owned_buffer[0] = result;  // output will only have one element - the product of the entire tensor
     auto output = Tensor(
                       OwnedStorage{owned_buffer},
                       TensorSpec(
-                          ttnn::Shape({1, 1, 1, 1}),
+                          ttnn::Shape({1}),
                           TensorLayout::fromPaddedShape(
                               data_type,
                               PageConfig(Layout::ROW_MAJOR),
                               MemoryConfig{},
-                              input_tensor.get_logical_shape(),
-                              input_tensor.get_padded_shape())))
+                              ttnn::Shape({1}),
+                              ttnn::Shape({tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}))))
                       .to_layout(layout);
     if (device != nullptr) {
         output = output.to_device(device, output_mem_config);
