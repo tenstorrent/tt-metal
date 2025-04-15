@@ -27,9 +27,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([0, 0, 0], 1),
         ([1, 32, 64], 1),
         ([1, 1024, 32], 0),
-        ([1, 1024, 32], 1),  # Fail due to rounding errors ?
-        ([260, 1, 1], 0),  # Fail due to rounding errors ?
-        ([1024, 1, 32], 0),  # Fail due to rounding errors ?
+        ([1, 1024, 32], 1),
+        ([260, 1, 1], 0),
+        ([1024, 1, 32], 0),
         ([1, 1024, 32], 2),
         ([64, 1, 32], 1),
         ([64, 64, 1], 1),
@@ -54,7 +54,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (torch.float32, None),
         (torch.bfloat16, ttnn.bfloat16),
         (torch.float32, ttnn.float32),
-        # (torch.float32, ttnn.bfloat16)
     ],
 )
 def test_cumsum(size, dim, dtype, device):
@@ -62,8 +61,10 @@ def test_cumsum(size, dim, dtype, device):
 
     (host_dtype, dev_dtype) = dtype
 
-    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch.float32)
-    # torch_input_tensor = torch.randint(low=-2, high=3, size=size, dtype=torch.float32)
+    # Generate integer input on [-2; 2];
+    # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
+    # which are not handled yet
+    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=host_dtype)
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=dev_dtype, layout=ttnn.Layout.TILE)
 
     output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dev_dtype)
@@ -75,11 +76,7 @@ def test_cumsum(size, dim, dtype, device):
 
     torch_output = ttnn.to_torch(output_tensor, dtype=host_dtype)
 
-    print(f"torch input = \n{torch_input_tensor}")
-    print(f"torch output = \n{torch_output}")
-
     expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=host_dtype)
-    print(f"expected output = \n{expected_output}")
 
     assert_with_pcc(expected_output, torch_output)
 
@@ -102,9 +99,9 @@ def test_cumsum(size, dim, dtype, device):
         ([0, 0, 0], 1),
         ([1, 32, 64], 1),
         ([1, 1024, 32], 0),
-        ([1, 1024, 32], 1),  # Fail due to rounding errors ?
-        ([260, 1, 1], 0),  # Fail due to rounding errors ?
-        ([1024, 1, 32], 0),  # Fail due to rounding errors ?
+        ([1, 1024, 32], 1),
+        ([260, 1, 1], 0),
+        ([1024, 1, 32], 0),
         ([1, 1024, 32], 2),
         ([64, 1, 32], 1),
         ([64, 64, 1], 1),
@@ -129,7 +126,6 @@ def test_cumsum(size, dim, dtype, device):
         (torch.float32, None),
         (torch.bfloat16, ttnn.bfloat16),
         (torch.float32, ttnn.float32),
-        # (torch.float32, ttnn.bfloat16)
     ],
 )
 def test_cumsum_with_preallocated_output(size, dim, dtype, device):

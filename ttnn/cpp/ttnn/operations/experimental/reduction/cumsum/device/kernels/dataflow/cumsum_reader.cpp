@@ -18,16 +18,14 @@ void kernel_main() {
     DPRINT << "[Cumsum Reader] start" << ENDL();
 
     uint32_t input_dram_base_addr = get_arg_val<uint32_t>(0);  // input base addr (DRAM)
-    uint32_t intermed_sram_addr = get_arg_val<uint32_t>(1);    //
-    uint32_t num_rows = get_arg_val<uint32_t>(2);
-    uint32_t tiles_per_row = get_arg_val<uint32_t>(3);  // number of tiles in a row / along axis
-    uint32_t PHi = get_arg_val<uint32_t>(4);
-    uint32_t PLo = get_arg_val<uint32_t>(5);
-    uint32_t HtWt = get_arg_val<uint32_t>(6);
+    uint32_t num_rows = get_arg_val<uint32_t>(1);
+    uint32_t tiles_per_row = get_arg_val<uint32_t>(2);  // number of tiles in a row / along axis
+    uint32_t PHi = get_arg_val<uint32_t>(3);
+    uint32_t PLo = get_arg_val<uint32_t>(4);
+    uint32_t HtWt = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t cb_out = tt::CBIndex::c_0;
     constexpr uint32_t cb_zero = tt::CBIndex::c_16;
-    // constexpr uint32_t cb_intermed = tt::CBIndex::c_24;
 
     const auto& input_data_format = get_dataformat(cb_out);
 
@@ -47,13 +45,19 @@ void kernel_main() {
 
     uint32_t bytes_per_element = 4;
     switch (input_data_format) {
-        case DataFormat::Float32: scaler.f32 = 0.f; bytes_per_element = 4;
+        case DataFormat::Float32:
+            scaler.f32 = 0.f;
+            bytes_per_element = 4;
+            break;
         case DataFormat::Float16_b:
         case DataFormat::Float16:
             scaler.i32 = 0;  // {bin(0.h), bin(0.h)} == {0x0, 0x0} == 0u32
             bytes_per_element = 2;
             break;
-        default: scaler.i32 = 0; bytes_per_element = 4;
+        default:
+            scaler.i32 = 0;
+            bytes_per_element = 4;
+            break;
     }
 
     uint32_t tile_card = ublock_size_bytes / bytes_per_element;
@@ -78,7 +82,6 @@ void kernel_main() {
         for (unsigned i1 = 0; i1 < PHi * HtWt; i1++) {
             for (unsigned j = 0; j < tiles_per_row; j++) {
                 uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, PLo, PHi, HtWt);
-                // DPRINT << "[Cumsum Reader] tile = " << tileid << ENDL();
 
                 cb_reserve_back(cb_out, 1);
 

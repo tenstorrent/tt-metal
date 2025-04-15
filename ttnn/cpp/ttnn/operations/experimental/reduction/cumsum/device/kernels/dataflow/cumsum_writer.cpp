@@ -15,8 +15,6 @@ static inline unsigned get_tile_id(
 }
 
 void kernel_main() {
-    // DPRINT << "[Cumsum Writer] start" << ENDL();
-
     uint32_t output_dram_base_addr = get_arg_val<uint32_t>(0);  // output base addr (DRAM)
     uint32_t num_rows = get_arg_val<uint32_t>(1);
     uint32_t tiles_per_row = get_arg_val<uint32_t>(2);  // number of tiles in a row / along axis
@@ -49,13 +47,10 @@ void kernel_main() {
     InterleavedAddrGenFast<true> dram_output_addrg = {
         .bank_base_address = output_dram_base_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
-    DPRINT << "[Cumsum Writer]: bytes/element = " << bytes_per_element << ENDL();
-
     for (unsigned i0 = 0; i0 < PLo; i0++) {
         for (unsigned i1 = 0; i1 < PHi * HtWt; i1++) {
             for (unsigned j = 0; j < tiles_per_row; j++) {
                 uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, PLo, PHi, HtWt);
-                // DPRINT << "[Cumsum writer] tileid = " << tileid << ENDL();
 
                 // Read tile from Circularbuffer
                 cb_wait_front(cb_in, 1);

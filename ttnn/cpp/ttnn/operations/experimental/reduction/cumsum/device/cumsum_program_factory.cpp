@@ -28,8 +28,6 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    // Scaffold: No 'real' program for now
-
     using namespace tt;
 
     // Device setup
@@ -37,7 +35,6 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     IDevice* device = output_tensor.device();
 
     // Parameters setup
-
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_dtype = input_tensor.dtype();
     const auto& output_dtype = output_tensor.dtype();
@@ -48,13 +45,10 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     const auto& tensor_shape = input_tensor.get_padded_shape();
     const uint32_t tensor_rank = tensor_shape.rank();
     int32_t dim = operation_attributes.dim;
+
     if (dim < 0) {  // Handle cases where dim is negative
         dim += tensor_rank;
     }
-
-    // 1) If 2D or 1D => convert to 3D. Then finally convert back after processing
-    // 2) If dim is x or y axis => permute dim with axis=0 and then do operation on dim=0
-    // Then permute back matching axes
 
     TT_FATAL(input_dtype == output_dtype, "Type conversion not supported yet");
 
@@ -85,13 +79,6 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     // Buffer setup
     const uint32_t single_tile_size = output_tensor.element_size() * TILE_SIZE;
 
-    InterleavedBufferConfig dram_config{
-        .device = device, .size = single_tile_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
-    InterleavedBufferConfig sram_config{
-        .device = device, .size = single_tile_size, .page_size = single_tile_size, .buffer_type = BufferType::L1};
-
-    std::shared_ptr<Buffer> tmp_sram_buffer = CreateBuffer(sram_config);
-
     uint32_t src_bank_id = 0;
     uint32_t dst_bank_id = 0;
 
@@ -121,6 +108,7 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     CreateCircularBuffer(program, core, cb_zero_config);
     CreateCircularBuffer(program, core, cb_intermed_config);
 
+    // Create kernels
     KernelHandle cumsum_reader_handle_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/dataflow/cumsum_reader.cpp",
@@ -154,6 +142,11 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     const uint32_t num_rows = num_tiles / num_tiles_per_row;  // total number of rows in tensor
     const uint32_t HtWt = xy_volume / TILE_SIZE;              // padded shape => xy_volume is multiple of tile_size
 
+    // Depending on tensor rank and dim parameter, we may have to iterative on several tensor axis, with varying offset
+    // To solve this problem (and generalize the approach), we can compute two offsets: for dimensions > dim and for
+    // dimensions < dim We thus two parameters PHi (product High) and PLo (product Low): PHi is the number of iterations
+    // on 'high dims', it is the product of all axes length for dimensions > `dim` (excluding x and y axes) PLo is the
+    // number of iterations on 'low dims', it is the product of all axes length for dimensions < `dim`
     uint32_t PHi = 1;
     uint32_t PLo = 1;
 
@@ -170,7 +163,6 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         core,
         {
             input_tensor.buffer()->address(),
-            tmp_sram_buffer->address(),
             num_rows,
             num_tiles_per_row,
             PHi,
@@ -211,9 +203,10 @@ void CumSumDeviceOperation::SingleCore::override_runtime_arguments(
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& dtype = operation_attributes.dtype;
 
-    TT_FATAL(false, "false");
-
     const auto& input_dtype = input_tensor.get_dtype();
+
+    TT_THROW("override_runtime_arguments() not yet supported");
+
     TT_FATAL(input_dtype == DataType::FLOAT32 || input_dtype == DataType::INT32, "Unsupported input data type");
 
     TT_FATAL(dtype == DataType::FLOAT32 || dtype == DataType::INT32, "Unsupported data type");

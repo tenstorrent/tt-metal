@@ -27,14 +27,12 @@ Tensor CumSumOperation::invoke(
     const auto& input_shape = input_tensor.get_logical_shape();
     int tensor_rank = input_shape.rank();
 
-    // TODO: Handle type conversion (convert input_tensor if necessary)
-    // TODO: Make sure we don't accidentaly modify input
-
     Tensor adjusted_input_tensor = input_tensor;
     const auto& input_dtype = input_tensor.dtype();
-    // if (dtype.has_value() && input_dtype != dtype.value()) {
 
-    // TODO: ttnn::to_dtype() does not seem to work with DeviceStore
+    // TODO: Handle type conversion (convert input_tensor if necessary)
+    // TODO: ttnn::to_dtype() does not seem to work with DeviceStorage (?)
+    // if (dtype.has_value() && input_dtype != dtype.value()) {
     //    auto converted_tensor = ttnn::to_dtype(input_tensor, DataType::BFLOAT16);
     //    adjusted_input_tensor = converted_tensor;
     // }
@@ -50,8 +48,6 @@ Tensor CumSumOperation::invoke(
 
     // If dim is x or y axis (last or second last dimension)
     if (dim == tensor_rank - 1 || dim == tensor_rank - 2) {
-        // NOTE: Handle reshaping/permuting optional output tensor
-
         int initial_tensor_rank = tensor_rank;
         if (initial_tensor_rank <= 2) {
             // reshape tensor => make 3D or 4D
@@ -69,13 +65,15 @@ Tensor CumSumOperation::invoke(
             dim += 2;  // update dim parameter to target updated axis
         }
 
+        // For now, the cumsum does not support `dim` == x or y-axis.
+        // For now, we make the operation compatible by permuting axes if `dim` is either x or y axes.
+
         // Create permutation that just swaps dim with dim=0
         ttnn::SmallVector<int64_t> permutation(tensor_rank);
         std::iota(permutation.begin(), permutation.end(), 0);  // Initialize to [0,1,2,...]
         permutation[0] = dim;                                  // Swap dim with dim=0
         permutation[dim] = 0;
 
-        // Permute dimensions
         Tensor permuted_tensor =
             ttnn::permute(adjusted_input_tensor, permutation, adjusted_input_tensor.memory_config());
 
@@ -87,10 +85,10 @@ Tensor CumSumOperation::invoke(
         // Compute cumsum on permuted tensor (now accumulation is on dim=0)
         Tensor output_tensor = ttnn::prim::cumsum(queue_id, permuted_tensor, 0, dtype, optional_output_tensor);
 
-        // Backward permute to restore original dimension order (same permutation works in reverse)
+        // Apply backward permutation to restore initial shape
         output_tensor = ttnn::permute(output_tensor, permutation, output_tensor.memory_config());
 
-        // if necessary, reshape output to match input shape
+        // if initial input tensor was 1D or 2D, then also reshape output to 1D or 2D
         if (initial_tensor_rank <= 2) {
             output_tensor = ttnn::reshape(output_tensor, input_shape);
         }
