@@ -370,8 +370,6 @@ FORCE_INLINE void send_next_data(
     auto& local_sender_wrptr = sender_worker_interface.local_wrptr;
     auto local_sender_wrptr_buffer_index = local_sender_wrptr.get_buffer_index();
 
-    ASSERT(!internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ));
-
     // TODO: TUNING - experiment with only conditionally breaking the transfer up into multiple packets if we are
     //       a certain threshold less than full packet
     //       we can precompute this value even on host and pass it in so we can get away with a single integer
@@ -384,8 +382,10 @@ FORCE_INLINE void send_next_data(
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
     pkt_header->src_ch_id = sender_channel_index;
 
-    auto src_addr = sender_buffer_channel.get_buffer_address(local_sender_wrptr_buffer_index);
+    auto src_addr = (uint32_t)pkt_header;
     auto dest_addr = receiver_buffer_channel.get_buffer_address(remote_receiver_wrptr.get_buffer_index());
+    while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
+    };
     internal_::eth_send_packet_bytes_unsafe(DEFAULT_ETH_TXQ, src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
@@ -573,8 +573,7 @@ void run_sender_channel_step(
     // TODO: update to be stream reg based. Initialize to space available and simply check for non-zero
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     bool has_unsent_packet = local_sender_channel_worker_interface.has_unsent_payload();
-    bool eth_txq_not_busy = !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
-    bool can_send = receiver_has_space_for_packet && has_unsent_packet && eth_txq_not_busy;
+    bool can_send = receiver_has_space_for_packet && has_unsent_packet;
     if constexpr (enable_first_level_ack) {
         bool sender_backpressured_from_sender_side =
             !(local_sender_channel_worker_interface.local_rdptr.distance_behind(
