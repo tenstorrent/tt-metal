@@ -399,7 +399,7 @@ def run_llama3_demo(
     users_decoding = True  # reset to handle next batch
     total_decoding_time = 0  # Track total decoding time
     total_tokens_generated = 0  # Track total tokens generated
-    tokens_per_second_per_user_token127 = 0  # Track tokens per second per user at token 128
+    tokens_per_second_per_user_token127 = None  # Track tokens per second per user at token 128
 
     all_outputs = []
 
@@ -496,6 +496,22 @@ def run_llama3_demo(
         if iteration >= max_generated_tokens:
             users_decoding = False
 
+    # Release trace
+    ttnn.release_trace(mesh_device, trace_id)
+
+    # Finish profiling at the end of all batches inference
+    profiler.end(profiler_step_name)
+    profiler.end("run")
+
+    if is_ci_env and tokens_per_second_per_user_token127 is not None:
+        benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
+
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"tg-llama-demo-e2e",
+            ml_model_name="tg-llama",
+        )
+
     if not stress_test:
         # print before assertion
         out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
@@ -505,22 +521,6 @@ def run_llama3_demo(
 
     # Print out total number of tsu_failures
     logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
-
-    # Release trace
-    ttnn.release_trace(mesh_device, trace_id)
-
-    # Finish profiling at the end of all batches inference
-    profiler.end(profiler_step_name)
-    profiler.end("run")
-
-    if is_ci_env:
-        benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
-
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type=f"tg-llama-demo-e2e",
-            ml_model_name="tg-llama",
-        )
 
 
 # List of supported Parameters for demo.py
