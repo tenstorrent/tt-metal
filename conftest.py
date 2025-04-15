@@ -330,7 +330,7 @@ def ensure_devices_tg():
     import ttnn
 
     device_ids = ttnn.get_device_ids()
-    assert len(device_ids) == 32, f"Expected 32 devices, got {len(device_ids)}"
+    assert len(device_ids) == 69, f"Expected 69 devices, got {len(device_ids)}"
 
 
 @pytest.fixture()
