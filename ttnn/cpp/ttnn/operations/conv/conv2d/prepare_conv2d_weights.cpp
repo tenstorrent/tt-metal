@@ -392,31 +392,36 @@ static Tensor conv_depthwise_weight_bcast_helper(
     const ttnn::Shape& original_weight_shape,
     const ttnn::Shape& output_weight_shape,
     DataType output_dtype) {
-    tt::tt_metal::owned_buffer::Buffer<T> output_buffer =
-        tt::tt_metal::owned_buffer::create<T>(output_weight_shape.volume());
-    auto conv_weight_tensor_buffer = tt::tt_metal::borrowed_buffer::get_as<T>(conv_weight_tensor);
-    // Copy the original weight tensor to the output tensor
-    for (int i = 0; i < output_weight_shape[0]; i++) {
-        for (int j = 0; j < output_weight_shape[1]; j++) {
-            for (int k = 0; k < output_weight_shape[2]; k++) {
-                for (int l = 0; l < output_weight_shape[3]; l++) {
-                    auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                        ttnn::SmallVector<int>{i, 0, k, l}, compute_strides(original_weight_shape));
-                    auto value = conv_weight_tensor_buffer[value_flat_input_index];
-                    auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                        ttnn::SmallVector<int>{i, j, k, l}, compute_strides(output_weight_shape));
-                    output_buffer[output_flat_input_index] = value;
+    auto compute =
+        [&original_weight_shape, &output_weight_shape, &output_dtype](const auto& conv_weight_tensor_buffer) {
+            ttnn::Shape output_shape = output_weight_shape;
+            // Create a new buffer with the output shape
+            tt::tt_metal::owned_buffer::Buffer<T> output_buffer =
+                tt::tt_metal::owned_buffer::create<T>(output_weight_shape.volume());
+
+            // Copy the original weight tensor to the output tensor
+            for (int i = 0; i < output_weight_shape[0]; i++) {
+                for (int j = 0; j < output_weight_shape[1]; j++) {
+                    for (int k = 0; k < output_weight_shape[2]; k++) {
+                        for (int l = 0; l < output_weight_shape[3]; l++) {
+                            auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
+                                ttnn::SmallVector<int>{i, 0, k, l}, compute_strides(original_weight_shape));
+                            auto value = conv_weight_tensor_buffer[value_flat_input_index];
+                            auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
+                                ttnn::SmallVector<int>{i, j, k, l}, compute_strides(output_weight_shape));
+                            output_buffer[output_flat_input_index] = value;
+                        }
+                    }
                 }
             }
-        }
-    }
-
-    auto output_tensor = Tensor(
-        std::move(tt::tt_metal::OwnedStorage{std::move(output_buffer)}),
-        output_weight_shape,
-        output_dtype,
-        Layout::ROW_MAJOR);
-    return output_tensor;
+            auto output_tensor = Tensor(
+                std::move(tt::tt_metal::OwnedStorage{std::move(output_buffer)}),
+                output_weight_shape,
+                output_dtype,
+                Layout::ROW_MAJOR);
+            return output_tensor;
+        };
+    return convert_tensor<T>(conv_weight_tensor, compute);
 }
 
 /*
