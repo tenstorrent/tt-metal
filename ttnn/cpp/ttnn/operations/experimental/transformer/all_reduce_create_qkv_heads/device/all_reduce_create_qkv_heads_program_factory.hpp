@@ -33,11 +33,10 @@ using namespace ccl;
 CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minimal_multi_core_with_workers(
-    const Tensor& input_tensor,
-    const Tensor& buffer_tensor,
+    const std::vector<Tensor>& input_tensors,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
+    std::vector<Tensor>& output_tensors,
     const DataType dtype,
     const uint32_t num_links,
     const uint32_t ring_size,
