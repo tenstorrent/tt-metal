@@ -135,24 +135,22 @@ def upsample_multicore_common(
     device_grid = device.compute_with_storage_grid_size()
     max_grid_size = (device_grid.y, device_grid.x)
     if core_range != None:
-        if shard_strategy == ttnn.ShardStrategy.BLOCK:
-            if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
-                ncores = (core_range[0][1][0] - core_range[0][0][0] + 1, core_range[0][1][1] - core_range[0][0][1] + 1)
-            elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
-                ncores = (core_range[0][1][1] - core_range[0][0][1] + 1, core_range[0][1][0] - core_range[0][0][0] + 1)
-        elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
-            ncores = 0
-            for core in core_range:
-                ncores += (core[1][0] - core[0][0] + 1) * (core[1][1] - core[0][1] + 1)
-        else:
-            raise ValueError("Invalid shard strategy")
-
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(ttnn.CoreCoord(core[0][0], core[0][1]), ttnn.CoreCoord(core[1][0], core[1][1]))
                 for core in core_range
             }
         )
+        if shard_strategy == ttnn.ShardStrategy.BLOCK:
+            if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+                ncores = (core_range[0][1][0] - core_range[0][0][0] + 1, core_range[0][1][1] - core_range[0][0][1] + 1)
+            elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
+                ncores = (core_range[0][1][1] - core_range[0][0][1] + 1, core_range[0][1][0] - core_range[0][0][0] + 1)
+        elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
+            ncores = shard_grid.num_cores()
+        else:
+            raise ValueError("Invalid shard strategy")
+
     else:
         if shard_strategy == ttnn.ShardStrategy.HEIGHT:
             max_nshards = min(batch_size * height * width, max_grid_size[0] * max_grid_size[1])
@@ -280,14 +278,9 @@ def test_upsample_multicore(device, input_shape, scale_h, scale_w, shard_strateg
     )
     ## compare the results
     torch_result = torch_result.permute(0, 2, 3, 1)
-    assert_with_pcc(torch_result, output_tensor)
 
-    allclose = torch.allclose(output_tensor, torch_result)
-    isclose = torch.all(torch.isclose(output_tensor, torch_result))
     isequal = torch.equal(output_tensor, torch_result)
 
-    assert allclose
-    assert isclose
     assert isequal
 
 
@@ -327,18 +320,13 @@ def test_upsample_multicore_corerange(
         scale_w,
         shard_strategy,
         shard_orientation,
-        core_range=None,
+        core_range=core_range,
     )
     ## compare the results
     torch_result = torch_result.permute(0, 2, 3, 1)
-    assert_with_pcc(torch_result, output_tensor)
 
-    allclose = torch.allclose(output_tensor, torch_result)
-    isclose = torch.all(torch.isclose(output_tensor, torch_result))
     isequal = torch.equal(output_tensor, torch_result)
 
-    assert allclose
-    assert isclose
     assert isequal
 
 
