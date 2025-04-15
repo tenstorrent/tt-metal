@@ -4,7 +4,7 @@
 
 #include <assert.hpp>
 #include <buffer.hpp>
-#include <buffer_constants.hpp>
+#include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <global_semaphore.hpp>
