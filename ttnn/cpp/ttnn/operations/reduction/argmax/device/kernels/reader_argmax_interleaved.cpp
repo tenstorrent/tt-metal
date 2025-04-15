@@ -57,7 +57,8 @@ void kernel_main() {
     // Main loop - run by all cores
     for (uint32_t k = 0; k < outer_dim_units; ++k) {
         for (uint32_t j = 0; j < inner_dim_units; ++j) {
-            s_src.noc_async_read_page(k * inner_dim_units + j, src_cb_addr);
+            const uint64_t src_noc_addr = get_noc_addr(k * inner_dim_units + j, s_src);
+            noc_async_read(src_noc_addr, src_cb_addr, src_page_size);
             noc_async_read_barrier();
 
             // Reset max_val for each new output
