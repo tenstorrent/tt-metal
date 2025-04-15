@@ -34,7 +34,7 @@
 #include "llrt/hal.hpp"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 #include "watcher_server.hpp"

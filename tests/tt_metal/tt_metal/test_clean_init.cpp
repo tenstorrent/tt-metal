@@ -27,7 +27,7 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "rtoptions.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 
 namespace tt {

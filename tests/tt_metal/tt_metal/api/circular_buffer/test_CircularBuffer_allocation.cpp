@@ -28,7 +28,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
