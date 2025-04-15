@@ -170,9 +170,7 @@ class DeviceSingleCardFastSlowDispatchFixture : public DeviceSingleCardFixture {
 protected:
     static void validate_dispatch_mode() {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch) {
-            // No skip; allow both fast and slow dispatch
-        }
+        // No skip; allow both fast and slow dispatch
     }
 };
 
