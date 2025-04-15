@@ -48,6 +48,7 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${A
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 5 -i 5"  # Paged DRAM Write + Read Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 6 -i 5"  # Host Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 7 -i 5"  # Packed Read Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 8 -i 5"  # Ringbuffer Test
 run_test_with_watcher "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 7 -i 10 -x -mpps" # Packed Read Test w/ max num subcmds
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 1 -i 1000 -rb"  # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 2 -i 1000 -rb"  # Random Test
@@ -61,6 +62,7 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${A
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 5 -i 5 -spre -sdis" # Paged DRAM Write + Read Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 6 -i 5 -spre -sdis" # Host Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 7 -i 5 -spre -sdis" # Packed Read Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 8 -i 5 -spre -sdis"  # Ringbuffer Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 1 -i 1000 -rb -spre -sdis"  # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 2 -i 1000 -rb -spre -sdis"  # Random Test
 
@@ -73,6 +75,7 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${A
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 5 -i 5 -x" # Paged DRAM Write + Read Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 6 -i 5 -x" # Host Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 7 -i 5 -x" # Packed Read Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 8 -i 5 -x" # Rinbuffer Test
 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 1 -i 5 -x -spre" # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 1 -i 5 -x -spre -sdis" # Smoke Test
@@ -87,6 +90,7 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${A
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 2 -i 5 -spre -sdis -packetized_en" # Random Test with packetized path
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 6 -i 5 -spre -sdis -packetized_en" # Host Test with packetized path
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 7 -i 5 -spre -sdis -packetized_en" # Packed Read Test
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 8 -i 5 -spre -sdis -packetized_en" # Ringbuffer Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 1 -i 1000 -rb -spre -sdis -packetized_en"  # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 2 -i 1000 -rb -spre -sdis -packetized_en"  # Random Test
 
@@ -95,6 +99,7 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${A
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 2 -i 5 -x -spre -sdis -packetized_en" # Random Test with packetized path+exec
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 6 -i 5 -x -spre -sdis -packetized_en" # Host Test with packetized path+exec
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 7 -i 5 -x -spre -sdis -packetized_en" # Packed Read Test+exec
+run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 8 -i 5 -x -spre -sdis -packetized_en" # Ringbuffer Test+exec
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 1 -i 1000 -x -rb -spre -sdis -packetized_en"  # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher_${ARCH_NAME} -t 2 -i 1000 -x -rb -spre -sdis -packetized_en"  # Random Test
 
