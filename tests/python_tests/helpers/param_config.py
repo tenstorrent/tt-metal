@@ -228,7 +228,7 @@ def generate_param_ids(included_params, all_params: List[tuple]) -> List[str]:
 
         # Start with the FormatConfig information
         result = [
-            f"unpack_src={format_config.unpack_A_src.value}, {format_config.unpack_B_dst.value}",
+            f"unpack_src={format_config.unpack_A_src.value}, {format_config.unpack_B_src.value}",
             f"unpack_dst={format_config.unpack_A_dst.value}, {format_config.unpack_B_dst.value}",
             f"math={format_config.math.value}",
             f"pack_src={format_config.pack_src.value}",

@@ -42,7 +42,7 @@ def pack_fp16(torch_tensor):
     for i in range(0, len(torch_tensor), 2):
         half1 = float16_to_bytes(torch_tensor[i])
         half2 = float16_to_bytes(torch_tensor[i + 1])
-        packed_bytes.extend([half1[0:2], half2[0:2]][::-1])
+        packed_bytes.extend([half1[0:2], half2[0:2]])
     return flatten_list(packed_bytes)
 
 
