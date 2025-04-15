@@ -63,9 +63,9 @@ def run_layer_norm_tests(
 test_sweep_args = [
     (
         [
-            "/proj_sw/user_dev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_input.csv",
-            "/proj_sw/user_dev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_weight.csv",
-            "/proj_sw/user_dev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_bias.csv",
+            "$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_input.csv",
+            "$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_weight.csv",
+            "$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_bias.csv",
         ],
         [(1, 196, 768), (768), (768)],
         [ttnn.bfloat16],
@@ -77,9 +77,9 @@ for i in range(3, 25):
     test_sweep_args.append(
         (
             [
-                f"/proj_sw/user_dev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_input.csv",
-                f"/proj_sw/user_dev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_weight.csv",
-                f"/proj_sw/user_dev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_bias.csv",
+                f"$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_input.csv",
+                f"$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_weight.csv",
+                f"$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_bias.csv",
             ],
             [(1, 196, 768), (768), (768)],
             [ttnn.bfloat16],
