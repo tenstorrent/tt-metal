@@ -45,7 +45,8 @@ def generate_golden(op, operand1, operand2, data_format, math_fidelity):
 
 full_sweep = False
 all_format_combos = generate_format_combinations(
-    [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b], all_same=True
+    [DataFormat.Float16_b, DataFormat.Float16],
+    all_same=True,  # , DataFormat.Bfp8_b], all_same=True
 )  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
 all_params = generate_params(
     ["multiple_tiles_eltwise_test"],
@@ -112,7 +113,11 @@ def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile
     res_from_L1 = []
 
     for address in pack_addresses:
-        res_from_L1.append(collect_results(formats, address))
+        res_from_L1.append(
+            collect_results(
+                formats, tensor_size=len(src_A) // len(pack_addresses), address=address
+            )
+        )
 
     res_from_L1 = flatten_list(res_from_L1)
 

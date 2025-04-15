@@ -15,14 +15,19 @@ import inspect
 import time
 from helpers.param_config import *
 
+MAX_READ_BYTE_SIZE_16BIT = 2048
+
 
 def collect_results(
     formats: FormatConfig,
+    tensor_size: int,
     address: int = 0x1C000,
     core_loc: str = "0,0",
     sfpu: bool = False,
 ):
-    read_data = read_from_device(core_loc, address, num_bytes=4096)
+
+    read_bytes_cnt = calculate_read_byte_count(formats, tensor_size, sfpu)
+    read_data = read_from_device(core_loc, address, num_bytes=read_bytes_cnt)
     res_from_L1 = get_result_from_device(formats, read_data, sfpu)
     return res_from_L1
 

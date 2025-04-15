@@ -81,7 +81,7 @@ def test_fill_dest(testname, formats, dest_acc):
     res_from_L1 = []
     for address in pack_addresses:
         res_from_L1.append(
-            collect_results(formats, address)
+            collect_results(formats, tensor_size=len(src_A), address=address)
         )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
     res_from_L1 = flatten_list(res_from_L1)
 

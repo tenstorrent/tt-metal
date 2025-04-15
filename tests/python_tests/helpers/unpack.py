@@ -11,11 +11,8 @@ def unpack_fp16(packed_list, unpack_src, pack_dst):
     def bytes_to_float16(byte_list):
         return struct.unpack("<e", bytes(byte_list))[0]
 
-    limited_packed_list = packed_list[:2048]
-
     return [
-        bytes_to_float16(limited_packed_list[i : i + 2])
-        for i in range(0, len(limited_packed_list), 2)
+        bytes_to_float16(packed_list[i : i + 2]) for i in range(0, len(packed_list), 2)
     ]
 
 
@@ -25,10 +22,8 @@ def unpack_bfp16(packed_list, unpack_src, pack_dst):
         unpacked_value = struct.unpack("<f", bytes_data)[0]
         return unpacked_value
 
-    limited_packed_list = packed_list[:2048]
     return [
-        bytes_to_bfloat16(limited_packed_list[i : i + 2])
-        for i in range(0, len(limited_packed_list), 2)
+        bytes_to_bfloat16(packed_list[i : i + 2]) for i in range(0, len(packed_list), 2)
     ]
 
 

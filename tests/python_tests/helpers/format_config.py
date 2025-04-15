@@ -6,20 +6,40 @@ from enum import Enum
 from typing import List, Optional, Tuple
 
 
-class DataFormat(Enum):
+class DataFormatInfo:
     """
-    An enumeration class that holds all the data formats supported by the LLKs.
-    Used to avoid hardcoding the format strings in the test scripts using strings. This avoid typos and future errors.
-    DataFormat(Enum) class instances can be compared via unique values.
-    When you have a set of related constants and you want to leverage the benefits of enumeration (unique members, comparisons, introspection, etc.).
-    It's a good choice for things like state machines, categories, or settings where values should not be changed or duplicated.
+    A helper class that encapsulates metadata for a data format.
+
+    Attributes:
+        name (str): A human-readable name for the data format.
+        byte_size (int): The size in bytes of one unit of the data format.
     """
 
-    Float16 = "Float16"
-    Float16_b = "Float16_b"
-    Bfp8_b = "Bfp8_b"
-    Float32 = "Float32"
-    Int32 = "Int32"
+    def __init__(self, name: str, byte_size: int):
+        self.name = name
+        self.byte_size = byte_size
+
+
+class DataFormat(Enum):
+    """
+    An enumeration of data formats supported by the LLKs.
+    Holds format name and byte size, and is extendable.
+    """
+
+    Float16 = DataFormatInfo("Float16", 2)
+    Float16_b = DataFormatInfo("Float16_b", 2)
+    Bfp8_b = DataFormatInfo("Bfp8_b", 1)
+    Float32 = DataFormatInfo("Float32", 4)
+    Int32 = DataFormatInfo("Int32", 4)
+
+    @property
+    def size(self) -> int:
+        """Returns the byte size of the data format."""
+        return self.value.byte_size
+
+    def __str__(self) -> str:
+        """Returns the string representation of the data format."""
+        return self.value.name
 
 
 @dataclass
