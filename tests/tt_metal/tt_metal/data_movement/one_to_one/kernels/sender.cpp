@@ -27,7 +27,7 @@ void kernel_main() {
     DeviceTimestampedData("Test id", test_id);
 
     {
-        DeviceZoneScopedN("SENDER");
+        DeviceZoneScopedN("RISCV0");
         uint64_t dst_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, dst_addr);
 
         noc_async_write(src_addr, dst_noc_addr, transaction_size_bytes);
