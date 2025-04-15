@@ -295,11 +295,6 @@ bool should_sync_after_in1_dram(const tt::ARCH arch);
  * Level 4: throttle to 40% of max
  * Level 5: throttle to 33% of max
  */
-void throttle_mm_perf(
-    const tt::ARCH arch,
-    const int num_cores,
-    std::map<string, string>& mm_kernel_defines,
-    MathFidelity fidelity,
-    bool tiny_tile_mm);
+void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
 
 }  // namespace bmm_op_utils
