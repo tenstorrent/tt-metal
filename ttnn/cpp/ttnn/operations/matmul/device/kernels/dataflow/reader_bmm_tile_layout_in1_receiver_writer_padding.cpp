@@ -6,6 +6,10 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "debug/dprint.h"
+#include "ckernel.h"
+
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     // READER
@@ -18,6 +22,11 @@ void kernel_main() {
     // out tensor args
     const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+
+    // in1 sync args
+    const uint32_t in1_sync_leader_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in1_sync_leader_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in1_sync_wait_time = get_arg_val<uint32_t>(rt_args_idx++);
 
     // padding args (WRITER)
     const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(rt_args_idx++);
@@ -50,32 +59,45 @@ void kernel_main() {
     // in1 mcast args
     uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
     uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(6));
+
+    // in1 sync args
+    uint32_t in1_sync_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(7));
+    uint32_t in1_sync_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
+
     // batch args
-    constexpr uint32_t batch = get_compile_time_arg_val(7);
+    constexpr uint32_t batch = get_compile_time_arg_val(9);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(8);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(10);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(12);
-    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(13);
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(10);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(11);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(12);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(13);
+    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(14);
+    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(15);
 
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(14);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(15);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(16);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(16);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(17);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(18);
 
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(17);  // if 0
-    // Don't need batch; same as batch from READER args
+    constexpr uint32_t MtNt = get_compile_time_arg_val(19);  // if 0
 
 #ifdef FUSE_BIAS
     // in3 block args
-    constexpr uint32_t in3_block_w = get_compile_time_arg_val(18);
+    constexpr uint32_t in3_block_w = get_compile_time_arg_val(20);
 
     constexpr uint32_t cb_id_in3 = 3;
+#endif
+
+#ifdef SYNC_AFTER_IN1_DRAM
+    volatile tt_l1_ptr uint32_t* in1_sync_receiver_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_sync_receiver_semaphore_addr);
+    *(in1_sync_receiver_semaphore_addr_ptr) = VALID;
+
+    const uint64_t in1_sync_sender_semaphore_addr_counter =
+        get_noc_addr(in1_sync_leader_noc_x, in1_sync_leader_noc_y, in1_sync_sender_semaphore_addr);
 #endif
 
     // WRITER
@@ -112,16 +134,29 @@ void kernel_main() {
                     // Operand 1
                     cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
-                    // Set in1 semaphore value to INVALID
-                    noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
+                    {
+                        DeviceZoneScopedN("IN1_REC_WRI_PADD");
 
-                    // Atomic increment source core counter
-                    noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
+                        // Set in1 semaphore value to INVALID
+                        noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                    // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+                        // Atomic increment source core counter
+                        noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
 
-                    cb_push_back(cb_id_in1, in1_block_num_tiles);
+                        // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
+                        noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+
+#ifdef SYNC_AFTER_IN1_DRAM
+                        // Sync cores after all of them receive current in1 block
+                        noc_semaphore_set(in1_sync_receiver_semaphore_addr_ptr, INVALID);
+                        noc_semaphore_inc(in1_sync_sender_semaphore_addr_counter, 1);
+                        noc_semaphore_wait(in1_sync_receiver_semaphore_addr_ptr, VALID);
+
+                        ckernel::wait(in1_sync_wait_time);
+#endif
+
+                        cb_push_back(cb_id_in1, in1_block_num_tiles);
+                    }
                 }
 
 #ifdef FUSE_BIAS

@@ -14,6 +14,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
+#include "umd/device/types/arch.h"
 
 using namespace tt;
 using namespace tt::constants;
@@ -1245,14 +1246,147 @@ void add_stagger_defines_if_needed(
     // delay impacts op performance
     constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
 
-    // Apply stagger delay on Wormhole B0 on odd rows, so that only half of cores
-    // start doing work at once. This is done to mitigate di/dt issues, in case
-    // the environment var is set. See issue #9857.
-    const bool enable_stagger = std::getenv("TT_ENABLE_MATMUL_STAGGER");
-    if (enable_stagger && arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
-        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
-        log_warning(tt::LogOp, "Stagger enabled for matmul op using {} cores.", num_cores);
+    // Apply stagger delay on Wormhole B0 on odd rows, so that only half of cores start doing work at once.
+    // This is done to mitigate di/dt issues, in case the environment var is set.
+    // See issue #9857.
+    const char* stagger_type = std::getenv("TT_MATMUL_STAGGER_TYPE");
+    const char* stagger_value = std::getenv("TT_MATMUL_STAGGER_VALUE");
+    if (stagger_type && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) &&
+        num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
+        // TODO check range for stagger_type
+        mm_kernel_defines["MM_STAGGER_TYPE"] = stagger_type;
+
+        if (stagger_value == nullptr) {
+            log_warning(tt::LogOp, "Using default stagger value: {}.", 0);
+            mm_kernel_defines["MM_STAGGER_VALUE"] = "0";
+        } else {
+            log_warning(tt::LogOp, "Using stagger value: {}.", stagger_value);
+            mm_kernel_defines["MM_STAGGER_VALUE"] = stagger_value;
+        }
+        log_warning(tt::LogOp, "Stagger type {} enabled for matmul op using {} cores.", stagger_type, num_cores);
     }
+}
+
+void throttle_mm_perf(
+    const tt::ARCH arch,
+    const int num_cores,
+    std::map<string, string>& mm_kernel_defines,
+    MathFidelity fidelity,
+    bool tiny_tile_mm) {
+    // Empirically deduced di/dt problems appear for OPs calling matmul using more than 48 cores on WH_B0
+    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_THROTTLE = 48;
+    // TODO: determine min core threshold for throttle to be needed on BH
+    constexpr uint32_t BH_MM_MAX_CORES_NO_THROTTLE = 0;
+    const bool mm_throttle_needed = (arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_THROTTLE) ||
+                                    (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_THROTTLE);
+
+    // Limit matmul compute throughput by inserting NOP instructions between MVMUL instructions of matmul kernel
+    // This will slow down the OP if UNPACK/PACK threads are capable of feeding data sufficiently fast (MATH compute
+    // bound)
+    const bool enable_throttle_mm_perf = std::getenv("TT_THROTTLE_MM_PERF");
+    const uint32_t throttle_level = enable_throttle_mm_perf ? std::stoi(std::getenv("TT_THROTTLE_MM_PERF")) : 0;
+    if (throttle_level && mm_throttle_needed) {
+        if (throttle_level == 5) {
+            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
+            tt::log_info(tt::LogOp, "Throttle matmul perf to max 33%");
+        } else if (throttle_level == 4) {
+            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
+            tt::log_info(tt::LogOp, "Throttle matmul perf to max 40%");
+        } else if (throttle_level == 3) {
+            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
+            tt::log_info(tt::LogOp, "Throttle matmul perf to max 50%");
+        } else if (throttle_level == 2) {
+            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
+            tt::log_info(tt::LogOp, "Throttle matmul perf to max 67%");
+        } else if (throttle_level == 1) {
+            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
+            tt::log_info(tt::LogOp, "Throttle matmul perf to max 73%");
+        } else {
+            log_error(
+                tt::LogOp,
+                "Throttle matmul perf ignored: invalid number of NOPs requested - only {{1,2,3,4,5}} are supported");
+        }
+    } else if (mm_throttle_needed && arch == tt::ARCH::WORMHOLE_B0 && fidelity == MathFidelity::LoFi && !tiny_tile_mm) {
+        // Default throttle to level 1 for WH_B0 if LoFi math fidelity and not tiny tiles
+        mm_kernel_defines["THROTTLE_MM"] = "1";
+        tt::log_info(tt::LogOp, "Throttle matmul perf to max 73% for LoFi + full tile size");
+    }
+}
+
+void add_mm_throttle_defines_if_needed(
+    const tt::ARCH arch, MathFidelity fidelity, std::map<string, string>& mm_kernel_defines) {
+    constexpr uint32_t stallwait_nops_equ = 6;
+    const bool enable_throttle_mm_pct = std::getenv("TT_MM_THROTTLE_PCT");
+    const uint32_t mm_throttle_pct = enable_throttle_mm_pct ? std::stoi(std::getenv("TT_MM_THROTTLE_PCT")) : 0;
+    if (mm_throttle_pct > 0) {
+        uint32_t add_stallwait;
+        uint32_t num_nops_count;
+        float achieved_mm_throttle_pct;
+        if (fidelity == MathFidelity::LoFi) {
+            constexpr float min_allowed_pct = 9.0;
+            constexpr float max_allowed_pct = 82.0;
+            constexpr uint32_t max_allowed_nops = 16;
+            constexpr float nop_step = (max_allowed_pct - min_allowed_pct) / max_allowed_nops;
+            add_stallwait = 1;
+            num_nops_count = std::round(((float)mm_throttle_pct - min_allowed_pct) / nop_step);
+            achieved_mm_throttle_pct = (float)num_nops_count * nop_step + min_allowed_pct;
+        } else {
+            constexpr float min_allowed_pct = 9.375;
+            constexpr float max_allowed_pct = 75.0;
+            constexpr uint32_t max_allowed_eff_nops = 21;
+            constexpr float nop_step = (max_allowed_pct - min_allowed_pct) / max_allowed_eff_nops;
+            uint32_t num_nops_count_eff = std::round(((float)mm_throttle_pct - min_allowed_pct) / nop_step + 1.0);
+            add_stallwait = (num_nops_count_eff >= 6) ? 1 : 0;
+            num_nops_count = num_nops_count_eff - add_stallwait * stallwait_nops_equ;
+            achieved_mm_throttle_pct = (float)(num_nops_count_eff - 1) * nop_step + min_allowed_pct;
+            tt::log_info(
+                tt::LogOp,
+                "Throttle matmul: num_nops_count_eff = {}, nop_step = {}, add_stallwait = {},  num_nops_count = {}",
+                num_nops_count_eff,
+                nop_step,
+                add_stallwait,
+                num_nops_count);
+        }
+        tt::log_info(
+            tt::LogOp,
+            "Throttle matmul: requested {}%, achieved {}% => added {} STALLWAITs and {} NOPs per tile",
+            (float)mm_throttle_pct,
+            achieved_mm_throttle_pct,
+            add_stallwait,
+            num_nops_count);
+
+        mm_kernel_defines["MM_THROTTLE_COMPUTE"] = "1";
+        mm_kernel_defines["MM_THROTTLE_COMPUTE_STALLWAIT"] = std::to_string(add_stallwait);
+        mm_kernel_defines["MM_THROTTLE_COMPUTE_NOP_COUNTS"] = std::to_string(num_nops_count);
+    }
+}
+
+void add_precision_defines_if_needed(const tt::ARCH arch, std::map<string, string>& mm_kernel_defines) {
+    const bool half_lofi = std::getenv("TT_ENABLE_HALF_LOFI");
+    if (half_lofi && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)) {
+        mm_kernel_defines["HALF_LOFI"] = "1";
+    }
+
+    const bool quarter_lofi = std::getenv("TT_ENABLE_QUARTER_LOFI");
+    if (quarter_lofi && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)) {
+        mm_kernel_defines["QUARTER_LOFI"] = "1";
+    }
+}
+
+void add_dram_skip_defines_if_needed(const tt::ARCH arch, std::map<string, string>& mm_in1_sender_writer_defines) {
+    const bool skip_in1_dram = std::getenv("TT_MATMUL_SKIP_IN1_DRAM");
+    if (skip_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)) {
+        mm_in1_sender_writer_defines["SKIP_IN1_DRAM"] = "1";
+    }
+}
+
+bool should_sync_after_in1_dram(const tt::ARCH arch) {
+    const bool sync_in1_dram = std::getenv("TT_MATMUL_SYNC_AFTER_IN1_DRAM");
+    if (sync_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)) {
+        return true;
+    }
+
+    return false;
 }
 
 }  // namespace bmm_op_utils

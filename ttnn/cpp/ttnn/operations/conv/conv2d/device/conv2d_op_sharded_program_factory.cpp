@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt::constants;
 
@@ -1377,6 +1378,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     if (packer_l1_acc_en) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
+
+    bool tiny_tile_mm = false;  // assuming that matmul will be computed on full tiles, not tiny tiles
+    bmm_op_utils::throttle_mm_perf(device->arch(), total_num_cores, compute_defines, math_fidelity, tiny_tile_mm);
+
     for (auto elem : compute_defines) {
         log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
     }
