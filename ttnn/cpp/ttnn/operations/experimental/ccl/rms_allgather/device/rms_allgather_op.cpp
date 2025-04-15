@@ -307,26 +307,25 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     ttnn::MeshDevice* mesh_device = input_tensors.at(0).mesh_device();
+    const auto target_device = mesh_device->get_device(mesh_coord);
     const auto mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coord[1])
                                                         : mesh_view.get_devices_on_row(mesh_coord[0]);
-    auto* current_device = mesh_device->get_device(mesh_coord);
 
-    const uint32_t num_devices = devices.size();
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == current_device) {
+    for (uint32_t i = 0; i < this->ring_size; ++i) {
+        if (devices.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
                 backward_device = devices.at(i - 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(num_devices - 1);
+                backward_device = devices.at(this->ring_size - 1);
             }
-            if (i != num_devices - 1) {
+            if (i != this->ring_size - 1) {
                 forward_device = devices.at(i + 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
                 forward_device = devices.at(0);
@@ -360,6 +359,7 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
                         program_config.block_w,
                         this->compute_kernel_config,
                         // New Parameters
+                        target_device,
                         forward_device,
                         backward_device,
                         this->num_links,
@@ -397,6 +397,7 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
                     1,
                     1,
                     this->compute_kernel_config,
+                    target_device,
                     forward_device,
                     backward_device,
                     this->num_links,

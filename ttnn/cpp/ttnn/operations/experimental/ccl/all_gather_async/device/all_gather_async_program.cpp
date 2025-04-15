@@ -141,6 +141,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     const GlobalSemaphore semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
+    // auto mesh_device = input_tensor.mesh_device();
     const bool enable_persistent_fabric_mode = true;
     const bool enable_async_output_tensor = false;
     const bool lower_command_stream_to_noc_commands =

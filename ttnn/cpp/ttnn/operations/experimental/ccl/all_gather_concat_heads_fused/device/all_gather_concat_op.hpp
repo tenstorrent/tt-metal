@@ -96,6 +96,7 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const Tensor& input_tensor,
     const Tensor& buffer_tensor,
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,

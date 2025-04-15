@@ -27,6 +27,7 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config,
     // New Parameters
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     const uint32_t num_links,

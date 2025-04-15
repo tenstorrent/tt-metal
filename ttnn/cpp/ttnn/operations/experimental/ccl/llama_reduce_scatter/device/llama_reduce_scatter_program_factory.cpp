@@ -265,11 +265,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     using namespace ttnn::ccl;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    auto* device = input_tensor.mesh_device();
-    const auto& mesh_view = device->get_view();
+    auto mesh_device = input_tensor.mesh_device();
+    const auto& mesh_view = mesh_device->get_view();
     const uint32_t ring_devices =
         (operation_attributes.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
+
+    auto target_device = mesh_device->get_device(mesh_coordinate);
 
     const uint32_t ring_size = operation_attributes.ring_devices;
     const uint32_t num_devices = ring_size;
@@ -277,13 +279,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     uint32_t ring_index = 0;  // Initialize device index
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
-    std::optional<GlobalSemaphore> semaphore = std::nullopt;
-    const auto coordinate = mesh_view.find_device(input_tensor.device()->id());
+
     std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
-                                        ? mesh_view.get_devices_on_column(coordinate[1])
-                                        : mesh_view.get_devices_on_row(coordinate[0]);
+                                        ? mesh_view.get_devices_on_column(mesh_coordinate[1])
+                                        : mesh_view.get_devices_on_row(mesh_coordinate[0]);
     for (uint32_t i = 0; i < ring_size; ++i) {
-        if (devices.at(i) == input_tensor.device()) {
+        if (devices.at(i) == target_device) {
             ring_index = i;
             if (i != 0) {
                 backward_device = devices.at(i - 1);
@@ -351,9 +352,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     auto input_grid = input_shard_spec.grid;
     auto output_grid = output_shard_spec.grid;
 
-    auto sub_device_cores = device->worker_cores(
+    auto sub_device_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        operation_attributes.subdevice_id.value_or(device->get_sub_device_ids().at(0)));
+        operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0)));
 
     tt::tt_metal::Program program{};
 
@@ -548,14 +549,14 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
 
     const uint32_t chip_id = ring_index;
 
-    auto to_worker_cores = [device](
+    auto to_worker_cores = [mesh_device](
                                const std::vector<CoreCoord>& cores,
                                std::optional<uint32_t> num_max_cores = std::nullopt) -> std::vector<CoreCoord> {
         std::vector<CoreCoord> worker_cores;
         auto num_cores = num_max_cores.has_value() ? num_max_cores.value() : cores.size();
         for (uint32_t i = 0; i < num_cores; ++i) {
             const auto& core = cores[i];
-            worker_cores.push_back(device->worker_core_from_logical_core(core));
+            worker_cores.push_back(mesh_device->worker_core_from_logical_core(core));
         }
         return worker_cores;
     };
@@ -720,26 +721,16 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
             sender_core_idx++;
 
             writer_runtime_args.push_back(forward_fabric_connection);
-            // if (forward_fabric_connection) {
-            //     tt::tt_fabric::append_fabric_connection_rt_args(
-            //         device->id(),
-            //         operation_attributes.forward_device.value()->id(),
-            //         link_idx,
-            //         program,
-            //         core,
-            //         writer_runtime_args);
-            // }
+            if (forward_fabric_connection) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    target_device->id(), forward_device.value()->id(), link_idx, program, core, writer_runtime_args);
+            }
 
-            // writer_runtime_args.push_back(backward_fabric_connection);
-            // if (backward_fabric_connection) {
-            //     tt::tt_fabric::append_fabric_connection_rt_args(
-            //         device->id(),
-            //         operation_attributes.backward_device.value()->id(),
-            //         link_idx,
-            //         program,
-            //         core,
-            //         writer_runtime_args);
-            // }
+            writer_runtime_args.push_back(backward_fabric_connection);
+            if (backward_fabric_connection) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    target_device->id(), backward_device.value()->id(), link_idx, program, core, writer_runtime_args);
+            }
 
             link_idx++;
         } else if (packet_worker_cores_grid.contains(core)) {

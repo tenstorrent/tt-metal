@@ -294,10 +294,9 @@ def run_all_gather_impl(
                 logger.error(f"output mismatch for tensor {i}")
                 passed = False
 
-    for i in range(num_devices):
-        assert (
-            mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
-        ), f"Device {i} has {mesh_device.num_program_cache_entries()} program cache entries"
+    assert (
+        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
+    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()

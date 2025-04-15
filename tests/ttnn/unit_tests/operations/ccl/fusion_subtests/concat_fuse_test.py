@@ -210,12 +210,10 @@ def run_concat_fuse_impl(
         input_tensors = torch.chunk(output_tensor, num_devices, dim)
         tt_input_tensors = []
         for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(
-                ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
-            )
+            tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
             logger.info(f"using device {mesh_device.get_devices()[i].id()}")
 
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -238,13 +236,11 @@ def run_concat_fuse_impl(
         zeros_tensor = torch.zeros(output_shape).bfloat16()
         tt_intermediate_tensors = []
         for i in range(4):
-            tt_intermediate_tensor = (
-                ttnn.Tensor(zeros_tensor, input_dtype)
-                .to(layout)
-                .to(mesh_device.get_devices()[i], intermediate_mem_config)
-            )
+            tt_intermediate_tensor = ttnn.Tensor(zeros_tensor, input_dtype).to(layout)
             tt_intermediate_tensors.append(tt_intermediate_tensor)
-        intermediate_tensor_mesh = ttnn.aggregate_as_tensor(tt_intermediate_tensors)
+        intermediate_tensor_mesh = ttnn.aggregate_as_tensor(tt_intermediate_tensors).to(
+            mesh_device, intermediate_mem_config
+        )
         intermediate_tensors_list.append(intermediate_tensor_mesh)
     tt_out_tensor_list = []
 

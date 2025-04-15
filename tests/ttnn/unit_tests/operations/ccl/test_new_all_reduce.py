@@ -311,12 +311,11 @@ def run_all_reduce_impl(
         output_tensor = output_tensor_goldens_list[-1]
         validate(tt_out_tensor, output_tensor)
 
-    for i in range(mesh_device.get_num_devices()):
-        reshard_op_cnt = 1 if loopback_size > 1 else 0
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1 + reshard_op_cnt
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters + reshard_op_cnt
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+    reshard_op_cnt = 1 if loopback_size > 1 else 0
+    assert (
+        mesh_device.num_program_cache_entries() == 1 + reshard_op_cnt
+        or mesh_device.num_program_cache_entries() == num_iters + reshard_op_cnt
+    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
 
