@@ -104,7 +104,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb) {
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
     sub_bcast_cols_init_short(in0_cb, in1_cb);
-    exp_tile_init<true>();
+    exp_tile_init<true, true>();
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
 
@@ -116,7 +116,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
-                exp_tile<true>(j);
+                exp_tile<true, true>(j);
                 in0_index++;
             }
             tile_regs_commit();
@@ -248,7 +248,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
     sub_tiles_init(in0_cb, in1_cb);
-    exp_tile_init<EXP_APPROX_MODE>();
+    exp_tile_init<true, false>();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -258,7 +258,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
 
-        exp_tile<EXP_APPROX_MODE>(0);
+        exp_tile<true, false>(0);
 
         pack_tile(0, out_cb);
 
@@ -335,8 +335,14 @@ void matmul_blocks(
             tile_regs_commit();
 
             tile_regs_wait();
-            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                pack_tile(i, out_cb);
+            uint32_t dst_idx = 0;
+            uint32_t out_col_offset = in1_subblock * subblock_w;
+            for (uint32_t r = 0; r < subblock_h; r++) {
+                uint32_t out_row_offset = (r + subblock_h * in0_subblock) * N;
+                for (uint32_t c = 0; c < subblock_w; c++) {
+                    pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
+                    dst_idx++;
+                }
             }
             tile_regs_release();
             in1_index_offset += subblock_w;

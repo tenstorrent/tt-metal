@@ -224,11 +224,17 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     const uint32_t qk_in0_block_w = DHt;
     // max of Sk_chunk_t and dst_size
-    const uint32_t qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
+    uint32_t qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
     // If qk_out_subblock_w is full row of output, scale subblock_h so volume = dst_size. Otherwise it's 1 to maintain
     // row-major intermediate buffer.
-    const uint32_t qk_out_subblock_h =
+    uint32_t qk_out_subblock_h =
         (qk_out_subblock_w == Sk_chunk_t) ? (std::min(Sq_chunk_t, dst_size / qk_out_subblock_w)) : 1;
+
+    if (qk_out_subblock_w == dst_size && qk_out_subblock_h == 1 && Sk_chunk_t % 2 == 0) {
+        // Hacky, try to get 2x4 output subblock if possible to optimize matmul util.
+        qk_out_subblock_w = qk_out_subblock_w / 2;
+        qk_out_subblock_h = 2;
+    }
 
     const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
     const uint32_t qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
