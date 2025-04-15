@@ -2062,10 +2062,11 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
         t.set_tensor_spec(TensorSpec(
             input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
-        device_input_tensors.push_back(t.to_device(devices[i]));
+        device_input_tensors.push_back(t);
     }
     // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
+    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
+                                         .to_device(test_fixture.mesh_device_.get());
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
 
     log_info(tt::LogTest, "launching op");
@@ -2108,18 +2109,12 @@ void run_ring_all_gather_with_persistent_fabric(
     }
     // Initialize MeshDevice with 1D Fabric
     Fabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
+    test_fixture.mesh_device_->reshape(MeshShape(1, 8));
+
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
-    std::vector<IDevice*> devices = {
-        view.get_device(MeshCoordinate(0, 0)),
-        view.get_device(MeshCoordinate(0, 1)),
-        view.get_device(MeshCoordinate(0, 2)),
-        view.get_device(MeshCoordinate(0, 3)),
-        view.get_device(MeshCoordinate(1, 3)),
-        view.get_device(MeshCoordinate(1, 2)),
-        view.get_device(MeshCoordinate(1, 1)),
-        view.get_device(MeshCoordinate(1, 0))};
+    std::vector<IDevice*> devices = test_fixture.mesh_device_->get_devices();
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -2138,10 +2133,11 @@ void run_ring_all_gather_with_persistent_fabric(
         t.set_tensor_spec(TensorSpec(
             input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
-        device_input_tensors.push_back(t.to_device(devices[i]));
+        device_input_tensors.push_back(t);
     }
     // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
+    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
+                                         .to_device(test_fixture.mesh_device_.get());
 
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;

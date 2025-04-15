@@ -39,26 +39,19 @@ std::vector<IDevice*> get_line_devices(distributed::MeshDevice* mesh_device) {
         view.get_device(distributed::MeshCoordinate(0, 3))};
 }
 
-struct FabricGuard {
-    FabricGuard(const std::vector<IDevice*>& devices) : devices(devices) {
-        setup_test_with_persistent_fabric(
-            devices, programs, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric, true);
-    }
-    ~FabricGuard() {
-        persistent_fabric_teardown_sequence(
-            devices, subdevice_managers, line_fabric.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-    }
-
-    std::vector<IDevice*> devices;
-    std::vector<Program> programs;
-    std::optional<SubdeviceInfo> subdevice_managers;
-    std::optional<std::vector<Program>> fabric_programs;
-    std::vector<Program*> fabric_program_ptrs;
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
-};
-
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
+
+class T3000MultiCQFabricMeshDeviceFixture : public T3000MultiCQMeshDeviceFixture {
+protected:
+    T3000MultiCQFabricMeshDeviceFixture() {
+        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_1D);
+    }
+    void TearDown() override {
+        T3000MultiCQMeshDeviceFixture::TearDown();
+        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+    }
+};
 
 TEST_F(T3000MultiCQMeshDeviceFixture, AllGather) {
     mesh_device_->enable_program_cache();
@@ -82,10 +75,9 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AllGather) {
     }
 }
 
-TEST_F(T3000MultiCQMeshDeviceFixture, AllGatherAsync) {
+TEST_F(T3000MultiCQFabricMeshDeviceFixture, AllGatherAsync) {
     mesh_device_->enable_program_cache();
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
-    CMAKE_UNIQUE_NAMESPACE::FabricGuard fabric_guard(devices);
 
     std::vector<ttnn::Tensor> tensors;
     TensorSpec tensor_spec(
