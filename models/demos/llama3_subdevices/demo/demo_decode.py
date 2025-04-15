@@ -399,7 +399,7 @@ def run_llama3_demo(
     users_decoding = True  # reset to handle next batch
     total_decoding_time = 0  # Track total decoding time
     total_tokens_generated = 0  # Track total tokens generated
-    tokens_per_second_per_user_token127 = 0  # Track tokens per second per user at token 128
+    tokens_per_second_per_user_token127 = None  # Track tokens per second per user at token 128
 
     all_outputs = []
 
@@ -503,7 +503,7 @@ def run_llama3_demo(
     profiler.end(profiler_step_name)
     profiler.end("run")
 
-    if is_ci_env:
+    if is_ci_env and tokens_per_second_per_user_token127 is not None:
         benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
 
         benchmark_data.save_partial_run_json(
