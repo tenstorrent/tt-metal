@@ -159,6 +159,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         last_dim,                                         // last_dim
         num_banks,                                        // num_banks
         optimized_dim3,                                   // optimized_dim3
+        num_links,                                        // num_links
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
     for (const auto& arg : reader_kernel_config.compile_args) {
@@ -189,6 +190,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         last_dim,                                          // last_dim
         num_banks,                                         // num_bansks
         optimized_dim3,                                    // optimized_dim3
+        num_links,                                         // num_links
     };
     for (const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);

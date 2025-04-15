@@ -4,7 +4,6 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_constants.hpp>
-#include "minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -23,55 +22,7 @@ constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(4);
 constexpr bool last_dim = get_compile_time_arg_val(5);
 constexpr uint32_t num_banks = get_compile_time_arg_val(6);
 constexpr bool optimized_dim3 = get_compile_time_arg_val(7);
-
-template <bool DRAM>
-inline void pack_contig_tiles_dim3_bf16(
-    uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
-    uint32_t total = 0;
-    uint32_t tile_id = 0;
-    uint32_t total_cols = tile_cols_per_chip * ring_size;
-    uint32_t end_abs_tile_id = dim3_rel2abs_tile_id(num_tiles - 1, tile_cols_per_chip, ring_size, my_chip_id);
-    while (total < num_tiles) {
-        uint32_t abs_tile_id = dim3_rel2abs_tile_id(tile_id, tile_cols_per_chip, ring_size, my_chip_id);
-        const uint32_t l1_write_addr_base = get_write_ptr(cb0_id);
-        uint32_t l1_write_addr = l1_write_addr_base;
-        if (dim3_was_stride_sent(abs_tile_id, total_cols, tile_cols_per_chip, num_banks, my_chip_id)) {
-            if (dim3_was_stride_sent(
-                    abs_tile_id, total_cols, tile_cols_per_chip, packet_size_in_pages * num_banks, my_chip_id)) {
-                cb_reserve_back(cb0_id, packet_size_in_pages);
-                noc_async_read_tile(tile_id, addrgen, l1_write_addr);
-                tile_id++;
-                total++;
-                noc_async_read_barrier();
-                cb_push_back(cb0_id, packet_size_in_pages);
-            } else {
-                tile_id++;  // skip tile as it is already processed
-            }
-        } else {
-            cb_reserve_back(cb0_id, packet_size_in_pages);
-            // check whether there is contiguous tile, the tile is in the local chip/buffer
-            if ((abs_tile_id + num_banks) <= end_abs_tile_id &&
-                dim3_is_tile_in_local(abs_tile_id + num_banks, total_cols, tile_cols_per_chip, my_chip_id)) {
-                // +12ed tile exists in same bank of output tensor
-                uint32_t id = tile_id;
-                for (uint32_t j = 0; j < packet_size_in_pages; j++) {
-                    noc_async_read_tile(id, addrgen, l1_write_addr);
-                    l1_write_addr += tensor0_page_size;
-                    id = dim3_abs2rel_tile_id(abs_tile_id + num_banks, tile_cols_per_chip, ring_size, my_chip_id);
-                }
-                tile_id++;
-                total += packet_size_in_pages;
-            } else {
-                // TODO: loop
-                noc_async_read_tile(tile_id, addrgen, l1_write_addr);
-                tile_id++;
-                total++;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb0_id, packet_size_in_pages);
-        }
-    }
-}
+constexpr uint32_t num_links = get_compile_time_arg_val(8);
 
 template <bool DRAM>
 inline void pack_full_contig(uint32_t contig_total, uint32_t& tile_id, InterleavedAddrGenFast<DRAM>& addrgen) {
@@ -260,6 +211,25 @@ inline void pack_dim2(
     }
 }
 
+template <bool DRAM>
+inline void pack_generic(uint32_t tile_id_start, uint32_t tile_id_end, InterleavedAddrGenFast<DRAM>& tensor0_addrgen) {
+    uint32_t tile_id = tile_id_start;
+    uint32_t num_tiles = tile_id_end - tile_id_start;
+    for (uint32_t i = 0; i < num_tiles; i += packet_size_in_pages) {
+        uint32_t num_pages_to_read = min(num_tiles - i, packet_size_in_pages);
+        cb_reserve_back(cb0_id, num_pages_to_read);
+        const uint32_t l1_write_addr_base = get_write_ptr(cb0_id);
+        uint32_t l1_write_addr = l1_write_addr_base;
+        for (uint32_t j = 0; j < num_pages_to_read; j++) {
+            noc_async_read_tile(tile_id, tensor0_addrgen, l1_write_addr);
+            l1_write_addr += tensor0_page_size;
+            tile_id++;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb0_id, num_pages_to_read);
+    }
+}
+
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
  * dispatch implementations depending on those invocation parameters.
@@ -288,6 +258,7 @@ void kernel_main() {
     DPRINT << "last_dim: " << (uint32_t)last_dim << "\n";
     DPRINT << "num_banks: " << (uint32_t)num_banks << "\n";
     DPRINT << "optimized_dim3: " << (uint32_t)optimized_dim3 << "\n";
+    DPRINT << "num_links: " << (uint32_t)num_links << "\n";
 
     DPRINT << "rt args: \n";
     DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
@@ -305,19 +276,23 @@ void kernel_main() {
     DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
     DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
 
-    if constexpr (last_dim) {
-        if constexpr (packet_size_in_pages == 2) {
+    if constexpr (num_links == 1) {
+        if constexpr (last_dim) {
             if constexpr (optimized_dim3) {
-                pack_dim3_bf16_remain_even(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+                if constexpr (packet_size_in_pages == 2) {
+                    pack_dim3_bf16_remain_even(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+                } else {
+                    pack_dim3_bf8_dram_remain048<is_dram>(
+                        num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+                }
             } else {
-                pack_contig_tiles_dim3_bf16<is_dram>(
-                    num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+                pack_generic<is_dram>(tile_id_start, tile_id_end, tensor0_addrgen);
             }
         } else {
-            pack_dim3_bf8_dram_remain048<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+            pack_dim2(num_tiles_per_chip, tile_id_start, tensor0_addrgen);
         }
     } else {
-        pack_dim2(num_tiles_per_chip, tile_id_start, tensor0_addrgen);
+        pack_generic<is_dram>(tile_id_start, tile_id_end, tensor0_addrgen);
     }
 
     DPRINT << "DONE \n";
