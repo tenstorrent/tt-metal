@@ -164,8 +164,8 @@ operation::ProgramWithCallbacks upsample_multi_core(
 
     // extra limitation to avoid post upsample step of resharding
     if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        ncores_x = all_cores.ranges().begin()->end_coord.x + 1;
-        ncores_nhw = all_cores.ranges().begin()->end_coord.y + 1;
+        ncores_x = all_cores.ranges().begin()->end_coord.x - all_cores.ranges().begin()->start_coord.x + 1;
+        ncores_nhw = all_cores.ranges().begin()->end_coord.y - all_cores.ranges().begin()->start_coord.y + 1;
         input_stick_nbytes = input_stick_nbytes / ncores_x;
         output_stick_nbytes = output_stick_nbytes / ncores_x;
     }
