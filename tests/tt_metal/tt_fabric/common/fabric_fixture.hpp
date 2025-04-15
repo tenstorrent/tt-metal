@@ -30,6 +30,8 @@ class ControlPlaneFixture : public ::testing::Test {
        void TearDown() override {}
 };
 
+class ClusterFixture : public ::testing::Test {};
+
 class BaseFabricFixture : public ::testing::Test {
 public:
     tt::ARCH arch_;

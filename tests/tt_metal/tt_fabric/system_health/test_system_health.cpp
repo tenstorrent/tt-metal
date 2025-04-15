@@ -15,9 +15,9 @@
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
-namespace fabric_router_tests {
+namespace system_health_tests {
 
-TEST_F(ControlPlaneFixture, TestUBBConnectivity) {
+TEST_F(ClusterFixture, TestUBBConnectivity) {
     const auto& eth_connections = tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections();
     EXPECT_EQ(eth_connections.size(), 32);
     for (const auto& [chip, connections] : eth_connections) {
@@ -39,6 +39,5 @@ TEST_F(ControlPlaneFixture, TestUBBConnectivity) {
     }
 }
 
-
-}  // namespace fabric_router_tests
+}  // namespace system_health_tests
 }  // namespace tt::tt_fabric
