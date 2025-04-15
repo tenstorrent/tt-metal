@@ -8,7 +8,6 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #include <array>
 #include <utility>
@@ -70,12 +69,6 @@ constexpr std::array<uint32_t, NUM_SENDER_CHANNELS_FROM_FABRIC> sender_channel_f
         MAX_NUM_SENDER_CHANNELS_FROM_FABRIC_CURRENTLY_SUPPORTED,
         uint32_t>(std::array<uint32_t, MAX_NUM_SENDER_CHANNELS_FROM_FABRIC_CURRENTLY_SUPPORTED>{
         sender_1_free_slots_stream_id, sender_2_free_slots_stream_id});
-constexpr std::array<uint32_t, NUM_SENDER_CHANNELS_FROM_FABRIC> sender_channel_free_slots_stream_reg_addrs =
-    take_first_n_elements<
-        NUM_SENDER_CHANNELS_FROM_FABRIC,
-        MAX_NUM_SENDER_CHANNELS_FROM_FABRIC_CURRENTLY_SUPPORTED,
-        uint32_t>(std::array<uint32_t, MAX_NUM_SENDER_CHANNELS_FROM_FABRIC_CURRENTLY_SUPPORTED>{
-        get_stream_reg_addr<sender_1_free_slots_stream_id>(), get_stream_reg_addr<sender_2_free_slots_stream_id>()});
 
 static_assert(
     NUM_RECEIVER_CHANNELS <= NUM_SENDER_CHANNELS,
