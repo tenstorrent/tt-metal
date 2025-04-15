@@ -224,7 +224,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     }
 
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
-    bmm_op_utils::throttle_mm_perf(mm_kernel_defines, math_fidelity);
+    bool tiny_tile_mm =
+        !(in0_tile.get_height() == TILE_HEIGHT && in0_tile.get_width() == TILE_WIDTH &&
+          in1_tile.get_height() == TILE_HEIGHT && in1_tile.get_width() == TILE_WIDTH);
+    bmm_op_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines, math_fidelity, tiny_tile_mm);
 
     // Create compute kernel
     auto mm_kernel_group_1_id = tt_metal::CreateKernel(

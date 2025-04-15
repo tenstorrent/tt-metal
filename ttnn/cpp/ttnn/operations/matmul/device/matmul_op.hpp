@@ -260,6 +260,24 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 
 void add_stagger_defines_if_needed(
     const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
-void throttle_mm_perf(std::map<string, string>& mm_kernel_defines, MathFidelity fidelity);
+
+/*
+ * Optionally limit matmul compute throughput by inserting NOP instructions between MVMUL instructions of matmul kernel
+ * This will slow down the OP if UNPACK/PACK threads are capable of feeding data sufficiently fast (MATH compute bound)
+ *
+ * Enabled by setting env var TT_THROTTLE_MM_PERF to value in range {1,2,3,4,5}
+ * Each value corresponds to level of throttling as:
+ * Level 1: throttle to 73% of max
+ * Level 2: throttle to 67% of max
+ * Level 3: throttle to 50% of max
+ * Level 4: throttle to 40% of max
+ * Level 5: throttle to 33% of max
+ */
+void throttle_mm_perf(
+    const tt::ARCH arch,
+    const int num_cores,
+    std::map<string, string>& mm_kernel_defines,
+    MathFidelity fidelity,
+    bool tiny_tile_mm);
 
 }  // namespace bmm_op_utils
