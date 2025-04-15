@@ -9,6 +9,7 @@
 #include "edm_fabric_worker_adapters.hpp"
 #include "fabric_edm_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include <cstdint>
 
 // If the hop/distance counter equals to the below value, it indicates that it has
@@ -216,13 +217,16 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     uint16_t payload_size_bytes,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
-    uint8_t transaction_id) {
+    uint8_t transaction_id,
+    uint32_t downstream_sender_channel_slots_free_stream_id) {
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
     ASSERT(downstream_edm_interface.edm_has_space_for_packet());  // best effort check
 
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
+    DPRINT << "forwarding packet to downstream edm\n";
     update_packet_header_for_next_hop(packet_header, cached_routing_fields);
     downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<enable_ring_support>(
         reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
+    increment_local_update_ptr_val(downstream_sender_channel_slots_free_stream_id, -1);
 }

@@ -101,7 +101,7 @@ private:
     uint8_t channel_id;
 };
 
-template <uint8_t NUM_BUFFERS>
+template <uint8_t NUM_BUFFERS, bool UPDATE_STREAM_REG_ON_PRODUCER_WRPTR_UPDATE = false>
 struct EdmChannelWorkerInterface {
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
@@ -150,7 +150,12 @@ struct EdmChannelWorkerInterface {
 
     template <bool enable_ring_support>
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
-        noc_inline_dw_write<false, true>(this->cached_worker_semaphore_address, new_ptr_val);
+        if constexpr (UPDATE_STREAM_REG_ON_PRODUCER_WRPTR_UPDATE) {
+            noc_inline_dw_write<UPDATE_STREAM_REG_ON_PRODUCER_WRPTR_UPDATE, true>(
+                this->cached_worker_semaphore_address, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        } else {
+            noc_inline_dw_write<false, true>(this->cached_worker_semaphore_address, new_ptr_val);
+        }
     }
 
     // Connection management methods
@@ -171,11 +176,20 @@ struct EdmChannelWorkerInterface {
         noc_semaphore_inc<posted>(worker_semaphore_address, 1);
     }
 
-    FORCE_INLINE void cache_producer_noc_addr() {
+    FORCE_INLINE void cache_producer_noc_addr(uint32_t stream_reg_addr = std::numeric_limits<uint32_t>::max()) {
         const auto& worker_info = *worker_location_info_ptr;
-        uint64_t worker_semaphore_address = get_noc_addr(
-            (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
-        this->cached_worker_semaphore_address = worker_semaphore_address;
+        if constexpr (UPDATE_STREAM_REG_ON_PRODUCER_WRPTR_UPDATE) {
+            ASSERT(stream_reg_addr != std::numeric_limits<uint32_t>::max());
+            uint64_t worker_semaphore_address =
+                get_noc_addr((uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, stream_reg_addr);
+            this->cached_worker_semaphore_address = worker_semaphore_address;
+        } else {
+            uint64_t worker_semaphore_address = get_noc_addr(
+                (uint32_t)worker_info.worker_xy.x,
+                (uint32_t)worker_info.worker_xy.y,
+                worker_info.worker_semaphore_address);
+            this->cached_worker_semaphore_address = worker_semaphore_address;
+        }
     }
 
     FORCE_INLINE bool all_eth_packets_acked() const { return this->local_ackptr.is_caught_up_to(this->local_wrptr); }
@@ -190,6 +204,8 @@ struct EdmChannelWorkerInterface {
 
     volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr;
     uint64_t cached_worker_semaphore_address = 0;
+
+    // This sender channel's local copy of the producer's write pointer
     volatile tt_l1_ptr uint32_t* const remote_producer_wrptr;
     volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
     uint8_t sender_sync_noc_cmd_buf;

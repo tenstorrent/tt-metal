@@ -8,6 +8,7 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #include <array>
 #include <utility>
@@ -36,6 +37,10 @@ constexpr uint32_t to_sender_1_pkts_completed_id = 6;
 // receivers updates the reg on this stream
 constexpr uint32_t to_sender_2_pkts_completed_id = 7;
 
+// Receiver sees this and sender writes to it
+constexpr uint32_t sender_1_free_slots_stream_id = 12;
+constexpr uint32_t sender_2_free_slots_stream_id = 14;
+
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 3;
 
@@ -49,6 +54,28 @@ constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_C
 constexpr size_t wait_for_host_signal_IDX = NUM_RECEIVER_CHANNELS_CT_ARG_IDX + 1;
 constexpr bool wait_for_host_signal = get_compile_time_arg_val(wait_for_host_signal_IDX);
 constexpr size_t MAIN_CT_ARGS_START_IDX = wait_for_host_signal_IDX + 1;
+
+constexpr size_t NUM_WORKER_SENDER_CHANNELS = 1;
+constexpr size_t MAX_NUM_SENDER_CHANNELS_FROM_FABRIC_CURRENTLY_SUPPORTED = 2;
+constexpr size_t NUM_SENDER_CHANNELS_FROM_FABRIC = NUM_SENDER_CHANNELS - NUM_WORKER_SENDER_CHANNELS;
+static_assert(
+    NUM_SENDER_CHANNELS_FROM_FABRIC <= MAX_NUM_SENDER_CHANNELS_FROM_FABRIC_CURRENTLY_SUPPORTED,
+    "NUM_SENDER_CHANNELS_FROM_FABRIC must be less than or equal to "
+    "MAX_NUM_SENDER_CHANNELS_FROM_FABRIC_CURRENTLY_SUPPORTED. If you need more than the current max, please extend it "
+    "accordingly.");
+
+constexpr std::array<uint32_t, NUM_SENDER_CHANNELS_FROM_FABRIC> sender_channel_free_slots_stream_ids =
+    take_first_n_elements<
+        NUM_SENDER_CHANNELS_FROM_FABRIC,
+        MAX_NUM_SENDER_CHANNELS_FROM_FABRIC_CURRENTLY_SUPPORTED,
+        uint32_t>(std::array<uint32_t, MAX_NUM_SENDER_CHANNELS_FROM_FABRIC_CURRENTLY_SUPPORTED>{
+        sender_1_free_slots_stream_id, sender_2_free_slots_stream_id});
+constexpr std::array<uint32_t, NUM_SENDER_CHANNELS_FROM_FABRIC> sender_channel_free_slots_stream_reg_addrs =
+    take_first_n_elements<
+        NUM_SENDER_CHANNELS_FROM_FABRIC,
+        MAX_NUM_SENDER_CHANNELS_FROM_FABRIC_CURRENTLY_SUPPORTED,
+        uint32_t>(std::array<uint32_t, MAX_NUM_SENDER_CHANNELS_FROM_FABRIC_CURRENTLY_SUPPORTED>{
+        get_stream_reg_addr<sender_1_free_slots_stream_id>(), get_stream_reg_addr<sender_2_free_slots_stream_id>()});
 
 static_assert(
     NUM_RECEIVER_CHANNELS <= NUM_SENDER_CHANNELS,
