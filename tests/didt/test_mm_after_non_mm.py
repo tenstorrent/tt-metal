@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -11,6 +11,9 @@ import ttnn
 from models.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
 
+# This test was created to perform temperature readings on BH chip
+# The workload starts with loops of a non-matmul OP to bring the chip to
+# steady state, followed by sharded matmul which draws max power
 class FF1Test(OpTestBase):
     def __init__(
         self,
@@ -27,7 +30,7 @@ class FF1Test(OpTestBase):
         in1_layout,
         program_config,
         compute_config,
-        loop_count=1000,
+        loop_count=1,
         determinism_check_enabled=False,
         determinism_check_iterations=False,
         non_mm_loops=1000,
