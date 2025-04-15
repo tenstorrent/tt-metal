@@ -272,6 +272,7 @@ Result conv2d_DRAM(
                 input_tensor_on_device.layout(),
                 std::make_optional(input_tensor_on_device.memory_config()),
                 kernel_size,
+                stride,
                 groups,
                 bias_tensor.has_value(),
                 compute_config);
