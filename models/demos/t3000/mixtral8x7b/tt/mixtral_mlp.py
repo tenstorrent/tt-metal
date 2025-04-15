@@ -48,14 +48,14 @@ class TtMixtralMLP(LightweightModule):
 
         self.prefill_mlp_config = self.model_config["PREFILL_MLP_COMPUTE_CONFIG"]
 
-    def forward(self, x: ttnn.Tensor, mode="decode") -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             seq_len = x.shape[-2]
             compute_kernel_config = self.prefill_mlp_config
             if seq_len >= 2048 // 2:  # Too big to compute. Set different program configs based on seqlen

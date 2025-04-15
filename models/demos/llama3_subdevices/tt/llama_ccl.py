@@ -22,13 +22,13 @@ class TT_CCL:
         enable_persistent_fabric=True,
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
     ):
         self.mode = mode
         all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
 
         self.mesh_device = mesh_device
-        self.sub_device_crs = all_crs if mode == "prefill" else model_args.sub_core_grids
+        self.sub_device_crs = all_crs if mode == ttnn.InferenceMode.PREFILL else model_args.sub_core_grids
         self.worker_sub_device_id = worker_sub_device_id
         self.enable_persistent_fabric = enable_persistent_fabric
         self.create_persistent_fabric = create_persistent_fabric
@@ -46,7 +46,7 @@ class TT_CCL:
 
             # Double buffered on each axis
             self.gather_semaphore_handles = [[], []]
-            if mode == "prefill":
+            if mode == ttnn.InferenceMode.PREFILL:
                 self.from_semaphore_handles = [[], []]
                 self.to_semaphore_handles = [[], []]
             for i in range(2):
@@ -54,7 +54,7 @@ class TT_CCL:
                     self.gather_semaphore_handles[i].append(
                         create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
                     )
-                    if mode == "prefill":
+                    if mode == ttnn.InferenceMode.PREFILL:
                         self.from_semaphore_handles[i].append(
                             create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
                         )
@@ -66,11 +66,11 @@ class TT_CCL:
             self.buffer_idx = [0, 0]
             self.reduce_scatter_buffer_idx = [0, 0]
 
-            if mode == "decode":
+            if mode == ttnn.InferenceMode.DECODE:
                 self.persistent_buffers = self.get_persistent_buffers()
                 self.all_gather_buffers = self.get_all_gather_buffers()
                 self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
-            if mode == "prefill":
+            if mode == ttnn.InferenceMode.PREFILL:
                 self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
                 self.all_gather_buffers = self.get_prefill_all_gather_buffers()
 
@@ -283,7 +283,7 @@ class TT_CCL:
         if self.model_config is None:
             return persistent_buffers
 
-        M = 128 if self.mode == "prefill" else 32
+        M = 128 if self.mode == ttnn.InferenceMode.PREFILL else 32
         buffers_dict = {
             "QKV": [(1, 1, 128, 1280), (1, 1, 128, 1280 // 4)],
             "WO": [(1, 1, 128, 2048), (1, 1, 128, 2048 // 8)],
@@ -340,7 +340,7 @@ class TT_CCL:
 
         ag_persistent_buffers = {}
 
-        M = 128 if self.mode == "prefill" else 32
+        M = 128 if self.mode == ttnn.InferenceMode.PREFILL else 32
         buffers_dict = {
             "QKV": [(1, 1, 128, 1280)],
             "WO": [(1, 1, 128, 2048)],
@@ -367,7 +367,7 @@ class TT_CCL:
     def line_all_reduce(
         self, input_tensor_mesh, cluster_axis, num_links, memory_config, dtype=None, lm_head=False, buffer_key=None
     ):
-        if self.mode == "decode":
+        if self.mode == ttnn.InferenceMode.DECODE:
             if lm_head:
                 persistent_buffer = self.tt_lm_head_buffer_l1
             else:
@@ -464,7 +464,7 @@ class TT_CCL:
         math_op=ttnn.ReduceType.Sum,
         buffer_key=None,
     ):
-        if self.mode == "prefill":
+        if self.mode == ttnn.InferenceMode.PREFILL:
             persistent_buffers = self.persistent_buffers.get(buffer_key, None)
 
             ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
@@ -509,7 +509,7 @@ class TT_CCL:
         return ttnn_tensor_out
 
     def line_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None):
-        if self.mode == "prefill" and not self.enable_persistent_fabric:
+        if self.mode == ttnn.InferenceMode.PREFILL and not self.enable_persistent_fabric:
             num_links = 1  # if cluster_axis==1 else 4
             ttnn_tensor_out = ttnn.all_gather(
                 input_tensor_mesh,

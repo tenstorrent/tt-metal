@@ -41,7 +41,7 @@ def test_qwen_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds
     if mesh_device.shape != (1, 1):
         pytest.skip("Only N150 is supported")
     dtype = ttnn.bfloat8_b
-    mode = "decode" if seq_len <= 32 else "prefill"
+    mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE if seq_len <= 32 else ttnn.InferenceMode.PREFILL
 
     mesh_device.enable_async(True)
 
@@ -78,7 +78,7 @@ def test_qwen_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat8_b,
         memory_config=model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
-        if mode == "decode"
+        if mode == ttnn.InferenceMode.DECODE
         else ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )

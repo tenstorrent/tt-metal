@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import ttnn
 import pytest
 from loguru import logger
 
@@ -151,10 +152,10 @@ def run_test_FalconDecoder_inference(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
-        ("prefill", 1, 128, 0),
-        ("prefill", 1, 1024, 0),
-        ("prefill", 1, 2048, 0),
-        ("decode", 32, 1, 128),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0),
+        (ttnn.InferenceMode.PREFILL, 1, 1024, 0),
+        (ttnn.InferenceMode.PREFILL, 1, 2048, 0),
+        (ttnn.InferenceMode.DECODE, 32, 1, 128),
     ),
     ids=["prefill_seq128", "prefill_seq1024", "prefill_seq2048", "decode_batch32"],
 )
@@ -165,7 +166,7 @@ def run_test_FalconDecoder_inference(
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"))
 def test_FalconDecoder_inference(
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -177,7 +178,7 @@ def test_FalconDecoder_inference(
     mesh_device,
     enable_async_mode,
 ):
-    if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
+    if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == ttnn.InferenceMode.PREFILL:
         pytest.skip(f"prefill does not support L1_SHARDED")
 
     model_config = get_model_config(model_config_str, seq_len, batch)

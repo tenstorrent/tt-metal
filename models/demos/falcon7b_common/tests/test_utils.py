@@ -74,7 +74,7 @@ def create_prefill_attn_mask_for_sharded_softmax(attention_mask, num_attn_heads,
 
 
 def get_rand_falcon_inputs(
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     seq_len,
     batch,
     kv_cache_len,
@@ -91,7 +91,7 @@ def get_rand_falcon_inputs(
     # TODO: Generate attention_mask on device
     tt_attention_input = []
     tt_attention_mask = []
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         q_len, kv_len = seq_len, seq_len
         # assert batch == 1, "For prefill, batch must be 1!"
         assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
@@ -156,7 +156,7 @@ def get_rand_falcon_inputs(
             )
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         q_len, kv_len = seq_len, kv_cache_len + 1
         assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
         assert q_len == 1, "For decode, q_len must be 1!"
@@ -274,9 +274,9 @@ def concat_device_out_layer_present(mesh_device, tt_layer_present, seq_end_idx, 
 
 
 def concat_device_outputs(mesh_device, tt_out, llm_mode, tt_layer_present, seq_end_idx):
-    concat_dim = 2 if llm_mode == "decode" else 0
+    concat_dim = 2 if llm_mode == ttnn.InferenceMode.DECODE else 0
     tt_out = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=concat_dim).squeeze(1)
-    if llm_mode == "decode":
+    if llm_mode == ttnn.InferenceMode.DECODE:
         tt_out = tt_out.transpose(0, 1)
     tt_layer_present = concat_device_out_layer_present(mesh_device, tt_layer_present, seq_end_idx)
     return tt_out, tt_layer_present

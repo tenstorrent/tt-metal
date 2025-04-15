@@ -84,7 +84,7 @@ class TtMoeLayer(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
-    def forward(self, inputs, mode="decode"):
+    def forward(self, inputs, mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE):
         """
         Tensors are postfixed with 4 characters that represent their 4-D shape:
         B : batch_size (32)
@@ -106,7 +106,7 @@ class TtMoeLayer(LightweightModule):
         # get weights for top-2 experts -- masking out everything except the 8 experts (needed because top-k works with a min input of size 64)
         gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
 
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             weights_1SB1 = ttnn.moe(gate_logits_1SB8, self.top8_mask_11B_64, self.top2_mask_11BB, 32)
         else:
             topk_values, topk_indices = ttnn.topk(gate_logits_1SB8, 32)
@@ -129,7 +129,7 @@ class TtMoeLayer(LightweightModule):
         weights_1SB1.deallocate(True)
 
         # All gather
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             output_11BH_gathered = ttnn.all_gather(results_11BH, dim=1, num_links=1)
             results_11BH.deallocate(True)
             # Sum reduction

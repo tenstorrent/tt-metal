@@ -28,7 +28,7 @@ import ttnn
 def run_test_FalconCausalLM_end_to_end(
     device,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -50,12 +50,12 @@ def run_test_FalconCausalLM_end_to_end(
     head_dim = configuration.hidden_size // configuration.num_attention_heads
     use_cache = True
     dtype = model_config["DEFAULT_DTYPE"]
-    kv_len = seq_len if llm_mode == "prefill" else kv_cache_len + 1
+    kv_len = seq_len if llm_mode == ttnn.InferenceModettnn.InferenceMode.PREFILL else kv_cache_len + 1
 
     model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
 
     # Generate dummy kv_cache --------------------------------------------------------------
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         past_key_values = None
         tt_layer_past = ()
         for i in range(num_layers):
@@ -63,7 +63,7 @@ def run_test_FalconCausalLM_end_to_end(
             tt_layer_past += (tt_current_layer_past,)
         attention_mask = None
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         q_len, kv_len = seq_len, kv_cache_len + 1
         assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
         assert q_len == 1, "For decode, q_len must be 1!"
@@ -101,7 +101,7 @@ def run_test_FalconCausalLM_end_to_end(
         parameters,
     )
     # TODO: Generate embeddings and attention_mask on device
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         model_inputs = torch.split(model_input, 1)
         tt_embeddings, tt_attention_mask = zip(
             *[
@@ -109,19 +109,19 @@ def run_test_FalconCausalLM_end_to_end(
                 for m_i in model_inputs
             ]
         )
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tt_layer_past = ()
         for i in range(num_layers):
             _, tt_current_layer_past = create_kv_cache(llm_mode, dtype, batch, kv_cache_len, configuration, device)
             tt_layer_past += (tt_current_layer_past,)
         attention_mask = None
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_layer_past = ()
         for i in range(num_layers):
             current_layer_past, tt_current_layer_past = create_kv_cache(
@@ -129,7 +129,7 @@ def run_test_FalconCausalLM_end_to_end(
             )
             tt_layer_past += (tt_current_layer_past,)
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         model_inputs = torch.split(model_input, 1)
         tt_embeddings, tt_attention_mask = zip(
             *[
@@ -137,12 +137,12 @@ def run_test_FalconCausalLM_end_to_end(
                 for m_i in model_inputs
             ]
         )
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tt_outs = []
         model_inputs = torch.split(model_input, 1)
         tt_embeddings, tt_attention_mask = zip(
@@ -163,7 +163,7 @@ def run_test_FalconCausalLM_end_to_end(
             )
             tt_outs.append(tt_out)
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_out, tt_layer_present = tt_FalconCausalLM(
             input_embeddings=tt_embeddings,
             llm_mode=llm_mode,
@@ -177,11 +177,11 @@ def run_test_FalconCausalLM_end_to_end(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
     (
-        ("prefill", 1, 128, 0, 0.30),
-        ("prefill", 1, 256, 0, 0.44),
-        ("decode", 32, 1, 128, 0.27),
-        ("decode", 32, 1, 1024, 0.35),
-        ("decode", 32, 1, 2047, 0.48),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0, 0.30),
+        (ttnn.InferenceMode.PREFILL, 1, 256, 0, 0.44),
+        (ttnn.InferenceMode.DECODE, 32, 1, 128, 0.27),
+        (ttnn.InferenceMode.DECODE, 32, 1, 1024, 0.35),
+        (ttnn.InferenceMode.DECODE, 32, 1, 2047, 0.48),
     ),
     ids=[
         "prefill_seq128",
@@ -206,7 +206,7 @@ def test_perf_bare_metal(
     device,
     use_program_cache,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,

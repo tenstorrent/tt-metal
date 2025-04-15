@@ -212,12 +212,20 @@ class TtLlamaAttention_galaxy:
             cache_file_name=self.cache_path / wo_cache_str,
         )
 
-    def __call__(self, xs, rot_mats, start_pos: int, attn_masks, user_id: int = 0, mode="decode"):
+    def __call__(
+        self,
+        xs,
+        rot_mats,
+        start_pos: int,
+        attn_masks,
+        user_id: int = 0,
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
+    ):
         self.attention_config = self.model_config["attention"][mode]
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
-        elif mode == "prefill":
+        elif mode == ttnn.InferenceMode.PREFILL:
             return self.prefill_forward(xs, rot_mats, attn_masks, user_id)
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")

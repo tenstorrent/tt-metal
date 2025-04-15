@@ -73,11 +73,11 @@ class TtTransformer(nn.Module):
         rot_mat=None,
         transformation_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
     ):
         for layer in self.layers:
             x = layer(x, current_pos, attn_masks, rot_mat, transformation_mats, user_id, mode)
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             return x
         x = self.norm(x, mode=mode)
 

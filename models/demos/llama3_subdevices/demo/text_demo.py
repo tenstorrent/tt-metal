@@ -481,7 +481,7 @@ def test_demo_text(
 
         out_tok = prefilled_token  # .repeat(batch_size, 1)
         try:
-            model.switch_mode("decode")
+            model.switch_mode(ttnn.InferenceMode.DECODE)
         except Exception as e:
             logger.error(f"Error switching to decode mode: {str(e)}")
             model.tt_ccl.close()

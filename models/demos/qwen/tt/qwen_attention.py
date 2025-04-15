@@ -603,9 +603,16 @@ class TtQwenAttention(LightweightModule):
             return output_11SH
 
     def forward(
-        self, x, current_pos, rot_mats=None, transformation_mats=None, user_id=0, mode="decode", page_table=None
+        self,
+        x,
+        current_pos,
+        rot_mats=None,
+        transformation_mats=None,
+        user_id=0,
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
+        page_table=None,
     ):
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             return self.forward_prefill(x, rot_mats, transformation_mats, user_id, page_table)
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table)

@@ -47,8 +47,8 @@ def torch_model():
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
-        ("prefill", 1, 128, 0),
-        ("decode", 32, 1, 128),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0),
+        (ttnn.InferenceMode.DECODE, 32, 1, 128),
     ),
     ids=["prefill_seq128", "decode_batch32"],
 )
@@ -58,14 +58,22 @@ def torch_model():
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 def test_falcon_attention(
-    device, model_name, llm_mode, batch, seq_len, kv_cache_len, expected_pcc, model_config_str, torch_model
+    device,
+    model_name,
+    llm_mode: ttnn.InferenceMode,
+    batch,
+    seq_len,
+    kv_cache_len,
+    expected_pcc,
+    model_config_str,
+    torch_model,
 ):
     torch.manual_seed(0)
 
     configuration = transformers.FalconConfig.from_pretrained(model_name)
     model_config = get_model_config(model_config_str)
     dtype = model_config["DEFAULT_DTYPE"]
-    kv_len = seq_len if llm_mode == "prefill" else kv_cache_len + 1
+    kv_len = seq_len if llm_mode == ttnn.InferenceMode.PREFILL else kv_cache_len + 1
 
     attention_input, tt_attention_input = create_attention_input(
         llm_mode, dtype, batch, seq_len, configuration.hidden_size, device
@@ -120,7 +128,7 @@ def test_falcon_attention(
         ttnn.to_torch(tt_layer_present[1], device=device).squeeze(1),
     )
 
-    if llm_mode == "decode":
+    if llm_mode == ttnn.InferenceMode.DECODE:
         tt_out = tt_out.transpose(0, 1)
     tt_layer_present = (
         tt_layer_present[0][:, :kv_len, :],

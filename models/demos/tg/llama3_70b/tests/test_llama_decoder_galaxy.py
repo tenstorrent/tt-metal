@@ -102,14 +102,14 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
         return result
 
 
-def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
+def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode: ttnn.InferenceMode):
     assert len(x.size()) == 3
     batch, seq_len, hidden_size = x.shape
 
     cache_name = lambda name: llama_decoder_model.cache_path / (
         f"{'llama3_' if llama_decoder_model.llama3 else ''}{name}"
     )
-    if mode == "decode":
+    if mode == ttnn.InferenceMode.DECODE:
         assert seq_len == 1, "Only supporting decode mode"
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
 
@@ -164,7 +164,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
 
         attn_masks = None
 
-    elif mode == "prefill":
+    elif mode == ttnn.InferenceMode.PREFILL:
         x = x.unsqueeze(1)  # [batch, seq_len, hidden_dim] -> [batch, 1, seq_len, hidden_dim]
 
         xs = ttnn.from_torch(
@@ -288,10 +288,10 @@ def run_test_LlamaDecoder_inference(
         cache_path=cache_path,
     )
 
-    mode = "decode" if seq_len == 1 else "prefill"
+    mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE if seq_len == 1 else ttnn.InferenceMode.PREFILL
 
     all_tests_pass, all_pccs = True, []
-    if mode == "prefill":
+    if mode == ttnn.InferenceMode.PREFILL:
         generation_start_pos = 0
         generation_length = 1
     else:
@@ -305,7 +305,7 @@ def run_test_LlamaDecoder_inference(
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             x_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaDecoder_model.prepare_inputs_prefill(
                 pt_inp, start_pos
             )
@@ -373,7 +373,7 @@ def run_test_LlamaDecoder_inference(
         generation_start_pos,
         generation_length,
         seq_len,
-        mode == "prefill",
+        mode == ttnn.InferenceMode.PREFILL,
         pcc,
     )
     all_tests_pass = all_tests_pass and cache_test_pass

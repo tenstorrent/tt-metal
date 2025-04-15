@@ -32,13 +32,15 @@ class DistributedNorm(LightweightModule):
             use_height_and_width_as_shard_shape=True,
         )
 
-    def forward(self, x, mode):
+    def forward(self, x, mode: ttnn.InferenceMode):
         """Apply a norm, possibly gathering inputs if required."""
-        input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        input_mem_cfg = (
+            self.norm.sharded_output_config if mode == ttnn.InferenceMode.DECODE else ttnn.DRAM_MEMORY_CONFIG
+        )
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
-            if mode == "decode":
+            if mode == ttnn.InferenceMode.DECODE:
                 x = ttnn.interleaved_to_sharded(x, self.gather_in_mem_cfg)
                 x = ttnn.all_gather(
                     x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg
@@ -47,12 +49,17 @@ class DistributedNorm(LightweightModule):
                 x = ttnn.all_gather(
                     x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg
                 )
-        elif mode == "decode":
+        elif mode == ttnn.InferenceMode.DECODE:
             # Gathered norms will be sharded for decode mode, so single-chip should be too
             x = ttnn.interleaved_to_sharded(x, input_mem_cfg)
 
         # x sharded in decode mode here
-        x = self.norm(x, mode=mode, in_sharded=(mode == "decode"), out_sharded=(mode == "decode"))
+        x = self.norm(
+            x,
+            mode=mode,
+            in_sharded=(mode == ttnn.InferenceMode.DECODE),
+            out_sharded=(mode == ttnn.InferenceMode.DECODE),
+        )
 
         # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode):

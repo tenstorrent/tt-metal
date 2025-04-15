@@ -164,7 +164,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
             )
 
         # Run ttnn mixtral model
-        tt_out_11BH = tt_model(decode_input_11BH, [start_pos] * batch_size, mode="decode")
+        tt_out_11BH = tt_model(decode_input_11BH, [start_pos] * batch_size, mode=ttnn.InferenceMode.DECODE)
 
         if embed_on_host:
             # Convert ttnn tensor to torch tensor

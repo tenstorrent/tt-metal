@@ -41,7 +41,7 @@ def test_mistral_rms_norm_inference(device, use_program_cache, reset_seeds):
         input, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
     )  # , device, put_on_device=False)
 
-    tt_output = tt_model(tt_input, mode="decode")
+    tt_output = tt_model(tt_input, mode=ttnn.InferenceMode.DECODE)
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)

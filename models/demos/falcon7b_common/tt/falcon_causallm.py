@@ -138,7 +138,7 @@ class TtFalconCausalLM(TtFalconModelShared):
     def forward(
         self,
         input_ids: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
         layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
@@ -157,7 +157,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             device_perf_run=device_perf_run,
         )
 
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             if self.model_config["PREFILL_OPTIMIZED_MODE"] and hidden_states.padded_shape[-2] > 512:
                 lm_logits = falcon_lm_head_matmul_2d(
                     hidden_states,

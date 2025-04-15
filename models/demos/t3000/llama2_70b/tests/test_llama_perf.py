@@ -347,7 +347,7 @@ def test_Llama_perf_device(batch, seq_len, expected_perf):
         logger.info("Directory exists.")
 
     seq_len_str = "2k" if seq_len == 2048 else str(seq_len)
-    llm_mode = "decode" if seq_len == 1 else f"prefill_{seq_len_str}"
+    llm_mode = ttnn.InferenceMode.DECODE if seq_len == 1 else f"prefill_{seq_len_str}"
     command = f"pytest models/demos/t3000/llama2_70b/tests/test_llama_model.py::test_LlamaModel_inference[{llm_mode}-8chip-T3000-2L]"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

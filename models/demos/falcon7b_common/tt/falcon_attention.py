@@ -184,7 +184,7 @@ class TtFalconAttentionPrefill(nn.Module):
         hidden_states: ttnn.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         user_id: int = 0,
         layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
@@ -249,7 +249,7 @@ class TtFalconAttentionPrefill(nn.Module):
             -1,
             memory_config=(
                 self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
-                if llm_mode == "prefill" or self.model_config["l1_sharded"] == False
+                if llm_mode == ttnn.InferenceMode.PREFILL or self.model_config["l1_sharded"] == False
                 else ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.BufferType.L1,

@@ -71,7 +71,14 @@ class TtTransformerBlock(LightweightModule):
         )
 
     def forward(
-        self, xs_1SBH, start_pos_ids, attn_masks, rot_mat, transformation_mats=None, user_id=0, mode="decode"
+        self,
+        xs_1SBH,
+        start_pos_ids,
+        attn_masks,
+        rot_mat,
+        transformation_mats=None,
+        user_id=0,
+        mode=ttnn.InferenceMode.DECODE,
     ) -> ttnn.Tensor:
         """
         Tensors are postfixed with 4 characters that represent their 4-D shape:

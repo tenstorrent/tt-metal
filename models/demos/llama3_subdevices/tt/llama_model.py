@@ -29,7 +29,7 @@ class TtTransformer(LightweightModule):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
     ):
         super().__init__()
         self.args = args
@@ -67,7 +67,7 @@ class TtTransformer(LightweightModule):
         self.mesh_sub_device_manager_id_decode = None
         self.mesh_sub_device_manager_id_prefill = None
 
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             self.setup_decode()
             self.is_decode_setup = True
         else:
@@ -119,7 +119,7 @@ class TtTransformer(LightweightModule):
             tt_ccl=self.tt_ccl,
             prefetcher_setup=self.prefetcher_setup,
         )
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
 
@@ -128,7 +128,7 @@ class TtTransformer(LightweightModule):
             self.mesh_device,
             n_tensors=0,
             n_layers=self.n_layers,
-            mode="prefill",
+            mode=ttnn.InferenceMode.PREFILL,
             mesh_sub_device_manager_id_prefill=mesh_sub_device_manager_id_prefill,
             save_tensor_addresses=True,
         )
@@ -136,7 +136,7 @@ class TtTransformer(LightweightModule):
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
         if mesh_sub_device_manager_id_prefill is None:
             self.tt_ccl = TT_CCL(
-                self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id, mode="prefill"
+                self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id, mode=ttnn.InferenceMode.PREFILL
             )
         else:
             self.tt_ccl = self.tt_ccl_prefill
@@ -318,11 +318,11 @@ class TtTransformer(LightweightModule):
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
-        x, _ = self.norm(tt_out, res=None, mode="prefill")
+        x, _ = self.norm(tt_out, res=None, mode=ttnn.InferenceMode.PREFILL)
 
         x = x[:, :, last_token_idx : last_token_idx + 1, :]
 
-        tt_logits = self.lm_head(x, None, mode="prefill")
+        tt_logits = self.lm_head(x, None, mode=ttnn.InferenceMode.PREFILL)
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         tt_logits = self.tt_ccl.line_all_gather(
@@ -386,7 +386,7 @@ class TtTransformer(LightweightModule):
             current_pos=None,
             rot_mats=rot_mats if rot_mats is not None else self.tt_rot_mats_prefill,
             user_id=user_id,
-            mode="prefill",
+            mode=ttnn.InferenceMode.PREFILL,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
@@ -412,7 +412,7 @@ class TtTransformer(LightweightModule):
             x,
             current_pos,
             rot_mats=rot_mats,
-            mode="decode",
+            mode=ttnn.InferenceMode.DECODE,
             page_table=page_table,
             kv_cache=kv_cache,
         )
@@ -446,8 +446,8 @@ class TtTransformer(LightweightModule):
 
         return tt_logits
 
-    def switch_mode(self, mode):
-        if mode == "decode":
+    def switch_mode(self, mode: ttnn.InferenceMode):
+        if mode == ttnn.InferenceMode.DECODE:
             if self.is_prefill_setup:
                 self.tt_ccl.close()
                 self.tt_ccl_prefill = self.tt_ccl
@@ -487,14 +487,14 @@ class TtTransformer(LightweightModule):
         current_pos,
         rot_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
     ):
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
@@ -503,7 +503,7 @@ class TtTransformer(LightweightModule):
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
-        if mode == "decode" and not self.args.is_galaxy:
+        if mode == ttnn.InferenceMode.DECODE and not self.args.is_galaxy:
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
         h = None
@@ -521,7 +521,7 @@ class TtTransformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
         # ttnn.deallocate(h)
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             ttnn.deallocate(garbage_tensor)
 
             # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
@@ -529,7 +529,7 @@ class TtTransformer(LightweightModule):
                 self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
             )
 
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             return x
         # Output norm
         x, res = self.norm(x, res=None, mode=mode)
@@ -537,7 +537,9 @@ class TtTransformer(LightweightModule):
         if get_last_token != -1:
             x = x[:, :, get_last_token:, :]
 
-        return self.lm_head(x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode)
+        return self.lm_head(
+            x, None if mode == ttnn.InferenceMode.PREFILL else self.prefetcher_setup.worker_sub_device_id, mode=mode
+        )
 
     def __del__(self):
         self.tt_ccl.close()

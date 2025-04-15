@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import ttnn
 
 from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
@@ -33,16 +34,16 @@ class TestParametrized:
     @pytest.mark.parametrize(
         "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_inference_time",
         (
-            ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.31),
-            ("prefill", 32, 1, 128, 0, "BFLOAT16-L1", 0.29),
-            ("prefill", 32, 1, 256, 0, "BFLOAT16-DRAM", 0.43),
-            ("prefill", 32, 1, 256, 0, "BFLOAT16-L1", 0.34),
-            ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.28),
-            ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.28),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.37),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1", 0.31),
-            ("decode", 32, 32, 1, 2047, "BFLOAT16-DRAM", 0.40),
-            ("decode", 32, 32, 1, 2047, "BFLOAT16-L1", 0.35),
+            (ttnn.InferenceMode.PREFILL, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.31),
+            (ttnn.InferenceMode.PREFILL, 32, 1, 128, 0, "BFLOAT16-L1", 0.29),
+            (ttnn.InferenceMode.PREFILL, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.43),
+            (ttnn.InferenceMode.PREFILL, 32, 1, 256, 0, "BFLOAT16-L1", 0.34),
+            (ttnn.InferenceMode.DECODE, 32, 32, 1, 128, "BFLOAT16-DRAM", 0.28),
+            (ttnn.InferenceMode.DECODE, 32, 32, 1, 128, "BFLOAT16-L1", 0.28),
+            (ttnn.InferenceMode.DECODE, 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.37),
+            (ttnn.InferenceMode.DECODE, 32, 32, 1, 1024, "BFLOAT16-L1", 0.31),
+            (ttnn.InferenceMode.DECODE, 32, 32, 1, 2047, "BFLOAT16-DRAM", 0.40),
+            (ttnn.InferenceMode.DECODE, 32, 32, 1, 2047, "BFLOAT16-L1", 0.35),
         ),
         ids=[
             "prefill_seq128_bf16_dram",
@@ -61,7 +62,7 @@ class TestParametrized:
     def test_perf_gs_bare_metal(
         self,
         model_version,
-        llm_mode,
+        llm_mode: ttnn.InferenceMode,
         batch,
         seq_len,
         kv_cache_len,
@@ -86,7 +87,7 @@ class TestParametrized:
 
         disable_persistent_kernel_cache()
 
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
                 DeviceSetup.GRAYSKULL
             ][model_config_str][seq_len]
@@ -115,7 +116,7 @@ class TestParametrized:
     def run_perf_wh_bare_metal(
         self,
         model_version,
-        llm_mode,
+        llm_mode: ttnn.InferenceMode,
         batch,
         seq_len,
         kv_cache_len,
@@ -128,7 +129,7 @@ class TestParametrized:
         mesh_device,
         async_mode,
     ):
-        if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
+        if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == ttnn.InferenceMode.PREFILL:
             pytest.skip(f"prefill does not support L1_SHARDED")
 
         model_config = get_model_config(model_config_str, seq_len, batch)
@@ -208,12 +209,12 @@ class TestParametrized:
         enable_async_mode,
     ):
         if enable_async_mode:
-            if llm_mode == "decode" and not (kv_cache_len == 2047):
+            if llm_mode == ttnn.InferenceMode.DECODE and not (kv_cache_len == 2047):
                 pytest.skip(
                     f"Skipping {llm_mode} with {kv_cache_len} in async mode. Config is supported but provides redundant testing."
                 )
 
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
                 DeviceSetup.WORMHOLE_B0
             ][model_config_str][seq_len]
@@ -242,20 +243,20 @@ class TestParametrized:
     @pytest.mark.parametrize(
         "llm_mode, mesh_device, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_inference_time, enable_async_mode",
         (
-            ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.071, False),
-            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.142, False),
-            ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.42, False),
-            ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 1.02, False),
-            ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.067, False),
-            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.069, False),
-            ("decode", 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.073, False),
-            ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.070, True),  # Issue 9422
-            ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.142, True),
-            ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.41, True),
-            ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.98, True),
-            ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.059, True),
-            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.065, True),
-            ("decode", 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.071, True),
+            (ttnn.InferenceMode.PREFILL, 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.071, False),
+            (ttnn.InferenceMode.PREFILL, 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.142, False),
+            (ttnn.InferenceMode.PREFILL, 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.42, False),
+            (ttnn.InferenceMode.PREFILL, 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 1.02, False),
+            (ttnn.InferenceMode.DECODE, 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.067, False),
+            (ttnn.InferenceMode.DECODE, 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.069, False),
+            (ttnn.InferenceMode.DECODE, 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.073, False),
+            (ttnn.InferenceMode.PREFILL, 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.070, True),  # Issue 9422
+            (ttnn.InferenceMode.PREFILL, 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.142, True),
+            (ttnn.InferenceMode.PREFILL, 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.41, True),
+            (ttnn.InferenceMode.PREFILL, 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.98, True),
+            (ttnn.InferenceMode.DECODE, 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.059, True),
+            (ttnn.InferenceMode.DECODE, 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.065, True),
+            (ttnn.InferenceMode.DECODE, 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.071, True),
         ),
         ids=[
             "prefill_seq128",
@@ -280,7 +281,7 @@ class TestParametrized:
         self,
         use_program_cache,
         model_version,
-        llm_mode,
+        llm_mode: ttnn.InferenceMode,
         batch,
         seq_len,
         kv_cache_len,
@@ -292,7 +293,7 @@ class TestParametrized:
         get_tt_cache_path,
         mesh_device,
     ):
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[DeviceSetup.T3000][
                 model_config_str
             ][seq_len]

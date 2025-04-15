@@ -77,7 +77,7 @@ class TtLlamaModelForGeneration:
         ) = self.tt_model.prepare_device_inputs_decode(
             tokens,
             start_pos,
-            mode="decode",
+            mode=ttnn.InferenceMode.DECODE,
             page_table=page_table,
             return_tokens=True,
             return_rot_idxs=True,
@@ -91,7 +91,7 @@ class TtLlamaModelForGeneration:
             cache_idxs=cache_idxs_tt,
             page_table=tt_page_table,
             kv_cache=kv_cache,
-            mode="decode",
+            mode=ttnn.InferenceMode.DECODE,
         )
         logger.info("Done Compiling Model")
 
@@ -109,7 +109,7 @@ class TtLlamaModelForGeneration:
             cache_idxs=cache_idxs_tt,
             page_table=tt_page_table,
             kv_cache=kv_cache,
-            mode="decode",
+            mode=ttnn.InferenceMode.DECODE,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -143,7 +143,7 @@ class TtLlamaModelForGeneration:
             updated_rot_idxs_tt,
             updated_cache_idxs_tt,
             updated_tt_page_table,
-        ) = self.tt_model.prepare_inputs(tokens, start_pos, mode="decode", page_table=page_table)
+        ) = self.tt_model.prepare_inputs(tokens, start_pos, mode=ttnn.InferenceMode.DECODE, page_table=page_table)
         ttnn.copy_host_to_device_tensor(updated_tt_inp, tt_inp)
         ttnn.copy_host_to_device_tensor(updated_rot_idxs_tt, rot_idxs_tt)
         ttnn.copy_host_to_device_tensor(updated_cache_idxs_tt, cache_idxs_tt)
@@ -183,7 +183,7 @@ class TtLlamaModelForGeneration:
         if not enable_trace:
             # Get inputs on device
             tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.tt_model.prepare_device_inputs_decode(
-                tokens, start_pos, mode="decode", page_table=page_table
+                tokens, start_pos, mode=ttnn.InferenceMode.DECODE, page_table=page_table
             )
 
             tt_logits = self.tt_model(
@@ -193,7 +193,7 @@ class TtLlamaModelForGeneration:
                 cache_idxs=cache_idxs_tt,
                 page_table=tt_page_table,
                 kv_cache=kv_cache,
-                mode="decode",
+                mode=ttnn.InferenceMode.DECODE,
             )
         else:
             tt_logits = self._easy_trace(tokens, start_pos, page_table, kv_cache)

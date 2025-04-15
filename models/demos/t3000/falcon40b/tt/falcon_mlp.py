@@ -68,7 +68,7 @@ class TtFalconMLP:
         self._allocate_output_mlp_tensors()
 
     def _allocate_output_mlp_tensors(self):
-        if self.model_config["LLM_MODE"] == "prefill":
+        if self.model_config["LLM_MODE"] == ttnn.InferenceMode.PREFILL:
             if self.output is not None:
                 self.output.deallocate()
 
@@ -87,10 +87,10 @@ class TtFalconMLP:
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
-    def __call__(self, x: List[ttnn.Tensor], llm_mode: str) -> List[ttnn.Tensor]:
-        if llm_mode == "prefill":
+    def __call__(self, x: List[ttnn.Tensor], llm_mode: ttnn.InferenceMode) -> List[ttnn.Tensor]:
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             return self.fwd_prefill(x)
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             return self.fwd_decode(x)
         else:
             assert False

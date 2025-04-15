@@ -98,7 +98,9 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
         return result
 
 
-def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode, rope_setup=None, use_scaled_rope=False):
+def tt_llama_decoder_prepare_inputs(
+    llama_decoder_model, x, start_pos, mode: ttnn.InferenceMode, rope_setup=None, use_scaled_rope=False
+):
     assert len(x.size()) == 3
     batch, seq_len, hidden_size = x.shape
 
@@ -106,7 +108,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode, rop
         f"{'llama3_' if llama_decoder_model.llama3 else ''}{name}"
     )
 
-    if mode == "prefill":
+    if mode == ttnn.InferenceMode.PREFILL:
         assert seq_len % 128 == 0 and seq_len > 0, "Prefill mode only supports seqlen as a multiple of 128 up to 2k"
         assert batch == 1, "prefill mode only supports batch size 1"
         x = x.unsqueeze(1)  # [batch, 1, seq_len, hidden_dim]
@@ -155,7 +157,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode, rop
 
         cache_idxs_tt = None
 
-    elif mode == "decode":
+    elif mode == ttnn.InferenceMode.DECODE:
         assert seq_len == 1, "Only supporting decode mode"
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
         # Pad x to match the padded batch size
@@ -223,14 +225,14 @@ def run_test_LlamaDecoder_inference(
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
-    mode = "prefill" if seq_len > 1 else "decode"
+    mode = ttnn.InferenceMode.PREFILL if seq_len > 1 else ttnn.InferenceMode.DECODE
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(
         hugging_face_reference_model, UNIT_TEST_LAYER_NUM, configuration.rope_theta, configuration.use_scaled_rope
     )
     # TT model -------------------------------------------------------------------------
-    if mode == "decode":
+    if mode == ttnn.InferenceMode.DECODE:
         head_dim = configuration.dim // configuration.n_heads
         rope_setup = TtLlamaRotarySetup(
             t3k_mesh_device, head_dim, max_seq_len, configuration.rope_theta, configuration.use_scaled_rope
@@ -262,7 +264,7 @@ def run_test_LlamaDecoder_inference(
     )
 
     all_tests_pass, all_pccs = True, []
-    if mode == "prefill":
+    if mode == ttnn.InferenceMode.PREFILL:
         generation_start_pos = 0
         generation_length = 1
     else:
@@ -276,7 +278,7 @@ def run_test_LlamaDecoder_inference(
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             x_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaDecoder_model.prepare_inputs_prefill(
                 pt_inp, start_pos
             )
@@ -296,7 +298,7 @@ def run_test_LlamaDecoder_inference(
             tt_input,
             start_pos,
             mode=mode,
-            rope_setup=rope_setup if mode == "decode" else None,
+            rope_setup=rope_setup if mode == ttnn.InferenceMode.DECODE else None,
             use_scaled_rope=configuration.use_scaled_rope,
         )
 
@@ -311,7 +313,7 @@ def run_test_LlamaDecoder_inference(
         tt_out = ttnn.from_device(tt_out)
         tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [batch, seq_len, hidden_dim]
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             tt_out = tt_out[:batch]
 
         # check outputs ----------------------------------------------------------------------
@@ -352,7 +354,7 @@ def run_test_LlamaDecoder_inference(
         generation_start_pos,
         generation_length,
         seq_len,
-        mode == "prefill",
+        mode == ttnn.InferenceMode.PREFILL,
         pcc,
     )
     all_tests_pass = all_tests_pass and cache_test_pass

@@ -117,10 +117,10 @@ class TtLlamaMLP_optimized:
             cache_file_name=self.cache_path / w3_dram_shard_str,
         )
 
-    def __call__(self, x: List[ttnn.Tensor], mode="decode") -> List[ttnn.Tensor]:
-        if mode == "decode":
+    def __call__(self, x: List[ttnn.Tensor], mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE) -> List[ttnn.Tensor]:
+        if mode == ttnn.InferenceMode.DECODE:
             return self.decode_forward(x)
-        elif mode == "prefill":
+        elif mode == ttnn.InferenceMode.PREFILL:
             return self.prefill_forward(x)
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")

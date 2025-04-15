@@ -127,7 +127,7 @@ def run_test_LlamaModel_end_to_end(
     ##### Compile Model #####
     logger.info("Compiling model")
     profiler.start(f"compile_time")
-    tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode="decode")
+    tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode=ttnn.InferenceMode.DECODE)
     tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
     logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
@@ -140,7 +140,7 @@ def run_test_LlamaModel_end_to_end(
     ##### Capture Trace #####
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode="decode")
+    tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode=ttnn.InferenceMode.DECODE)
     tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
     logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
@@ -310,13 +310,13 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
         ##### Prepare Inputs #####
         prev_pos = total_len - 1
         tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs_decode(
-            tokens, prev_pos, mode="decode"
+            tokens, prev_pos, mode=ttnn.InferenceMode.DECODE
         )
 
         ##### Compile Model #####
         logger.info("Compiling model")
         profiler.start(f"compile_time")
-        tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode="decode")
+        tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode=ttnn.InferenceMode.DECODE)
         tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
         logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
@@ -348,7 +348,7 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
         cache_idxs = submesh_to_metadata[mesh_id]["cache_idxs"]
         prev_pos = submesh_to_metadata[mesh_id]["prev_pos"]
 
-        tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode="decode")
+        tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode=ttnn.InferenceMode.DECODE)
         tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
         logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)

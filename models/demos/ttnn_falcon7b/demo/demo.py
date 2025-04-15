@@ -224,13 +224,13 @@ def run_falcon_demo_kv(
             tt_decode_embeddings,
             tt_decode_attention_mask,
         ) = tt_FalconCausalLM_single_layer.model_preprocessing(
-            "decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
+            ttnn.InferenceMode.DECODE, decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
         )
         assert tt_decode_attention_mask is not None
 
         tt_logits, kv_cache_single_layer = tt_FalconCausalLM_single_layer(
             input_embeddings=tt_decode_embeddings,
-            llm_mode="decode",
+            llm_mode=ttnn.InferenceMode.DECODE,
             attention_mask=tt_decode_attention_mask,
             layer_past=kv_cache_single_layer,
             layer_past_len=kv_cache_len,
@@ -351,12 +351,14 @@ def run_falcon_demo_kv(
         (
             tt_decode_embeddings,
             tt_decode_attention_mask,
-        ) = tt_FalconCausalLM.model_preprocessing("decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1)
+        ) = tt_FalconCausalLM.model_preprocessing(
+            ttnn.InferenceMode.DECODE, decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
+        )
         assert tt_decode_attention_mask is not None
 
         tt_logits, kv_cache = tt_FalconCausalLM(
             input_embeddings=tt_decode_embeddings,
-            llm_mode="decode",
+            llm_mode=ttnn.InferenceMode.DECODE,
             attention_mask=tt_decode_attention_mask,
             layer_past=kv_cache,
             layer_past_len=kv_cache_len,

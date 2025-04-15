@@ -134,9 +134,9 @@ def run_test_LlamaModel_inference(
         paged_attention_config=paged_attention_config,
     )
 
-    mode = "prefill" if seq_len > 1 else "decode"
+    mode: ttnn.InferenceMode = ttnn.InferenceMode.PREFILL if seq_len > 1 else ttnn.InferenceMode.DECODE
 
-    if mode == "prefill" or device_perf:
+    if mode == ttnn.InferenceMode.PREFILL or device_perf:
         generation_length = 1
     else:
         generation_length = UNIT_TEST_GENERATION_LENGTH
@@ -171,7 +171,7 @@ def run_test_LlamaModel_inference(
             pt_inp_ids,
             start_pos,
         )
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             pytorch_out = pytorch_out.squeeze().reshape(batch, -1)  # [batch, hidden_dim]
         else:
             pytorch_out = pytorch_out.squeeze().reshape(seq_len, -1)  # [seq, hidden_dim]
@@ -181,7 +181,7 @@ def run_test_LlamaModel_inference(
         # TT hardware execution -------------------------------------------------------------
         if chunk_size is not None:
             tt_out = []
-            assert mode == "prefill"
+            assert mode == ttnn.InferenceMode.PREFILL
             for chunk_start in range(0, seq_len, chunk_size):
                 logger.info(f"Chunk start: {chunk_start}")
                 chunk_end = chunk_start + chunk_size
@@ -232,7 +232,7 @@ def run_test_LlamaModel_inference(
             tt_out = torch.cat(tt_out, dim=0).float()
 
         else:
-            if mode == "decode":
+            if mode == ttnn.InferenceMode.DECODE:
                 tt_inp_emb, start_pos, rot_mat, cache_idxs, *_ = tt_model.prepare_device_inputs_decode(
                     tt_inp_ids, start_pos, mode=mode
                 )
@@ -258,7 +258,7 @@ def run_test_LlamaModel_inference(
 
             tt_out = tt_out[..., : configuration.vocab_size]
             tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
-            if mode == "decode":
+            if mode == ttnn.InferenceMode.DECODE:
                 tt_out = tt_out[:batch]
             tt_out = tt_out.float()
 
@@ -333,7 +333,7 @@ def run_test_LlamaModel_inference(
         generation_start_pos,
         generation_length,
         seq_len,
-        mode == "prefill",
+        mode == ttnn.InferenceMode.PREFILL,
         pcc,
     )
     all_tests_pass = all_tests_pass and cache_test_pass

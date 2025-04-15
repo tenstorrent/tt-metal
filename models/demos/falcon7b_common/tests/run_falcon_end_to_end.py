@@ -35,7 +35,7 @@ from models.perf.perf_utils import prep_perf_report
 
 
 def get_inputs_on_device(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len):
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tt_input_ids, tt_attention_mask = zip(
             *[
                 tt_FalconCausalLM.model_preprocessing(
@@ -44,7 +44,7 @@ def get_inputs_on_device(llm_mode, tt_FalconCausalLM, model_input, kv_cache_len,
                 for i in range(batch)
             ]
         )
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_input_ids, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
@@ -207,7 +207,7 @@ def run_test_FalconCausalLM_end_to_end(
 
         # Use force enable to only record this profiler call while others are disabled
         profiler.start("first_model_run_with_compile", force_enable=e2e_perf)
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             tt_outs = []
             # Device transfer time is included in model run time for prefill
             tt_input_ids, tt_attention_mask = get_inputs_on_device(
@@ -226,7 +226,7 @@ def run_test_FalconCausalLM_end_to_end(
                 tt_outs.append(tt_out)
             tt_out = tt_outs
 
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             tt_out, tt_layer_present = tt_FalconCausalLM(
                 input_ids=tt_input_ids,
                 llm_mode=llm_mode,
@@ -290,7 +290,7 @@ def run_test_FalconCausalLM_end_to_end(
     if device_perf:
         signpost("start")  # start device perf measurement
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tt_outs = []
         # Device transfer time is included in model run time for prefill
         tt_input_ids, tt_attention_mask = get_inputs_on_device(
@@ -309,7 +309,7 @@ def run_test_FalconCausalLM_end_to_end(
             )
             tt_outs.append(tt_out)
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_out, tt_layer_present = tt_FalconCausalLM(
             input_ids=tt_input_ids,
             llm_mode=llm_mode,
@@ -322,13 +322,13 @@ def run_test_FalconCausalLM_end_to_end(
     ttnn.synchronize_device(mesh_device)
     profiler.end(f"model_run_for_inference")
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tt_out_tmp = torch.zeros(global_batch, seq_len, configuration.vocab_size)  # Output tensor to overwrite
         for user_id, tt_out in enumerate(tt_outs):
             # Get outputs from all devices
             tt_out_tmp[user_id::batch] = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=0).squeeze(1)
         tt_out = tt_out_tmp
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_out = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=2).squeeze(1).transpose(0, 1)
 
     if device_perf:
@@ -357,10 +357,10 @@ def run_test_FalconCausalLM_end_to_end(
     device_pcc_k = 1.0
     device_pcc_v = 1.0
     for i in range(num_layers):
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             pytorch_layer_pres = (pytorch_layer_present[i][0].squeeze(1), pytorch_layer_present[i][1].squeeze(1))
             tt_layer_pres = concat_device_out_layer_present(mesh_device, tt_layer_present[i], kv_len)
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             pytorch_layer_pres = (
                 pytorch_layer_present[i][0].squeeze(1)[:, kv_cache_len, :],
                 pytorch_layer_present[i][1].squeeze(1)[:, kv_cache_len, :],

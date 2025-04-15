@@ -180,7 +180,7 @@ class TtLlamaCrossAttention(LightweightModule):
                 transpose_k_heads=False,
             )
 
-        xk = self.k_norm(xk, mode="decode")
+        xk = self.k_norm(xk, mode=ttnn.InferenceMode.DECODE)
 
         k_cache, v_cache = xattn_cache
 
@@ -225,7 +225,7 @@ class TtLlamaCrossAttention(LightweightModule):
         xq = ttnn.transpose(xq, 1, 2)
         xq = ttnn.to_layout(xq, layout=ttnn.TILE_LAYOUT)
 
-        xq = self.q_norm(xq, mode="decode")
+        xq = self.q_norm(xq, mode=ttnn.InferenceMode.DECODE)
 
         xk, xv = xattn_cache
         cache_seq_len = xk.shape[-2]
@@ -333,7 +333,7 @@ class TtLlamaCrossAttention(LightweightModule):
             xq, xq, num_heads=self.n_local_heads, num_kv_heads=self.n_local_heads // 2, transpose_k_heads=False
         )
 
-        xq = self.q_norm(xq, mode="prefill")
+        xq = self.q_norm(xq, mode=ttnn.InferenceMode.PREFILL)
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
@@ -391,12 +391,12 @@ class TtLlamaCrossAttention(LightweightModule):
         xattn_mask,
         full_text_row_masked_out_mask_1NSH,
         xattn_cache,
-        mode,
+        mode: ttnn.InferenceMode,
         user_id=0,
         vision_tokens=None,
         cross_page_table=None,
     ):
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             return self.forward_prefill(
                 x_11SH,
                 xattn_mask,

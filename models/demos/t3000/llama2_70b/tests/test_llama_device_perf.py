@@ -4,6 +4,7 @@
 
 import sys
 import pytest
+import ttnn
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_mesh_device
 from models.demos.t3000.llama2_70b.tests.test_llama_model import run_test_LlamaModel_inference
@@ -128,11 +129,13 @@ def test_device_perf_llama(
 
     # Prepare the arguments to calculate the ops performance results
     ops_perf_filename = get_latest_ops_log_filename(subdir)
-    llm_mode, seq_len, *_ = test_id.split("_")
-    if llm_mode == "decode":
+    llm_mode_str, seq_len, *_ = test_id.split("_")
+    if llm_mode_str == ttnn.InferenceMode.DECODE:
+        llm_mode = ttnn.InferenceMode.DECODE
         skip_first = 3  # embeddings, i2s (embeddings), i2s (rot-mat)
         skip_last = 3  # all-gather, rms-norm, lm-head
     else:
+        llm_mode = ttnn.InferenceMode.PREFILL
         skip_first = 1  # embeddings
         skip_last = 5  # ln pre-all-gather, all-gather, ln post-all-gather, all-gather, matmul
     n_layers_total = 80
@@ -150,7 +153,7 @@ def test_device_perf_llama(
         "--estimate-full-model",
         f"{n_layers_total}",
     ]
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         sys.argv.append("--prefill")
 
     # Calculate the ops performance results using the system arguments above

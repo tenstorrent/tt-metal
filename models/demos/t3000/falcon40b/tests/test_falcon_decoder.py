@@ -44,7 +44,7 @@ class PytorchFalconDecoderModel(torch.nn.Module):
 def run_test_FalconDecoder_inference(
     mesh_device,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -77,7 +77,7 @@ def run_test_FalconDecoder_inference(
     ln_output_tensors_dict = {"final_layernorm": dict(), "mlp_layernorm": dict(), "attn_layernorm": dict()}
     # Generate input, attention_mask, and kv_cache --------------------------------------
     # TODO: Generate attention_mask on device
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         q_len, kv_len = seq_len, seq_len
         assert batch == 1, "For prefill, batch must be 1!"
         assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
@@ -143,7 +143,7 @@ def run_test_FalconDecoder_inference(
                 model_config["LN_MLP_OUTPUT_DTYPE"],
             )
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         q_len, kv_len = seq_len, kv_cache_len + 1
         assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
         assert q_len == 1, "For decode, q_len must be 1!"
@@ -266,7 +266,7 @@ def run_test_FalconDecoder_inference(
         ttnn.to_torch(tt_layer_present[1], device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=1)),
     )
 
-    if llm_mode == "decode":
+    if llm_mode == ttnn.InferenceMode.DECODE:
         tt_out = tt_out_tensor.transpose(0, 1)
     tt_layer_present = (
         torch.repeat_interleave(
@@ -291,7 +291,7 @@ def run_test_FalconDecoder_inference(
 
     does_pass = does_pass and does_pass2
 
-    if llm_mode == "decode":
+    if llm_mode == ttnn.InferenceMode.DECODE:
         does_pass2, output_pcc = comp_pcc(
             pytorch_layer_present[0][:, kv_len - 1 : kv_len, :],
             tt_layer_present[0][:, kv_len - 1 : kv_len, :],
@@ -322,10 +322,10 @@ def run_test_FalconDecoder_inference(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
-        ("prefill", 1, 32, 0),
-        ("prefill", 1, 128, 0),
-        ("prefill", 1, 2048, 0),
-        ("decode", 32, 1, 128),
+        (ttnn.InferenceMode.PREFILL, 1, 32, 0),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0),
+        (ttnn.InferenceMode.PREFILL, 1, 2048, 0),
+        (ttnn.InferenceMode.DECODE, 32, 1, 128),
     ),
     ids=[
         "prefill_seq32",
@@ -357,7 +357,7 @@ def run_test_FalconDecoder_inference(
 def test_FalconDecoder_inference(
     num_devices,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -371,9 +371,11 @@ def test_FalconDecoder_inference(
     t3k_mesh_device,
     use_program_cache,
 ):
-    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
+    if llm_mode == ttnn.InferenceMode.PREFILL and (
+        model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8
+    ):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
+    if llm_mode == ttnn.InferenceMode.DECODE and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
         pytest.skip("Decode is only supported for SHARDED memory config!")
 
     input_shape = [batch, seq_len]

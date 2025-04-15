@@ -36,7 +36,7 @@ class PytorchLlamaMLPModel(torch.nn.Module):
         return result
 
 
-def tt_llama_mlp_prepare_inputs(llama_mlp_model, x, mode):
+def tt_llama_mlp_prepare_inputs(llama_mlp_model, x, mode: ttnn.InferenceMode):
     x_multichip = ttnn.from_torch(
         x,
         layout=ttnn.TILE_LAYOUT,
@@ -45,9 +45,9 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x, mode):
         mesh_mapper=ReplicateTensorToMesh(llama_mlp_model.mesh_device),
     )
 
-    if mode == "decode":
+    if mode == ttnn.InferenceMode.DECODE:
         x_multichip = ttnn.to_memory_config(x_multichip, llama_mlp_model.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"])
-    elif mode == "prefill":
+    elif mode == ttnn.InferenceMode.PREFILL:
         x_multichip = ttnn.to_memory_config(x_multichip, ttnn.DRAM_MEMORY_CONFIG)
 
     return x_multichip
@@ -85,8 +85,8 @@ def run_test_LlamaMLP_inference(
     pt_inp_ids = torch.randint(0, configuration.vocab_size, (batch, seq_len))
     pt_inp = hugging_face_reference_model.tok_embeddings(pt_inp_ids)
     pt_inp_normed = hugging_face_reference_model.layers[UNIT_TEST_LAYER_NUM].ffn_norm(pt_inp)
-    mode = "prefill" if seq_len > 1 else "decode"
-    if mode == "decode":
+    mode: ttnn.InferenceMode = ttnn.InferenceMode.PREFILL if seq_len > 1 else ttnn.InferenceMode.DECODE
+    if mode == ttnn.InferenceMode.DECODE:
         # shape should be (1, seq_len, batch, dim)
         pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
     else:

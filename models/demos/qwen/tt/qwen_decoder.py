@@ -85,7 +85,7 @@ class TtTransformerBlock(LightweightModule):
         rot_mat=None,
         transformation_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         page_table=None,
     ) -> ttnn.Tensor:
         # x is fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
@@ -93,7 +93,7 @@ class TtTransformerBlock(LightweightModule):
         # FIXME: Currently, for decode mode, we are using DRAM intereleaved as L1 interleaved results in h being corrupted in MLP
         skip_mem_cfg = (
             ttnn.DRAM_MEMORY_CONFIG
-            # self.model_config["DEC_SKIP_OUTPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+            # self.model_config["DEC_SKIP_OUTPUT_MEMCFG"] if mode == ttnn.InferenceMode.DECODE else ttnn.DRAM_MEMORY_CONFIG
         )
 
         # Norms take fractured inputs and output replicated across devices

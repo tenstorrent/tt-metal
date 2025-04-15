@@ -102,13 +102,15 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         return result
 
 
-def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_theta, mode="decode"):
+def tt_llama_attention_prepare_inputs(
+    llama_attention_model, x, start_pos, rope_theta, mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE
+):
     assert len(x.size()) == 3
     batch, seq_len, _ = x.shape
 
     cache_name = lambda name: llama_attention_model.cache_path / (f"{name}")
 
-    if mode == "decode":
+    if mode == ttnn.InferenceMode.DECODE:
         assert seq_len == 1, "Only supporting decode mode"
         x = x.transpose(0, 1).unsqueeze(1)
         assert x.shape == (seq_len, 1, batch, llama_attention_model.hidden_size)
@@ -166,7 +168,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
 
         attn_masks = None
 
-    elif mode == "prefill":
+    elif mode == ttnn.InferenceMode.PREFILL:
         assert (
             seq_len % 256 == 0 and seq_len > 0 and seq_len <= 8192
         ), "Prefill mode only supports seqlen as a multiple of 256 up to 8k"
@@ -291,10 +293,10 @@ def run_test_LlamaAttention_inference(
         cache_path=cache_path,
     )
 
-    mode = "decode" if seq_len == 1 else "prefill"
+    mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE if seq_len == 1 else ttnn.InferenceMode.PREFILL
 
     all_tests_pass, all_pccs = True, []
-    if mode == "prefill":
+    if mode == ttnn.InferenceMode.PREFILL:
         generation_start_pos = 0
         generation_length = 1
     else:
@@ -310,7 +312,7 @@ def run_test_LlamaAttention_inference(
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs_prefill(
                 pt_inp_normed, start_pos
             )
@@ -388,7 +390,7 @@ def run_test_LlamaAttention_inference(
         generation_start_pos,
         generation_length,
         seq_len,
-        mode == "prefill",
+        mode == ttnn.InferenceMode.PREFILL,
         pcc,
     )
 

@@ -41,14 +41,14 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 @pytest.mark.parametrize(
     "mode",
     [
-        "decode",
+        ttnn.InferenceMode.DECODE,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_llama_rms_norm_inference(
     max_seq_len,
     batch_size,
-    mode,
+    mode: ttnn.InferenceMode,
     mesh_device,
     use_program_cache,
     reset_seeds,
@@ -102,7 +102,7 @@ def test_llama_rms_norm_inference(
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
             memory_config=model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"]
-            if mode == "decode"
+            if mode == ttnn.InferenceMode.DECODE
             else ttnn.DRAM_MEMORY_CONFIG,
         )
         tt_input_res = ttnn.from_torch(
@@ -112,7 +112,7 @@ def test_llama_rms_norm_inference(
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
             memory_config=model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"]
-            if mode == "decode"
+            if mode == ttnn.InferenceMode.DECODE
             else ttnn.DRAM_MEMORY_CONFIG,
         )
         mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])

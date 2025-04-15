@@ -35,11 +35,11 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-@pytest.mark.parametrize("mode", ["prefill", "decode"])
+@pytest.mark.parametrize("mode", [ttnn.InferenceMode.PREFILL, ttnn.InferenceMode.DECODE])
 def test_rms_norm_inference(
     max_seq_len,
     batch_size,
-    mode,
+    mode: ttnn.InferenceMode.DECODE,
     mesh_device,
     use_program_cache,
     reset_seeds,
@@ -90,7 +90,9 @@ def test_rms_norm_inference(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
         memory_config=(
-            model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+            model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"]
+            if mode == ttnn.InferenceMode.DECODE
+            else ttnn.DRAM_MEMORY_CONFIG
         ),
     )
 

@@ -204,12 +204,12 @@ class TtLlamaAttention_optimized:
         cache_idxs=None,
         page_table=None,
         kv_cache=None,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         chunk_page_table=None,
         chunk_start_idx=None,
     ):
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             return self.decode_forward(
                 xs,
                 rot_mats,
@@ -219,7 +219,7 @@ class TtLlamaAttention_optimized:
                 kv_cache=kv_cache,
             )
         # Prefill should have input tensor of shape (1, batch=1, seqlen, hidden_size)
-        elif mode == "prefill":
+        elif mode == ttnn.InferenceMode.PREFILL:
             return self.prefill_forward(
                 xs,
                 rot_mats,

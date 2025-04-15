@@ -296,7 +296,7 @@ def run_llama3_demo(
             tt_decode_input,
             current_pos_tensor,
             rot_mats=rot_mats,
-            mode="decode",
+            mode=ttnn.InferenceMode.DECODE,
             page_table=page_table_tt,
         )
         logger.info(f"tt_out done")
@@ -340,7 +340,7 @@ def run_llama3_demo(
         tt_decode_input,
         current_pos_tensor,
         rot_mats=rot_mats,
-        mode="decode",
+        mode=ttnn.InferenceMode.DECODE,
         page_table=page_table_tt,
     )
 

@@ -48,8 +48,8 @@ def torch_model():
 @pytest.mark.parametrize(
     "llm_mode, device_batch_size, seq_len, kv_cache_len",
     (
-        ("prefill", 1, 128, 0),
-        ("decode", 32, 1, 128),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0),
+        (ttnn.InferenceMode.DECODE, 32, 1, 128),
     ),
     ids=["prefill_seq128", "decode_batch32"],
 )
@@ -72,7 +72,7 @@ def torch_model():
 def test_falcon_attention(
     mesh_device,
     model_name,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     device_batch_size,
     seq_len,
     kv_cache_len,
@@ -85,7 +85,7 @@ def test_falcon_attention(
 
     torch.manual_seed(0)
     batch = device_batch_size * mesh_device.get_num_devices()
-    if llm_mode == "decode":
+    if llm_mode == ttnn.InferenceMode.DECODE:
         shard_dim = 2
         concat_dim = 1
     else:
@@ -95,7 +95,7 @@ def test_falcon_attention(
     configuration = transformers.FalconConfig.from_pretrained(model_name)
     model_config = get_model_config(model_config_str)
     dtype = model_config["DEFAULT_DTYPE"]
-    kv_len = seq_len if llm_mode == "prefill" else kv_cache_len + 1
+    kv_len = seq_len if llm_mode == ttnn.InferenceMode.PREFILL else kv_cache_len + 1
 
     attention_input, tt_attention_input = create_attention_input(
         llm_mode,
@@ -173,7 +173,7 @@ def test_falcon_attention(
         ttnn.to_torch(tt_layer_present[1], mesh_composer=ConcatMeshToTensor(mesh_device, dim=0)).squeeze(1),
     )
 
-    if llm_mode == "decode":
+    if llm_mode == ttnn.InferenceMode.DECODE:
         tt_out = tt_out.transpose(0, 1)
     tt_layer_present = (
         tt_layer_present[0][:, :kv_len, :],

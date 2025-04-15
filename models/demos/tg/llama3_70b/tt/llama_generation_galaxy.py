@@ -60,9 +60,11 @@ class TtLlamaModelForGeneration:
 
     def decode_forward(self, tokens: torch.Tensor, start_pos: int):
         batch = tokens.shape[0]
-        tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(tokens, start_pos, mode="decode")
+        tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(
+            tokens, start_pos, mode=ttnn.InferenceMode.DECODE
+        )
 
-        tt_logits = self.tt_model(tt_inp_emb, rot_mat, start_pos, attn_mask, mode="decode")
+        tt_logits = self.tt_model(tt_inp_emb, rot_mat, start_pos, attn_mask, mode=ttnn.InferenceMode.DECODE)
 
         del tt_inp_emb
         del rot_mat

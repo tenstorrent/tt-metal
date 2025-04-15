@@ -121,7 +121,7 @@ class TtTransformerBlock(LightweightModule):
         current_pos,
         rot_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
@@ -129,7 +129,11 @@ class TtTransformerBlock(LightweightModule):
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        skip_mem_cfg = (
+            self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            if mode == ttnn.InferenceMode.DECODE
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
@@ -144,7 +148,7 @@ class TtTransformerBlock(LightweightModule):
         # NOTE: donnot deallocate x here as it updated inplace and returns new h
         # Attention takes replicated inputs and produces fractured outputs
         # pad attn input
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             attn_in = ttnn.to_memory_config(attn_in, ttnn.DRAM_MEMORY_CONFIG)
             attn_in_sharded = ttnn.to_memory_config(attn_in, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"])
             attn_in.deallocate(True)
@@ -169,11 +173,11 @@ class TtTransformerBlock(LightweightModule):
         # attn_out.deallocate(True)
         ff_in, _ = self.ff_norm(h, None, mode)
         # print("ff norm done", ff_in)
-        # if TG and mode == "decode":
+        # if TG and mode == ttnn.InferenceMode.DECODE:
         #     ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
 
         # MLP takes replicated inputs and produces fractured outputs
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             ff_in = ttnn.to_memory_config(ff_in, ttnn.DRAM_MEMORY_CONFIG)
             ff_in_sharded = ttnn.to_memory_config(ff_in, self.model_config["SHARDED_FF12_RING_MEMCFG"])
             ff_in.deallocate(True)

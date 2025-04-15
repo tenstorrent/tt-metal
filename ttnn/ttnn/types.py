@@ -58,6 +58,14 @@ class CoreRange:
     end: CoreGrid
 
 
+class InferenceMode(Enum):
+    PREFILL = 1
+    DECODE = 2
+
+    def __str__(self):
+        self.name
+
+
 class ShardStrategy(Enum):
     HEIGHT = 1
     WIDTH = 2

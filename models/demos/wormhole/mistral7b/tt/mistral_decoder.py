@@ -77,9 +77,9 @@ class TtTransformerBlock(torch.nn.Module):
         rot_mat=None,
         transformation_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
     ) -> ttnn.Tensor:
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         else:
             skip_mem_cfg = self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]

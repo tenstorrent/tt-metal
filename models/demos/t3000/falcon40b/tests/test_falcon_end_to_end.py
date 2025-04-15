@@ -34,7 +34,7 @@ from models.utility_functions import (
 def run_test_FalconCausalLM_end_to_end(
     mesh_device,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -78,14 +78,14 @@ def run_test_FalconCausalLM_end_to_end(
         model_input = torch.stack([torch.randint(0, seq_len)] * batch).reshape(batch, seq_len)
 
     # Generate dummy kv_cache --------------------------------------------------------------
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         q_len, kv_len = seq_len, seq_len
         assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
         assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
         past_key_values = None
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         q_len, kv_len = seq_len, kv_cache_len + 1
         assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
         assert q_len == 1, "For decode, q_len must be 1!"
@@ -137,7 +137,7 @@ def run_test_FalconCausalLM_end_to_end(
     tt_layer_past = tt_FalconCausalLM.initialize_kv_cache()
 
     profiler.start("processing_of_input")
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         model_inputs = torch.split(model_input, 1)
         tt_inputs, tt_attention_mask = zip(
             *[
@@ -145,7 +145,7 @@ def run_test_FalconCausalLM_end_to_end(
                 for m_i in model_inputs
             ]
         )
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
@@ -157,7 +157,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tt_outs = []
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconCausalLM(
@@ -177,7 +177,7 @@ def run_test_FalconCausalLM_end_to_end(
         ]
         tt_out = tt_outs
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_out, tt_layer_present = tt_FalconCausalLM(
             input_ids=tt_inputs,
             llm_mode=llm_mode,
@@ -197,7 +197,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     # Warmup loops
     for i in range(num_loops - 1):
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             model_inputs = torch.split(model_input, 1)
             tt_inputs, tt_attention_mask = zip(
                 *[
@@ -205,14 +205,14 @@ def run_test_FalconCausalLM_end_to_end(
                     for m_i in model_inputs
                 ]
             )
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
                 llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
             )
         # First run to fill compile cache ----------------------------------------------------
         logger.info(f"Running Falcon model warmup loop {i}")
 
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             tt_outs = []
             for user_id in range(batch):
                 tt_out, tt_layer_present = tt_FalconCausalLM(
@@ -234,7 +234,7 @@ def run_test_FalconCausalLM_end_to_end(
             ]
             tt_out = tt_outs
 
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             tt_out, tt_layer_present = tt_FalconCausalLM(
                 input_ids=tt_inputs,
                 llm_mode=llm_mode,
@@ -255,7 +255,7 @@ def run_test_FalconCausalLM_end_to_end(
     profiler.enable()
     enable_persistent_kernel_cache()
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         model_inputs = torch.split(model_input, 1)
         tt_inputs, tt_attention_mask = zip(
             *[
@@ -263,14 +263,14 @@ def run_test_FalconCausalLM_end_to_end(
                 for m_i in model_inputs
             ]
         )
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
     ttnn.synchronize_device(mesh_device)
     profiler.start(f"model_run_for_inference")
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tt_outs = []
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconCausalLM(
@@ -284,7 +284,7 @@ def run_test_FalconCausalLM_end_to_end(
             )
             tt_outs.append(tt_out)
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_out, tt_layer_present = tt_FalconCausalLM(
             input_ids=tt_inputs,
             llm_mode=llm_mode,
@@ -296,13 +296,13 @@ def run_test_FalconCausalLM_end_to_end(
     profiler.end(f"model_run_for_inference")
     ttnn.synchronize_device(mesh_device)
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tensors = [
             ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
             for tt_out in tt_outs
         ]
         tt_out = torch.vstack(tensors)
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_out = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
         tt_out = tt_out.squeeze(1).transpose(0, 1)
     # check outputs ----------------------------------------------------------------------
@@ -353,7 +353,7 @@ def run_test_FalconCausalLM_end_to_end(
 
         does_pass = does_pass and does_pass2
 
-        if llm_mode == "decode":
+        if llm_mode == ttnn.InferenceMode.DECODE:
             does_pass2, output_pcc, calc_pcc = comp_and_get_pcc(
                 pytorch_layer_pres[0][:, :, kv_len - 1 : kv_len, :],
                 tt_layer_pres[0][:, :, kv_len - 1 : kv_len, :],
@@ -393,11 +393,11 @@ def run_test_FalconCausalLM_end_to_end(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
-        ("prefill", 1, 32, 0),
-        ("prefill", 2, 32, 0),
-        ("prefill", 1, 128, 0),
-        ("prefill", 1, 2048, 0),
-        ("decode", 32, 1, 128),
+        (ttnn.InferenceMode.PREFILL, 1, 32, 0),
+        (ttnn.InferenceMode.PREFILL, 2, 32, 0),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0),
+        (ttnn.InferenceMode.PREFILL, 1, 2048, 0),
+        (ttnn.InferenceMode.DECODE, 32, 1, 128),
     ),
     ids=[
         "prefill_seq32",
@@ -446,7 +446,7 @@ def run_test_FalconCausalLM_end_to_end(
 def test_FalconCausalLM_end_to_end_with_program_cache(
     num_devices,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -461,9 +461,9 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     async_mode,
 ):
     model_config_str = f"{data_type}-{memcfg}"
-    if llm_mode == "prefill" and memcfg != "DRAM" or num_devices != 8:
+    if llm_mode == ttnn.InferenceMode.PREFILL and memcfg != "DRAM" or num_devices != 8:
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and memcfg != "SHARDED":
+    if llm_mode == ttnn.InferenceMode.DECODE and memcfg != "SHARDED":
         pytest.skip("Decode is only supported for SHARDED memory config!")
 
     out_pcc = 0.99
@@ -471,7 +471,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     v_cache_pcc = 0.99
     token_pcc = 0.99
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         if num_layers == 60:
             if data_type == "BFLOAT8_B":
                 if seq_len == 32:

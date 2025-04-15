@@ -90,11 +90,13 @@ def create_custom_preprocessor(model_config, tt_cache_path, device, base_file_na
     return rotary_embedding_custom_processor
 
 
-def create_attention_input(llm_mode, dtype, batch, sequence_length, hidden_size, device, mesh_mapper=None):
+def create_attention_input(
+    llm_mode: ttnn.InferenceMode, dtype, batch, sequence_length, hidden_size, device, mesh_mapper=None
+):
     torch_attention_input = (torch.rand(batch, sequence_length, hidden_size) * 2) - 1
 
     q_len = sequence_length
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tt_attention_input = ttnn.from_torch(
             torch_attention_input.unsqueeze(1),
             dtype=dtype,
@@ -102,7 +104,7 @@ def create_attention_input(llm_mode, dtype, batch, sequence_length, hidden_size,
             device=device,
             mesh_mapper=mesh_mapper,
         )
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
         assert q_len == 1, "For decode, q_len must be 1!"
 
@@ -120,7 +122,7 @@ def create_attention_input(llm_mode, dtype, batch, sequence_length, hidden_size,
 
 
 def create_attention_mask(
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     dtype,
     attention_input,
     batch,
@@ -130,7 +132,7 @@ def create_attention_mask(
     device,
     mesh_mapper=None,
 ):
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         q_len, kv_len = sequence_length, sequence_length
         assert batch == 1 or mesh_mapper, "For prefill, batch must be 1!"
         assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
@@ -151,7 +153,7 @@ def create_attention_mask(
             device=device,
             mesh_mapper=mesh_mapper,
         )
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         q_len, kv_len = sequence_length, kv_cache_length + 1
         assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
         assert q_len == 1, "For decode, q_len must be 1!"
@@ -190,7 +192,7 @@ def create_kv_cache(llm_mode, dtype, batch, kv_cache_length, config, device, mes
     torch_k_cache = torch.zeros(batch, 1, config.max_position_embeddings, head_dim)
     torch_v_cache = torch.zeros(batch, 1, config.max_position_embeddings, head_dim)
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         layer_past = None
         ttnn_k_cache = ttnn.from_torch(
             torch_k_cache, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_mapper=mesh_mapper
@@ -198,7 +200,7 @@ def create_kv_cache(llm_mode, dtype, batch, kv_cache_length, config, device, mes
         ttnn_v_cache = ttnn.from_torch(
             torch_v_cache, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_mapper=mesh_mapper
         )
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         k_cache_data = torch.rand(batch, 1, kv_cache_length, head_dim)
         v_cache_data = torch.rand(batch, 1, kv_cache_length, head_dim)
         layer_past = (k_cache_data, v_cache_data)
@@ -219,9 +221,9 @@ def create_kv_cache(llm_mode, dtype, batch, kv_cache_length, config, device, mes
 
 
 def create_position_ids(llm_mode, kv_cache_length):
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         position_ids = None
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         position_ids = torch.LongTensor([kv_cache_length])
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")

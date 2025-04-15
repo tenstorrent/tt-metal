@@ -481,12 +481,14 @@ class TtModelArgs:
             self.is_2d_fracturing = all([dim > 1 for dim in self.mesh_device.shape]) if self.mesh_device else False
             self.is_multichip = self.num_devices > 1
 
-    def is_distributed_norm(self, mode):
+    def is_distributed_norm(self, mode: ttnn.InferenceMode):
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in self.mesh_device.shape]):  # 2D grid
             return True
-        elif self.dim >= 8192 and mode == "prefill":  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
+        elif (
+            self.dim >= 8192 and mode == ttnn.InferenceMode.PREFILL
+        ):  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
             return True
         return False
 

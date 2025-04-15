@@ -84,19 +84,19 @@ class TtLlamaMLP(LightweightModule):
         self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
 
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == ttnn.InferenceMode.DECODE:
             self.prefetch(prefetcher_setup, tt_ccl)
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == ttnn.InferenceMode.DECODE:
             self.prefetcher_setup.insert_tensor(self.w1)
             self.prefetcher_setup.insert_tensor(self.w3)
             self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
 
-    def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
-        if mode == "prefill":
+    def forward(self, x: ttnn.Tensor, mode: ttnn.InferenceMode) -> ttnn.Tensor:
+        if mode == ttnn.InferenceMode.PREFILL:
             return self.forward_prefill(x, mode)
 
         pc_1 = self.model_config["FF1_3_TG_RING_PROGCFG"]
@@ -113,7 +113,7 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_1,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == ttnn.InferenceMode.DECODE else None,
         )
 
         w1_out_reduced = self.tt_ccl.line_reduce_scatter(
@@ -133,7 +133,7 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == ttnn.InferenceMode.DECODE else None,
         )
         ttnn.deallocate(x)
         try:
@@ -179,7 +179,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == ttnn.InferenceMode.DECODE else None,
         )
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(

@@ -30,7 +30,7 @@ class PytorchFalconMLPModel(torch.nn.Module):
 def run_test_FalconMLP_inference(
     mesh_device,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     pcc,
@@ -55,9 +55,9 @@ def run_test_FalconMLP_inference(
     pytorch_FalconMLP_model = PytorchFalconMLPModel(hugging_face_reference_model, layer_num)
     pytorch_out = pytorch_FalconMLP_model(mlp_input)
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         ttFalconMLP = TtFalconMLPPrefill
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         ttFalconMLP = TtFalconMLPDecode
     else:
         raise ValueError(f"Unknown llm_mode: {llm_mode}")
@@ -105,28 +105,28 @@ def run_test_FalconMLP_inference(
     (
         (
             "tiiuae/falcon-7b-instruct",
-            "prefill",
+            ttnn.InferenceMode.PREFILL,
             1,
             2048,
             0.98,
         ),
         (
             "tiiuae/falcon-7b-instruct",
-            "prefill",
+            ttnn.InferenceMode.PREFILL,
             1,
             1024,
             0.98,
         ),
         (
             "tiiuae/falcon-7b-instruct",
-            "prefill",
+            ttnn.InferenceMode.PREFILL,
             1,
             128,
             0.98,
         ),
         (
             "tiiuae/falcon-7b-instruct",
-            "decode",
+            ttnn.InferenceMode.DECODE,
             1,
             32,
             0.98,
@@ -137,7 +137,7 @@ def run_test_FalconMLP_inference(
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 def test_FalconMLP_inference(
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     pcc,

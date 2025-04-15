@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import ttnn
 
 from models.demos.t3000.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
 from models.demos.t3000.falcon40b.tt.model_config import (
@@ -76,7 +77,7 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
     async_mode,
 ):
     num_devices = 8
-    llm_mode = "prefill"
+    llm_mode = ttnn.InferenceMode.PREFILL
     batch = 1
     kv_cache_len = 0
     out_pcc = 0.99
@@ -96,7 +97,9 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
 
-    assert llm_mode == "prefill" and num_layers == 60, "PCC tresholds only valid for prefill and 60 layers."
+    assert (
+        llm_mode == ttnn.InferenceMode.PREFILL and num_layers == 60
+    ), "PCC tresholds only valid for prefill and 60 layers."
 
     if data_type == "BFLOAT8_B":
         if seq_len == 32:

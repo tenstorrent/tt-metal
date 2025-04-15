@@ -101,12 +101,12 @@ class TtLlamaMLP_galaxy:
             cache_file_name=self.cache_path / w2_cache_str,
         )
 
-    def __call__(self, x: List[ttnn.Tensor], mode="decode") -> List[ttnn.Tensor]:
+    def __call__(self, x: List[ttnn.Tensor], mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE) -> List[ttnn.Tensor]:
         self.mlp_config = self.model_config["mlp"][mode]
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             return self.decode_forward(x)
-        elif mode == "prefill":
+        elif mode == ttnn.InferenceMode.PREFILL:
             return self.prefill_forward(x)
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
