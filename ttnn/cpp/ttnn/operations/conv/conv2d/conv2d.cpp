@@ -372,9 +372,6 @@ Result conv2d_L1(
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
-    if (bias_tensor.has_value()) {
-        log_info(" Start Bias Tensor = {}", bias_tensor->get());
-    }
     bool auto_shard = false;
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
         // In this case we deduce the shard layout.
@@ -479,10 +476,6 @@ Result conv2d_L1(
     // call optimized conv op or matmul micro op
     bool input_is_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
-    if (bias_tensor.has_value()) {
-        log_info(" Conv Bias Tensor = {}", bias_tensor->get());
-    }
-
     if (!mm_conv) {
         // call halo op
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
