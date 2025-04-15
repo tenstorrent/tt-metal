@@ -273,9 +273,6 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     auto layout = tensor.get_layout();
     auto tensor_shape = tensor.get_logical_shape();
 
-    const uint32_t tile_first_dim = 32;
-    const uint32_t tile_second_dim = 32;
-
     const auto [logical_shape, padded_shape] = shape_corrector(tensor, logical_input_shape, padded_input_shape);
     // First Case, No reshape Required
     if (tensor.get_logical_shape() == logical_shape && tensor.get_padded_shape() == padded_shape) {
@@ -289,8 +286,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         default_pad_value = (uint32_t)0;
     }
 
-    // const uint32_t tile_first_dim =tensor.get_tile().get_width();
-    // const uint32_t tile_second_dim =tensor.get_tile().get_height();
+    const uint32_t tile_first_dim = tt::constants::TILE_HEIGHT;
+    const uint32_t tile_second_dim = tt::constants::TILE_WIDTH;
 
     // The following case should only be called for the device storage case, the rest is a bandaid
     // for issue 15317

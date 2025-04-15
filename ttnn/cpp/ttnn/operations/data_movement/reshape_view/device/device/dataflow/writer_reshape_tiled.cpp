@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "dataflow_api.h"
+
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
-#include "dataflow_api.h"
-#include "debug/assert.h"
-#include "debug/dprint_pages.h"
-#include "debug/dprint.h"
 
 using namespace tt::data_movement::common;
 using ttnn::operations::data_movement::reshape::detail::SegmentMapData;
@@ -24,9 +22,9 @@ void kernel_main() {
 
     constexpr uint8_t element_sz_bytes = get_compile_time_arg_val(3);
 
-    constexpr uint32_t cb_id_mapping = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_input = tt::CBIndex::c_1;
-    constexpr uint32_t cb_id_working = tt::CBIndex::c_2;  // scratch
+    constexpr uint32_t cb_id_mapping = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_id_input = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_id_working = get_compile_time_arg_val(6);  // scratch
 
     const DataFormat input_data_format = get_dataformat(cb_id_input);
 

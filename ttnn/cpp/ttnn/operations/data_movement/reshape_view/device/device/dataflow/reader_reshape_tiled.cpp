@@ -5,9 +5,6 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "dprint.h"
-
-#include "debug/dprint_pages.h"
 
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_view/device/hostdevcommon/common.hpp"
@@ -26,11 +23,11 @@ void kernel_main() {
     constexpr uint32_t Max_Map_Size_Bytes = get_compile_time_arg_val(1);
     constexpr uint32_t Tile_Size_Bytes = get_compile_time_arg_val(2);
 
+    constexpr uint32_t mapping_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t input_cb_id = get_compile_time_arg_val(4);
+
     constexpr uint32_t Max_Map_Entries = Max_Map_Size_Bytes / sizeof(SegmentMapData);
     constexpr uint32_t Max_Map_Elements = Max_Map_Entries * SegmentMapData::size;
-
-    constexpr auto mapping_cb_id = tt::CBIndex::c_0;
-    constexpr auto input_cb_id = tt::CBIndex::c_1;
 
     const DataFormat input_data_format = get_dataformat(input_cb_id);
     const DataFormat map_data_format = get_dataformat(mapping_cb_id);
