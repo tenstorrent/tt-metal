@@ -53,12 +53,6 @@ void append_fabric_connection_rt_args(
     }
 }
 
-enum BF8_DIM3_TYPE {
-    NONE,
-    BF8_DIM3_DRAM_REMAIN_0,
-    BF8_DIM3_DRAM_REMAIN_8,
-};
-
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
@@ -142,14 +136,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto output_tensor_layout = output_tensor.buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
     const auto output_tensor_page_layout = output_tensor.layout();
-    BF8_DIM3_TYPE bf8_dim3_type = NONE;
-    if (dim == 3 && num_pages_per_packet == 4) {
-        if (input_tensor_shape[2] % 32 == 0 && (input_tensor_shape[3] / 32) % 12 == 0) {
-            bf8_dim3_type = BF8_DIM3_DRAM_REMAIN_0;
-        } else if (input_tensor_shape[2] % 32 == 0 && (input_tensor_shape[3] / 32) % 12 == 8) {
-            bf8_dim3_type = BF8_DIM3_DRAM_REMAIN_8;
-        }
-    }
+
+    const bool optimized_dim3 = dim == 3 && output_tensor_buffer_type == BufferType::DRAM &&
+                                input_tensor_shape[2] % 32 == 0 &&
+                                ((input_tensor_shape[3] / 32) % 12 == 0 || (input_tensor_shape[3] / 32) % 12 == 4 ||
+                                 (input_tensor_shape[3] / 32) % 12 == 0);
 
     // KERNEL CREATION
     // Reader
@@ -165,7 +156,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         op_config.get_page_size(),                        // tensor0_page_size
         last_dim,                                         // last_dim
         num_banks,                                        // num_banks
-        static_cast<uint32_t>(bf8_dim3_type),             // bf8_dim3_type
+        optimized_dim3,                                   // optimized_dim3
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
     for (const auto& arg : reader_kernel_config.compile_args) {
@@ -195,7 +186,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         dynamic_alternate,                                 // alternate
         last_dim,                                          // last_dim
         num_banks,                                         // num_bansks
-        static_cast<uint32_t>(bf8_dim3_type),              // bf8_dim3_type
+        optimized_dim3,                                    // optimized_dim3
     };
     for (const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);

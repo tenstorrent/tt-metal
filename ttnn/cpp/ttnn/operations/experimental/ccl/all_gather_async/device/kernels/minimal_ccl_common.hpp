@@ -10,8 +10,6 @@
 #include <cstdint>
 #include <utility>
 
-enum BF8_DIM3_TYPE { NONE, BF8_DIM3_DRAM_REMAIN_0, BF8_DIM3_DRAM_REMAIN_8 };
-
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
