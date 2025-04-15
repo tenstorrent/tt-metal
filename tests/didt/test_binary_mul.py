@@ -11,6 +11,8 @@ import ttnn
 from models.utility_functions import skip_for_blackhole, is_blackhole
 
 
+# This test was created to measure power consumption of BH chip on non-matmul workload.
+# The underlying workload is binary eltwise multiplication.
 class BinaryMulTest(OpTestBase):
     def __init__(
         self,
