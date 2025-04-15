@@ -14,7 +14,7 @@
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-auto check_shape(const Tensor& input, const ttnn::Shape& output_shape) {
+auto check_shape(const ttnn::Tensor& input, const ttnn::Shape& output_shape) {
     auto input_shape = input.get_logical_shape();
     TT_FATAL(
         input_shape.size() <= output_shape.size(),
