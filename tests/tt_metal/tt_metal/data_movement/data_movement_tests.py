@@ -43,6 +43,24 @@ test_bounds = {
     },
 }
 
+test_bounds = {
+    0: {
+        "riscv_1": {"latency": {"lower": 500, "upper": 1100}, "bandwidth": 0.06},
+        "riscv_0": {"latency": {"lower": 400, "upper": 900}, "bandwidth": 0.07},
+    },
+    1: {
+        "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
+        "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.29},
+    },
+    2: {
+        "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
+        "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
+    },
+    3: {
+        "riscv_1": {"latency": {"lower": 4100, "upper": 4200}, "bandwidth": 0.06},
+        "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.59},
+    },
+}
 
 def run_dm_tests(profile, verbose, gtest_filter, plot, report):
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
