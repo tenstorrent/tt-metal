@@ -62,9 +62,9 @@ perf_targets = {
     },
     "AllGatherConcat_0": {
         "op_name": "AllGatherConcat",
-        "kernel_duration": 16902.947916666668,
-        "op_to_op": 810.3333333333334,
-        "non-overlapped-dispatch-time": 6273.2,
+        "kernel_duration": 16953.190972222223,
+        "op_to_op": 796.8888888888889,
+        "non-overlapped-dispatch-time": 11465.5,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.5,
