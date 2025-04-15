@@ -129,10 +129,38 @@ std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::v
     Shape output_shape({sequence_length, 1, batch, hidden_dim});
 
     CoreRangeSet output_core_grid;
-    auto core_range_1 = CoreRange(CoreCoord{1, 0}, CoreCoord{3, 1});
-    auto core_range_2 = CoreRange(CoreCoord{1, 2}, CoreCoord{2, 2});
-    output_core_grid = CoreRangeSet(std::vector{core_range_1, core_range_2});
-    tt::tt_metal::ShardSpec shard_spec{output_core_grid, {batch, head_dim}};
+    auto core_range_1 = CoreRange(CoreCoord{6, 6}, CoreCoord{6, 6});
+    auto core_range_2 = CoreRange(CoreCoord{6, 7}, CoreCoord{6, 7});
+    auto core_range_3 = CoreRange(CoreCoord{6, 9}, CoreCoord{6, 9});
+    auto core_range_4 = CoreRange(CoreCoord{6, 0}, CoreCoord{6, 0});
+    auto core_range_5 = CoreRange(CoreCoord{6, 1}, CoreCoord{6, 1});
+    auto core_range_6 = CoreRange(CoreCoord{6, 2}, CoreCoord{6, 2});
+    auto core_range_7 = CoreRange(CoreCoord{6, 4}, CoreCoord{6, 4});
+    auto core_range_8 = CoreRange(CoreCoord{6, 5}, CoreCoord{6, 5});
+    auto core_range_9 = CoreRange(CoreCoord{5, 5}, CoreCoord{5, 5});
+    auto core_range_10 = CoreRange(CoreCoord{5, 6}, CoreCoord{5, 6});
+    auto core_range_11 = CoreRange(CoreCoord{5, 7}, CoreCoord{5, 7});
+    auto core_range_12 = CoreRange(CoreCoord{5, 9}, CoreCoord{5, 9});
+    auto core_range_13 = CoreRange(CoreCoord{5, 0}, CoreCoord{5, 0});
+    auto core_range_14 = CoreRange(CoreCoord{5, 1}, CoreCoord{5, 1});
+    auto core_range_15 = CoreRange(CoreCoord{5, 2}, CoreCoord{5, 2});
+    auto core_range_16 = CoreRange(CoreCoord{5, 4}, CoreCoord{5, 4});
+    auto core_range_17 = CoreRange(CoreCoord{1, 4}, CoreCoord{1, 4});
+    auto core_range_18 = CoreRange(CoreCoord{1, 5}, CoreCoord{1, 5});
+    auto core_range_19 = CoreRange(CoreCoord{1, 9}, CoreCoord{1, 9});
+    auto core_range_20 = CoreRange(CoreCoord{1, 0}, CoreCoord{1, 0});
+    auto core_range_21 = CoreRange(CoreCoord{2, 0}, CoreCoord{2, 0});
+    auto core_range_22 = CoreRange(CoreCoord{2, 4}, CoreCoord{2, 4});
+    auto core_range_23 = CoreRange(CoreCoord{2, 5}, CoreCoord{2, 5});
+    auto core_range_24 = CoreRange(CoreCoord{2, 9}, CoreCoord{2, 9});
+
+    output_core_grid = CoreRangeSet(
+        std::vector{core_range_1,  core_range_2,  core_range_3,  core_range_4,  core_range_5,  core_range_6,
+                    core_range_7,  core_range_8,  core_range_9,  core_range_10, core_range_11, core_range_12,
+                    core_range_13, core_range_14, core_range_15, core_range_16, core_range_17, core_range_18,
+                    core_range_19, core_range_20, core_range_21, core_range_22, core_range_23, core_range_24});
+    tt::tt_metal::ShardSpec shard_spec{output_core_grid, {batch, head_dim / 2}};
+
     auto mem_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1};
     mem_config.shard_spec = shard_spec;

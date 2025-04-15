@@ -25,112 +25,7 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
-constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(8);
-constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(9);
-constexpr uint32_t cb_id_q_out = get_compile_time_arg_val(10);
-constexpr uint32_t head_size = get_compile_time_arg_val(11);
-constexpr uint32_t batch = get_compile_time_arg_val(12);
-constexpr uint32_t head_size_num_tiles = get_compile_time_arg_val(13);
-constexpr uint32_t PHASES_TO_READ =
-    get_compile_time_arg_val(14);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
-
-constexpr uint32_t in_num_cores = get_compile_time_arg_val(15);
-constexpr uint32_t face_h = get_compile_time_arg_val(16);
-constexpr uint32_t face_hw = get_compile_time_arg_val(17);
-
-constexpr uint32_t temp_cb_id = get_compile_time_arg_val(18);
-
-constexpr uint32_t batch_size = get_compile_time_arg_val(19);
-constexpr uint32_t batch_start_1 = get_compile_time_arg_val(20);
-constexpr uint32_t batch_end_1 = get_compile_time_arg_val(21);
-constexpr uint32_t batch_start_2 = get_compile_time_arg_val(22);
-constexpr uint32_t batch_end_2 = get_compile_time_arg_val(23);
-constexpr uint32_t start_local = get_compile_time_arg_val(24);
-constexpr uint32_t num_sem_ranges = get_compile_time_arg_val(25);
-constexpr uint32_t tile_size = get_compile_time_arg_val(26);
-constexpr uint32_t num_tiles_per_core_concat = get_compile_time_arg_val(27);
-
-void batch_loop(
-    uint32_t q_start_addr,
-    const uint32_t cb_write_ptr_base,
-    uint64_t qkv_read_addr,
-    uint32_t num_tiles_read_cur_core,
-    uint32_t cur_core_idx,
-    uint32_t start,
-    uint32_t end,
-    uint32_t concat_arg_start,
-    tt_l1_ptr uint32_t* in0_mcast_noc_x,
-    tt_l1_ptr uint32_t* in0_mcast_noc_y,
-    uint32_t& in_tile_offset_by_head) {
-    for (uint32_t q = start; q < end; ++q) {
-        uint32_t wptr_offset = q < face_h ? q * SUBTILE_LINE_BYTES : (q + face_h) * SUBTILE_LINE_BYTES;
-        uint32_t q_write_addr = cb_write_ptr_base + wptr_offset;
-        for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
-            noc_async_read(
-                qkv_read_addr + face_hw * ELEMENT_SIZE, q_write_addr + face_hw * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
-
-            qkv_read_addr += tile_size;
-            q_write_addr += tile_size;
-            num_tiles_read_cur_core++;
-
-            if (num_tiles_read_cur_core == num_tiles_per_core_concat) {
-                cur_core_idx++;
-                qkv_read_addr =
-                    get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                    in_tile_offset_by_head;
-                num_tiles_read_cur_core = 0;
-            }
-        }
-    }
-};
-
-void nlp_concat(
-    uint32_t batch,
-    uint32_t q_start_addr,
-    uint32_t head_size,
-    uint32_t cb_id_q_out,
-    uint32_t concat_arg_start,
-    bool nlp_local,
-    uint32_t start_local,
-    tt_l1_ptr uint32_t* in0_mcast_noc_x,
-    tt_l1_ptr uint32_t* in0_mcast_noc_y,
-    uint32_t& in_tile_offset_by_head) {
-    // Q
-    uint32_t cur_core_idx = batch_start_1;
-
-    uint64_t qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                             in_tile_offset_by_head;
-
-    uint32_t num_tiles_read_cur_core = 0;
-    uint32_t q_write_addr = 0;
-    const uint32_t cb_write_ptr_base = get_write_ptr(cb_id_q_out);
-
-    uint32_t start = nlp_local ? start_local : batch_start_1;
-    uint32_t end = nlp_local ? start_local + 8 : batch_end_1;
-    uint32_t idx_end = nlp_local ? 1 : batch_size;
-
-    for (uint32_t batch_range = 0; batch_range < idx_end; batch_range++) {
-        batch_loop(
-            q_start_addr,
-            cb_write_ptr_base,
-            qkv_read_addr,
-            num_tiles_read_cur_core,
-            cur_core_idx,
-            start,
-            end,
-            concat_arg_start,
-            in0_mcast_noc_x,
-            in0_mcast_noc_y,
-            in_tile_offset_by_head);
-        start = batch_start_2;
-        end = batch_end_2;
-        cur_core_idx = batch_start_2;
-        qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                        in_tile_offset_by_head;
-    }
-
-    noc_async_read_barrier();
-};
+constexpr uint32_t num_sem_ranges = get_compile_time_arg_val(8);
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -141,7 +36,7 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
 
-    size_t arg_idx = 1;
+    size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -156,6 +51,7 @@ void kernel_main() {
     constexpr uint32_t out_ready_sem_wait_value = 12;  // get_arg_val<uint32_t>(arg_idx++);
 
     const uint32_t concat_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t concat_semaphore_send_addr2 = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
@@ -175,13 +71,6 @@ void kernel_main() {
     auto fabric_connection =
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
             arg_idx);
-
-    uint32_t concat_arg_start = get_arg_val<uint32_t>(0);
-    uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(concat_arg_start);
-    uint32_t q_start_addr = get_arg_val<uint32_t>(concat_arg_start + 1);
-
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + concat_arg_start));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + in_num_cores + concat_arg_start));
 
     // packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
@@ -283,11 +172,28 @@ void kernel_main() {
     if (wait_output_semaphore) {
         volatile tt_l1_ptr uint32_t* concat_semaphore_send_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr);
-        noc_semaphore_set(concat_semaphore_send_addr_ptr, VALID);
+        volatile tt_l1_ptr uint32_t* concat_semaphore_send_addr_ptr2 =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr2);
+
+        noc_semaphore_set(concat_semaphore_send_addr_ptr, 1);
+        noc_semaphore_set(concat_semaphore_send_addr_ptr2, 1);
+        if (concat_semaphore_send_addr_ptr[0] != 1) {
+            noc_semaphore_set(concat_semaphore_send_addr_ptr, 1);
+        }
+        if (concat_semaphore_send_addr_ptr2[0] != 1) {
+            noc_semaphore_set(concat_semaphore_send_addr_ptr2, 1);
+        }
     }
 
     if (wait_output_semaphore) {
         for (uint32_t i = 0; i < 3; i++) {
+            uint32_t mcast_dest_num = 2;
+            if (i == 1) {
+                mcast_dest_num = 6;
+            }
+            if (i == 2) {
+                mcast_dest_num = 8;
+            }
             const uint64_t concat_sem_rcv_addr = get_noc_multicast_addr(
                 mcast_dest_noc_start_x[i],
                 mcast_dest_noc_start_y[i],
@@ -297,7 +203,21 @@ void kernel_main() {
             noc_semaphore_set_multicast(
                 concat_semaphore_send_addr,
                 concat_sem_rcv_addr,
-                i == 1 ? 3 : 2,
+                mcast_dest_num,
+                false,  // linked = false
+                true);  // multicast_path_reserve = true
+
+            const uint64_t concat_sem_rcv_addr2 = get_noc_multicast_addr(
+                mcast_dest_noc_start_x[i],
+                mcast_dest_noc_start_y[i],
+                mcast_dest_noc_end_x[i],
+                mcast_dest_noc_end_y[i],
+                concat_semaphore_send_addr2);
+
+            noc_semaphore_set_multicast(
+                concat_semaphore_send_addr2,
+                concat_sem_rcv_addr2,
+                mcast_dest_num,
                 false,  // linked = false
                 true);  // multicast_path_reserve = true
         }
@@ -306,24 +226,6 @@ void kernel_main() {
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close_start();
     }
-
-    if (!wait_output_semaphore) {
-        volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr);
-        noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
-    }
-
-    nlp_concat(
-        batch,
-        q_start_addr,
-        head_size,
-        cb_id_q_out,
-        concat_arg_start,
-        0,
-        start_local,
-        in0_mcast_noc_x,
-        in0_mcast_noc_y,
-        in_tile_offset_by_head);
 
     if (reset_global_semaphore) {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;

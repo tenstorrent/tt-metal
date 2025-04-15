@@ -399,12 +399,12 @@ class TtLlamaAttention(LightweightModule):
         # print("done concat heads")
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
-        attn_output_cat = ttnn.to_memory_config(
-            attn_output_cat_0, self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"]
-        )
-        attn_output_cat_0.deallocate(True)
+        # attn_output_cat = ttnn.to_memory_config(
+        #    attn_output_cat_0, self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"]
+        # )
+        # attn_output_cat_0.deallocate(True)
         dense_out_ttnn = ttnn.matmul(
-            attn_output_cat,
+            attn_output_cat_0,
             self.wo,
             program_config=self.model_config["WO_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_WO_OUT_RING_MEMCFG"],
@@ -414,7 +414,7 @@ class TtLlamaAttention(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         # [1, 1, 32, 2304]
-        ttnn.deallocate(attn_output_cat)
+        # ttnn.deallocate(attn_output_cat)
         # print("done matmul")
 
         dense_out_reduced = self.tt_ccl.line_all_reduce(

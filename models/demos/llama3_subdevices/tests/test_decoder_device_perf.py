@@ -62,8 +62,8 @@ perf_targets = {
     },
     "AllGatherConcat_0": {
         "op_name": "AllGatherConcat",
-        "kernel_duration": 16855.885416666666,
-        "op_to_op": 2433.0,
+        "kernel_duration": 16902.947916666668,
+        "op_to_op": 810.3333333333334,
         "non-overlapped-dispatch-time": 6273.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
@@ -76,15 +76,6 @@ perf_targets = {
         "non-overlapped-dispatch-time": 4351.1,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
-    },
-    "ReshardDeviceOperation_0": {
-        "op_name": "ReshardDeviceOperation_LN_0",
-        "kernel_duration": 2003.7777777777776,
-        "op_to_op": 734.4444444444445,
-        "non-overlapped-dispatch-time": 11460.6,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.1,
         "dispatch_duration_relative_margin": 0.1,
     },
     "Matmul_0": {

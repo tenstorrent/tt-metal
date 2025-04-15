@@ -29,16 +29,14 @@ constexpr uint32_t in_num_cores = get_compile_time_arg_val(7);
 constexpr uint32_t face_h = get_compile_time_arg_val(8);
 constexpr uint32_t face_hw = get_compile_time_arg_val(9);
 
-constexpr uint32_t temp_cb_id = get_compile_time_arg_val(10);
-constexpr uint32_t batch_size = get_compile_time_arg_val(11);
-constexpr uint32_t batch_start_1 = get_compile_time_arg_val(12);
-constexpr uint32_t batch_end_1 = get_compile_time_arg_val(13);
-constexpr uint32_t batch_start_2 = get_compile_time_arg_val(14);
-constexpr uint32_t batch_end_2 = get_compile_time_arg_val(15);
-constexpr uint32_t start_local = get_compile_time_arg_val(16);
-constexpr uint32_t tile_size = get_compile_time_arg_val(17);
-constexpr uint32_t num_tiles_per_core_concat = get_compile_time_arg_val(18);
-
+constexpr uint32_t batch_size = get_compile_time_arg_val(10);
+constexpr uint32_t batch_start_1 = get_compile_time_arg_val(11);
+constexpr uint32_t batch_end_1 = get_compile_time_arg_val(12);
+constexpr uint32_t batch_start_2 = get_compile_time_arg_val(13);
+constexpr uint32_t batch_end_2 = get_compile_time_arg_val(14);
+constexpr uint32_t start_local = get_compile_time_arg_val(15);
+constexpr uint32_t tile_size = get_compile_time_arg_val(16);
+constexpr uint32_t num_tiles_per_core_concat = head_size_num_tiles;
 void batch_loop(
     uint32_t q_start_addr,
     uint32_t tensor_address0,
@@ -54,11 +52,14 @@ void batch_loop(
     tt_l1_ptr uint32_t* in0_mcast_noc_x,
     tt_l1_ptr uint32_t* in0_mcast_noc_y,
     bool nlp_local,
-    uint32_t in_tile_offset_by_head) {
+    uint32_t in_tile_offset_by_head,
+    uint32_t second_half_core) {
     for (uint32_t q = start; q < end; ++q) {
         uint32_t wptr_offset = q < face_h ? q * SUBTILE_LINE_BYTES : (q + face_h) * SUBTILE_LINE_BYTES;
         uint32_t q_write_addr = cb_write_ptr_base + wptr_offset;
-        for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
+        for (uint32_t i = head_size_num_tiles * second_half_core;
+             i < head_size_num_tiles * second_half_core + head_size_num_tiles;
+             ++i) {
             // Read first phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
                 noc_async_read(qkv_read_addr, q_write_addr, SUBTILE_LINE_BYTES);
@@ -77,10 +78,10 @@ void batch_loop(
                 local_count++;
                 qkv_read_addr =
                     get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                    in_tile_offset_by_head;
+                    in_tile_offset_by_head + 2 * tile_size * second_half_core;
                 if (nlp_local) {
                     qkv_read_addr = get_noc_addr(core_noc_x[local_count], core_noc_y[local_count], tensor_address0) +
-                                    in_tile_offset_by_head;
+                                    in_tile_offset_by_head + 2 * tile_size * second_half_core;
                 }
                 num_tiles_read_cur_core = 0;
             }
@@ -100,16 +101,17 @@ void nlp_concat(
     std::array<uint32_t, 8> core_noc_y,
     tt_l1_ptr uint32_t* in0_mcast_noc_x,
     tt_l1_ptr uint32_t* in0_mcast_noc_y,
-    uint32_t in_tile_offset_by_head) {
+    uint32_t in_tile_offset_by_head,
+    uint32_t second_half_core) {
     // Q
     uint32_t cur_core_idx = batch_start_1;
 
     uint64_t qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                             in_tile_offset_by_head;
+                             in_tile_offset_by_head + 2 * tile_size * second_half_core;
     uint32_t local_count = 0;
     if (nlp_local) {
-        qkv_read_addr =
-            get_noc_addr(core_noc_x[local_count], core_noc_y[local_count], tensor_address0) + in_tile_offset_by_head;
+        qkv_read_addr = get_noc_addr(core_noc_x[local_count], core_noc_y[local_count], tensor_address0) +
+                        in_tile_offset_by_head + 2 * tile_size * second_half_core;
     }
     uint32_t num_tiles_read_cur_core = 0;
     uint32_t q_write_addr = 0;
@@ -135,12 +137,13 @@ void nlp_concat(
             in0_mcast_noc_x,
             in0_mcast_noc_y,
             nlp_local,
-            in_tile_offset_by_head);
+            in_tile_offset_by_head,
+            second_half_core);
         start = batch_start_2;
         end = batch_end_2;
         cur_core_idx = batch_start_2;
         qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                        in_tile_offset_by_head;
+                        in_tile_offset_by_head + 2 * tile_size * second_half_core;
 
         num_tiles_read_cur_core = 0;
     }
@@ -155,15 +158,19 @@ void kernel_main() {
 
     uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(0);
     uint32_t q_start_addr = get_arg_val<uint32_t>(1);
-    const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(2));
+    uint32_t tensor_address0 = get_arg_val<uint32_t>(2);
+    const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(3));
+    const uint32_t signal_semaphore_addr2 = get_semaphore(get_arg_val<uint32_t>(4));
 
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr2 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr2);
 
-    uint32_t arg_idx = 3 + 2 * in_num_cores;
-    uint32_t tensor_address0 = get_arg_val<uint32_t>(arg_idx);
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(3 + in_num_cores));
+    uint32_t arg_idx = 5 + 2 * in_num_cores;
+    uint32_t second_half_core = get_arg_val<uint32_t>(arg_idx);
+    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
+    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + in_num_cores));
 
     std::array<uint32_t, 8> core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
     std::array<uint32_t, 8> core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
@@ -180,11 +187,15 @@ void kernel_main() {
         core_noc_y,
         in0_mcast_noc_x,
         in0_mcast_noc_y,
-        in_tile_offset_by_head);
-
-    // 1. Wait for signal from All-Gather worker
-    noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
-    noc_semaphore_set(signal_semaphore_addr_ptr, 0);
+        in_tile_offset_by_head,
+        second_half_core);
+    if (PHASES_TO_READ == 1) {
+        noc_semaphore_wait(signal_semaphore_addr_ptr, 1);
+        noc_semaphore_set(signal_semaphore_addr_ptr, 0);
+    } else if (PHASES_TO_READ == 2) {
+        noc_semaphore_wait(signal_semaphore_addr_ptr2, 1);
+        noc_semaphore_set(signal_semaphore_addr_ptr2, 0);
+    }
 
     nlp_concat(
         batch,
@@ -198,5 +209,6 @@ void kernel_main() {
         core_noc_y,
         in0_mcast_noc_x,
         in0_mcast_noc_y,
-        in_tile_offset_by_head);
+        in_tile_offset_by_head,
+        second_half_core);
 }
