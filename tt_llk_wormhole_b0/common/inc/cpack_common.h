@@ -249,7 +249,8 @@ inline void set_packer_config(const uint pack_src_format, const uint pack_dst_fo
     dest_rd_ctrl_u dest_rd_ctrl;
     dest_rd_ctrl.val                              = 0;
     dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = ((pack_src_format & 0xF) == (uint)DataFormat::Int8) | (pack_src_format == (uint)DataFormat::Int32) |
-                                                    (pack_src_format == (uint)DataFormat::Float32) | (is_fp32_dest_acc_en ? 1 : 0);
+                                                    (pack_src_format == (uint)DataFormat::UInt32) | (pack_src_format == (uint)DataFormat::Float32) |
+                                                    (is_fp32_dest_acc_en ? 1 : 0);
     if (pack_dst_format == (uint)DataFormat::UInt8)
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
@@ -362,7 +363,8 @@ inline void reconfig_packer_data_format(const uint pack_src_format, const uint p
     dest_rd_ctrl_u dest_rd_ctrl;
     dest_rd_ctrl.val                              = 0;
     dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = ((pack_src_format & 0xF) == (uint)DataFormat::Int8) | (pack_src_format == (uint)DataFormat::Int32) |
-                                                    (pack_src_format == (uint)DataFormat::Float32) | (is_fp32_dest_acc_en ? 1 : 0);
+                                                    (pack_src_format == (uint)DataFormat::UInt32) | (pack_src_format == (uint)DataFormat::Float32) |
+                                                    (is_fp32_dest_acc_en ? 1 : 0);
     if (pack_dst_format == (uint)DataFormat::UInt8)
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
