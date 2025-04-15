@@ -144,7 +144,8 @@ MeshDevice::ScopedDevices::ScopedDevices(
         {},
         worker_l1_size,
         /*init_profiler*/ false,
-        /*use_max_eth_core_count_on_all_devices*/ true);
+        /*use_max_eth_core_count_on_all_devices*/ true,
+        /* initialize_fabric_and_dispatch_fw */ false);
 
     for (auto device_id : device_ids) {
         devices_.push_back(opened_devices_.at(device_id));
@@ -220,6 +221,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         dynamic_cast<Device*>(device)->mesh_device = mesh_device;
     }
     DevicePool::instance().init_profiler();
+    DevicePool::instance().initialize_active_devices();
+    DevicePool::instance().wait_for_fabric_router_sync();
     return mesh_device;
 }
 
@@ -250,10 +253,14 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     std::map<int, std::shared_ptr<MeshDevice>> result;
     for (size_t i = 0; i < device_ids.size(); i++) {
         submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
+        for (auto device : submeshes[i]->get_devices()) {
+            dynamic_cast<Device*>(device)->mesh_device = submeshes[i];
+        }
         result[device_ids[i]] = submeshes[i];
     }
     DevicePool::instance().init_profiler();
-
+    DevicePool::instance().initialize_active_devices();
+    DevicePool::instance().wait_for_fabric_router_sync();
     return result;
 }
 

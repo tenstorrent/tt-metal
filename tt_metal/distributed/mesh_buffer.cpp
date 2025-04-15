@@ -225,9 +225,12 @@ AnyBuffer::AnyBuffer(std::shared_ptr<Buffer> buffer) : buffer_(buffer.get()), ho
 AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
     buffer_(buffer->get_reference_buffer()), holder_(std::move(buffer)) {}
 
-AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config) {
+AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address) {
     auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
+        if (address.has_value()) {
+            return AnyBuffer{CreateBuffer(config, *address)};
+        }
         return AnyBuffer{CreateBuffer(config)};
     }
     MeshBufferConfig mesh_config = ReplicatedBufferConfig{
@@ -239,12 +242,15 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config) {
         .buffer_layout = config.buffer_layout,
         .shard_parameters = config.shard_parameters,
     };
-    return MeshBuffer::create(mesh_config, local_config, mesh_device);
+    return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }
 
-AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config) {
+AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address) {
     auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
+        if (address.has_value()) {
+            return AnyBuffer{CreateBuffer(config, *address)};
+        }
         return AnyBuffer{CreateBuffer(config)};
     }
     MeshBufferConfig mesh_config = ReplicatedBufferConfig{
@@ -255,7 +261,7 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config)
         .buffer_type = config.buffer_type,
         .buffer_layout = config.buffer_layout,
     };
-    return MeshBuffer::create(mesh_config, local_config, mesh_device);
+    return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }
 
 Buffer* AnyBuffer::get_buffer() const { return buffer_; }

@@ -215,7 +215,7 @@ def test_dispatch_cores():
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch": [153, 246, 365, 1035, 1548, 1634, 2447],
-        "Tensix CQ Prefetch": [410, 484, 529, 1117, 2356, 2447, 3070],
+        "Tensix CQ Prefetch": [410, 451, 529, 1117, 2356, 2447, 3070],
     }
 
     def verify_stats(devicesData):

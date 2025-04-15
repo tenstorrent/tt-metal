@@ -220,7 +220,8 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size,
     bool init_profiler,
-    bool use_max_eth_core_count_on_all_devices) noexcept {
+    bool use_max_eth_core_count_on_all_devices,
+    bool initialize_fabric_and_dispatch_fw) noexcept {
     // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
     // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
@@ -237,6 +238,8 @@ void DevicePool::initialize(
     _inst->worker_l1_size = worker_l1_size;
     _inst->num_hw_cqs = num_hw_cqs;
     _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
+    _inst->init_profiler_ = init_profiler;
+    _inst->initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
     // Track the thread where the Device Pool was created. Certain functions
     // modifying the state of this instance, for example those responsible for
     // (un)registering worker threads, can only be called in the creation thread
@@ -271,10 +274,6 @@ void DevicePool::initialize(
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(
         true, target_mmio_ids);
     _inst->init_firmware_on_active_devices();
-    _inst->wait_for_fabric_router_sync();
-    if (init_profiler) {
-        _inst->init_profiler();
-    }
 }
 
 void DevicePool::initialize_host(IDevice* dev) const {
@@ -653,8 +652,14 @@ void DevicePool::init_firmware_on_active_devices() const {
             }
         }
     }
-    this->init_profiler();
-    this->initialize_active_devices();
+
+    if (init_profiler_) {
+        this->init_profiler();
+    }
+    if (initialize_fabric_and_dispatch_fw_) {
+        this->initialize_active_devices();
+        this->wait_for_fabric_router_sync();
+    }
 }
 
 DevicePool::DevicePool() {

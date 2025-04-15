@@ -60,6 +60,7 @@
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
@@ -145,12 +146,28 @@ void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
             // generic API to read from an address instead of a buffer. (#15015)
             CoreCoord logical_worker_core =
                 soc_d.translate_coord_to(curr_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-            auto control_buffer_view = get_control_buffer_view(
-                device,
-                reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                logical_worker_core);
-            EnqueueWriteBuffer(device->command_queue(), control_buffer_view, control_buffer, true);
+            if (auto mesh_device = device->get_mesh_device()) {
+                auto control_buffer_view = get_control_buffer_view(
+                    mesh_device.get(),
+                    reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+                    logical_worker_core);
+
+                auto device_coord = mesh_device->get_view().find_device(device_id);
+                WriteShard(
+                    mesh_device->mesh_command_queue(),
+                    control_buffer_view.get_mesh_buffer(),
+                    control_buffer,
+                    device_coord,
+                    true);
+            } else {
+                auto control_buffer_view = get_control_buffer_view(
+                    device,
+                    reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+                    logical_worker_core);
+                EnqueueWriteBuffer(device->command_queue(), *(control_buffer_view.get_buffer()), control_buffer, true);
+            }
         } else {
             tt::llrt::write_hex_vec_to_core(
                 device_id, curr_core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
@@ -729,14 +746,20 @@ void InitDeviceProfiler(IDevice* device) {
         std::vector<uint32_t> inputs_DRAM(output_dram_buffer_ptr->size() / sizeof(uint32_t), 0);
 
         if (device->dispatch_firmware_active()) {
-            EnqueueWriteBuffer(
-                device->command_queue(),
-                *(tt_metal_device_profiler_map.at(device_id).output_dram_buffer.get_buffer()),
-                inputs_DRAM,
-                true);
+            if (auto mesh_device = device->get_mesh_device()) {
+                auto device_coord = mesh_device->get_view().find_device(device_id);
+                distributed::WriteShard(
+                    mesh_device->mesh_command_queue(),
+                    profiler.output_dram_buffer.get_mesh_buffer(),
+                    inputs_DRAM,
+                    device_coord,
+                    true);
+            } else {
+                EnqueueWriteBuffer(
+                    device->command_queue(), *(profiler.output_dram_buffer.get_buffer()), inputs_DRAM, true);
+            }
         } else {
-            tt_metal::detail::WriteToBuffer(
-                *(tt_metal_device_profiler_map.at(device_id).output_dram_buffer.get_buffer()), inputs_DRAM);
+            tt_metal::detail::WriteToBuffer(*(profiler.output_dram_buffer.get_buffer()), inputs_DRAM);
         }
     }
 #endif

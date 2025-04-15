@@ -58,7 +58,7 @@ void filter_tensor_shards(
 }
 
 // Checks if the MeshCoordinateRangeSet containing all coordinates in b is a subset of a.
-inline bool is_sub_set_of(const std::vector<MeshCoordinate>& a, const std::vector<MeshCoordinate>& b) {
+inline bool is_subset_of(const std::vector<MeshCoordinate>& a, const std::vector<MeshCoordinate>& b) {
     MeshCoordinateRangeSet a_set;
     MeshCoordinateRangeSet b_set;
 

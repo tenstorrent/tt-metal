@@ -173,8 +173,10 @@ private:
 class AnyBuffer {
 public:
     AnyBuffer() = default;
-    static AnyBuffer create(const tt::tt_metal::ShardedBufferConfig& config);
-    static AnyBuffer create(const tt::tt_metal::InterleavedBufferConfig& config);
+    static AnyBuffer create(
+        const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address = std::nullopt);
+    static AnyBuffer create(
+        const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address = std::nullopt);
 
     Buffer* get_buffer() const;
     bool is_mesh_buffer() const;
