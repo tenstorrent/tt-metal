@@ -1267,25 +1267,49 @@ void add_stagger_defines_if_needed(
     }
 }
 
-void throttle_mm_perf(std::map<string, string>& mm_kernel_defines, MathFidelity fidelity) {
-    // Limit matmul op throughput by inserting NOP instructions every 2 MVMUL instructions
+void throttle_mm_perf(
+    const tt::ARCH arch,
+    const int num_cores,
+    std::map<string, string>& mm_kernel_defines,
+    MathFidelity fidelity,
+    bool tiny_tile_mm) {
+    // Empirically deduced di/dt problems appear for OPs calling matmul using more than 48 cores on WH_B0
+    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_THROTTLE = 48;
+    // TODO: determine min core threshold for throttle to be needed on BH
+    constexpr uint32_t BH_MM_MAX_CORES_NO_THROTTLE = 0;
+    const bool mm_throttle_needed = (arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_THROTTLE) ||
+                                    (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_THROTTLE);
+
+    // Limit matmul compute throughput by inserting NOP instructions between MVMUL instructions of matmul kernel
+    // This will slow down the OP if UNPACK/PACK threads are capable of feeding data sufficiently fast (MATH compute
+    // bound)
     const bool enable_throttle_mm_perf = std::getenv("TT_THROTTLE_MM_PERF");
-    const uint32_t num_nops = enable_throttle_mm_perf ? std::stoi(std::getenv("TT_THROTTLE_MM_PERF")) : 0;
-    if (enable_throttle_mm_perf) {
-        if (num_nops == 3) {
-            mm_kernel_defines["MM_ADD_NOPS"] = std::to_string(num_nops);
-            log_warning(tt::LogOp, "Throttle matmul perf to max 40% by adding 3 NOPs every 2 instructions");
-        } else if (num_nops == 2) {
-            mm_kernel_defines["MM_ADD_NOPS"] = std::to_string(num_nops);
-            log_warning(tt::LogOp, "Throttle matmul perf to max 50% by adding 2 NOPs every 2 instructions");
-        } else if (num_nops == 1) {
-            mm_kernel_defines["MM_ADD_NOPS"] = std::to_string(num_nops);
-            log_warning(tt::LogOp, "Throttle matmul perf to max 67% by adding 1 NOP every 2 instructions");
+    const uint32_t throttle_level = enable_throttle_mm_perf ? std::stoi(std::getenv("TT_THROTTLE_MM_PERF")) : 0;
+    if (throttle_level && mm_throttle_needed) {
+        if (throttle_level == 5) {
+            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
+            tt::log_info(tt::LogOp, "Throttle matmul perf to max 33%");
+        } else if (throttle_level == 4) {
+            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
+            tt::log_info(tt::LogOp, "Throttle matmul perf to max 40%");
+        } else if (throttle_level == 3) {
+            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
+            tt::log_info(tt::LogOp, "Throttle matmul perf to max 50%");
+        } else if (throttle_level == 2) {
+            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
+            tt::log_info(tt::LogOp, "Throttle matmul perf to max 67%");
+        } else if (throttle_level == 1) {
+            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
+            tt::log_info(tt::LogOp, "Throttle matmul perf to max 73%");
         } else {
-            log_warning(
+            log_error(
                 tt::LogOp,
-                "Throttle matmul perf ignored: invalid number of NOPs requested - only 1, 2, and 3 are supported");
+                "Throttle matmul perf ignored: invalid number of NOPs requested - only {{1,2,3,4,5}} are supported");
         }
+    } else if (mm_throttle_needed && arch == tt::ARCH::WORMHOLE_B0 && fidelity == MathFidelity::LoFi && !tiny_tile_mm) {
+        // Default throttle to level 1 for WH_B0 if LoFi math fidelity and not tiny tiles
+        mm_kernel_defines["THROTTLE_MM"] = "1";
+        tt::log_info(tt::LogOp, "Throttle matmul perf to max 73% for LoFi + full tile size");
     }
 }
 
