@@ -3400,7 +3400,6 @@ def test_conv_higher_strides(
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
 
-    use_shallow_conv_variant = (input_channels == 16) and device.arch() == ttnn.device.Arch.GRAYSKULL
     run_conv(
         device,
         torch_tensor_map,
@@ -3418,7 +3417,7 @@ def test_conv_higher_strides(
         stride_w,
         (pad_h, pad_w),
         config_override=config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=False,
         transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=packer_l1_acc,
         fp32_accum=False,

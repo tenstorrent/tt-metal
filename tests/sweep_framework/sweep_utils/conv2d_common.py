@@ -270,7 +270,6 @@ def run_conv2d_short_sweep(
         if has_bias:
             tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, weights_dtype)
         output_layout = ttnn.Layout(output_layout)
-        print(f"output_layout: {output_layout}")
         output_dtype = ttnn.DataType(output_dtype)
         conv_config = ttnn.Conv2dConfig(
             dtype=output_dtype,
