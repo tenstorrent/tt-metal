@@ -13,7 +13,7 @@
 #include "gmock/gmock.h"
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape_base.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
