@@ -999,6 +999,9 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         input_width,
         bias_tensor.has_value());
 
+    TT_FATAL(
+        !is_tensor_on_device_or_multidevice(weight_tensor_),
+        "prepare_conv_weights_biases_and_move_to_device is not supported when the weights tensor is on the device");
     // Convert weight tensor to 0 padded shape if groups > 1
     if (!is_conv1d and groups > 1) {
         weight_tensor_ = convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups, weights_bias_dtype);
@@ -1175,11 +1178,11 @@ ttnn::Tensor prepare_conv_weights(
                 "conv_config.preprocess_weights_on_device flag was not set to True. \n This will use the device to "
                 "prepare weights, which is not fully supported.");
         }
-        if (groups > 1) {
-            TT_THROW(
-                "Weights preparation on device doesn't support grouped convolutions. Please use host preparation by "
-                "passing a host tensor and setting conv_config.preprocess_weights_on_device to False");
-        }
+        TT_FATAL(
+            groups == 1,
+            "Weights preparation on device doesn't support grouped convolutions. Please use host preparation by "
+            "passing a host tensor and setting conv_config.preprocess_weights_on_device to False \n Got groups = {}",
+            groups);
 
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
             weight_tensor,

@@ -64,6 +64,7 @@ import ttnn
 )
 @pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
+@pytest.mark.parametrize("groups", [1])
 def test_prepare_conv_weights(
     batch_size,
     output_channels,
@@ -80,6 +81,7 @@ def test_prepare_conv_weights(
     config_override,
     on_device,
     device,
+    groups,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
@@ -91,7 +93,7 @@ def test_prepare_conv_weights(
 
     has_bias = True
     inp_shape = (batch_size, input_channels, input_height, input_width)
-    conv_weight_shape = (output_channels, input_channels, filter_height, filter_width)
+    conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16)
     torch_input_tensor = torch.randn(inp_shape, dtype=torch.bfloat16)
     torch_bias_tensor = torch.randn((1, 1, 1, output_channels), dtype=torch.bfloat16) if has_bias else None
@@ -103,7 +105,7 @@ def test_prepare_conv_weights(
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
         dilation=(1, 1),
-        groups=1,
+        groups=groups,
     ).permute(0, 2, 3, 1)
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor.transpose(-3, -2).transpose(-2, -1), ttnn.bfloat16)
@@ -143,7 +145,7 @@ def test_prepare_conv_weights(
         "stride": (stride_h, stride_w),
         "padding": (pad_h, pad_w),
         "dilation": (1, 1),
-        "groups": 1,
+        "groups": groups,
         "device": device,
         "conv_config": conv_config,
     }
