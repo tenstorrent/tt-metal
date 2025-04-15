@@ -30,8 +30,8 @@
 #include "launch_message_ring_buffer_state.hpp"
 #include "mesh_trace.hpp"
 #include "shape_base.hpp"
-#include "span.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"

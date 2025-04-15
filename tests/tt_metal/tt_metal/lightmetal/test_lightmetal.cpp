@@ -33,7 +33,7 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt-metalium/lightmetal_capture_utils.hpp>
 #include "lightmetal_fixture.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 

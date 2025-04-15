@@ -22,6 +22,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
 
 jobs:
   cpp-unit-tests:
@@ -41,7 +45,7 @@ jobs:
           {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch"},
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth_${{ inputs.arch }}"},
           {name: stl, cmd: "./build/test/tt_metal/unit_tests_stl"},
-          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }} ${{ inputs.arch == 'blackhole' && '--gtest_filter=\"-MeshEventsTestSuite.*\"' || '' }}"},
+          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }}"},
           {name: lightmetal, cmd: "./build/test/tt_metal/unit_tests_lightmetal"},
           {name: dispatch multicmd queue, cmd: "TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*"},
           {name: ttnn cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
@@ -69,8 +73,8 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: >-
       ${{
-        startsWith(inputs.runner-label, 'tt-beta-ubuntu')
-        && fromJSON(format('["{0}"]', inputs.runner-label))
+        (startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)))
+        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
@@ -82,6 +86,7 @@ jobs:
           # Unsure why these C++ tests need the wheel...  a cleanup to do separately
           # https://github.com/tenstorrent/tt-metal/issues/20166
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}

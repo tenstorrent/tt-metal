@@ -47,7 +47,6 @@
 #include "routing_test_common.hpp"
 #include "rtoptions.hpp"
 #include <tt-metalium/allocator.hpp>
-#include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
@@ -502,7 +501,13 @@ typedef struct test_board {
     }
 
     inline eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t eth_chan) {
-        return control_plane->get_eth_chan_direction(mesh_id, chip_id, eth_chan);
+        auto active_eth_chans = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+        for (const auto& [eth_chan_, direction] : active_eth_chans) {
+            if (eth_chan_ == eth_chan) {
+                return direction;
+            }
+        }
+        TT_THROW("Cannot find ethernet channel direction");
     }
 
     inline void close_devices() { tt::tt_metal::detail::CloseDevices(device_handle_map); }
