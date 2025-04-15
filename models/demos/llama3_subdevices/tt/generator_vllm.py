@@ -21,10 +21,10 @@ def generate_submeshes(mesh_device, data_parallel):
     return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
 
 
-def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, mesh_device, tt_cache_path, tt_data_parallel=1):
-    submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
-
+def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: TtTransformer, tt_cache_path):
+    submesh_devices = [model.mesh_device]
     kv_cache = []
+
     for mesh_idx, submesh in enumerate(submesh_devices):
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
         kv_tt = []
@@ -133,4 +133,4 @@ class LlamaForCausalLM(Generator):
         return super().decode_forward_text(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, tt_cache_path=self.cache_path)
+        return allocate_vllm_kv_cache(*args, **kwargs, model=self.model, tt_cache_path=self.cache_path)

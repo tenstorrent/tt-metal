@@ -9,7 +9,7 @@
 #include <sub_device_types.hpp>
 #include <tt-metalium/device.hpp>
 
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "system_memory_manager.hpp"
 
 namespace tt {

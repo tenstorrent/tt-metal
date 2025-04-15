@@ -34,7 +34,7 @@
 #include <tt-metalium/logger.hpp>
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"

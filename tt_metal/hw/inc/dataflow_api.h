@@ -1701,14 +1701,15 @@ void noc_async_read_tile_dram_sharded_with_state(
     }
 }
 
-FORCE_INLINE
-void noc_async_read_tile_dram_sharded_with_state_with_trid(
+template <bool skip_ptr_update = false>
+FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
 
     WAYPOINT("NRDW");
 #ifndef ARCH_GRAYSKULL
-    ncrisc_noc_fast_read_with_transaction_id<noc_mode>(noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
+    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
+        noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
 #endif
     WAYPOINT("NRDD");
 }

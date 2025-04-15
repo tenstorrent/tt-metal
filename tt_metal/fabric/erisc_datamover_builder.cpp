@@ -374,7 +374,12 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     edm_status_ptr(config.edm_status_address),
     enable_persistent_mode(enable_persistent_mode),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
-    dateline_connection(dateline_connection) {}
+    dateline_connection(dateline_connection) {
+    std::fill(
+        sender_channel_connection_liveness_check_disable_array.begin(),
+        sender_channel_connection_liveness_check_disable_array.end(),
+        false);
+}
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const {
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
@@ -457,6 +462,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
 
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
+
+    for (size_t i = 0; i < num_sender_channels; i++) {
+        ct_args.push_back(this->sender_channel_connection_liveness_check_disable_array[i]);
+    }
 
     // Sender channel args
     constexpr size_t sender_ack_noc_id = 0;
@@ -668,7 +677,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
         this->enable_persistent_mode};
 }
 
-SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(uint32_t vc) const {
+SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(uint32_t vc) {
     uint32_t chan = 0;
     if (vc == 0) {
         chan = 1;
@@ -677,6 +686,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     } else {
         TT_THROW("Invalid VC");
     }
+    this->sender_channel_connection_liveness_check_disable_array[chan] = true;
     return SenderWorkerAdapterSpec{
         this->my_noc_x,
         this->my_noc_y,
@@ -690,7 +700,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         false};
 }
 
-void FabricEriscDatamoverBuilder::connect_to_downstream_edm(const FabricEriscDatamoverBuilder& downstream_edm) {
+void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamoverBuilder& downstream_edm) {
     TT_FATAL(
         !this->build_in_worker_connection_mode, "Tried to connect two EDMs to each other in worker connection mode");
     for (uint32_t i = 0; i < FabricEriscDatamoverBuilder::num_virtual_channels; i++) {

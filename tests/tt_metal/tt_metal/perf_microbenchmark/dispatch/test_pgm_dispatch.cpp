@@ -32,7 +32,7 @@
 #include <tt-metalium/program.hpp>
 #include "rtoptions.hpp"
 #include <tt-metalium/semaphore.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>

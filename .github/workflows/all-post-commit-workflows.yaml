@@ -208,6 +208,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   t3000-fast-tests:
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml

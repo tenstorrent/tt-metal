@@ -140,7 +140,6 @@ def run_latency_test(
     assert latency_max_ns <= expected_max_latency_ns * min_max_latency_upper_bound_threshold_percent
     assert avg_hop_latency <= expected_avg_hop_latency_ns * upper_bound_threshold_percent
 
-    lower_bound_threshold_percent = 0.95
     is_under_avg_lower_bound = latency_avg_ns <= expected_mean_latency_ns - allowable_delta
     is_under_min_lower_bound = latency_min_ns <= expected_min_latency_ns * min_max_latency_lower_bound_threshold_percent
     is_under_max_lower_bound = latency_max_ns <= expected_max_latency_ns * min_max_latency_lower_bound_threshold_percent
@@ -151,8 +150,8 @@ def run_latency_test(
             f"Some measured values were under (better) than the expected values (including margin). Please update targets accordingly."
         )
         assert expected_mean_latency_ns - allowable_delta <= latency_avg_ns
-        assert expected_min_latency_ns * lower_bound_threshold_percent <= latency_min_ns
-        assert expected_max_latency_ns * lower_bound_threshold_percent <= latency_max_ns
+        assert expected_min_latency_ns * min_max_latency_lower_bound_threshold_percent <= latency_min_ns
+        assert expected_max_latency_ns * min_max_latency_lower_bound_threshold_percent <= latency_max_ns
         assert expected_avg_hop_latency_ns * lower_bound_threshold_percent <= avg_hop_latency
 
 
@@ -166,16 +165,16 @@ def run_latency_test(
 @pytest.mark.parametrize(
     "latency_ping_message_size_bytes,latency_measurement_worker_line_index,enable_fused_payload_with_sync, expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
     [
-        (0, 0, False, 10850, 10300, 11370, 775),
-        (0, 1, False, 9171, 8730, 9590, 765),
-        (4096, 1, False, 15970, 15600, 16300, 1330),
-        (0, 2, False, 7700, 7330, 8125, 770),
-        (0, 3, False, 6200, 5920, 6570, 775),
-        (0, 4, False, 4740, 4520, 5270, 790),
-        (0, 5, False, 3170, 3010, 3470, 780),
-        (0, 6, False, 1520, 1420, 1720, 760),
-        (16, 6, False, 1520, 1400, 1730, 760),
-        (16, 6, True, 1535, 1425, 1730, 770),
+        (0, 0, False, 10625, 10300, 11000, 760),
+        (0, 1, False, 9000, 8680, 9430, 750),
+        (4096, 1, False, 15750, 15500, 16200, 1310),
+        (0, 2, False, 7550, 7240, 7840, 755),
+        (0, 3, False, 6160, 5850, 6580, 770),
+        (0, 4, False, 4680, 4450, 4975, 780),
+        (0, 5, False, 3160, 2975, 3470, 790),
+        (0, 6, False, 1520, 1420, 1680, 760),
+        (16, 6, False, 1520, 1400, 1680, 760),
+        (16, 6, True, 1535, 1425, 1700, 770),
         (1024, 6, False, 2000, 1820, 2150, 1000),
         (2048, 6, False, 2240, 2150, 2500, 1120),
         (4096, 6, False, 2600, 2520, 2770, 1300),

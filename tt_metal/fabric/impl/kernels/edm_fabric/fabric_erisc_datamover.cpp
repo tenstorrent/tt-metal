@@ -500,6 +500,24 @@ FORCE_INLINE void receiver_forward_packet(
     }
 }
 
+FORCE_INLINE bool connect_is_requested(uint32_t cached) {
+    return cached == tt::tt_fabric::EdmToEdmSender<0>::open_connection_value ||
+           cached == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
+}
+
+template <uint8_t SENDER_NUM_BUFFERS>
+FORCE_INLINE void establish_connection(
+    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface) {
+    local_sender_channel_worker_interface.cache_producer_noc_addr();
+    if constexpr (enable_first_level_ack) {
+        local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
+            local_sender_channel_worker_interface.local_ackptr.get_ptr());
+    } else {
+        local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
+            local_sender_channel_worker_interface.local_rdptr.get_ptr());
+    }
+}
+
 template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void check_worker_connections(
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
@@ -514,21 +532,12 @@ FORCE_INLINE void check_worker_connections(
         //
         // In such a case like that, we still want to formally teardown the connection to keep things clean
         uint32_t cached = *local_sender_channel_worker_interface.connection_live_semaphore;
-        bool connect_requested = cached == tt::tt_fabric::EdmToEdmSender<0>::open_connection_value ||
-                                 cached == tt::tt_fabric::EdmToEdmSender<0>::close_connection_request_value;
-        if (connect_requested) {
+        if (connect_is_requested(cached)) {
             // if constexpr (enable_fabric_counters) {
             //     sender_channel_counters->add_connection();
             // }
             channel_connection_established = true;
-            local_sender_channel_worker_interface.cache_producer_noc_addr();
-            if constexpr (enable_first_level_ack) {
-                local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
-                    local_sender_channel_worker_interface.local_ackptr.get_ptr());
-            } else {
-                local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
-                    local_sender_channel_worker_interface.local_rdptr.get_ptr());
-            }
+            establish_connection(local_sender_channel_worker_interface);
         }
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
         channel_connection_established = false;
@@ -547,7 +556,8 @@ template <
     bool enable_fabric_counters,
     uint8_t RECEIVER_NUM_BUFFERS,
     uint8_t SENDER_NUM_BUFFERS,
-    uint8_t to_receiver_pkts_sent_id>
+    uint8_t to_receiver_pkts_sent_id,
+    bool SKIP_CONNECTION_LIVENESS_CHECK>
 void run_sender_channel_step(
     tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& local_sender_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
@@ -596,9 +606,14 @@ void run_sender_channel_step(
         increment_local_update_ptr_val(
             to_sender_packets_completed_streams[sender_channel_index], -completions_since_last_check);
         if constexpr (!enable_first_level_ack) {
-            if (channel_connection_established) {
+            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
                     sender_rdptr.get_ptr());
+            } else {
+                if (channel_connection_established) {
+                    local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
+                        sender_rdptr.get_ptr());
+                }
             }
         }
     }
@@ -611,19 +626,26 @@ void run_sender_channel_step(
         auto& sender_ackptr = local_sender_channel_worker_interface.local_ackptr;
         if (acks_since_last_check > 0) {
             sender_ackptr.increment_n(acks_since_last_check);
-            if (channel_connection_established) {
+            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
                     sender_ackptr.get_ptr());
+            } else {
+                if (channel_connection_established) {
+                    local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
+                        sender_ackptr.get_ptr());
+                }
             }
             increment_local_update_ptr_val(
                 to_sender_packets_acked_streams[sender_channel_index], -acks_since_last_check);
         }
     }
 
-    auto check_connection_status =
-        !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
-    if (check_connection_status) {
-        check_worker_connections(local_sender_channel_worker_interface, channel_connection_established);
+    if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
+        auto check_connection_status =
+            !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
+        if (check_connection_status) {
+            check_worker_connections(local_sender_channel_worker_interface, channel_connection_established);
+        }
     }
 };
 
@@ -858,7 +880,8 @@ void run_fabric_edm_main_loop(
                 enable_fabric_counters,
                 RECEIVER_NUM_BUFFERS,
                 SENDER_NUM_BUFFERS,
-                to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>(
+                to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
+                sender_ch_live_check_skip[0]>(
                 local_sender_channels[0],
                 local_sender_channel_worker_interfaces[0],
                 outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
@@ -907,7 +930,8 @@ void run_fabric_edm_main_loop(
                 enable_fabric_counters,
                 RECEIVER_NUM_BUFFERS,
                 SENDER_NUM_BUFFERS,
-                to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>(
+                to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
+                sender_ch_live_check_skip[1]>(
                 local_sender_channels[1],
                 local_sender_channel_worker_interfaces[1],
                 outbound_to_receiver_channel_pointers[VC0_RECEIVER_CHANNEL],
@@ -922,7 +946,8 @@ void run_fabric_edm_main_loop(
                     enable_fabric_counters,
                     RECEIVER_NUM_BUFFERS,
                     SENDER_NUM_BUFFERS,
-                    to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL]>(
+                    to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL],
+                    sender_ch_live_check_skip[2]>(
                     local_sender_channels[2],
                     local_sender_channel_worker_interfaces[2],
                     outbound_to_receiver_channel_pointers[VC1_RECEIVER_CHANNEL],
@@ -946,6 +971,18 @@ void run_fabric_edm_main_loop(
         }
     }
     DPRINT << "EDM Terminating\n";
+}
+
+template <size_t NUM_SENDER_CHANNELS, uint8_t SENDER_NUM_BUFFERS>
+void __attribute__((noinline)) wait_for_static_connection_to_ready(
+    std::array<tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>&
+        local_sender_channel_worker_interfaces) {
+    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        if (sender_ch_live_check_skip[i]) {
+            while (!connect_is_requested(*local_sender_channel_worker_interfaces[i].connection_live_semaphore));
+            establish_connection(local_sender_channel_worker_interfaces[i]);
+        }
+    }
 }
 
 template <size_t NUM_SENDER_CHANNELS, uint8_t SENDER_NUM_BUFFERS>
@@ -1352,6 +1389,8 @@ void kernel_main() {
                 tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
         }
     }
+
+    wait_for_static_connection_to_ready(local_sender_channel_worker_interfaces);
 
     //////////////////////////////
     //////////////////////////////

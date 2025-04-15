@@ -8,6 +8,8 @@
 #include "remote_circular_buffer_api.h"
 #include "debug/dprint.h"
 
+constexpr bool skip_ptr_update = true;
+
 uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args = 1) {
     uint32_t old_arg_idx = arg_idx;
     arg_idx += num_args;
@@ -53,7 +55,7 @@ void kernel_main() {
                     cb_wait_front(local_cb_id, max_block_num_tiles);
 
                     uint32_t local_cb_addr = get_read_ptr(local_cb_id);
-                    experimental::remote_cb_push_back_and_write_pages(
+                    experimental::remote_cb_push_back_and_write_pages<skip_ptr_update>(
                         remote_cb_id,
                         local_cb_addr,
                         1,  // wrt to the size of the packet (curr_block_size)
@@ -71,4 +73,11 @@ void kernel_main() {
     experimental::remote_cb_sender_barrier(remote_cb_id);
 
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
+
+    // reset noc counters here because we didn't properly update ptrs for better perf.
+    if (noc_mode == DM_DEDICATED_NOC) {
+        ncrisc_noc_counters_init();
+    } else {
+        dynamic_noc_local_state_init();
+    }
 }

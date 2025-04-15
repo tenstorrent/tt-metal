@@ -23,7 +23,7 @@
 #include "fmt/base.h"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "rtoptions.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
 #include "util.hpp"

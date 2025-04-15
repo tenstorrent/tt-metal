@@ -7,7 +7,7 @@
 #include <memory>
 
 #include "gtest/gtest.h"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 

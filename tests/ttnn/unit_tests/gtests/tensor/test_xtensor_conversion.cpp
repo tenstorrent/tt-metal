@@ -20,7 +20,7 @@
 
 #include "gmock/gmock.h"
 #include <tt-metalium/shape.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"

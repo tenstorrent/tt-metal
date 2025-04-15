@@ -20,7 +20,7 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/small_vector.hpp>
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"

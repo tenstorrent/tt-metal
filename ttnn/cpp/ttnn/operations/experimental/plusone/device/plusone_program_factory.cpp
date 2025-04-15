@@ -32,7 +32,13 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     }
 
     const auto& input_shape = input.get_padded_shape();
-    const uint32_t W = input_shape[0];
+    uint32_t W = input_shape[-1];
+    uint32_t H = 1;
+    if (input_shape.size() > 1) {
+        for (uint32_t i = 0; i < input_shape.size() - 1; ++i) {
+            H *= input_shape[i];
+        }
+    }
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
@@ -50,6 +56,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
         src_is_dram,
         aligned_input_unit_size,
         W,
+        H,
     };
 
     std::map<string, string> kernel_defines;

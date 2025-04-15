@@ -23,6 +23,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     num_cores_to_rectangle_grid,
     round_up,
 )
+from tracy import signpost
 
 
 def get_buffer_address(tensor):
@@ -589,7 +590,9 @@ def run_prefetcher_mm(
 
     ##### Run Trace #####
     logger.info("Running trace")
+    signpost("start")
     ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+    signpost("stop")
 
     ##### Check Results #####
     all_passing = True

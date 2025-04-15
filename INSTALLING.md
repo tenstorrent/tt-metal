@@ -18,11 +18,13 @@ These instructions will guide you through the installation of Tenstorrent system
 
 Note the current compatibility matrix:
 
-| Device              | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
-|---------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-| Wormhole            | Ubuntu 22.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | N/A                            |
-| T3000 (Wormhole)    | Ubuntu 22.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | v1.1.3 or above, `mesh` config |
-| Blackhole           | Ubuntu 22.04    | 3.10     | v1.31              | fw_pack-80.15.0.0 (v80.15.0.0)             | v3.0.5 or above       | v1.1.3 or above, 'mesh' config |
+| Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
+|----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
+| Wormhole             | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 to v3.0.5      | N/A                            |
+| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 to v3.0.5      | v1.1.3 or above, `mesh` config |
+| TG (Wormhole 4U)     | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.10.1.0                          | v2.2.0 to v3.0.5      | v1.1.3 or above, `mesh` config |
+| Galaxy (Wormhole 6u) | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
+| Blackhole            | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.15.0.0 (v80.15.0.0)             | v3.0.5 or above       | v1.1.3 or above, `mesh` config |
 
 #### Install System-level Dependencies
 ```
@@ -73,7 +75,7 @@ sudo reboot
 tt-flash --version
 ```
 
-- Download and install the latest TT-Firmware version:
+- Download and install the TT-Firmware version according to the table above. We will use latest here as example:
 ```
 file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
 curl -L -o "$file_name" "https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
@@ -85,9 +87,9 @@ tt-flash flash --fw-tar $file_name
 ---
 
 #### Install System Management Interface (TT-SMI)
-- Install Tenstorrent Software Management Interface (TT-SMI):
+- Install Tenstorrent Software Management Interface (TT-SMI) according to the table above. We will use a specific version here as an example:
 ```
-pip install git+https://github.com/tenstorrent/tt-smi
+pip install git+https://github.com/tenstorrent/tt-smi@v3.0.12
 ```
 
 - Verify System Configuration

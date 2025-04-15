@@ -181,13 +181,13 @@ public:
         bool dateline_connection = false);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
-    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc) const;
+    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);
 
     [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
-    void connect_to_downstream_edm(const FabricEriscDatamoverBuilder& downstream_edm);
+    void connect_to_downstream_edm(FabricEriscDatamoverBuilder& downstream_edm);
 
     void dump_to_log() const {
         // TODO
@@ -244,6 +244,9 @@ public:
     std::array<std::optional<size_t>, num_virtual_channels> downstream_edm_vcs_worker_registration_address;
     std::array<std::optional<size_t>, num_virtual_channels> downstream_edm_vcs_worker_location_info_address;
     std::array<std::optional<size_t>, num_virtual_channels> downstream_vcs_sender_channel_buffer_index_semaphore_id;
+
+    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>
+        sender_channel_connection_liveness_check_disable_array;
 
     bool enable_persistent_mode = false;
     bool build_in_worker_connection_mode = false;

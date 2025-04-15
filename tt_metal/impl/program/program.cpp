@@ -64,8 +64,8 @@
 #include "program_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
-#include "span.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "system_memory_manager.hpp"
 #include "tile.hpp"

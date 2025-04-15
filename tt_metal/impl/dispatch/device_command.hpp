@@ -19,7 +19,7 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "memcpy.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "vector_aligned.hpp"

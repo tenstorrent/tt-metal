@@ -19,7 +19,7 @@
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "llrt.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"

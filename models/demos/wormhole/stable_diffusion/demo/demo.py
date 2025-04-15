@@ -19,10 +19,9 @@ from diffusers import (
     AutoencoderKL,
     UNet2DConditionModel,
 )
-from models.utility_functions import skip_for_grayskull
 from models.utility_functions import (
     enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
+    profiler,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
@@ -66,22 +65,6 @@ def tt_guide(noise_pred, guidance_scale):  # will return latents
     return noise_pred
 
 
-def _save_image_and_latents(latents, iter, vae, pre_fix="", pre_fix2=""):
-    latents = ttnn.to_torch(latents).to(torch.float32)
-    pre_fix = "" if pre_fix == "" else f"{pre_fix}_"
-    pre_fix2 = "" if pre_fix2 == "" else f"{pre_fix2}_"
-    _latents = 1 / 0.18215 * latents
-
-    with torch.no_grad():
-        image = vae.decode(_latents).sample
-    # Image post-processing
-    image = (image / 2 + 0.5).clamp(0, 1)
-    image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
-    images = (image * 255).round().astype("uint8")
-    pil_images = [Image.fromarray(image) for image in images][0]
-    pil_images.save(f"{pre_fix}{pre_fix2}image_iter_{iter}.png")
-
-
 def calculate_fid_score(imgs_path1, imgs_path2):
     fid = FrechetInceptionDistance(normalize=True)
     fid.update(imgs_path1, real=False)
@@ -101,8 +84,9 @@ def preprocess_images(image_paths):
 
 
 def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size=(256, 256)):
-    disable_persistent_kernel_cache()
+    enable_persistent_kernel_cache()
     device.enable_program_cache()
+    profiler.clear()
 
     # Until di/dt issues are resolved
     os.environ["SLOW_MATMULS"] = "1"
@@ -189,6 +173,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         logger.info(f"input prompt : {input_prompt}")
         batch_size = len(input_prompt)
 
+        profiler.start(f"inference_prompt_{i}")
         ## First, we get the text_embeddings for the prompt. These embeddings will be used to condition the UNet model.
         # Tokenizer and Text Encoder
         text_input = tokenizer(
@@ -221,22 +206,20 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
             _t = _tlist[index]
             t = time_step[index]
             # predict the noise residual
-            with torch.no_grad():
-                ttnn_output = model(
-                    ttnn_latent_model_input,  # input
-                    timestep=_t,
-                    encoder_hidden_states=ttnn_text_embeddings,
-                    class_labels=None,
-                    attention_mask=None,
-                    cross_attention_kwargs=None,
-                    return_dict=True,
-                    config=config,
-                )
+            ttnn_output = model(
+                ttnn_latent_model_input,  # input
+                timestep=_t,
+                encoder_hidden_states=ttnn_text_embeddings,
+                class_labels=None,
+                attention_mask=None,
+                cross_attention_kwargs=None,
+                return_dict=True,
+                config=config,
+            )
             # perform guidance
             noise_pred = tt_guide(ttnn_output, guidance_scale)
 
             ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
-            _save_image_and_latents(ttnn_latents, iter, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
 
             iter += 1
 
@@ -244,8 +227,8 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
         # scale and decode the image latents with vae
         latents = 1 / 0.18215 * latents
-        with torch.no_grad():
-            image = vae.decode(latents).sample
+        image = vae.decode(latents).sample
+        profiler.end(f"inference_prompt_{i}")
 
         # Image post-processing
         image = (image / 2 + 0.5).clamp(0, 1)
@@ -255,9 +238,20 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         ttnn_output_path = f"{experiment_name}_ttnn.png"
         pil_images.save(ttnn_output_path)
 
+    profiler.print()
+
+    # skip first for compile
+    total_time = sum([profiler.get("inference_prompt_" + str(i)) for i in range(2, num_prompts + 1)])
+    avg_time = total_time / (num_prompts - 1)
+    FPS = 1 / avg_time
+
+    print(
+        f"Average time per prompt: {avg_time}, FPS: {FPS}",
+    )
+
 
 def run_interactive_demo_inference(device, num_inference_steps, image_size=(256, 256)):
-    disable_persistent_kernel_cache()
+    enable_persistent_kernel_cache()
     device.enable_program_cache()
 
     # Until di/dt issues are resolved
@@ -379,17 +373,16 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
             _t = _tlist[index]
             t = time_step[index]
             # predict the noise residual
-            with torch.no_grad():
-                ttnn_output = model(
-                    ttnn_latent_model_input,  # input
-                    timestep=_t,
-                    encoder_hidden_states=ttnn_text_embeddings,
-                    class_labels=None,
-                    attention_mask=None,
-                    cross_attention_kwargs=None,
-                    return_dict=True,
-                    config=config,
-                )
+            ttnn_output = model(
+                ttnn_latent_model_input,  # input
+                timestep=_t,
+                encoder_hidden_states=ttnn_text_embeddings,
+                class_labels=None,
+                attention_mask=None,
+                cross_attention_kwargs=None,
+                return_dict=True,
+                config=config,
+            )
             # perform guidance
             noise_pred = tt_guide(ttnn_output, guidance_scale)
 
@@ -402,8 +395,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
         # scale and decode the image latents with vae
         latents = 1 / 0.18215 * latents
-        with torch.no_grad():
-            image = vae.decode(latents).sample
+        image = vae.decode(latents).sample
 
         # Image post-processing
         image = (image / 2 + 0.5).clamp(0, 1)
@@ -417,7 +409,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 def run_demo_inference_diffusiondb(
     device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size=(256, 256)
 ):
-    disable_persistent_kernel_cache()
+    enable_persistent_kernel_cache()
     device.enable_program_cache()
 
     # Until di/dt issues are resolved
@@ -541,31 +533,27 @@ def run_demo_inference_diffusiondb(
             _t = _tlist[index]
             t = time_step[index]
             # predict the noise residual
-            with torch.no_grad():
-                ttnn_output = model(
-                    ttnn_latent_model_input,  # input
-                    timestep=_t,
-                    encoder_hidden_states=ttnn_text_embeddings,
-                    class_labels=None,
-                    attention_mask=None,
-                    cross_attention_kwargs=None,
-                    return_dict=True,
-                    config=config,
-                )
+            ttnn_output = model(
+                ttnn_latent_model_input,  # input
+                timestep=_t,
+                encoder_hidden_states=ttnn_text_embeddings,
+                class_labels=None,
+                attention_mask=None,
+                cross_attention_kwargs=None,
+                return_dict=True,
+                config=config,
+            )
 
             # perform guidance
             noise_pred = tt_guide(ttnn_output, guidance_scale)
             ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
-            _save_image_and_latents(ttnn_latents, iter, vae, pre_fix=f"{experiment_name}_tt", pre_fix2="")
 
             iter += 1
-            enable_persistent_kernel_cache()
 
         latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
         # scale and decode the image latents with vae
         latents = 1 / 0.18215 * latents
-        with torch.no_grad():
-            image = vae.decode(latents).sample
+        image = vae.decode(latents).sample
 
         # Image post-processing
         image = (image / 2 + 0.5).clamp(0, 1)
@@ -592,11 +580,15 @@ def run_demo_inference_diffusiondb(
         logger.info(f"CLIP Score (TTNN): {clip_score_ttnn}")
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
+    "input_path",
+    (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),
+    ids=["default_input"],
+)
+@pytest.mark.parametrize(
     "num_prompts",
-    ((1),),
+    ((10),),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
@@ -608,35 +600,3 @@ def run_demo_inference_diffusiondb(
 )
 def test_demo(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size):
     return run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
-
-
-@skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize(
-    "num_prompts",
-    ((1),),
-)
-@pytest.mark.parametrize(
-    "num_inference_steps",
-    ((50),),
-)
-@pytest.mark.parametrize(
-    "image_size",
-    ((512, 512),),
-)
-def test_demo_diffusiondb(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size):
-    return run_demo_inference_diffusiondb(device, reset_seeds, input_path, num_prompts, num_inference_steps, image_size)
-
-
-@skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize(
-    "num_inference_steps",
-    ((50),),
-)
-@pytest.mark.parametrize(
-    "image_size",
-    ((512, 512),),
-)
-def test_interactive_demo(device, num_inference_steps, image_size):
-    return run_interactive_demo_inference(device, num_inference_steps, image_size)

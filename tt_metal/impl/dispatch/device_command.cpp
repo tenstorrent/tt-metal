@@ -6,7 +6,7 @@
 
 #include <cstring>
 
-#include "aligned_allocator.hpp"
+#include <tt_stl/aligned_allocator.hpp>
 #include "assert.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/memcpy.hpp"

@@ -25,7 +25,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/semaphore.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/tt_core_coordinates.h"
