@@ -54,6 +54,7 @@
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
 #include "tt-metalium/program.hpp"
+#include "tt-metalium/allocator.hpp"
 #include "rtoptions.hpp"
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
@@ -155,11 +156,13 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
 
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     auto phys_core = soc_desc.translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
-    profiler_msg_t* profiler_msg = device->get_dev_addr<profiler_msg_t*>(core, HalL1MemAddrType::PROFILER);
+    profiler_msg_t* profiler_msg =
+        hal_ref.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     uint32_t addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     uint64_t control_l1_addr =
         reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::L1_HOST_SYNC_ADDRESS]);
-    tt::Cluster::instance().write_reg(&addr, tt_cxy_pair(device_id, core), control_l1_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
+        &addr, tt_cxy_pair(device_id, core), control_l1_addr);
 
     deviceHostTimePair.emplace(device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
     smallestHostime.emplace(device_id, 0);
@@ -197,7 +200,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     const int64_t hostStartTime = TracyGetCpuTime();
     std::vector<int64_t> writeTimes(sampleCount);
 
-    auto* profiler_msg = reinterpret_cast<profiler_msg_t*>(device->get_dev_addr(core, HalL1MemAddrType::PROFILER));
     uint64_t control_addr =
         reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::HOST_SYNC_TIMESTAMP]);
     for (int i = 0; i < sampleCount; i++) {
