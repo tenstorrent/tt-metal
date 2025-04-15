@@ -10,6 +10,8 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/eltwise_unary/negative.h"
 
+#include "tt_metal/hw/inc/debug/dprint_pages.h"
+
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
@@ -18,13 +20,15 @@ void MAIN {
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
     bool last_tile = false;
     bool once = true;
+    cb_reserve_back(tt::CBIndex::c_3, 1);
     for (uint32_t t = 0; t < num_tiles; t++) {
         if (t == (num_tiles - 1)) {
             last_tile = true;
         }
-        cb_reserve_back(tt::CBIndex::c_3, 1);
+
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             cb_wait_front(tt::CBIndex::c_0, 1);
+            // PACK(tt::compute::common::print_full_tile(tt::CBIndex::c_0));
             if (once) {
                 cb_reserve_back(tt::CBIndex::c_2, 1);
                 tile_regs_acquire();
@@ -58,7 +62,7 @@ void MAIN {
             once = false;
             cb_pop_front(tt::CBIndex::c_0, 1);
         }
-        cb_push_back(tt::CBIndex::c_3, 1);
     }
+    cb_push_back(tt::CBIndex::c_3, 1);
 }
 }  // namespace NAMESPACE

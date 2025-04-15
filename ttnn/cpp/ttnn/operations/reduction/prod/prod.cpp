@@ -13,6 +13,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::reduction {
@@ -20,7 +21,7 @@ namespace ttnn::operations::reduction {
 inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     auto formatted_input_tensor = input_a;
-    if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
+    if (formatted_input_tensor.get_layout() != Layout::TILE) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(input_a.get_padded_shape());
 
         if (!AutoFormat::check_input_tensor_format(input_a, a_pad_shape)) {
@@ -28,6 +29,7 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
                 AutoFormat::format_input_tensor(input_a, input_a.device(), a_pad_shape, 1.0, Layout::TILE);
         }
     }
+
     return tt::operations::primary::prod_all(formatted_input_tensor, output_mem_config);
 }
 
@@ -76,19 +78,15 @@ Tensor ProdOperation::invoke(
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     const int size = static_cast<int>(input_a.get_logical_shape().rank());
+    if (all_dimensions) {
+        return prod_all(input_a, output_mem_config);
+    }
     TT_FATAL(
         size && dim >= -size && dim <= size - 1,
-        "Dimension out of range (expected to be in range of [-{}, {}]",
+        "Dimension for prod is out of range (expected to be in range of [-{}, {}]",
         size,
         size - 1);
 
-    if (all_dimensions) {
-        TT_FATAL(size == 4, "All dimension prod is only supported with input tensor of rank 4");
-        return prod_all(input_a, output_mem_config);
-    }
-
-    // FIXME: all the prod code is based on 4D tensors, so we need to convert the input tensor to 4D.
-    // TODO: We need to handle the case where the input tensor is not 4D.
     const auto old_rank = input_a.get_logical_shape().rank();
     auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a);
 
