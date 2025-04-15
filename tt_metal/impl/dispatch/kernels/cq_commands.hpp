@@ -27,7 +27,10 @@ enum CQPrefetchCmdId : uint8_t {
     CQ_PREFETCH_CMD_STALL = 8,         // drain pipe through dispatcher
     CQ_PREFETCH_CMD_DEBUG = 9,         // log waypoint data to watcher, checksum
     CQ_PREFETCH_CMD_TERMINATE = 10,    // quit
-    CQ_PREFETCH_CMD_MAX_COUNT,         // for checking legal IDs
+    CQ_PREFETCH_CMD_PAGED_TO_RINGBUFFER = 11,    // Copy paged data to the ringbuffer
+    CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET = 12,  // Set an offset in the ringbuffer for later reads.
+    CQ_PREFETCH_CMD_RELAY_RINGBUFFER = 13,       // Relay data from the ringbuffer to the dispatcher
+    CQ_PREFETCH_CMD_MAX_COUNT,                   // for checking legal IDs
 };
 
 // Dispatcher CMD ID enums
@@ -133,6 +136,36 @@ struct CQPrefetchExecBufCmd {
     uint32_t pages;
 } __attribute__((packed));
 
+// Reset the write pointer to the start of the ring buffer. If this isn't set,
+// the ringbuffer will never wrap around.
+constexpr uint32_t CQ_PREFETCH_PAGED_TO_RING_BUFFER_FLAG_RESET_TO_START = 1;
+// Will always flush writes before reading.
+struct CQPrefetchPagedToRingbufferCmd {
+    uint8_t flags;
+    uint8_t pad1;
+    uint8_t log2_page_size;
+    uint32_t start_page;
+    uint32_t base_addr;  // Base address of the interleaved buffer to read from.
+    uint32_t length;     // multiple of DRAM alignment
+} __attribute__((packed));
+
+struct CQPrefetchSetRingbufferOffsetCmd {
+    uint32_t offset;
+} __attribute__((packed));
+
+// Current implementation limit is based on size of the l1_cache which stores the sub_cmds
+constexpr uint32_t CQ_PREFETCH_CMD_RELAY_RINGBUFFER_MAX_SUB_CMDS = 52;
+struct CQPrefetchRelayRingbufferCmd {
+    uint8_t pad1;
+    uint16_t count;
+    uint32_t stride;  // Size of the full command, including subcmds
+} __attribute__((packed));
+
+struct CQPrefetchRelayRingbufferSubCmd {
+    uint32_t start;  // The ringbuffer offset will be added to this.
+    uint32_t length;
+} __attribute__((packed));
+
 struct CQPrefetchCmd {
     CQPrefetchBaseCmd base;
     union {
@@ -142,6 +175,9 @@ struct CQPrefetchCmd {
         CQPrefetchRelayInlineCmd relay_inline;
         CQPrefetchExecBufCmd exec_buf;
         CQGenericDebugCmd debug;
+        CQPrefetchPagedToRingbufferCmd paged_to_ringbuffer;
+        CQPrefetchSetRingbufferOffsetCmd set_ringbuffer_offset;
+        CQPrefetchRelayRingbufferCmd relay_ringbuffer;
     } __attribute__((packed));
 };
 
