@@ -342,13 +342,13 @@ class TtTransformer(LightweightModule):
         logits = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
         return logits
 
-    def process_output_decode(self, tt_out, B, S=1, argmax_on_device=False):
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """
-        Input is ttnn device tensor of logits. Output is torch logits tensor or the generated token if argmax on device
+        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
-        if argmax_on_device:
+        if is_tokens:
             tt_out = ttnn.to_torch(
                 tt_out,  # tt_out.cpu(blocking=True, cq_id=1),
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
