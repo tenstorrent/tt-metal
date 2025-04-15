@@ -96,8 +96,8 @@ ResultWithOptions conv2d(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
-    const bool return_output_dim = false,
-    const bool return_weights_and_bias = false);
+    bool return_output_dim = false,
+    bool return_weights_and_bias = false);
 
 struct Conv2dOperation {
     static ResultWithOptions invoke(
@@ -120,8 +120,8 @@ struct Conv2dOperation {
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
         const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
-        const bool return_output_dim = false,
-        const bool return_weights_and_bias = false);
+        bool return_output_dim = false,
+        bool return_weights_and_bias = false);
 
     static ResultWithOptions invoke(
         QueueId queue_id,
@@ -143,8 +143,8 @@ struct Conv2dOperation {
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
         const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt,
-        const bool return_output_dim = false,
-        const bool return_weights_and_bias = false);
+        bool return_output_dim = false,
+        bool return_weights_and_bias = false);
 };
 }  // namespace conv2d
 }  // namespace operations::conv
