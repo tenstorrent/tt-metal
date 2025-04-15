@@ -646,52 +646,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
-inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_exclude_region(
-    uint32_t noc,
-    uint32_t cmd_buf,
-    uint32_t src_addr,
-    uint64_t dest_addr,
-    uint32_t len_bytes,
-    uint32_t vc,
-    bool mcast,
-    bool linked,
-    uint32_t num_dests,
-    bool multicast_path_reserve,
-    uint32_t exclude_region = 0) {
-    while (len_bytes > NOC_MAX_BURST_SIZE) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_write_exclude_region<noc_mode>(
-            noc,
-            cmd_buf,
-            src_addr,
-            dest_addr,
-            NOC_MAX_BURST_SIZE,
-            vc,
-            mcast,
-            linked,
-            num_dests,
-            multicast_path_reserve,
-            exclude_region);
-        src_addr += NOC_MAX_BURST_SIZE;
-        dest_addr += NOC_MAX_BURST_SIZE;
-        len_bytes -= NOC_MAX_BURST_SIZE;
-    }
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_write_exclude_region<noc_mode>(
-        noc,
-        cmd_buf,
-        src_addr,
-        dest_addr,
-        len_bytes,
-        vc,
-        mcast,
-        linked,
-        num_dests,
-        multicast_path_reserve,
-        exclude_region);
-}
-
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
