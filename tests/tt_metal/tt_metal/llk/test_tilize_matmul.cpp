@@ -145,7 +145,7 @@ void run_single_core_tilize_matmul(
         "tests/tt_metal/tt_metal/test_kernels/compute/tilize_matmul.cpp",
         core,
         tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = MathFidelity::LoFi,
             .compile_args =
                 {in0_cb_index,
                  in1_cb_index,
