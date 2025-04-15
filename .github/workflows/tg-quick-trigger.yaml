@@ -1,7 +1,7 @@
 name: "Galaxy Quick"
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
       topology-4u:
         required: false
@@ -11,7 +11,6 @@ on:
         required: false
         type: boolean
         default: true
-  workflow_dispatch:
   push:
     branches: ["main"]
 
