@@ -91,7 +91,8 @@ def run_latency_test(
     logger.warning("removing file profile_log_device.csv")
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
-    cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
+    # cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
+    cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 \
             {os.environ['TT_METAL_HOME']}/build/test/ttnn/unit_tests_ttnn_1d_fabric_latency \
                 {line_size} \
                 {latency_measurement_worker_line_index} \
@@ -180,12 +181,6 @@ def run_latency_test(
         ("line", 1024, 6, False, 2000, 1820, 2150, 1000),
         ("line", 2048, 6, False, 2240, 2150, 2500, 1120),
         ("line", 4096, 6, False, 2600, 2520, 2770, 1300),
-        ("ring", 0, 6, False, 1520, 1420, 1720, 760),
-        ("ring", 16, 6, False, 1520, 1400, 1730, 760),
-        ("ring", 16, 6, True, 1535, 1425, 1730, 770),
-        ("ring", 1024, 6, False, 2000, 1820, 2150, 1000),
-        ("ring", 2048, 6, False, 2240, 2150, 2500, 1120),
-        ("ring", 4096, 6, False, 2600, 2520, 2770, 1300),
     ],
 )
 @pytest.mark.parametrize("latency_ping_burst_size", [1])
@@ -194,7 +189,62 @@ def run_latency_test(
 @pytest.mark.parametrize("num_downstream_fabric_congestion_writers", [0])
 @pytest.mark.parametrize("congestion_writers_message_size", [0])
 @pytest.mark.parametrize("congestion_writers_use_mcast", [False])
-def test_1D_fabric_latency_on_uncongested_fabric_minimal_packet_size(
+def test_1D_line_fabric_latency_on_uncongested_fabric(
+    topology,
+    line_size,
+    latency_measurement_worker_line_index,
+    enable_fused_payload_with_sync,
+    latency_ping_message_size_bytes,
+    latency_ping_burst_size,
+    latency_ping_burst_count,
+    add_upstream_fabric_congestion_writers,
+    num_downstream_fabric_congestion_writers,
+    congestion_writers_message_size,
+    congestion_writers_use_mcast,
+    expected_mean_latency_ns,
+    expected_min_latency_ns,
+    expected_max_latency_ns,
+    expected_avg_hop_latency_ns,
+):
+    run_latency_test(
+        topology,
+        line_size,
+        latency_measurement_worker_line_index,
+        latency_ping_message_size_bytes,
+        latency_ping_burst_size,
+        latency_ping_burst_count,
+        add_upstream_fabric_congestion_writers,
+        num_downstream_fabric_congestion_writers,
+        congestion_writers_message_size,
+        congestion_writers_use_mcast,
+        enable_fused_payload_with_sync,
+        expected_mean_latency_ns,
+        expected_min_latency_ns,
+        expected_max_latency_ns,
+        expected_avg_hop_latency_ns,
+    )
+
+
+# 1D All-to-All Multicast
+@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize(
+    "topology, latency_ping_message_size_bytes,latency_measurement_worker_line_index,enable_fused_payload_with_sync, expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
+    [
+        ("ring", 0, 0, False, 1520, 1420, 1720, 760),
+        ("ring", 16, 0, False, 1520, 1400, 1730, 760),
+        ("ring", 16, 0, True, 1535, 1425, 1730, 770),
+        ("ring", 1024, 0, False, 2000, 1820, 2150, 1000),
+        ("ring", 2048, 0, False, 2240, 2150, 2500, 1120),
+        ("ring", 4096, 0, False, 2600, 2520, 2770, 1300),
+    ],
+)
+@pytest.mark.parametrize("latency_ping_burst_size", [1])
+@pytest.mark.parametrize("latency_ping_burst_count", [62])
+@pytest.mark.parametrize("add_upstream_fabric_congestion_writers", [False])
+@pytest.mark.parametrize("num_downstream_fabric_congestion_writers", [0])
+@pytest.mark.parametrize("congestion_writers_message_size", [0])
+@pytest.mark.parametrize("congestion_writers_use_mcast", [False])
+def test_1D_ring_fabric_latency_on_uncongested_fabric(
     topology,
     line_size,
     latency_measurement_worker_line_index,

@@ -16,6 +16,7 @@ constexpr bool sem_inc_only = get_compile_time_arg_val(2) != 0;
 
 void kernel_main() {
     using namespace tt::tt_fabric;
+    DPRINT << "START\n";
     size_t arg_idx = 0;
 
     // A safe location to dump payload data
@@ -90,10 +91,13 @@ void kernel_main() {
 
     // PACKET HEADER SETUP
     if constexpr (payloads_are_mcast) {
+        DPRINT << "payloads_are_mcast\n";
         auto mcast_hops = static_cast<uint8_t>(num_hops_over_loopback_fabric_to_self);
         payload_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_hops)});
         sem_inc_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_hops)});
     } else {
+        DPRINT << "payloads_are_unicast\n";
+        DPRINT << "num_hops_over_loopback_fabric_to_self: " << (uint32_t)num_hops_over_loopback_fabric_to_self << "\n";
         payload_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_over_loopback_fabric_to_self));
         sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_over_loopback_fabric_to_self));
     }
@@ -106,25 +110,31 @@ void kernel_main() {
             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                 dest_payload_noc_addr, dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max(), false},
             payload_size_bytes);
+        DPRINT << "Setup fused packet. payload_addr = " << (uint64_t)payload_packet_header
+               << ", sem_addr = " << (uint64_t)sem_inc_packet_header << "\n";
     } else {
         payload_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_payload_noc_addr}, payload_size_bytes);
         sem_inc_packet_header->to_noc_unicast_atomic_inc(
             NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
+        DPRINT << "Setup unicast packet. payload_addr = " << (uint64_t)dest_payload_noc_addr
+               << ", sem_addr = " << (uint64_t)dest_semaphore_noc_addr << "\n";
     }
 
     auto send_seminc_packet = [&fabric_connection, sem_inc_packet_header]() {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         // print_pkt_header(sem_inc_packet_header);
-        fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
-            (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
+        DPRINT << "Send seminc packet\n";
+        // fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+        //     (uint32_t)sem_inc_packet_header, sizeof(PACKET_HEADER_TYPE));
     };
     auto send_payload_packet =
         [&fabric_connection, payload_packet_header, dest_dummy_payload_buffer_address, payload_size_bytes]() {
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
             fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
                 dest_dummy_payload_buffer_address, payload_size_bytes);
-            fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
-                (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
+            DPRINT << "Send payload packet\n";
+            // fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+            //     (uint32_t)payload_packet_header, sizeof(PACKET_HEADER_TYPE));
         };
     // Flush the datapath
     {
@@ -136,9 +146,11 @@ void kernel_main() {
     auto payload_l1_ptr = reinterpret_cast<volatile uint32_t*>(dest_dummy_payload_buffer_address);
     {
         for (size_t i = 0; i < num_bursts_to_send; i++) {
+            DPRINT << "LOOP " << (uint32_t)i << "\n";
             // Wait for the fabric endpoint to have a completely empty sender channel buffer
             if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
                 if (burst_size > 1) {
+                    DPRINT << "STUCK\n";
                     while (1);  // invalid config -- hang instead of reporting garbage numbers
                 }
                 // Initialize to i + 1 so we can safely reset to 0 and not invalidate the first
@@ -150,7 +162,9 @@ void kernel_main() {
             // Burst
             {
                 DeviceZoneScopedN("BURST-WRITE");
+                DPRINT << "BURST-WRITE\n";
                 for (size_t j = 0; j < burst_size; j++) {
+                    DPRINT << "\tj=" << (uint32_t)j << "\n";
                     if constexpr (enable_fused_payload_with_sync) {
                         send_payload_packet();
                     } else {
@@ -170,7 +184,7 @@ void kernel_main() {
 
                 {
                     DeviceZoneScopedN("WAIT-FOR-ALL-SEMAPHORES");
-
+                    DPRINT << "\tWAIT-FOR-ALL-SEMAPHORES\n";
                     if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
                         noc_semaphore_wait_min(payload_l1_ptr, i + 1);
                     } else {
@@ -180,9 +194,11 @@ void kernel_main() {
                     }
                 }
                 *reinterpret_cast<volatile uint32_t*>(semaphore_address) = 0;
+                DPRINT << "\tWAIT-FOR-ALL-SEMAPHORES-DONE\n";
             }
         }
     }
+    DPRINT << "DONE LOOP\n";
 
     auto send_teardown_message = [packet_header = payload_packet_header](
                                      tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
@@ -213,6 +229,8 @@ void kernel_main() {
             downstream_congestion_writer_hop_distance_list_ptr[i]);
     }
 
+    DPRINT << "CLOSE\n";
     fabric_connection.close();
     noc_async_write_barrier();
+    DPRINT << "DONE\n";
 }

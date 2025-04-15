@@ -5,6 +5,7 @@
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 #include <cstdint>
 #include <cstddef>
+#include <optional>
 
 // The writer that sends the packets that will have latency measured
 struct LatencyPacketTestWriterSpec {
@@ -25,6 +26,7 @@ struct WriterSpec {
 
 using LatencyTestWriterSpecs = std::vector<std::optional<WriterSpec>>;
 
+template <typename DEVICE_FIXTURE_T>
 inline void RunPersistent1dFabricLatencyTest(
     // Args for the measured writer
     LatencyTestWriterSpecs writer_specs,
@@ -44,18 +46,28 @@ inline void RunPersistent1dFabricLatencyTest(
     TT_FATAL(writer_specs.size() < line_size, "num_devices_with_workers must be less than or equal to num_links");
     using namespace ttnn::ccl;
 
-    Fabric1DFixture test_fixture;
+    DEVICE_FIXTURE_T test_fixture;
+    log_info(tt::LogTest, "Constructed test fixture");
     auto view = test_fixture.mesh_device_->get_view();
 
-    std::vector<IDevice*> devices_ = {
-        view.get_device(MeshCoordinate(0, 0)),
-        view.get_device(MeshCoordinate(0, 1)),
-        view.get_device(MeshCoordinate(0, 2)),
-        view.get_device(MeshCoordinate(0, 3)),
-        view.get_device(MeshCoordinate(1, 3)),
-        view.get_device(MeshCoordinate(1, 2)),
-        view.get_device(MeshCoordinate(1, 1)),
-        view.get_device(MeshCoordinate(1, 0))};
+    std::vector<IDevice*> devices_;
+    if (line_size == 4) {
+        devices_ = {
+            view.get_device(MeshCoordinate(0, 1)),
+            view.get_device(MeshCoordinate(0, 2)),
+            view.get_device(MeshCoordinate(1, 2)),
+            view.get_device(MeshCoordinate(1, 1))};
+    } else {
+        devices_ = {
+            view.get_device(MeshCoordinate(0, 0)),
+            view.get_device(MeshCoordinate(0, 1)),
+            view.get_device(MeshCoordinate(0, 2)),
+            view.get_device(MeshCoordinate(0, 3)),
+            view.get_device(MeshCoordinate(1, 3)),
+            view.get_device(MeshCoordinate(1, 2)),
+            view.get_device(MeshCoordinate(1, 1)),
+            view.get_device(MeshCoordinate(1, 0))};
+    }
     std::vector<IDevice*> devices;
     std::vector<IDevice*> devices_with_workers;
     devices.reserve(line_size);
@@ -110,26 +122,29 @@ inline void RunPersistent1dFabricLatencyTest(
     for (auto d : devices) {
         log_info(tt::LogTest, "Launching fabric on device {}", d->id());
     }
-    std::vector<Program> dummy_worker_programs;
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
     std::optional<std::vector<Program>> fabric_programs;
     std::vector<Program*> fabric_program_ptrs;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
-    setup_test_with_persistent_fabric(
-        devices,
-        dummy_worker_programs,
-        subdevice_managers,
-        fabric_programs,
-        fabric_program_ptrs,
-        fabric_handle,
-        enable_persistent_fabric_mode,
-        num_links,
-        topology,
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval,
-        !is_ring);
-
-    for (IDevice* d : devices) {
-        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
+    if (!is_ring) {
+        std::vector<Program> dummy_worker_programs;
+        setup_test_with_persistent_fabric(
+            devices,
+            dummy_worker_programs,
+            subdevice_managers,
+            fabric_programs,
+            fabric_program_ptrs,
+            fabric_handle,
+            enable_persistent_fabric_mode,
+            num_links,
+            topology,
+            tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval,
+            !is_ring);
+        for (IDevice* d : devices) {
+            tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
+        }
+    } else {
+        subdevice_managers = create_subdevices(devices);
     }
 
     // Other boiler plate setup
@@ -210,18 +225,27 @@ inline void RunPersistent1dFabricLatencyTest(
             log_info(tt::LogTest, "index: {} has datapath busy sender", i);
         }
 
-        IDevice* backward_device = i == 0 ? nullptr : devices.at(i - 1);
-        IDevice* forward_device = i == line_size - 1 ? nullptr : devices.at(i + 1);
+        IDevice* backward_device = i == 0 ? is_ring ? devices.at(line_size - 1) : nullptr : devices.at(i - 1);
+        IDevice* forward_device = i == line_size - 1 ? is_ring ? devices.at(0) : nullptr : devices.at(i + 1);
 
         // Initialize the fabric handle for worker connection
         bool start_of_line = line_index == 0;
         bool end_of_line = line_index == line_size - 1;
-        bool has_forward_connection = !end_of_line;
-        bool has_backward_connection = !start_of_line;
+        bool has_forward_connection = is_ring || !end_of_line;
+        bool has_backward_connection = is_ring || !start_of_line;
 
-        auto local_device_fabric_handle =
-            ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-                device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links);
+        std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_device_fabric_handle;
+        if (!is_ring) {
+            local_device_fabric_handle =
+                ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
+                    device,
+                    forward_device,
+                    backward_device,
+                    &program,
+                    enable_persistent_fabric_mode,
+                    num_links,
+                    topology);
+        }
 
         // reserve CB
         tt_metal::CircularBufferConfig cb_src0_config =
@@ -231,11 +255,13 @@ inline void RunPersistent1dFabricLatencyTest(
                 .set_page_size(packet_header_cb_index, sizeof(tt::tt_fabric::PacketHeader));
         CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
 
-        TT_FATAL(
-            local_device_fabric_handle.get_num_links() == num_links,
-            "Error in test setup. Expected two links between devices but got {} links for device {}",
-            local_device_fabric_handle.get_num_links(),
-            device->id());
+        if (!is_ring) {
+            TT_FATAL(
+                local_device_fabric_handle->get_num_links() == num_links,
+                "Error in test setup. Expected two links between devices but got {} links for device {}",
+                local_device_fabric_handle->get_num_links(),
+                device->id());
+        }
 
         std::vector<uint32_t> worker_ct_args = {};
         std::string kernel_path =
@@ -243,6 +269,7 @@ inline void RunPersistent1dFabricLatencyTest(
                 ? "tests/ttnn/unit_tests/gtests/ccl/kernels/1D_fabric_loopback_latency_test_writer.cpp"
                 : "tests/ttnn/unit_tests/gtests/ccl/kernels/1D_fabric_latency_datapath_congestion_writer.cpp";
         if (is_latency_packet_sender) {
+            log_info(tt::LogTest, "adding latency packet writer");
             const auto& packet_spec = std::get<LatencyPacketTestWriterSpec>(writer_specs[i]->spec);
             bool payloads_are_mcast = false;
             bool sem_inc_only = writer_specs.at(i)->message_size_bytes == 0;
@@ -252,27 +279,47 @@ inline void RunPersistent1dFabricLatencyTest(
             const auto& datapath_spec = std::get<DatapathBusyDataWriterSpec>(writer_specs[i]->spec);
             worker_ct_args.push_back(datapath_spec.mcast);
         }
+        log_info(tt::LogTest, "adding worker kernel");
         auto worker_kernel_id = tt_metal::CreateKernel(
             program, kernel_path, worker_cores, tt_metal::WriterDataMovementConfig(worker_ct_args));
         worker_kernel_ids.push_back(worker_kernel_id);
 
-        auto build_connection_args = [&local_device_fabric_handle, device, &program, &worker_core_logical](
+        auto build_connection_args = [is_ring,
+                                      &local_device_fabric_handle,
+                                      device,
+                                      forward_device,
+                                      backward_device,
+                                      &program,
+                                      &worker_core_logical](
                                          bool is_connected_in_direction,
                                          ttnn::ccl::EdmLineFabricOpInterface::Direction direction,
                                          std::vector<uint32_t>& rt_args_out) {
             rt_args_out.push_back(is_connected_in_direction);
-            if (is_connected_in_direction) {
-                const auto connection = local_device_fabric_handle.uniquely_connect_worker(device, direction);
-                const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
-                    connection, program, {worker_core_logical});
-                log_info(
-                    tt::LogTest,
-                    "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",
-                    device->id(),
-                    direction,
-                    connection.edm_noc_x,
-                    connection.edm_noc_y);
-                std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args_out));
+            if (!is_ring) {
+                if (is_connected_in_direction) {
+                    const auto connection = local_device_fabric_handle->uniquely_connect_worker(device, direction);
+                    const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
+                        connection, program, {worker_core_logical});
+                    log_info(
+                        tt::LogTest,
+                        "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",
+                        device->id(),
+                        direction,
+                        connection.edm_noc_x,
+                        connection.edm_noc_y);
+                    std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args_out));
+                }
+            } else {
+                if (is_connected_in_direction) {
+                    tt::tt_fabric::append_fabric_connection_rt_args(
+                        device->id(),
+                        direction == ttnn::ccl::EdmLineFabricOpInterface::FORWARD ? forward_device->id()
+                                                                                  : backward_device->id(),
+                        0,
+                        program,
+                        {worker_core_logical},
+                        rt_args_out);
+                }
             }
         };
         // RT ARGS
@@ -383,10 +430,14 @@ inline void RunPersistent1dFabricLatencyTest(
     wait_for_worker_subdevice_program_completion(devices_with_workers, subdevice_managers);
     log_info(tt::LogTest, "Main op done");
 
-    TT_FATAL(fabric_programs->size() == devices.size(), "Expected fabric programs size to be same as devices size");
+    TT_FATAL(
+        is_ring || fabric_programs->size() == devices.size(),
+        "Expected fabric programs size to be same as devices size");
     log_info(tt::LogTest, "Fabric teardown");
-    persistent_fabric_teardown_sequence(
-        devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+    if (!is_ring) {
+        persistent_fabric_teardown_sequence(
+            devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+    }
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (IDevice* d : devices) {
@@ -498,5 +549,11 @@ int main(int argc, char** argv) {
         TT_THROW("Invalid topology: {}", topology_str);
     }
 
-    RunPersistent1dFabricLatencyTest(writer_specs, line_size, enable_fused_payload_with_sync, topology);
+    if (is_ring) {
+        RunPersistent1dFabricLatencyTest<Fabric1DRingDeviceInitFixture>(
+            writer_specs, line_size, enable_fused_payload_with_sync, topology);
+    } else {
+        RunPersistent1dFabricLatencyTest<Fabric1DFixture>(
+            writer_specs, line_size, enable_fused_payload_with_sync, topology);
+    }
 }

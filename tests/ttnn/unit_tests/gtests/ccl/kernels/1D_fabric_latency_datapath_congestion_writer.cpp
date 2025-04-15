@@ -13,6 +13,7 @@
 constexpr bool use_mcast_mode = get_compile_time_arg_val(0) != 0;
 
 void kernel_main() {
+    DPRINT << "CONGESTION WRITER START\n";
     using namespace tt::tt_fabric;
     size_t arg_idx = 0;
 
