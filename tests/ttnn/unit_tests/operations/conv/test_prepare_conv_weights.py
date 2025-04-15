@@ -63,7 +63,6 @@ import ttnn
     ),
 )
 @pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
-@pytest.mark.parametrize("owned_storage", [True, False], ids=["owned", "borrowed"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_conv_weights(
     batch_size,
@@ -81,7 +80,6 @@ def test_prepare_conv_weights(
     config_override,
     on_device,
     device,
-    owned_storage,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
@@ -91,19 +89,12 @@ def test_prepare_conv_weights(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
-    if on_device and owned_storage:
-        pytest.skip("Skipping test because borrowed storage is not defined on device")
-
     has_bias = True
     inp_shape = (batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels, filter_height, filter_width)
-    if owned_storage:
-        torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16)
-        torch_bias_tensor = torch.ones((1, 1, 1, output_channels), dtype=torch.bfloat16) if has_bias else None
-    else:
-        torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16)
-        torch_bias_tensor = torch.randn((1, 1, 1, output_channels), dtype=torch.bfloat16) if has_bias else None
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16)
     torch_input_tensor = torch.randn(inp_shape, dtype=torch.bfloat16)
+    torch_bias_tensor = torch.randn((1, 1, 1, output_channels), dtype=torch.bfloat16) if has_bias else None
 
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor,
@@ -116,12 +107,8 @@ def test_prepare_conv_weights(
     ).permute(0, 2, 3, 1)
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor.transpose(-3, -2).transpose(-2, -1), ttnn.bfloat16)
-    if owned_storage:
-        tt_weight_tensor = ttnn.ones(conv_weight_shape, dtype=ttnn.bfloat16)
-        tt_bias_tensor = ttnn.ones((1, 1, 1, output_channels), dtype=ttnn.bfloat16) if has_bias else None
-    else:
-        tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
-        tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
+    tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
+    tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
 
     conv_config = ttnn.Conv2dConfig(
         dtype=ttnn.bfloat16,
@@ -166,7 +153,6 @@ def test_prepare_conv_weights(
         tt_weight_tensor = ttnn.to_device(tt_weight_tensor, device)
         tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device) if has_bias else None
 
-    print(tt_weight_tensor.storage_type())
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
         weight_tensor=tt_weight_tensor,
         weights_format="OIHW",
