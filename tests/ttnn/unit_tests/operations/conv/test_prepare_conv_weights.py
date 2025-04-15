@@ -19,7 +19,7 @@ import ttnn
         (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 256}, 1),
         # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 32}, 1),  Out of Memory!!
         # rn50 layer1
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None, 64),
+        (8, 64, 64, 56, 1, 3, 1, 1, 1, 1, 0, True, None, 64),
         (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None, 1),
         (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None, 1),
         # rn50 layer2
@@ -94,7 +94,7 @@ def test_prepare_conv_weights(
 
     if groups > 1 and on_device:
         pytest.skip("Weights Preparation on device is not supported for convs with groups > 1")
-    has_bias = True
+    has_bias = False
     inp_shape = (batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16)

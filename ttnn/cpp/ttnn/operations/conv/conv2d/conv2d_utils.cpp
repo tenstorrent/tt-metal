@@ -12,6 +12,7 @@
 #include <tt-metalium/buffer_constants.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/hal.hpp>
+#include "tt-metalium/logger.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -419,6 +420,7 @@ bool is_1d_deptwise_conv(
     uint32_t image_width,
     bool has_bias) {
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
+    log_info("has_bias: {}", has_bias);
     return is_depthwise_conv && is_1d_conv(kernel_width, image_width) && !has_bias;
 }
 
