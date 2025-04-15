@@ -76,8 +76,8 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const Conv2dSliceConfig>& slice_config_,
-               const bool return_output_dim,
-               const bool return_weights_and_bias,
+               bool return_output_dim,
+               bool return_weights_and_bias,
                QueueId queue_id) -> ResultWithOptions {
                 return self(
                     queue_id,
@@ -145,8 +145,8 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const Conv2dSliceConfig>& slice_config_,
-               const bool return_output_dim,
-               const bool return_weights_and_bias,
+               bool return_output_dim,
+               bool return_weights_and_bias,
                QueueId queue_id) -> ResultWithOptions {
                 return self(
                     queue_id,

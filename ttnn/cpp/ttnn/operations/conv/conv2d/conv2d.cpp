@@ -74,8 +74,8 @@ ResultWithOptions conv2d(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
-    const bool return_output_dim,
-    const bool return_weights_and_bias) {
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     if (dram_slice_config_.has_value()) {
         return result_to_result_with_options(
             conv2d_DRAM(
@@ -632,8 +632,8 @@ template ResultWithOptions conv2d<IDevice>(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
-    const bool return_output_dim,
-    const bool return_weights_and_bias);
+    bool return_output_dim,
+    bool return_weights_and_bias);
 
 template ResultWithOptions conv2d<MeshDevice>(
     QueueId queue_id,
@@ -655,8 +655,8 @@ template ResultWithOptions conv2d<MeshDevice>(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
-    const bool return_output_dim,
-    const bool return_weights_and_bias);
+    bool return_output_dim,
+    bool return_weights_and_bias);
 
 ResultWithOptions Conv2dOperation::invoke(
     QueueId queue_id,
@@ -678,8 +678,8 @@ ResultWithOptions Conv2dOperation::invoke(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     const std::optional<const Conv2dSliceConfig>& slice_config_,
-    const bool return_output_dim,
-    const bool return_weights_and_bias) {
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     return conv2d(
         queue_id,
         input_tensor,
@@ -724,8 +724,8 @@ ResultWithOptions Conv2dOperation::invoke(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const Conv2dSliceConfig>& slice_config_,
-    const bool return_output_dim,
-    const bool return_weights_and_bias) {
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     return conv2d(
         queue_id,
         input_tensor,
