@@ -547,7 +547,10 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
     (ROUTING_MODE == (ROUTING_MODE_2D | ROUTING_MODE_TORUS | ROUTING_MODE_LOW_LATENCY)))
 #define PACKET_HEADER_TYPE low_latency_packet_header_t
 #else
-static_assert(false, "non supported ROUTING_MODE" #ROUTING_MODE);
+// Helper macros to stringify macro values
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));
 #endif
 #endif  // ROUTING_MODE
 
