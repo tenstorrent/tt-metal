@@ -215,7 +215,7 @@ models/experimental/ @sminakov-tt @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydona
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/experimental/functional_UFLD_v2 @mbahnasTT @dvartaniansTT @ssinghalTT @arginugaTT
 models/experimental/functional_vgg_unet @mbahnasTT @dvartaniansTT @ssinghalTT @arginugaTT
-models/experimental/functional_vanilla_unet @mbahnasTT @dvartaniansTT @ssinghalTT @arginugaTT
+models/experimental/functional_vanilla_unet @tenstorrent/cse-developer-ttnn
 models/experimental/grok @yieldthought @uaydonat
 models/demos/wormhole/vit @mbahnasTT @dvartaniansTT @uaydonat
 models/demos/vit  @mbahnasTT @dvartaniansTT @uaydonat
