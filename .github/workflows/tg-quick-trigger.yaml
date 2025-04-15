@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       topology-4u:
-        required: false
+        required: true
         type: boolean
         default: true
       topology-6u:
-        required: false
+        required: true
         type: boolean
-        default: true
+        default: false
   push:
     branches: ["main"]
 
@@ -30,5 +30,5 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ inputs.topology-4u || true }}
-      topology-6u: ${{ inputs.topology-6u || false }}
+      topology-4u: ${{ inputs.topology-4u }}
+      topology-6u: ${{ inputs.topology-6u }}
