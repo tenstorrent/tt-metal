@@ -534,9 +534,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
 
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), cores.size(), mm_kernel_defines);
-    bmm_op_utils::add_nops_in_matmul(mm_kernel_defines, math_fidelity);
     bmm_op_utils::add_mm_throttle_defines_if_needed(device->arch(), math_fidelity, mm_kernel_defines);
     bmm_op_utils::add_precision_defines_if_needed(device->arch(), mm_kernel_defines);
+    bool tiny_tile_mm =
+        !(in0_tile.get_height() == TILE_HEIGHT && in0_tile.get_width() == TILE_WIDTH &&
+          in1_tile.get_height() == TILE_HEIGHT && in1_tile.get_width() == TILE_WIDTH);
+    bmm_op_utils::throttle_mm_perf(device->arch(), cores.size(), mm_kernel_defines, math_fidelity, tiny_tile_mm);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
