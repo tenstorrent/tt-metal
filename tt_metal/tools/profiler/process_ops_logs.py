@@ -467,11 +467,11 @@ def get_device_data_generate_report(
                     if "core" in analysis:
                         assert len(analysisData) >= 1, "Unexpected device data format"
                         headerField = f"{csv_header_format(analysis)} MIN [ns]"
-                        rowDict[headerField] = f"{analysisStats['Min']:.0f}"
+                        rowDict[headerField] = f"{analysisStats['Min'] * 1000 / freq:.0f}"
                         headerField = f"{csv_header_format(analysis)} MAX [ns]"
-                        rowDict[headerField] = f"{analysisStats['Max']:.0f}"
+                        rowDict[headerField] = f"{analysisStats['Max'] * 1000 / freq:.0f}"
                         headerField = f"{csv_header_format(analysis)} AVG [ns]"
-                        rowDict[headerField] = f"{analysisStats['Average']:.0f}"
+                        rowDict[headerField] = f"{analysisStats['Average'] * 1000 / freq:.0f}"
                     else:
                         headerField = f"{csv_header_format(analysis)} [ns]"
                         assert len(analysisData) == 1, "Unexpected device data format"
@@ -693,14 +693,15 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     for analysis, data in opData["device_time"].items():
                         analysisData = data["series"]
                         analysisStats = data["stats"]
+                        freq = analysisData[0]["duration_cycles"] / analysisData[0]["duration_ns"]
                         if "core" in analysis:
                             assert len(analysisData) >= 1, "Unexpected device data format"
                             headerField = f"{csv_header_format(analysis)} MIN [ns]"
-                            rowDict[headerField] = f"{analysisStats['Min']:.0f}"
+                            rowDict[headerField] = f"{analysisStats['Min'] / freq:.0f}"
                             headerField = f"{csv_header_format(analysis)} MAX [ns]"
-                            rowDict[headerField] = f"{analysisStats['Max']:.0f}"
+                            rowDict[headerField] = f"{analysisStats['Max'] / freq:.0f}"
                             headerField = f"{csv_header_format(analysis)} AVG [ns]"
-                            rowDict[headerField] = f"{analysisStats['Average']:.0f}"
+                            rowDict[headerField] = f"{analysisStats['Average'] / freq:.0f}"
                         else:
                             headerField = f"{csv_header_format(analysis)} [ns]"
                             assert len(analysisData) == 1, "Unexpected device data format"
@@ -708,7 +709,6 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                         if analysis == "device_fw_duration":
                             rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
                             rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
-                            freq = analysisData[0]["duration_cycles"] / analysisData[0]["duration_ns"]
                         if analysis == "device_kernel_duration":
                             if deviceID in devicePreOpTime.keys():
                                 rowDict["OP TO OP LATENCY [ns]"] = round(
