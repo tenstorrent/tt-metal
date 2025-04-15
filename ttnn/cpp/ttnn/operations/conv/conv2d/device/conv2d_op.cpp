@@ -314,10 +314,14 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     auto kernel_dims =
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
+
+    auto output_shape = output_tensor.shard_spec().value().shape;
+
     conv_op_l1_usage l1_usage = calculate_L1_usage(
         compute_kernel_config,
         block_config,
         parallelization_config,
+        output_shape[0],
         weights_shape,
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
         Conv2dConfig{
@@ -352,7 +356,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     bool is_graph_capture_no_dispathch_mode = post_op_l1_allocation_size == 0;
     TT_FATAL(
         post_op_l1_allocation_size == (this->pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size) ||
-            is_graph_capture_no_dispathch_mode || disable_shard_height_tiling,
+            is_graph_capture_no_dispathch_mode,
         "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
         this->pre_op_l1_allocation_size_bytes,
         post_op_l1_allocation_size,

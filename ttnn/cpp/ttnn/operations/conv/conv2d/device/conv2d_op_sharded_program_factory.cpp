@@ -185,8 +185,7 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandl
             output_shard_shape[1] * output_shard_shape[0] < num_writer_output_tiles * TILE_HW;
 
         auto shard_shape = output.shard_spec().value().shape;
-        // uint32_t aligned_output_stick_nbytes = out_tile_size;
-        // uint32_t aligned_output_num_pages = num_writer_output_tiles;
+
         uint32_t aligned_output_stick_nbytes =
             disable_shard_height_tiling ? shard_shape[1] * output.element_size() : out_tile_size;
         uint32_t aligned_output_num_pages = disable_shard_height_tiling ? shard_shape[0] : num_writer_output_tiles;
@@ -198,6 +197,12 @@ std::tuple<tt::tt_metal::CBHandle, tt::tt_metal::CBHandle, tt::tt_metal::CBHandl
             aligned_output_num_pages,
             out_df,
             output.buffer());
+        log_debug(
+            LogOp,
+            "Output Shard Shape: {}, aligned_output_stick_nbytes: {}, aligned_output_num_pages: {}",
+            shard_shape,
+            aligned_output_stick_nbytes,
+            aligned_output_num_pages);
     } else {
         // Share buffer if same data format
         if (interm0_df == out_df) {

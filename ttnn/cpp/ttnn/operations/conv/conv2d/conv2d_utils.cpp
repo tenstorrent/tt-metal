@@ -873,6 +873,9 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             compute_config,
             opt_conv_op_block_config,
             opt_conv_op_parallel_config,
+            std::ceil(
+                (((float)batch_size * output_height * output_width) /
+                 opt_conv_op_parallel_config.num_cores_nhw)),  // output shard height
             weights_shape,
             kernel_size,
             conv_config,
@@ -987,6 +990,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
+    const uint32_t nhw_per_core,
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
@@ -1096,6 +1100,10 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             .tensor_allocation_size = output_size_per_core_in_bytes, .CB_allocation_size = total_CB_size};
     } else if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
+        if (disable_shard_height_tiling) {
+            output_size = nhw_per_core * per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH *
+                          tt::datum_size(datatype_to_dataformat_converter(input_dtype));
+        }
 
         uint32_t bias_block_num_bytes = per_core_out_matrix_width_ntiles * bias_tile_size;
 
