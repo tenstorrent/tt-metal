@@ -12,7 +12,7 @@
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "llrt/hal.hpp"
 #include "rtoptions.hpp"
 #include "utils.hpp"

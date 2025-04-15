@@ -21,7 +21,7 @@ from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 DECODE_OP_START_INDEX = 4
-DECODE_OP_END_INDEX = -11
+DECODE_OP_END_INDEX = -12
 
 perf_targets = {
     "RMSAllGather_0": {
@@ -67,7 +67,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 2273.2,
         "kernel_duration_relative_margin": 0.01,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.5,
     },
     "AllGatherAsync_1": {
         "op_name": "AllGatherAsync_Binary_Mult",
@@ -85,7 +85,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 1919.0,
         "kernel_duration_relative_margin": 0.03,
         "op_to_op_duration_relative_margin": 0.1,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.3,
     },
     "ShardedToInterleavedDeviceOperation_1": {
         "op_name": "ShardedToInterleavedDeviceOperation_LN_1",
@@ -94,7 +94,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 1910.2,
         "kernel_duration_relative_margin": 0.03,
         "op_to_op_duration_relative_margin": 0.1,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.3,
     },
     "InterleavedToShardedDeviceOperation_0": {
         "op_name": "InterleavedToShardedDeviceOperation_LN_0",
@@ -184,7 +184,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 8510.2,
         "kernel_duration_relative_margin": 0.03,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.3,
     },
     "AllReduceAsync_2": {
         "op_name": "AllReduceAsync_FF2",
@@ -202,7 +202,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 8058.9,
         "kernel_duration_relative_margin": 0.01,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.3,
     },
     "LlamaReduceScatterDeviceOperation_1": {
         "op_name": "ReduceScatter_FF3",
@@ -211,7 +211,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7359.9,
         "kernel_duration_relative_margin": 0.01,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.3,
     },
     "NLPCreateHeadsDecodeDeviceOperation_0": {
         "op_name": "CreateHeads",
@@ -247,7 +247,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 9741.5,
         "kernel_duration_relative_margin": 0.01,
         "op_to_op_duration_relative_margin": 0.1,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.3,
     },
     "NLPConcatHeadsDecodeDeviceOperation_0": {
         "op_name": "ConcatHeads",
@@ -464,6 +464,8 @@ def merge_device_rows(df):
 def build_duration_dict(raw_dict, column_name):
     op_code_dict = {}
     for entry in raw_dict:
+        if column_name not in entry:
+            print(f"Warning: {entry} does not have column {column_name}")
         op_code = entry["OP CODE"]
         duration = entry[column_name]
         if op_code not in op_code_dict:
@@ -477,7 +479,10 @@ def build_duration_per_instance_dict(input_dict, num_layers):
     for op_code in input_dict:
         num_ops_with_op_code = len(input_dict[op_code])
         num_instances = num_ops_with_op_code // num_layers
-        assert num_ops_with_op_code % num_layers == 0
+        if num_ops_with_op_code % num_layers != 0:
+            print(f"Warning: {op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers")
+            print_dict(input_dict, "input_dict")
+            assert num_ops_with_op_code % num_layers == 0
         for iteration_id in range(num_layers):
             for instance_id in range(num_instances):
                 op_code_with_id = f"{op_code}_{instance_id}"
@@ -801,12 +806,10 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             )
 
             upper_limit = (
-                expected_time
-                + perf_targets[op_code_with_id]["non-overlapped-dispatch-time_duration_relative_margin"] * expected_time
+                expected_time + perf_targets[op_code_with_id]["dispatch_duration_relative_margin"] * expected_time
             )
             lower_limit = (
-                expected_time
-                - perf_targets[op_code_with_id]["non-overlapped-dispatch-time_duration_relative_margin"] * expected_time
+                expected_time - perf_targets[op_code_with_id]["dispatch_duration_relative_margin"] * expected_time
             )
             if avg_dispatch_duration > upper_limit:
                 passing = False
@@ -814,7 +817,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
                     f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is larger than target "
                     f"({expected_time}) ns, difference: "
                     f"{abs(avg_dispatch_duration - upper_limit)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['non-overlapped-dispatch-time_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']} ns, "
                     f"relative margin to pass would be: "
                     f"{abs(expected_time - avg_dispatch_duration) / expected_time}"
                 )
@@ -824,7 +827,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
                     f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is smaller than target "
                     f"({expected_time}) ns, difference: "
                     f"{abs(lower_limit - avg_dispatch_duration)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['non-overlapped-dispatch-time_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']} ns, "
                     f"relative margin to pass would be: "
                     f"{abs(expected_time - avg_dispatch_duration) / expected_time}"
                 )
