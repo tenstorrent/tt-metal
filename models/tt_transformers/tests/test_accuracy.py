@@ -329,6 +329,7 @@ def test_tt_model_acc(
         tt_out_tok = ttnn.argmax(
             tt_out_rm,
             dim=3,
+            keepdim=True,
             use_multicore=True if model_args.max_batch_size == 1 else False,
         )
         if not use_reference_file:
