@@ -39,8 +39,8 @@ void kernel_main() {
     constexpr bool reduce_all = (bool)get_compile_time_arg_val(9);
 
     //-------------------------------------------------------------------------
-    const InterleavedAddrGen<src_is_dram> s_src = {.bank_base_address = src_base_addr, .page_size = src_page_size};
-    const InterleavedAddrGen<dst_is_dram> s_dst = {.bank_base_address = dst_base_addr, .page_size = dst_page_size};
+    const auto s_src = get_interleaved_addr_gen<src_is_dram, src_page_size>(src_base_addr);
+    const auto s_dst = get_interleaved_addr_gen<dst_is_dram, dst_page_size>(dst_base_addr);
 
     // CB in L1 memory for storing input
     const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
@@ -57,7 +57,7 @@ void kernel_main() {
     // Main loop - run by all cores
     for (uint32_t k = 0; k < outer_dim_units; ++k) {
         for (uint32_t j = 0; j < inner_dim_units; ++j) {
-            noc_async_read_page(k * inner_dim_units + j, s_src, src_cb_addr);
+            s_src.noc_async_read_page(k * inner_dim_units + j, src_cb_addr);
             noc_async_read_barrier();
 
             // Reset max_val for each new output

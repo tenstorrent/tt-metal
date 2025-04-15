@@ -6,9 +6,9 @@
 
 #include <stdint.h>
 
-#define NEG_INF_BFLOAT16 0xFF80  // Representation of negative infinity in bfloat16
-#define POS_INF_BFLOAT16 0x7F80  // Representation of positive infinity in bfloat16
-#define NAN_BFLOAT16 0x7FFF      // Representation of NaN in bfloat16
+inline constexpr uint16_t NEG_INF_BFLOAT16 = 0xFF80;  // Representation of negative infinity in bfloat16
+inline constexpr uint16_t POS_INF_BFLOAT16 = 0x7F80;  // Representation of positive infinity in bfloat16
+inline constexpr uint16_t NAN_BFLOAT16 = 0x7FFF;      // Representation of NaN in bfloat16
 
 // Optimized function to compare two bfloat16 values using integer arithmetic
 bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {
