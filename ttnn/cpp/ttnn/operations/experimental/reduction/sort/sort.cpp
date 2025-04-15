@@ -72,6 +72,22 @@ std::vector<Tensor> post_sort_transform_tensor(
     return result;
 }
 
+bool validate_optional_output_tensors_for_early_exit(
+    const std::optional<std::tuple<Tensor, Tensor>>& optional_output_tensors, const Shape& original_lshape) {
+    if (!optional_output_tensors.has_value()) {
+        return false;
+    }
+
+    auto output_tensor_0 = std::get<0>(optional_output_tensors.value());
+    auto output_tensor_1 = std::get<1>(optional_output_tensors.value());
+
+    if (output_tensor_0.get_logical_shape() == original_lshape &&
+        output_tensor_1.get_logical_shape() == original_lshape) {
+        return true;
+    }
+    return false;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -88,7 +104,8 @@ std::vector<Tensor> ExecuteSort::invoke(
 
     // Check for early exit for scalar or empty tensors tensors
     if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
-        if (optional_output_tensors.has_value()) {
+        if (CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
+                optional_output_tensors, original_lshape)) {
             return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
         } else {
             return {input_tensor, ttnn::zeros_like(input_tensor)};
