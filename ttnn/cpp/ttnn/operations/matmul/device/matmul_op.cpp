@@ -1267,12 +1267,7 @@ void add_stagger_defines_if_needed(
     }
 }
 
-void throttle_mm_perf(
-    const tt::ARCH arch,
-    const int num_cores,
-    std::map<string, string>& mm_kernel_defines,
-    MathFidelity fidelity,
-    bool tiny_tile_mm) {
+void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines) {
     // Empirically deduced di/dt problems appear for OPs calling matmul using more than 48 cores on WH_B0
     constexpr uint32_t WH_B0_MM_MAX_CORES_NO_THROTTLE = 48;
     // TODO: determine min core threshold for throttle to be needed on BH
@@ -1306,10 +1301,6 @@ void throttle_mm_perf(
                 tt::LogOp,
                 "Throttle matmul perf ignored: invalid number of NOPs requested - only {{1,2,3,4,5}} are supported");
         }
-    } else if (mm_throttle_needed && arch == tt::ARCH::WORMHOLE_B0 && fidelity == MathFidelity::LoFi && !tiny_tile_mm) {
-        // Default throttle to level 1 for WH_B0 if LoFi math fidelity and not tiny tiles
-        mm_kernel_defines["THROTTLE_MM"] = "1";
-        tt::log_info(tt::LogOp, "Throttle matmul perf to max 73% for LoFi + full tile size");
     }
 }
 

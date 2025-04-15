@@ -602,8 +602,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         compute_defines["PACKER_L1_ACC"] = "1";
     }
 
-    bool tiny_tile_mm = false;  // assuming that matmul will be computed on full tiles, not tiny tiles
-    bmm_op_utils::throttle_mm_perf(device->arch(), all_cores.num_cores(), compute_defines, math_fidelity, tiny_tile_mm);
+    bmm_op_utils::throttle_mm_perf(device->arch(), all_cores.num_cores(), compute_defines);
 
     for (auto elem : compute_defines) {
         log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
