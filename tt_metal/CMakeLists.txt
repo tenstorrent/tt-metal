@@ -35,6 +35,15 @@ target_sources(
             impl/dispatch/kernels/cq_helpers.hpp
             impl/dispatch/kernels/packet_queue.hpp
             impl/dispatch/kernels/packet_queue_ctrl.hpp
+            fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/quanta_galaxy_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
             include/compute_kernel_api/blank.h
             include/compute_kernel_api/cb_api.h
             include/compute_kernel_api/common.h
