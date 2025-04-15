@@ -7,7 +7,6 @@
 #include "dataflow_api.h"
 
 // DRAM to L1 read
-// TODO: Expand this to read from other core(s)
 void kernel_main() {
     uint32_t src_addr = get_compile_time_arg_val(0);
     constexpr uint32_t bank_id = get_compile_time_arg_val(1);
@@ -26,7 +25,7 @@ void kernel_main() {
 
     cb_reserve_back(cb_id_in0, total_num_pages);
     {
-        DeviceZoneScopedN("READER");
+        DeviceZoneScopedN("RISCV1");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             // TODO: Change src address to change DRAM/core locations (single/multiple core)
             uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);

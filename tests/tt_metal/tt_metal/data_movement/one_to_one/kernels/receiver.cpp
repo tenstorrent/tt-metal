@@ -23,7 +23,7 @@ void kernel_main() {
     DeviceTimestampedData("Test id", test_id);
 
     {
-        DeviceZoneScopedN("RECEIVER");
+        DeviceZoneScopedN("RISCV1");
         noc_semaphore_wait(sem_addr, 1);
     }
 }

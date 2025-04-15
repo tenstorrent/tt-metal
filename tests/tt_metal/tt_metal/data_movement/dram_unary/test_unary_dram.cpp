@@ -13,10 +13,12 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
-namespace unit_tests::dm::dram {
-
+namespace unit_tests::dm {
+// Unique id for each test run
 uint32_t runtime_host_id = 0;
+}  // namespace unit_tests::dm
 
+namespace unit_tests::dm::dram {
 // Test config, i.e. test parameters
 struct DramConfig {
     uint32_t test_id = 0;
@@ -122,8 +124,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
             .compile_args = writer_compile_args});
 
     // Assign unique id
-    log_info("Results for test id: {}", test_config.test_id);
-    log_info("Results for run id: {}", runtime_host_id);
+    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, runtime_host_id);
     program.set_runtime_id(runtime_host_id++);
 
     // Launch program and record outputs

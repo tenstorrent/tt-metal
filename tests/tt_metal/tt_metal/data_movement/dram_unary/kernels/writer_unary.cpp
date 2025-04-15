@@ -5,7 +5,6 @@
 #include "dataflow_api.h"
 
 // L1 to DRAM write
-// TODO: Expand this to write to other core(s)
 void kernel_main() {
     uint32_t dst_addr = get_compile_time_arg_val(0);
     constexpr uint32_t bank_id = get_compile_time_arg_val(1);
@@ -24,7 +23,7 @@ void kernel_main() {
 
     cb_wait_front(cb_id_out0, total_num_pages);
     {
-        DeviceZoneScopedN("WRITER");
+        DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             // TODO: Change dst address to change DRAM/core locations (single/multiple core)
             uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_addr);

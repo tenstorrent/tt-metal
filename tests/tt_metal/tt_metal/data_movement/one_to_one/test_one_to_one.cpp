@@ -14,9 +14,6 @@ using namespace tt;
 using namespace tt::test_utils;
 
 namespace unit_tests::dm::core_to_core {
-
-uint32_t runtime_host_id = 0;
-
 // Test config, i.e. test parameters
 struct OneToOneConfig {
     uint32_t test_id = 0;
@@ -127,8 +124,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     SetRuntimeArgs(program, receiver_kernel, slave_core_set, {sem_id});
 
     // Assign unique id
-    log_info("Results for test id: {}", test_config.test_id);
-    log_info("Results for run id: {}", runtime_host_id);
+    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, runtime_host_id);
     program.set_runtime_id(runtime_host_id++);
 
     // Input
