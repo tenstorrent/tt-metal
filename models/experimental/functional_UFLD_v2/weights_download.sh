@@ -9,7 +9,7 @@ else
 fi
 
 # Output filename
-OUTPUT="models/experimental/ufld_v2/tusimple_res34.pth"
+OUTPUT="models/experimental/functional_UFLD_v2/tusimple_res34.pth"
 
 # Create output directory if it doesn't exist
 mkdir -p "$(dirname "$OUTPUT")"

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.ufld_v2.ttnn.common import TtnnUFLDV2Conv2D
+from models.experimental.functional_UFLD_v2.ttnn.common import TtnnUFLDV2Conv2D
 
 
 class TtnnBasicBlock:
