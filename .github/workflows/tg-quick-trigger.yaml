@@ -2,15 +2,6 @@ name: "Galaxy Quick"
 
 on:
   workflow_dispatch:
-    inputs:
-      topology-4u:
-        required: true
-        type: boolean
-        default: true
-      topology-6u:
-        required: true
-        type: boolean
-        default: false
   push:
     branches: ["main"]
 
@@ -30,5 +21,3 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ inputs.topology-4u }}
-      topology-6u: ${{ inputs.topology-6u }}
