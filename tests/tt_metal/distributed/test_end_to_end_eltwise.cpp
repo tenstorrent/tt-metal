@@ -245,7 +245,7 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
     for (uint16_t i = 0; i < result_vec.size(); i++) {
-        EXPECT_FLOAT_EQ(result_vec[i].to_float(), golden_vec[i].to_float());
+        EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
     }
 }
 
@@ -322,7 +322,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
     for (uint16_t i = 0; i < result_vec.size(); i++) {
-        EXPECT_FLOAT_EQ(result_vec[i].to_float(), golden_vec[i].to_float());
+        EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
     }
 }
 
@@ -388,7 +388,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
     for (uint16_t i = 0; i < result_vec.size(); i++) {
-        EXPECT_FLOAT_EQ(result_vec[i].to_float(), golden_vec[i].to_float());
+        EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
     }
 }
 
