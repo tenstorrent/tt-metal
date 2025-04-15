@@ -437,7 +437,11 @@ class TtTransformer(LightweightModule):
 
         if argmax_on_device:
             tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
-                tt_logits, dim=3, use_multicore=True, sub_core_grids=sub_core_grids  # ,output_tensor=tokens
+                tt_logits,
+                dim=3,
+                keepdim=True,
+                use_multicore=True,
+                sub_core_grids=sub_core_grids,  # ,output_tensor=tokens
             )
         else:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
