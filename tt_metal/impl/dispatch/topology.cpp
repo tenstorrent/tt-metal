@@ -997,13 +997,14 @@ void configure_2d_fabric_cores(IDevice* device) {
 
     auto router_chans = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(device->id());
     for (const auto& router_chan : router_chans) {
+        const auto& hal = MetalContext::instance().hal();
         CoreCoord virtual_eth_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                 device->id(), router_chan);
         auto router_logical_core = device->logical_core_from_ethernet_core(virtual_eth_core);
         // initialize the semaphore
-        auto fabric_router_sync_sem_addr = MetalContext::instance().hal().get_dev_addr(
-            HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
         detail::WriteToDeviceL1(
             device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
     }
