@@ -26,6 +26,9 @@ bool is_2d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config);
 
 Topology get_1d_topology(const tt::tt_metal::FabricConfig& fabric_config);
 
+void set_routing_mode(
+    Topology topology, uint32_t dimension = 1, RoutingMode routing_mode = RoutingMode::RoutingModeUndefined);
+
 tt::tt_fabric::FabricEriscDatamoverConfig get_1d_fabric_config();
 
 // Used to get the run-time args for estabilishing connection with the fabric router.

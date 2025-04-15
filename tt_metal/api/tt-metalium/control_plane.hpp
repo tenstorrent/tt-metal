@@ -64,8 +64,8 @@ public:
 
     eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, int chan) const;
 
-    void set_fabric_mode(RoutingMode mode);
-    RoutingMode get_fabric_mode() const;
+    void set_routing_mode(RoutingMode mode);
+    RoutingMode get_routing_mode() const;
 
 private:
     RoutingMode routing_mode_;

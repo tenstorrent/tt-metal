@@ -962,6 +962,7 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
             router_defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
         }
     }
+    tt::tt_fabric::set_routing_mode(tt_fabric::Topology::Ring, 2);
 
     // TODO: Manual clear of semaphore, move this to proper Metal sempahore apis
     std::vector<uint32_t> fabric_sem_zero_buf(1, 0);
@@ -1055,6 +1056,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
     std::unordered_map<chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
     auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
     Topology topology = get_1d_topology(fabric_config);
+    tt::tt_fabric::set_routing_mode(topology);
 
     if (device->is_mmio_capable() &&
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG)) {

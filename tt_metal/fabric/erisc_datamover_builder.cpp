@@ -22,7 +22,7 @@
 #include <variant>
 #include <vector>
 
-#include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "core_coord.hpp"
 #include "fabric_edm_types.hpp"
 #include "logger.hpp"
@@ -121,17 +121,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
     this->num_used_sender_channels = FabricEriscDatamoverConfig::num_sender_channels;
     this->num_used_receiver_channels = FabricEriscDatamoverConfig::num_receiver_channels;
     this->topology = topology;
-    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    // TODO: more detail fabric mode selection
-    if (topology == Topology::Ring) {
-        control_plane->set_fabric_mode((RoutingMode)(ROUTING_MODE_1D | ROUTING_MODE_RING | ROUTING_MODE_LOW_LATENCY));
-    } else {
+    if (topology != Topology::Ring) {
         this->num_used_sender_channels -= 1;
         this->num_used_receiver_channels -= 1;
-        control_plane->set_fabric_mode(
-            topology == Topology::Linear ? (RoutingMode)(ROUTING_MODE_1D | ROUTING_MODE_LINE | ROUTING_MODE_LOW_LATENCY)
-                                         : (RoutingMode)(ROUTING_MODE_2D | ROUTING_MODE_MESH));
     }
+    tt::tt_fabric::set_routing_mode(topology);
 
     for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
         TT_FATAL(
