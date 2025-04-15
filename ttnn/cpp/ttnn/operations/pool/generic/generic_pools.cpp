@@ -90,7 +90,8 @@ Tensor Pool2DOp<pool_type>::invoke(
                                                 input_tensor.device()->compute_with_storage_grid_size(),    //8,8
                                                 ShardOrientation::ROW_MAJOR,
                                                 false,
-                                                false);
+                                                false,
+                                            false);
         }
         else { //auto-sharding
             parallel_config = pool::determine_pool_config_for_auto_shard(

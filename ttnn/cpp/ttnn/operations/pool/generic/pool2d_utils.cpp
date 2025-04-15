@@ -61,24 +61,15 @@ uint32_t calculate_L1_usage(
     }
 
     uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;  // row of input (channels)
-    uint32_t out_nbytes_c = out_w / num_shards_c * out_nbytes;         // row of output (channels)
 
     tt::DataFormat indices_df =
         tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.get_dtype());
     uint32_t indices_nbytes = datum_size(indices_df);
 
     uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
-    uint32_t kernel_size_hw_padded = tt::round_up(kernel_size_hw, tt::constants::TILE_HEIGHT);
-    uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
-    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)out_w / num_shards_c / tt::constants::TILE_WIDTH);
 
     uint32_t max_rows_for_reduction = 16;
-    // TODO #14588: temporarily disabling 32 row reductions due to issues in large kernels
-    /* uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
-    // For GRAYSKULL, make reduction for 16 rows at a time.
-    if (device->arch() == tt::ARCH::GRAYSKULL)
-        max_rows_for_reduction /= 2; */
 
     // Hardware can do reduction of 8 tiles at a time.
     // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
@@ -89,18 +80,7 @@ uint32_t calculate_L1_usage(
     uint32_t nblocks = 1;
     // TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
-    uint32_t tile_w = tt::constants::TILE_WIDTH;
-    if (input_shape[3] < tt::constants::TILE_WIDTH) {
-        TT_FATAL(input_shape[3] == 16, "Error");
-        tile_w = tt::constants::FACE_WIDTH;
-    }
-    uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
-
     // distributing out_hw across the grid
-    auto all_cores = input_memory.shard_spec.value().grid;
-    uint32_t ncores = all_cores.num_cores();
-    auto core_range = all_cores;
-    uint32_t in_nhw_per_core = input_memory.shard_spec.value().shape[0];
     uint32_t out_nhw_per_core = output_memory.shard_spec.value().shape[0];
 
     // TODO: support generic nblocks
@@ -170,11 +150,11 @@ uint32_t calculate_L1_usage(
     }
 
     return in_scalar_cb_config_size
-           // + raw_in_cb_config_size
-           // + in_reader_indices_cb_config_size
+           //+ raw_in_cb_config_size
+           //+ in_reader_indices_cb_config_size
            + in_cb_config_0_size +
            in_cb_config_1_size
-           // + out_cb_config_size
+           //+ out_cb_config_size
            + max_pool_partials_cb_config_size;
 }
 
@@ -195,6 +175,8 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
         ShardOrientation::ROW_MAJOR,
         false,
         false);
+    auto output_parallel_config_height =
+        conv::determine_output_parallel_config(input_parallel_config_height, compute_grid_size, channels, false);
 
     auto input_parallel_config_width = conv::determine_parallel_config(
         TensorMemoryLayout::WIDTH_SHARDED,
@@ -221,6 +203,8 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
         ShardOrientation::COL_MAJOR,
         false,
         false);
+    auto output_parallel_config_block =
+        conv::determine_output_parallel_config(input_parallel_config_block, compute_grid_size, channels, false);
 
     auto get_memconfig = [&](const ParallelConfig& parallel_config) {
         uint32_t nhw = batch_size * output_shape[1] * output_shape[2];
@@ -237,7 +221,7 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
         sliding_window_config.get_output_shape()[1],
         sliding_window_config.get_output_shape()[2],
         get_memconfig(input_parallel_config_height),
-        get_memconfig(input_parallel_config_height));
+        get_memconfig(output_parallel_config_height));
 
     uint32_t l1_usage_width = calculate_L1_usage(
         input_tensor,
@@ -255,7 +239,7 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
         sliding_window_config.get_output_shape()[1],
         sliding_window_config.get_output_shape()[2],
         get_memconfig(input_parallel_config_block),
-        get_memconfig(input_parallel_config_block));
+        get_memconfig(output_parallel_config_block));
 
     uint32_t ncores_height = input_parallel_config_height.grid.num_cores();
     uint32_t ncores_width = input_parallel_config_width.grid.num_cores();
