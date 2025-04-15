@@ -522,25 +522,33 @@ static_assert(
 
 static constexpr size_t header_size_bytes = sizeof(PacketHeader);
 
-#ifndef FABRIC_MODE
+#ifndef ROUTING_MODE
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
-#if ((FABRIC_MODE == FABRIC_MODE_1D_LINE) || (FABRIC_MODE == FABRIC_MODE_1D_RING))
+#if ((ROUTING_MODE & ROUTING_MODE_DYNAMIC) == ROUTING_MODE_DYNAMIC)
+static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
+#elif (                                                        \
+    (ROUTING_MODE == (ROUTING_MODE_1D | ROUTING_MODE_LINE)) || \
+    (ROUTING_MODE == (ROUTING_MODE_1D | ROUTING_MODE_RING)))
 #define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields
-#elif ((FABRIC_MODE == FABRIC_MODE_1D_LINE_LOW_LATENCY) || (FABRIC_MODE == FABRIC_MODE_1D_RING_LOW_LATENCY))
+#elif (                                                                                   \
+    (ROUTING_MODE == (ROUTING_MODE_1D | ROUTING_MODE_LINE | ROUTING_MODE_LOW_LATENCY)) || \
+    (ROUTING_MODE == (ROUTING_MODE_1D | ROUTING_MODE_RING | ROUTING_MODE_LOW_LATENCY)))
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
-#elif ((FABRIC_MODE == FABRIC_MODE_2D_MESH) || (FABRIC_MODE == FABRIC_MODE_2D_TORUS))
+#elif (                                                        \
+    (ROUTING_MODE == (ROUTING_MODE_2D | ROUTING_MODE_MESH)) || \
+    (ROUTING_MODE == (ROUTING_MODE_2D | ROUTING_MODE_TORUS)))
 #define PACKET_HEADER_TYPE packet_header_t
-#elif ((FABRIC_MODE == FABRIC_MODE_2D_MESH_LOW_LATENCY) || (FABRIC_MODE == FABRIC_MODE_2D_TORUS_LOW_LATENCY))
+#elif (                                                                                   \
+    (ROUTING_MODE == (ROUTING_MODE_2D | ROUTING_MODE_MESH | ROUTING_MODE_LOW_LATENCY)) || \
+    (ROUTING_MODE == (ROUTING_MODE_2D | ROUTING_MODE_TORUS | ROUTING_MODE_LOW_LATENCY)))
 #define PACKET_HEADER_TYPE low_latency_packet_header_t
-#elif ((FABRIC_MODE == FABRIC_MODE_2D_MESH_DYNAMIC) || (FABRIC_MODE == FABRIC_MODE_2D_TORUS_DYNAMIC))
-static_assert(false, "FABRIC_MODE_DYNAMIC is not supported yet");
 #else
-static_assert(false, "non supported FABRIC_MODE" #FABRIC_MODE);
+static_assert(false, "non supported ROUTING_MODE" #ROUTING_MODE);
 #endif
-#endif  // FABRIC_MODE
+#endif  // ROUTING_MODE
 
 }  // namespace tt::tt_fabric

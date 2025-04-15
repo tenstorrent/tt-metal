@@ -125,7 +125,7 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     // Printing, only enabled with log_debug
     this->routing_table_generator_->print_routing_tables();
 
-    this->fabric_mode_ = FabricMode::FabricModeUndefined;
+    this->routing_mode_ = RoutingMode::RoutingModeUndefined;
 
     // Initialize the control plane routers based on mesh graph
     this->initialize_from_mesh_graph_desc_file(mesh_graph_desc_file);
@@ -976,13 +976,13 @@ void ControlPlane::print_ethernet_channels() const {
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
-void ControlPlane::set_fabric_mode(FabricMode mode) {
+void ControlPlane::set_fabric_mode(RoutingMode mode) {
     TT_ASSERT(
-        this->fabric_mode_ == FabricMode::FabricModeUndefined || this->fabric_mode_ == mode,
+        this->routing_mode_ == RoutingMode::RoutingModeUndefined || this->routing_mode_ == mode,
         "Control Plane: Routing mode already set");
-    this->fabric_mode_ = mode;
+    this->routing_mode_ = mode;
 }
 
-FabricMode ControlPlane::get_fabric_mode() const { return this->fabric_mode_; }
+RoutingMode ControlPlane::get_fabric_mode() const { return this->routing_mode_; }
 
 }  // namespace tt::tt_fabric
