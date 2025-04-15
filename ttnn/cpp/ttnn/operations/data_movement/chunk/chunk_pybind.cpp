@@ -22,8 +22,10 @@ void bind_chunk(pybind11::module& module, const data_movement_operation_t& opera
         operation,
         doc,
         ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, const int chunks, const int dim)
-                -> std::vector<ttnn::Tensor> { return self(input_tensor, chunks, dim); },
+            [](const data_movement_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               const uint32_t chunks,
+               const int dim) -> std::vector<ttnn::Tensor> { return self(input_tensor, chunks, dim); },
             py::arg("input_tensor"),
             py::arg("chunks"),
             py::arg("dim")});
