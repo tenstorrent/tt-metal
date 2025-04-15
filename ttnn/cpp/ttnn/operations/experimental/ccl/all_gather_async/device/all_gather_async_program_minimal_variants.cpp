@@ -137,10 +137,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
     const auto output_tensor_page_layout = output_tensor.layout();
 
-    const bool optimized_dim3 = dim == 3 && output_tensor_buffer_type == BufferType::DRAM &&
-                                input_tensor_shape[2] % 32 == 0 &&
-                                ((input_tensor_shape[3] / 32) % 12 == 0 || (input_tensor_shape[3] / 32) % 12 == 4 ||
-                                 (input_tensor_shape[3] / 32) % 12 == 0);
+    const bool optimized_dim3 = dim == 3 && input_tensor_shape[2] % 32 == 0 &&
+                                ((num_pages_per_packet == 2 && (((input_tensor_shape[3] / 32) % 12) % 2 == 0 ||
+                                                                ((input_tensor_shape[3] / 32) % 56) % 2 == 0)) ||
+                                 (num_pages_per_packet == 4 && output_tensor_buffer_type == BufferType::DRAM &&
+                                      (input_tensor_shape[3] / 32) % 12 == 0 ||
+                                  (input_tensor_shape[3] / 32) % 12 == 4 || (input_tensor_shape[3] / 32) % 12 == 8));
 
     // KERNEL CREATION
     // Reader

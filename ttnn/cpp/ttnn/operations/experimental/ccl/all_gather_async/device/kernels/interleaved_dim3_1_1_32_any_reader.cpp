@@ -140,7 +140,7 @@ inline void pack_non_contig(uint32_t num_tiles, uint32_t& tile_id, InterleavedAd
 }
 
 template <bool DRAM>
-inline void pack_dim3_bf16_dram_remain048(
+inline void pack_dim3_bf16_remain_even(
     uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
     const uint32_t num_contig2 = (tile_cols_per_chip / (num_banks * packet_size_in_pages)) * num_banks;
     const uint32_t num_contig1 = ((tile_cols_per_chip - num_contig2 * 2) / num_banks) * num_banks;
@@ -308,7 +308,7 @@ void kernel_main() {
     if constexpr (last_dim) {
         if constexpr (packet_size_in_pages == 2) {
             if constexpr (optimized_dim3) {
-                pack_dim3_bf16_dram_remain048(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+                pack_dim3_bf16_remain_even(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
             } else {
                 pack_contig_tiles_dim3_bf16<is_dram>(
                     num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);

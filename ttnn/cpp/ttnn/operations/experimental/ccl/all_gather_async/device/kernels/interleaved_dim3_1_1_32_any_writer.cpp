@@ -206,7 +206,7 @@ inline void fabric_send_non_contig(
 }
 
 template <bool DRAM>
-inline void fabric_send_dim3_bf16_dram_remain048(
+inline void fabric_send_dim3_bf16_remain_even(
     uint32_t num_tiles,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
@@ -540,7 +540,7 @@ void kernel_main() {
     if constexpr (last_dim) {
         if constexpr (packet_size_in_pages == 2) {  // bf16
             if constexpr (optimized_dim3) {
-                fabric_send_dim3_bf16_dram_remain048<is_dram>(
+                fabric_send_dim3_bf16_remain_even<is_dram>(
                     num_tiles_per_chip,
                     ring_size,
                     tile_cols_per_chip,
