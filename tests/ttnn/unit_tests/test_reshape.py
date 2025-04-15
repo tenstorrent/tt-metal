@@ -365,13 +365,15 @@ def test_reshape_tile_layout_only_change_shape(device):
         ((5, 4, 208, 156), (3, 13, 8, 2080)),  # issue 14513
         ((22, 23, 1), (1, 22, 23)),
         ((1, 1500, 1, 512), (1, 1500, 8, 64)),
+        ((32, 1, 96, 64), (1, 32, 96, 64)),  # issue 20238
     ],
 )
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.int32, ttnn.uint32), (torch.float32, ttnn.float32)]
 )
-def test_reshape_tile_with_padding(device, input_shape, output_shape, layout, dtype):
+def test_reshape_tile(device, input_shape, output_shape, layout, memory_config, dtype):
     torch_dtype, ttnn_dtype = dtype
 
     size = math.prod(input_shape)

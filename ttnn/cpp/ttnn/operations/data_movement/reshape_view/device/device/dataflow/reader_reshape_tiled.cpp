@@ -35,8 +35,7 @@ void kernel_main() {
     const InterleavedAddrGenFast<input_is_dram> input_addr_gen = {
         .bank_base_address = input_addr, .page_size = Tile_Size_Bytes, .data_format = input_data_format};
 
-    const InterleavedAddrGen<true> map_addr_gen = {
-        .bank_base_address = map_addr, .page_size = Max_Map_Size_Bytes};  //, .data_format = map_data_format};
+    const InterleavedAddrGen<true> map_addr_gen = {.bank_base_address = map_addr, .page_size = Max_Map_Size_Bytes};
 
     bool first = true;
     for (uint32_t out_page_idx = start_output_page_idx; out_page_idx < end_output_page_idx; ++out_page_idx) {
