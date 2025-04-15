@@ -23,6 +23,8 @@ void kernel_main() {
     constexpr uint32_t cb_max_mask_idx = tt::CBIndex::c_3;
     constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_4;
 
+    constexpr uint32_t cb_zero_scaler = tt::CBIndex::c_11;
+
     constexpr uint32_t num_input_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t block_size = get_compile_time_arg_val(1);
     constexpr uint32_t Wt = get_compile_time_arg_val(2);
@@ -39,6 +41,9 @@ void kernel_main() {
     cb_reserve_back(cb_scaler_idx, onetile);
     uint16_t* scaler_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_scaler_idx));  // write scalar tile
 
+    cb_reserve_back(cb_zero_scaler, onetile);
+    uint16_t* zero_scaler_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_zero_scaler));  // write scalar tile
+
     uint16_t* mask_ptr = nullptr;
     uint16_t* max_mask_ptr = nullptr;
     if constexpr (do_mask_w) {
@@ -54,13 +59,15 @@ void kernel_main() {
     for (uint32_t face = 0; face < 4; ++face) {
         uint32_t offset = (face & 1U) << 4U;
         for (uint32_t h = 0; h < 16; ++h) {
-            for (uint32_t w = 0; w < 16; ++w, ++mask_ptr, ++max_mask_ptr, ++scaler_ptr) {
+            for (uint32_t w = 0; w < 16; ++w, ++mask_ptr, ++max_mask_ptr, ++scaler_ptr, ++zero_scaler_ptr) {
                 if constexpr (do_mask_w) {
                     *mask_ptr = (offset + w < mask_w) ? one : zero;  // how to create the proper mask?
                     *max_mask_ptr = (offset + w < mask_w) ? zero : minus_inf;
                 }
 
                 *scaler_ptr = one;
+                *zero_scaler_ptr = zero;
+                // *zero_scaler_ptr++ = zero;
             }
         }
     }
@@ -69,6 +76,8 @@ void kernel_main() {
         cb_push_back(cb_max_mask_idx, onetile);
     }
     cb_push_back(cb_scaler_idx, onetile);
+
+    cb_push_back(cb_zero_scaler, onetile);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     const DataFormat data_format = get_dataformat(cb_input_idx);

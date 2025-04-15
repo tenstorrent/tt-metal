@@ -321,6 +321,14 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         bfloat16_single_tile_size_bytes,
         2 * block_size);  // create twice block_size variable
 
+    auto cb_zero_scaler = create_circular_buffer(
+        program,
+        all_cores,
+        tt::CBIndex::c_11,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        kNumOutputBeforeReductionTiles);
+
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------

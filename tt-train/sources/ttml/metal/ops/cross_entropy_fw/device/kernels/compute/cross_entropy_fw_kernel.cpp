@@ -43,6 +43,8 @@ constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_8;
 constexpr auto cb_output_before_reduction = tt::CBIndex::c_9;
 constexpr auto cb_output = tt::CBIndex::c_10;
 
+constexpr uint32_t cb_zero_scaler = tt::CBIndex::c_11;
+
 constexpr uint32_t onetile = 1;
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
@@ -121,23 +123,6 @@ void calculate_sum_exp_x() {
     // need to read from input second time
     // cb_wait_front(cb_input, Wt);  // wait until reader kernel has written Wt tiles to input buffer
     cb_wait_front(cb_max_value_after_reduction, onetile);  // wait until we get max value in each row
-
-    // DPRINT << "Cb_max_sum_after_reduction" << ENDL();
-
-    // for (int32_t r = 0; r < 32; ++r) {
-    //     SliceRange sr = SliceRange{
-    //         .h0 = static_cast<uint8_t>(r),
-    //         .h1 = static_cast<uint8_t>(r + 1),
-    //         .hs = 1,
-    //         .w0 = 0,
-    //         .w1 = 32,
-    //         .ws = 1
-    //     };
-    //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need to
-    //     specify
-    //     // whether the CB is input or output.
-    //     DPRINT << TSLICE(cb_max_value_after_reduction, 0, sr) << ENDL();
-    // }
 
     // run through all tiles in row
     const uint32_t accum_register = 0;
@@ -226,11 +211,10 @@ void MAIN {
     }
     cb_wait_front(cb_scaler, onetile);
 
+    cb_wait_front(cb_zero_scaler, onetile);
+
     init_sfpu(cb_input, cb_output);
     binary_op_init_common(cb_input, cb_target, cb_output);
-
-    DPRINT << "--------DEBUG PRINT FROM COMPUTE KERNEL!!!---------" << ENDL();
-    DPRINT << "NUMS ROWS  PER CORE: " << num_rows_per_core << ENDL();
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         find_max_value_in_row();  // find max value in each row
@@ -241,60 +225,40 @@ void MAIN {
             // cb_wait_front(cb_input, Wt);   // wait until reader kernel has written Wt tiles to input buffer
             cb_wait_front(cb_target, Wt);  // wait until reader kernel has written Wt tiles to target buffer
             cb_wait_front(cb_exp_sum_after_reduction, onetile);  // <- get here log(sum(exp(x - max(x)))
-
-            // DPRINT << "Cb_exp_sum_after_reduction" << ENDL();
-
-            // for (int32_t r = 0; r < 32; ++r) {
-            //     SliceRange sr = SliceRange{
-            //         .h0 = static_cast<uint8_t>(r),
-            //         .h1 = static_cast<uint8_t>(r + 1),
-            //         .hs = 1,
-            //         .w0 = 0,
-            //         .w1 = 32,
-            //         .ws = 1};
-            //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need
-            //     to
-            //     // specify whether the CB is input or output.
-            //     DPRINT << TSLICE(cb_max_value_after_reduction, 0, sr) << ENDL();
-            // }
-
             cb_reserve_back(
                 cb_output, onetile);  // reserve Wt tiles in output buffer == wait until cb will has Wt tiles
-            // for (uint32_t col = 0; col < Wt; col += block_size) {
             const uint32_t accum_register = 0;
             tile_regs_acquire();
             reconfig_data_format(cb_input, cb_max_value_after_reduction);
-            // accumulate log(sum(exp(x - max(x))) over row
+            // choose correct input logit(logits*target)
             for (uint32_t col = 0; col < Wt; col++) {
                 auto working_register = col == 0 ? 0 : 1U;
                 auto target_register = working_register + 1U;
-                auto log_sum_exp_register = working_register + 2U;
-                // cb_reserve_back(cb_output, block_size);  // wait until output cb will have block_size free tiles
-                sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
-                sub_tiles_bcast_cols(
-                    cb_input,
-                    cb_max_value_after_reduction,
-                    /* tile idx */ col,
-                    /* tile idx */ 0,
-                    /* reg tile idx */ working_register);
-
-                mul_bcast_cols_init_short(cb_target, cb_exp_sum_after_reduction);
-                mul_tiles_bcast_cols(
-                    cb_target,
-                    cb_exp_sum_after_reduction,
-                    /* tile idx */ col,
-                    /* tile idx */ 0,
-                    /* reg tile idx */ log_sum_exp_register);
+                copy_tile_init(cb_input);
+                copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
 
                 copy_tile_init(cb_target);
                 copy_tile(cb_target, /* tile_idx */ col, /* register_idx */ target_register);
+
                 mul_binary_tile_init();
                 mul_binary_tile(working_register, target_register);  // choose (x - max(x)) by index
+
                 negative_tile_init();
                 negative_tile(working_register);
 
-                add_binary_tile_init();
-                add_binary_tile(working_register, log_sum_exp_register);
+                if constexpr (do_mask_w) {
+                    if (col + 1 == Wt) {
+                        // this is limitation of the function mask_tile
+                        // mask tile currently does not work for mask register that is not next to data register
+                        const uint32_t mask_register = working_register + 1U;  // mask register should be next to data
+                        // register
+                        copy_tile_init(cb_mask);
+                        copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+
+                        mask_tile_init();
+                        mask_tile(working_register, mask_register);  // mask should be next to tile register
+                    }
+                }
 
                 if (col > 0) {
                     add_binary_tile_init();
@@ -312,22 +276,6 @@ void MAIN {
 
             cb_wait_front(cb_output_before_reduction, onetile);
 
-            // DPRINT << "cb_output_before_reduction" << ENDL();
-
-            // for (int32_t r = 0; r < 32; ++r) {
-            //     SliceRange sr = SliceRange{
-            //         .h0 = static_cast<uint8_t>(r),
-            //         .h1 = static_cast<uint8_t>(r + 1),
-            //         .hs = 1,
-            //         .w0 = 0,
-            //         .w1 = 32,
-            //         .ws = 1};
-            //     // On data movement RISCs, tiles can be printed from either the CB read or write pointers. Also need
-            //     to
-            //     // specify whether the CB is input or output.
-            //     DPRINT << TSLICE(cb_output_before_reduction, 0, sr) << ENDL();
-            // }
-
             const uint32_t reduction_register = 0;
             tile_regs_acquire();
             reconfig_data_format(cb_output_before_reduction, cb_scaler);
@@ -340,6 +288,24 @@ void MAIN {
                 /* tile_idx */ 0,
                 /* reduction_register */ reduction_register);
             reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_output_before_reduction);
+
+            const uint32_t max_value_register = reduction_register + 1U;
+            const uint32_t log_sum_exp_register = reduction_register + 2U;
+
+            copy_tile_init(cb_max_value_after_reduction);
+            copy_tile(cb_max_value_after_reduction, /* tile_idx */ 0, /* register_idx */ max_value_register);
+
+            copy_tile_init(cb_exp_sum_after_reduction);
+            copy_tile(cb_exp_sum_after_reduction, /* tile_idx */ 0, /* register_idx */ log_sum_exp_register);
+
+            // -(x - max(x)) = -x + max(x) - so we add max value in each row to proper logit
+            add_binary_tile_init();
+            add_binary_tile(reduction_register, max_value_register);
+
+            // add log(sum(exp(x - max(x)))
+            add_binary_tile_init();
+            add_binary_tile(reduction_register, log_sum_exp_register);
+
             tile_regs_commit();
 
             tile_regs_wait();
@@ -356,6 +322,7 @@ void MAIN {
         }
     }
 
+    // pop scaler and masks
     if constexpr (do_mask_w) {
         cb_pop_front(cb_mask, onetile);
         cb_pop_front(cb_max_mask, onetile);
