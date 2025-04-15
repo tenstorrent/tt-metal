@@ -51,9 +51,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "dtype",
     [
-        #    (torch.float32, None),
+        (torch.float32, None),
         (torch.bfloat16, ttnn.bfloat16),
         (torch.float32, ttnn.float32),
+        # (torch.float32, ttnn.bfloat16)
     ],
 )
 def test_cumsum(size, dim, dtype, device):
@@ -61,9 +62,9 @@ def test_cumsum(size, dim, dtype, device):
 
     (host_dtype, dev_dtype) = dtype
 
-    torch_input_tensor = torch.ones(size=size, dtype=torch.float32)
+    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch.float32)
     # torch_input_tensor = torch.randint(low=-2, high=3, size=size, dtype=torch.float32)
-    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE, dtype=dev_dtype)
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=dev_dtype, layout=ttnn.Layout.TILE)
 
     output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dev_dtype)
 
@@ -125,9 +126,10 @@ def test_cumsum(size, dim, dtype, device):
 @pytest.mark.parametrize(
     "dtype",
     [
-        #    (torch.float32, None),
+        (torch.float32, None),
         (torch.bfloat16, ttnn.bfloat16),
         (torch.float32, ttnn.float32),
+        # (torch.float32, ttnn.bfloat16)
     ],
 )
 def test_cumsum_with_preallocated_output(size, dim, dtype, device):
@@ -135,9 +137,9 @@ def test_cumsum_with_preallocated_output(size, dim, dtype, device):
 
     (host_dtype, dev_dtype) = dtype
 
-    torch_input_tensor = torch.rand(size, dtype=host_dtype)
+    torch_input_tensor = torch.randint(-2, 3, size, dtype=host_dtype)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=dev_dtype, layout=ttnn.Layout.TILE)
 
     preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=dev_dtype, layout=ttnn.Layout.TILE)
     output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dev_dtype, output=preallocated_output_tensor)

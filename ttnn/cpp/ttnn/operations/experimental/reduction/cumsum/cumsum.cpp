@@ -8,10 +8,13 @@
 #include "tt-metalium/shape.hpp"
 #include "tt-metalium/small_vector.hpp"
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/reduction/cumsum/device/cumsum_device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
@@ -29,11 +32,12 @@ Tensor CumSumOperation::invoke(
 
     Tensor adjusted_input_tensor = input_tensor;
     const auto& input_dtype = input_tensor.dtype();
-    // TODO: Create copy of input with dtype
     // if (dtype.has_value() && input_dtype != dtype.value()) {
-    //    adjusted_input_tensor = ttnn::operations::core::detail::convert_to_dtype(input_tensor,
-    //    input_tensor.get_layout(), dtype.value());
-    //}
+
+    // TODO: ttnn::to_dtype() does not seem to work with DeviceStore
+    //    auto converted_tensor = ttnn::to_dtype(input_tensor, DataType::BFLOAT16);
+    //    adjusted_input_tensor = converted_tensor;
+    // }
 
     if (tensor_rank == 0 || adjusted_input_tensor.get_logical_volume() == 0) {  // empty input tensor => nothing to do
         return adjusted_input_tensor;

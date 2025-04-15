@@ -29,7 +29,6 @@ void MAIN {
 
     constexpr uint32_t first_tile = 0;
 
-    // ???
     unary_op_init_common(cb_in, cb_out);
 
     // [UNPACK]: Acquire lock on cb_zero
@@ -43,7 +42,6 @@ void MAIN {
 
         // [UNPACK]: Zero => TILE_DEST
 
-        // What makes this required ? Are operation synchronous ?
         // Is it to prevent a data-race with UNPACK ?
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_zero);
