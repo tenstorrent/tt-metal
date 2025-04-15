@@ -40,8 +40,7 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                std::optional<const uint32_t> num_kv_heads,
                const std::optional<const uint32_t> slice_size,
                const std::optional<MemoryConfig>& final_memory_config,
-               const std::optional<const DataType> dtype,
-               std::optional<std::array<Tensor, 3>> optional_output_tensors)
+               const std::optional<const DataType> dtype)
                 -> std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> {
                 return self(
                     input_tensor,
@@ -58,8 +57,7 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                     num_kv_heads,
                     slice_size,
                     final_memory_config,
-                    dtype,
-                    optional_output_tensors);
+                    dtype);
             },
             py::arg("input_tensor"),
             py::arg("buffer_tensor"),
@@ -76,8 +74,7 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
             py::arg("num_kv_heads") = std::nullopt,
             py::arg("slice_size") = std::nullopt,
             py::arg("final_memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt,
-            py::arg("optional_output_tensors") = std::nullopt});
+            py::arg("dtype") = std::nullopt});
 }
 
 }  // namespace detail
