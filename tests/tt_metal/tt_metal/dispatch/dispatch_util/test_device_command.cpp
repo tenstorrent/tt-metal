@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"

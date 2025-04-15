@@ -11,7 +11,7 @@
 
 #include "assert.hpp"
 #include "control_plane.hpp"
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "logger.hpp"
 #include "mesh_coord.hpp"
 #include "impl/context/metal_context.hpp"

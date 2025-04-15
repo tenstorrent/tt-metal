@@ -49,7 +49,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>

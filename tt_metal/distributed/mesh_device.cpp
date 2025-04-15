@@ -30,8 +30,8 @@
 #include "launch_message_ring_buffer_state.hpp"
 #include "mesh_trace.hpp"
 #include "shape_base.hpp"
-#include "span.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"

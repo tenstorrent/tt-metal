@@ -36,7 +36,7 @@
 #include "llrt.hpp"
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_memory.h>
 #include "tt_metal/jit_build/build_env_manager.hpp"
