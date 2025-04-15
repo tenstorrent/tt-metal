@@ -18,10 +18,10 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
     ),
 )
 def test_bw_lerp(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 101, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 201, device, True)
-    end_data, end_tensor = data_gen_with_range(input_shapes, -199, 199, device, True)
-    weight_data, weight_tensor = data_gen_with_range(input_shapes, -201, 201, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 101, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 201, device, True, seed=1)
+    end_data, end_tensor = data_gen_with_range(input_shapes, -199, 199, device, True, seed=2)
+    weight_data, weight_tensor = data_gen_with_range(input_shapes, -201, 201, device, True, seed=3)
 
     tt_output_tensor_on_device = ttnn.lerp_bw(grad_tensor, input_tensor, end_tensor, weight_tensor)
 
@@ -41,9 +41,9 @@ def test_bw_lerp(input_shapes, device):
 )
 @pytest.mark.parametrize("weight", [-0.25, -25.0, 0.05, 1.0, 25.0])
 def test_bw_lerp_weight_scalar(input_shapes, weight, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 101, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 201, device, True)
-    end_data, end_tensor = data_gen_with_range(input_shapes, -199, 199, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 101, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 201, device, True, seed=1)
+    end_data, end_tensor = data_gen_with_range(input_shapes, -199, 199, device, True, seed=2)
 
     tt_output_tensor_on_device = ttnn.lerp_bw(grad_tensor, input_tensor, end_tensor, weight)
 

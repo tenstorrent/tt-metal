@@ -18,9 +18,9 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
 )
 @pytest.mark.parametrize("alpha", [0.05])
 def test_bw_subalpha(input_shapes, alpha, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=1)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=2)
 
     tt_output_tensor_on_device = ttnn.subalpha_bw(grad_tensor, input_tensor, other_tensor, alpha)
 
@@ -40,9 +40,9 @@ def test_bw_subalpha(input_shapes, alpha, device):
     ),
 )
 def test_bw_subalpha_default(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=1)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=2)
 
     tt_output_tensor_on_device = ttnn.subalpha_bw(grad_tensor, input_tensor, other_tensor)
 
@@ -63,9 +63,9 @@ def test_bw_subalpha_default(input_shapes, device):
 )
 @pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
 def test_bw_subalpha_opt_output(input_shapes, device, are_required_outputs):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=1)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=2)
 
     input_grad = None
     other_grad = None

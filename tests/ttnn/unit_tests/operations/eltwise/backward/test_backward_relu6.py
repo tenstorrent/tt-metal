@@ -17,8 +17,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ),
 )
 def test_bw_relu6(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 110, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 199, device, required_grad=True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 110, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 199, device, required_grad=True, seed=1)
 
     tt_output_tensor_on_device = ttnn.relu6_bw(grad_tensor, input_tensor)
 

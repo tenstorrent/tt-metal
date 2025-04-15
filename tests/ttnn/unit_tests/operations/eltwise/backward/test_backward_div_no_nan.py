@@ -18,8 +18,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
 )
 @pytest.mark.parametrize("scalar", [0.05, 0.0, -0.5, 5.12])
 def test_bw_unary_div_no_nan(input_shapes, scalar, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 199, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 201, device, required_grad=True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 199, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -200, 201, device, required_grad=True, seed=1)
 
     tt_output_tensor_on_device = ttnn.div_no_nan_bw(grad_tensor, input_tensor, scalar)
 

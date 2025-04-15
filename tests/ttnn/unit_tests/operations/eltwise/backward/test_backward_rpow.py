@@ -29,8 +29,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     ),
 )
 def test_bw_rpow(input_shapes, exponent, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 101, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -201, 199, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 101, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -201, 199, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.rpow_bw(grad_tensor, input_tensor, exponent)
 

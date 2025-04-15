@@ -18,8 +18,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
 )
 @pytest.mark.parametrize("negative_slope", [-0.25, -0.5, 0.01, 0.5, 5.0])
 def test_bw_leaky_relu(input_shapes, negative_slope, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.leaky_relu_bw(grad_tensor, input_tensor, negative_slope=negative_slope)
 
@@ -38,8 +38,8 @@ def test_bw_leaky_relu(input_shapes, negative_slope, device):
     ),
 )
 def test_bw_leaky_relu_default(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.leaky_relu_bw(grad_tensor, input_tensor)
 

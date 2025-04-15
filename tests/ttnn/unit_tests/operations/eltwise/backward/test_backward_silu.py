@@ -17,8 +17,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ),
 )
 def test_bw_silu(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.silu_bw(grad_tensor, input_tensor)
 
@@ -39,8 +39,8 @@ def test_bw_silu(input_shapes, device):
     ),
 )
 def test_bw_silu_opt_tensor(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device, seed=1)
 
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
 

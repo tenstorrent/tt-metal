@@ -17,9 +17,9 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ),
 )
 def test_bw_min(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, 1, 2, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True, seed=0)
+    other_data, other_tensor = data_gen_with_range(input_shapes, 1, 2, device, True, seed=1)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True, seed=2)
 
     tt_output_tensor_on_device = ttnn.min_bw(grad_tensor, input_tensor, other_tensor)
 

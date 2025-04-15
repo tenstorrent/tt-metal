@@ -26,8 +26,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
 )
 @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12])
 def test_bw_rdiv(input_shapes, scalar, round_mode, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.rdiv_bw(grad_tensor, input_tensor, scalar, round_mode=round_mode)
 
@@ -48,8 +48,8 @@ def test_bw_rdiv(input_shapes, scalar, round_mode, device):
 )
 @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12])
 def test_bw_rdiv_default(input_shapes, scalar, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device)
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.rdiv_bw(grad_tensor, input_tensor, scalar)
 

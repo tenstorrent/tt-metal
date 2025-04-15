@@ -17,8 +17,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
     ),
 )
 def test_bw_rsqrt(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 101, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -201, 199, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 101, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -201, 199, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.rsqrt_bw(grad_tensor, input_tensor)
 
@@ -38,8 +38,8 @@ def test_bw_rsqrt(input_shapes, device):
     ),
 )
 def test_bw_rsqrt_opt_output(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 101, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -201, 199, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 101, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -201, 199, device, True, seed=1)
 
     input_grad = torch.zeros(input_shapes, dtype=torch.bfloat16)
     input_grad = ttnn.from_torch(
