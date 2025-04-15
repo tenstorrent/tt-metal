@@ -1282,6 +1282,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
         // in1 mcast args
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
+        // in1 sync args
+        (std::uint32_t)0,
+        (std::uint32_t)0,
         // batch args
         (std::uint32_t)B,  // batch
 
@@ -1602,6 +1605,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
                 (std::uint32_t)0,
                 (std::uint32_t)0,
                 (std::uint32_t)0,
+                (std::uint32_t)0,
+                (std::uint32_t)0,
+                (std::uint32_t)0,
+                (std::uint32_t)0,
 
                 // WRITER
                 // out tensor args
@@ -1645,9 +1652,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
 
                 // WRITER
                 // out tensor args
-                (std::uint32_t)out_buffer->address(),                                     // out_tensor_addr
-                (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * N  // out_tensor_start_tile_id
-            };
+                (std::uint32_t)out_buffer->address(),                                      // out_tensor_addr
+                (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * N,  // out_tensor_start_tile_id
+
+                // in1 sync args
+                (std::uint32_t)0,
+                (std::uint32_t)0,
+                (std::uint32_t)0};
 
             if (output_idx_y == num_blocks_y - 1) {
                 // padding args (WRITER)
