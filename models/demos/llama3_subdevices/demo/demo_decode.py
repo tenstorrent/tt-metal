@@ -496,16 +496,6 @@ def run_llama3_demo(
         if iteration >= max_generated_tokens:
             users_decoding = False
 
-    if not stress_test:
-        # print before assertion
-        out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
-        logger.info(out_of_targets_msg)
-        # Assert at the end of test to check if the throughput recuperated
-        assert tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT, out_of_targets_msg
-
-    # Print out total number of tsu_failures
-    logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
-
     # Release trace
     ttnn.release_trace(mesh_device, trace_id)
 
@@ -521,6 +511,16 @@ def run_llama3_demo(
             run_type=f"tg-llama-demo-e2e",
             ml_model_name="tg-llama",
         )
+
+    if not stress_test:
+        # print before assertion
+        out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
+        logger.info(out_of_targets_msg)
+        # Assert at the end of test to check if the throughput recuperated
+        assert tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT, out_of_targets_msg
+
+    # Print out total number of tsu_failures
+    logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
 
 
 # List of supported Parameters for demo.py
