@@ -78,7 +78,7 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):  
 
     wait_for_tensix_operations_finished()
     res_from_L1 = collect_results(
-        formats, sfpu=True
+        formats, tensor_size=len(src_A)
     )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
     res_from_L1 = res_from_L1[
         :256

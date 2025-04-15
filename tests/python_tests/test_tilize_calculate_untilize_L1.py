@@ -83,6 +83,7 @@ def test_tilize_calculate_untilize_L1(
         src_A, src_B, formats.unpack_A_src, formats.unpack_B_src, "0,0", tile_cnt
     )
 
+    buffer_dest_address = 0x1E000  # Since this test calls LLK pipeline twise, unpacker will read at address in L1 that packer packed to, this address is able to be reaused for two LLK calls
     test_config = {
         "formats": formats,
         "testname": testname,
@@ -98,7 +99,7 @@ def test_tilize_calculate_untilize_L1(
     wait_for_tensix_operations_finished()
 
     res_from_L1 = collect_results(
-        formats, 0x1E000
+        formats, tensor_size=len(src_A), address=buffer_dest_address
     )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
     assert len(res_from_L1) == len(golden_tensor)
 

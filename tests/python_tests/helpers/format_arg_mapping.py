@@ -5,6 +5,7 @@ import torch
 from enum import Enum
 from .format_config import DataFormat
 
+
 format_dict = {
     DataFormat.Float32: torch.float32,
     DataFormat.Float16: torch.float16,
@@ -66,14 +67,6 @@ pack_dst_dict = {
     DataFormat.Float16_b: "PACK_DST_FLOAT16_B",
     DataFormat.Bfp8_b: "PACK_DST_BFP8_B",
     DataFormat.Int32: "PACK_DST_INT32",
-}
-
-format_sizes = {
-    DataFormat.Float32: 1024,
-    DataFormat.Float16: 512,
-    DataFormat.Float16_b: 512,
-    DataFormat.Bfp8_b: 272,
-    DataFormat.Int32: 1024,
 }
 
 

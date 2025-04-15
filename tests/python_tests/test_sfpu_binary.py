@@ -74,7 +74,7 @@ def test_all(testname, formats, dest_acc, mathop):
     wait_for_tensix_operations_finished()
 
     res_from_L1 = collect_results(
-        formats
+        formats, tensor_size=len(src_A)
     )  # Bug patchup in (unpack.py): passing formats struct to check its unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
 
     assert len(res_from_L1) == len(golden)
