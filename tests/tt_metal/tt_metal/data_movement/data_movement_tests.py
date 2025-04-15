@@ -22,8 +22,27 @@ test_id_to_name = {
     3: "One to One Core",
 }
 
+test_bounds = {
+    0: {
+        "riscv_1": {"latency": {"lower": 500, "upper": 1100}, "bandwidth": 0.06},
+        "riscv_0": {"latency": {"lower": 400, "upper": 900}, "bandwidth": 0.07},
+    },
+    1: {
+        "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
+        "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.29},
+    },
+    2: {
+        "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
+        "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
+    },
+    3: {
+        "riscv_1": {"latency": {"lower": 4100, "upper": 4200}, "bandwidth": 0.06},
+        "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.59},
+    },
+}
 
-def run_dm_tests(profile, gtest_filter):
+
+def run_dm_tests(profile, verbose, plot, gtest_filter):
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
     if profile or not os.path.exists(log_file_path) or gtest_filter:
         logger.info(f"Profiling Kernels...")
@@ -103,51 +122,111 @@ def run_dm_tests(profile, gtest_filter):
 
         dm_stats[kernel]["attributes"] = attributes
 
-    # Stats per runtime host id
+    # Stats per runtime host id, print if explicitly requested
+    results_bounds = {}
     for i in range(len(dm_stats["riscv_1"]["analysis"]["series"])):
         run_host_id = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
-        logger.info(f"Run host id: {run_host_id}")
+        test_id = dm_stats["riscv_1"]["attributes"][run_host_id]["Test id"]
 
-        # Latency
-        logger.info(f'BRISC duration: {dm_stats["riscv_1"]["analysis"]["series"][i]["duration_cycles"]}')
-        logger.info(f'NCRISC duration: {dm_stats["riscv_0"]["analysis"]["series"][i]["duration_cycles"]}')
+        if not test_id in results_bounds.keys():
+            results_bounds[test_id] = {
+                "riscv_1": {"latency": {"lower": float("inf"), "upper": 0}, "bandwidth": float("inf")},
+                "riscv_0": {"latency": {"lower": float("inf"), "upper": 0}, "bandwidth": float("inf")},
+            }
 
-        # Attributes
-        logger.info(f"Attributes:")
-        for attr, val in dm_stats["riscv_1"]["attributes"][run_host_id].items():
-            logger.info(f"  {attr}: {val}")
-        logger.info(f"\n")
+        riscv1_cycles = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_cycles"]
+        riscv0_cycles = dm_stats["riscv_0"]["analysis"]["series"][i]["duration_cycles"]
 
-    # # # # # # Performance check method # # # # # #
-    reader_cycles = dm_stats["riscv_1"]["analysis"]["series"][0]["duration_cycles"]
-    reader_cycles_lower_bound = 700
-    reader_cycles_upper_bound = 900
-    reader_cycles_within_bounds = reader_cycles_lower_bound <= reader_cycles <= reader_cycles_upper_bound
-    reader_attributes = dm_stats["riscv_1"]["attributes"][0]
-    reader_bw = (
-        reader_attributes["Number of transactions"] * reader_attributes["Transaction size in bytes"] / reader_cycles
-    )
-    reader_bw_lower_bound = 0.07
-    reader_bw_within_bounds = reader_bw_lower_bound <= reader_bw
-
-    if not reader_cycles_within_bounds:
-        logger.warning(
-            f"Reader cycles not within bounds. Received {reader_cycles}, was expecting between {reader_cycles_lower_bound} and {reader_cycles_upper_bound}"
+        results_bounds[test_id]["riscv_1"]["latency"]["lower"] = min(
+            results_bounds[test_id]["riscv_1"]["latency"]["lower"], riscv1_cycles
         )
-    else:
-        logger.info(f"Reader cycles within bounds. Received {reader_cycles}")
-
-    if not reader_bw_within_bounds:
-        logger.warning(
-            f"Reader bandwidth not within bounds. Received {reader_bw}, was expecting above {reader_bw_lower_bound}"
+        results_bounds[test_id]["riscv_0"]["latency"]["lower"] = min(
+            results_bounds[test_id]["riscv_0"]["latency"]["lower"], riscv0_cycles
         )
-    else:
-        logger.info(f"Reader bandwidth within bounds. Received {reader_bw}")
+        results_bounds[test_id]["riscv_1"]["latency"]["upper"] = max(
+            results_bounds[test_id]["riscv_1"]["latency"]["upper"], riscv1_cycles
+        )
+        results_bounds[test_id]["riscv_0"]["latency"]["upper"] = max(
+            results_bounds[test_id]["riscv_0"]["latency"]["upper"], riscv0_cycles
+        )
 
-    # assert reader_cycles_within_bounds
-    # assert reader_bw_within_bounds
+        riscv1_attributes = dm_stats["riscv_1"]["attributes"][test_id]
+        riscv1_bw = (
+            riscv1_attributes["Number of transactions"] * riscv1_attributes["Transaction size in bytes"] / riscv1_cycles
+        )
+        results_bounds[test_id]["riscv_1"]["bandwidth"] = min(
+            results_bounds[test_id]["riscv_1"]["bandwidth"], riscv1_bw
+        )
 
-    plot_dm_stats(dm_stats)
+        riscv0_attributes = dm_stats["riscv_0"]["attributes"][test_id]
+        riscv0_bw = (
+            riscv0_attributes["Number of transactions"] * riscv0_attributes["Transaction size in bytes"] / riscv0_cycles
+        )
+        results_bounds[test_id]["riscv_0"]["bandwidth"] = min(
+            results_bounds[test_id]["riscv_0"]["bandwidth"], riscv0_bw
+        )
+
+        if verbose:
+            logger.info(f"Run host id: {run_host_id}")
+            logger.info(f"RISCV 1 duration: {riscv1_cycles}")
+            logger.info(f"RISCV 0 duration: {riscv0_cycles}")
+            logger.info(f"Attributes:")
+            for attr, val in dm_stats["riscv_1"]["attributes"][run_host_id].items():
+                logger.info(f"  {attr}: {val}")
+            logger.info(f"\n")
+
+    # # # # # # Performance checks per test # # # # # #
+    for test_id, bounds in results_bounds.items():
+        # Bounds check
+        riscv1_cycles_within_bounds = (
+            test_bounds[test_id]["riscv_1"]["latency"]["lower"] <= bounds["riscv_1"]["latency"]["lower"]
+            and bounds["riscv_1"]["latency"]["upper"] <= test_bounds[test_id]["riscv_1"]["latency"]["upper"]
+        )
+        riscv0_cycles_within_bounds = (
+            test_bounds[test_id]["riscv_0"]["latency"]["lower"] <= bounds["riscv_0"]["latency"]["lower"]
+            and bounds["riscv_0"]["latency"]["upper"] <= test_bounds[test_id]["riscv_0"]["latency"]["upper"]
+        )
+        riscv1_bw_within_bounds = test_bounds[test_id]["riscv_1"]["bandwidth"] <= bounds["riscv_1"]["bandwidth"]
+        riscv0_bw_within_bounds = test_bounds[test_id]["riscv_0"]["bandwidth"] <= bounds["riscv_0"]["bandwidth"]
+
+        # Print latency and bandwidth perf results
+        if verbose:
+            logger.info(f"Perf results for test id: {test_id}")
+            logger.info(f"Latency")
+            logger.info(
+                f"  RISCV 1: {bounds['riscv_1']['latency']['lower']}-{bounds['riscv_1']['latency']['upper']} cycles"
+            )
+            logger.info(
+                f"  RISCV 0: {bounds['riscv_0']['latency']['lower']}-{bounds['riscv_0']['latency']['upper']} cycles"
+            )
+            logger.info(f"Bandwidth")
+            logger.info(f"  RISCV 1: {bounds['riscv_1']['bandwidth']} Bytes/cycle")
+            logger.info(f"  RISCV 0: {bounds['riscv_0']['bandwidth']} Bytes/cycle")
+
+            if not riscv1_cycles_within_bounds:
+                logger.warning(f"RISCV 1 cycles not within perf bounds.")
+            else:
+                logger.info(f"RISCV 1 cycles within perf bounds.")
+            if not riscv0_cycles_within_bounds:
+                logger.warning(f"RISCV 0 cycles not within perf bounds.")
+            else:
+                logger.info(f"RISCV 0 cycles within perf bounds.")
+            if not riscv1_bw_within_bounds:
+                logger.warning(f"RISCV 1 bandwidth not within perf bounds.")
+            else:
+                logger.info(f"RISCV 1 bandwidth within perf bounds.")
+            if not riscv0_bw_within_bounds:
+                logger.warning(f"RISCV 0 bandwidth not within perf bounds.\n")
+            else:
+                logger.info(f"RISCV 0 bandwidth within perf bounds.\n")
+
+        # assert riscv1_cycles_within_bounds
+        # assert riscv0_cycles_within_bounds
+        # assert riscv1_bw_within_bounds
+        # assert riscv0_bw_within_bounds
+
+    if plot:
+        plot_dm_stats(dm_stats)
 
 
 def plot_dm_stats(dm_stats):
@@ -219,8 +298,8 @@ def plot_dm_stats(dm_stats):
 
         # Plot durations
         ax = axes[0]
-        ax.plot(riscv_1_durations, label="BRISC Duration (cycles)", marker="o")
-        ax.plot(riscv_0_durations, label="NCRISC Duration (cycles)", marker="o")
+        ax.plot(riscv_1_durations, label="RISCV 1 Duration (cycles)", marker="o")
+        ax.plot(riscv_0_durations, label="RISCV 0 Duration (cycles)", marker="o")
         ax.set_xlabel("Index")
         ax.set_ylabel("Duration (cycles)")
         ax.set_title("Kernel Durations")
@@ -229,8 +308,8 @@ def plot_dm_stats(dm_stats):
 
         # Plot bandwidth
         ax = axes[1]
-        ax.plot(riscv_1_bandwidths, label="BRISC Bandwidth (bytes/cycle)", marker="o")
-        ax.plot(riscv_0_bandwidths, label="NCRISC Bandwidth (bytes/cycle)", marker="o")
+        ax.plot(riscv_1_bandwidths, label="RISCV 1 Bandwidth (bytes/cycle)", marker="o")
+        ax.plot(riscv_0_bandwidths, label="RISCV 0 Bandwidth (bytes/cycle)", marker="o")
         ax.set_xlabel("Index")
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Bandwidth Comparison")
@@ -239,8 +318,8 @@ def plot_dm_stats(dm_stats):
 
         # Plot size of data transferred vs bandwidth
         ax = axes[2]
-        ax.scatter(riscv_1_data_sizes, riscv_1_bandwidths, label="BRISC", marker="o")
-        ax.scatter(riscv_0_data_sizes, riscv_0_bandwidths, label="NCRISC", marker="o")
+        ax.scatter(riscv_1_data_sizes, riscv_1_bandwidths, label="RISCV 1", marker="o")
+        ax.scatter(riscv_0_data_sizes, riscv_0_bandwidths, label="RISCV 0", marker="o")
         ax.set_xlabel("Transaction Size (bytes)")
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Data Size vs Bandwidth")
@@ -255,6 +334,8 @@ def plot_dm_stats(dm_stats):
 if __name__ == "__main__":
     parser = ArgumentParser(description="Generate reference outputs for LLaMA accuracy testing.")
     parser.add_argument("-p", "--profile", action="store_true")
+    parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--plot", action="store_true")
     parser.add_argument("-g", "--gtest-filter", dest="gtest_filter")
     args = parser.parse_args()
 
