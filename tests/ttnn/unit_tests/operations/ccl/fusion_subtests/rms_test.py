@@ -153,6 +153,19 @@ def run_rms_trace(
             ccl_semaphore_handles,
             is_pre=True,
         )
+        tt_out = ttnn.fused_rms_1_1_32_8192(
+            input_tensor,
+            layer_norm_config,
+            1,
+            mesh_device,
+            ccl_semaphore_handles,
+            dtype=ttnn.bfloat8_b,
+            memory_config=output_memory_config,
+            epsilon=epsilon,
+            weight=gamma_tensor,
+            stats=tt_stats,
+            is_pre=False,
+        )
 
         logger.info("Capturing trace")
         if warmup_iters > 0:
@@ -166,6 +179,19 @@ def run_rms_trace(
                     ccl_semaphore_handles,
                     is_pre=True,
                 )
+                # tt_out = ttnn.fused_rms_1_1_32_8192(
+                #    input_tensor,
+                #    layer_norm_config,
+                #    1,
+                #    mesh_device,
+                #    ccl_semaphore_handles,
+                #    dtype=ttnn.bfloat8_b,
+                #    memory_config=output_memory_config,
+                #    epsilon=epsilon,
+                #    weight=gamma_tensor,
+                #    stats=tt_stats,
+                #    is_pre=False,
+                # )
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             logger.info("Done warmup")
             ttnn.synchronize_device(mesh_device)
@@ -179,6 +205,19 @@ def run_rms_trace(
                 ccl_semaphore_handles,
                 is_pre=True,
             )
+            # tt_out = ttnn.fused_rms_1_1_32_8192(
+            #    input_tensor,
+            #    layer_norm_config,
+            #    1,
+            #    mesh_device,
+            #    ccl_semaphore_handles,
+            #    dtype=ttnn.bfloat8_b,
+            #    memory_config=output_memory_config,
+            #    epsilon=epsilon,
+            #    weight=gamma_tensor,
+            #    stats=tt_stats,
+            #    is_pre=False,
+            # )
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     else:
         tt_stats = ttnn.rms_norm_pre_all_gather(
