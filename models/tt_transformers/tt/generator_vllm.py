@@ -18,7 +18,6 @@ from models.utility_functions import nearest_32
 
 from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext, TokenInputs, token_inputs
 from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.mllama import MLLAMA_IMAGE_TOKEN_ID, MLLAMA_IMAGE_TOKEN
 
 
 def generate_submeshes(mesh_device, data_parallel):
@@ -107,13 +106,14 @@ def initialize_vllm_text_transformer(
     return tt_model, model_args
 
 
+# TODO: Update input processor to inherit from EncDecMultiModalProcessor as is done in vllm.model_executor.models.mllama.py
 def input_processor_for_mllama(
     ctx: InputContext,
     inputs: EncoderDecoderInputs,
 ) -> EncoderDecoderInputs:
     """
-    Based on vllm.model_executor.models.mllama.py::input_processor_for_mllama().
-    Note that vLLM's input_processor_for_mllama performs additional processing to compute num_tiles while here it is fixed.
+    This was based on a previous version of vllm.model_executor.models.mllama.py::input_processor_for_mllama()
+    without the additional processing for computing num_tiles (here it is fixed).
     """
     # Example input to processor:
     # {
@@ -177,6 +177,8 @@ def input_processor_for_mllama(
     #         'multi_modal_data': {'image': <PIL.Image.Image image mode=RGB size=1770x1180 at 0x7FDE2C624880>},  # noqa: E501
     #     },
     # }
+    MLLAMA_IMAGE_TOKEN_ID = 128256
+    MLLAMA_IMAGE_TOKEN = "<|image|>"
     return EncoderDecoderInputs(
         encoder=token_inputs(
             prompt_token_ids=[MLLAMA_IMAGE_TOKEN_ID] * num_vision_tokens,
@@ -242,7 +244,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     def prefill_forward(
         self,
         tokens: torch.Tensor,
-        images: List[PIL.Image.Image],
+        images: Union[List[PIL.Image.Image], List[List[PIL.Image.Image]]],
         page_table: torch.Tensor,
         kv_cache,
         prompt_lens,
@@ -258,6 +260,9 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         total_lens = []
         for user_id in range(batch):
             image = images[user_id]
+            if isinstance(image, list):
+                assert len(image) == 1, "Only one image is supported for each user in the batch"
+                image = image[0]
             vision_images.append([image] if image else None)
             prompt_tokens = [int(tokens[user_id, i]) for i in range(prompt_lens[user_id])]
             vision_masks.append(create_vision_mask(prompt_tokens, self.MLLAMA_IMAGE_TOKEN_ID) if image else None)
