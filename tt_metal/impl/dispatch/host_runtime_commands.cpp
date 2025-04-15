@@ -32,7 +32,7 @@
 #include "llrt/hal.hpp"
 #include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
