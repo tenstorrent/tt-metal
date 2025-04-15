@@ -731,11 +731,12 @@ void InitDeviceProfiler(IDevice* device) {
         if (device->dispatch_firmware_active()) {
             EnqueueWriteBuffer(
                 device->command_queue(),
-                tt_metal_device_profiler_map.at(device_id).output_dram_buffer,
+                *(tt_metal_device_profiler_map.at(device_id).output_dram_buffer.get_buffer()),
                 inputs_DRAM,
                 true);
         } else {
-            tt_metal::detail::WriteToBuffer(tt_metal_device_profiler_map.at(device_id).output_dram_buffer, inputs_DRAM);
+            tt_metal::detail::WriteToBuffer(
+                *(tt_metal_device_profiler_map.at(device_id).output_dram_buffer.get_buffer()), inputs_DRAM);
         }
     }
 #endif

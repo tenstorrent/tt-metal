@@ -79,11 +79,16 @@ void MeshWorkload::compile(MeshDevice* mesh_device) {
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
-    for (auto& [device_range, program] : programs_) {
-        program.compile(mesh_device);
-        program.allocate_circular_buffers(mesh_device);
-        tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device);
+    for (auto& [device_range, _] : programs_) {
+        // Multi-Threaded Compile: Useful for heterogenous MeshWorkloads
+        mesh_device->enqueue_to_thread_pool([device_range, mesh_device, this]() {
+            auto& program = programs_.at(device_range);
+            program.compile(mesh_device);
+            program.allocate_circular_buffers(mesh_device);
+            tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device);
+        });
     }
+    mesh_device->wait_for_thread_pool();
     program_dispatch::finalize_program_offsets(*this, mesh_device);
 }
 
