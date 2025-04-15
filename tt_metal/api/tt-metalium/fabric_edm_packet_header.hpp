@@ -539,15 +539,16 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #elif (                                                        \
+    (ROUTING_MODE == (ROUTING_MODE_2D | ROUTING_MODE_RING)) || \
     (ROUTING_MODE == (ROUTING_MODE_2D | ROUTING_MODE_MESH)) || \
     (ROUTING_MODE == (ROUTING_MODE_2D | ROUTING_MODE_TORUS)))
 #define PACKET_HEADER_TYPE packet_header_t
 #elif (                                                                                   \
+    (ROUTING_MODE == (ROUTING_MODE_2D | ROUTING_MODE_RING | ROUTING_MODE_LOW_LATENCY)) || \
     (ROUTING_MODE == (ROUTING_MODE_2D | ROUTING_MODE_MESH | ROUTING_MODE_LOW_LATENCY)) || \
     (ROUTING_MODE == (ROUTING_MODE_2D | ROUTING_MODE_TORUS | ROUTING_MODE_LOW_LATENCY)))
 #define PACKET_HEADER_TYPE low_latency_packet_header_t
 #else
-// Helper macros to stringify macro values
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
 static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));
