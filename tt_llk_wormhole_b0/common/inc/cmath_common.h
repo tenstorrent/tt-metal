@@ -232,6 +232,7 @@ inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::
 {
     const uint input_df  = src_format & 0xF;
     const uint output_df = dst_format & 0xF;
+
     return ((input_df == (uint)DataFormat::Int32) || (input_df == (uint)DataFormat::Float32)) &&
            ((output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32));
 }
