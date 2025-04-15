@@ -65,7 +65,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        target_device,
+        target_device->id(),
         is_first_chip,
         is_last_chip);
 

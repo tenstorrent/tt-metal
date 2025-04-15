@@ -100,11 +100,12 @@ def test_concat_head(
     use_program_cache,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=1)
+    device = devices[0]
     torch.manual_seed(0)
 
     for i in range(3):
         # multiple loops to test program caching
-        run_test_concat_head(devices, n_local_heads, padded_local_heads, head_dim, batch_size)
+        run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, batch_size)
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -135,8 +136,9 @@ def test_concat_head_subcoregrids(
     use_program_cache,
 ):
     devices = get_devices_for_t3000(all_devices, num_devices=1)
+    device = devices[0]
     torch.manual_seed(0)
 
     for i in range(3):
         # multiple loops to test program caching
-        run_test_concat_head(devices, n_local_heads, padded_local_heads, head_dim, batch_size, sub_core_grids)
+        run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, batch_size, sub_core_grids)
