@@ -343,8 +343,6 @@ from ttnn.operations.ccl import (
 from ttnn.operations.conv2d import (
     Conv2dConfig,
     get_conv_output_dim,
-    prepare_conv_weights,
-    prepare_conv_bias,
     Conv2dSliceConfig,
     Conv2dSliceHeight,
     Conv2dSliceWidth,
