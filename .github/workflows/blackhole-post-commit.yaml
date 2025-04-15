@@ -77,7 +77,7 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   umd-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -98,7 +98,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   fd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
@@ -109,7 +109,7 @@ jobs:
       runner-label: ${{ inputs.runner-label || 'BH' }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -122,7 +122,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   models-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -133,7 +133,7 @@ jobs:
       timeout: 20
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
 #   profiler-regression:
 #     needs: build-artifact-profiler
