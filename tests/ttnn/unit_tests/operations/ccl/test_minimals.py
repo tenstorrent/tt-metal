@@ -374,7 +374,15 @@ def test_all_gather_only(
             4,
             8192,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-            None,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in PREFETCHER_NOC1_GRID
+                ]
+            ),
         ),
     ],
 )
@@ -421,25 +429,6 @@ def test_tg_trace_rms_fuse(
         profiler=profiler,
         use_new_version=use_new_version,
     )
-
-
-"""
-        # RMS NORM ALL GATHER FUSION RESHARD
-        (
-            4,
-            8192,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(x, y),
-                        ttnn.CoreCoord(x, y),
-                    )
-                    for x, y in PREFETCHER_NOC1_GRID
-                ]
-            )
-        ),
-"""
 
 
 # Enumerate the post-commit cases explicitly
