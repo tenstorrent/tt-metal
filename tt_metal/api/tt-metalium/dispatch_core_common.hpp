@@ -37,19 +37,19 @@ enum DispatchWorkerType : uint32_t {
 
 enum class DispatchCoreType : uint32_t { WORKER, ETH, COUNT };
 
-enum class DispatchCoreAxis { ROW, COL, COUNT, DEFAULT };
+enum class DispatchCoreAxis { ROW, COL, COUNT };
 
 class DispatchCoreConfig {
 private:
     DispatchCoreType type_;
-    DispatchCoreAxis axis_;
+    std::optional<DispatchCoreAxis> axis_;
 
     static DispatchCoreAxis get_default_axis();
 
 public:
-    DispatchCoreConfig() : type_(DispatchCoreType::WORKER), axis_(DispatchCoreAxis::DEFAULT) {}
+    DispatchCoreConfig() : type_(DispatchCoreType::WORKER) {}
 
-    DispatchCoreConfig(DispatchCoreType type) : type_(type), axis_(DispatchCoreAxis::DEFAULT) {}
+    DispatchCoreConfig(DispatchCoreType type) : type_(type) {}
 
     DispatchCoreConfig(DispatchCoreType type, DispatchCoreAxis axis) : type_(type), axis_(axis) {}
 
@@ -68,13 +68,7 @@ public:
 
     void set_dispatch_core_type(DispatchCoreType new_type) { type_ = new_type; }
 
-    DispatchCoreAxis get_dispatch_core_axis() const {
-        if (axis_ == DispatchCoreAxis::DEFAULT) {
-            return get_default_axis();
-        } else {
-            return axis_;
-        }
-    }
+    DispatchCoreAxis get_dispatch_core_axis() const { return axis_.value_or(get_default_axis()); }
 
     void set_dispatch_core_axis(DispatchCoreAxis new_axis) { axis_ = new_axis; }
 
