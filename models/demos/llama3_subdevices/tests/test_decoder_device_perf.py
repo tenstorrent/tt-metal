@@ -35,7 +35,7 @@ perf_targets = {
     },
     "RMSAllGather_1": {
         "op_name": "PostRMS_0",
-        "kernel_duration": 6327.008101851851,
+        "kernel_duration": 9400.361111111111,
         "op_to_op": 634.3333333333334,
         "non-overlapped-dispatch-time": 6190.6,
         "kernel_duration_relative_margin": 0.02,
@@ -53,7 +53,7 @@ perf_targets = {
     },
     "RMSAllGather_3": {
         "op_name": "PostRMS_1",
-        "kernel_duration": 6091.445601851851,
+        "kernel_duration": 9197.204861111111,
         "op_to_op": 641.0,
         "non-overlapped-dispatch-time": 6431.2,
         "kernel_duration_relative_margin": 0.01,
@@ -125,7 +125,7 @@ perf_targets = {
     },
     "Matmul_4": {
         "op_name": "FF2_MM",
-        "kernel_duration": 20528.0,
+        "kernel_duration": 15891.0,
         "op_to_op": 658.7777777777778,
         "non-overlapped-dispatch-time": 6029.3,
         "kernel_duration_relative_margin": 0.01,
