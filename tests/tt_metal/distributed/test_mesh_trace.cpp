@@ -41,8 +41,8 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"

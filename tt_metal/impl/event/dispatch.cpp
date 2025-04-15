@@ -20,7 +20,7 @@
 #include "dispatch_mem_map.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"

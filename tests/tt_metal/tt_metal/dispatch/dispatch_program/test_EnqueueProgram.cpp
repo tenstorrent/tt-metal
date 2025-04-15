@@ -46,7 +46,7 @@
 #include "random_program_fixture.hpp"
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/semaphore.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"

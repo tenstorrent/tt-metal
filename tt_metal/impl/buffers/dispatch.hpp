@@ -15,7 +15,7 @@
 
 #include "buffer.hpp"
 #include "core_coord.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "system_memory_manager.hpp"
 #include "tt_metal/impl/event/dispatch.hpp"
 

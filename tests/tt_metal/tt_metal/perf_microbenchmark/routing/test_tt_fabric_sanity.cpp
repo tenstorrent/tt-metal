@@ -47,7 +47,6 @@
 #include "routing_test_common.hpp"
 #include "rtoptions.hpp"
 #include <tt-metalium/allocator.hpp>
-#include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"

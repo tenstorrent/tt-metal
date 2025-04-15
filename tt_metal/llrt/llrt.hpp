@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 // clang-format off
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
