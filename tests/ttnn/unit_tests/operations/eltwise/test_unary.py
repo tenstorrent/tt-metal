@@ -550,9 +550,6 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttn_function, device):
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    print(in_data)
-    print(golden_tensor)
-    print(output_tensor)
     pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
     assert pcc == 1
 
