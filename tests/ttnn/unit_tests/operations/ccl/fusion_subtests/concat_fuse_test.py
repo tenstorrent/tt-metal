@@ -224,12 +224,6 @@ def run_concat_fuse_impl(
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
-        # intermediate_core_range_set = ttnn.CoreRangeSet(
-        #    {
-        #        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-        #        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 0)),
-        #    }
-        # )
         intermediate_core_range_set = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 3)),

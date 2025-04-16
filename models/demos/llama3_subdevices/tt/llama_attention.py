@@ -372,11 +372,6 @@ class TtLlamaAttention(LightweightModule):
 
         # ttnn.deallocate(attn_output_1G4D)
 
-        # attn_output_gathered_sharded = ttnn.to_memory_config(
-        #     attn_output_gathered, self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1])
-        # )
-        # ttnn.deallocate(attn_output_gathered)
-
         output_shard_shape = (32, 128)
         output_shard_grid = ttnn.CoreRangeSet(
             {
