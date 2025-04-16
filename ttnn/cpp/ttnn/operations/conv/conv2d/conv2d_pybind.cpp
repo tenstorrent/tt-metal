@@ -6,7 +6,6 @@
 #include "cpp/pybind11/decorators.hpp"
 
 #include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
-#include <pybind11/cast.h>
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
