@@ -10,7 +10,6 @@
 #include <tt-metalium/core_descriptor.hpp>
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
-#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 

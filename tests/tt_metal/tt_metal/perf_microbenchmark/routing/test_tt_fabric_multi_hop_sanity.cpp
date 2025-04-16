@@ -40,7 +40,6 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
