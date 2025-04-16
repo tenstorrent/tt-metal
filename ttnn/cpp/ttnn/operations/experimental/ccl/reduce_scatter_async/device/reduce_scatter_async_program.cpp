@@ -1332,7 +1332,6 @@ static void validate_end_of_line_worker_tensors(
     ReduceScatterBuilderConfig& builder_config, fabric_lifetime_mode fabric_mode) {
     ProgramTensorsBundle const& all_tensors = builder_config.all_tensors.get();
     LineTopology const& line_topology = builder_config.topology_config.get();
-    bool teardown_fabric = fabric_mode == fabric_lifetime_mode::TRANSIENT;
 
     TT_FATAL(all_tensors.input_tensor != nullptr, "Input tensor must be populated");
     TT_FATAL(all_tensors.local_final_output_tensor != nullptr, "Output tensor must be populated");
