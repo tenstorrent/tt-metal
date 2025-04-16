@@ -186,29 +186,6 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 #endif
 }
 
-inline __attribute__((always_inline)) void configure_l1_data_cache() {
-#if defined(ARCH_BLACKHOLE)
-#if defined(DISABLE_L1_DATA_CACHE)
-    // Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
-    // L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
-    // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR*,ER*>
-    asm(R"ASM(
-        li t1, 0x8
-        csrrs zero, 0x7c0, t1
-         )ASM" ::
-            : "t1");
-#elif !defined(ENABLE_HW_CACHE_INVALIDATION)
-    // Disable gathering to stop HW from invalidating the data cache after 128 transactions
-    // This is default enabled
-    asm(R"ASM(
-        lui  t1, 0x40
-        csrrs zero, 0x7c0, t1
-         )ASM" ::
-            : "t1");
-#endif
-#endif
-}
-
 // Flush i$ on ethernet riscs
 inline __attribute__((always_inline)) void flush_erisc_icache() {
 #ifdef ARCH_BLACKHOLE
