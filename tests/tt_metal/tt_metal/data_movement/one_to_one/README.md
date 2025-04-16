@@ -27,4 +27,4 @@ Test expectations are that pcc checks pass and sufficient test attribute data is
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
 Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
-1. One to one: Tests for single transaction size, single sender core and single receiver core.
+1. One to One Packet Sizes: Tests different number of transactions and transaction sizes by varying the num_of_transactions and transaction_size_pages parameters.
