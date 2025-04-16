@@ -190,8 +190,7 @@ void kernel_main() {
             uint32_t mcast_dest_num = 2;
             if (i == 1) {
                 mcast_dest_num = 6;
-            }
-            if (i == 2) {
+            } else if (i == 2) {
                 mcast_dest_num = 8;
             }
             const uint64_t concat_sem_rcv_addr = get_noc_multicast_addr(

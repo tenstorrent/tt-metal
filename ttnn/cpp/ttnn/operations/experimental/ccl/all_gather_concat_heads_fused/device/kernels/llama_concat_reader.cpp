@@ -53,7 +53,8 @@ void batch_loop(
     tt_l1_ptr uint32_t* in0_mcast_noc_y,
     bool nlp_local,
     uint32_t in_tile_offset_by_head,
-    uint32_t second_half_core) {
+    uint32_t second_half_core,
+    uint32_t second_core_start_tile) {
     for (uint32_t q = start; q < end; ++q) {
         uint32_t wptr_offset = q < face_h ? q * SUBTILE_LINE_BYTES : (q + face_h) * SUBTILE_LINE_BYTES;
         uint32_t q_write_addr = cb_write_ptr_base + wptr_offset;
@@ -78,10 +79,10 @@ void batch_loop(
                 local_count++;
                 qkv_read_addr =
                     get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                    in_tile_offset_by_head + 2 * tile_size * second_half_core;
+                    in_tile_offset_by_head + second_core_start_tile;
                 if (nlp_local) {
                     qkv_read_addr = get_noc_addr(core_noc_x[local_count], core_noc_y[local_count], tensor_address0) +
-                                    in_tile_offset_by_head + 2 * tile_size * second_half_core;
+                                    in_tile_offset_by_head + second_core_start_tile;
                 }
                 num_tiles_read_cur_core = 0;
             }
@@ -102,16 +103,17 @@ void nlp_concat(
     tt_l1_ptr uint32_t* in0_mcast_noc_x,
     tt_l1_ptr uint32_t* in0_mcast_noc_y,
     uint32_t in_tile_offset_by_head,
-    uint32_t second_half_core) {
+    uint32_t second_half_core,
+    uint32_t second_core_start_tile) {
     // Q
     uint32_t cur_core_idx = batch_start_1;
 
     uint64_t qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                             in_tile_offset_by_head + 2 * tile_size * second_half_core;
+                             in_tile_offset_by_head + second_core_start_tile;
     uint32_t local_count = 0;
     if (nlp_local) {
         qkv_read_addr = get_noc_addr(core_noc_x[local_count], core_noc_y[local_count], tensor_address0) +
-                        in_tile_offset_by_head + 2 * tile_size * second_half_core;
+                        in_tile_offset_by_head + second_core_start_tile;
     }
     uint32_t num_tiles_read_cur_core = 0;
     uint32_t q_write_addr = 0;
@@ -138,12 +140,13 @@ void nlp_concat(
             in0_mcast_noc_y,
             nlp_local,
             in_tile_offset_by_head,
-            second_half_core);
+            second_half_core,
+            second_core_start_tile);
         start = batch_start_2;
         end = batch_end_2;
         cur_core_idx = batch_start_2;
         qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
-                        in_tile_offset_by_head + 2 * tile_size * second_half_core;
+                        in_tile_offset_by_head + second_core_start_tile;
 
         num_tiles_read_cur_core = 0;
     }
@@ -174,6 +177,7 @@ void kernel_main() {
 
     std::array<uint32_t, 8> core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
     std::array<uint32_t, 8> core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
+    const uint32_t second_core_start_tile = 2 * tile_size * second_half_core;
 
     nlp_concat(
         batch,
@@ -188,7 +192,8 @@ void kernel_main() {
         in0_mcast_noc_x,
         in0_mcast_noc_y,
         in_tile_offset_by_head,
-        second_half_core);
+        second_half_core,
+        second_core_start_tile);
     if (PHASES_TO_READ == 1) {
         noc_semaphore_wait(signal_semaphore_addr_ptr, 1);
         noc_semaphore_set(signal_semaphore_addr_ptr, 0);
@@ -210,5 +215,6 @@ void kernel_main() {
         in0_mcast_noc_x,
         in0_mcast_noc_y,
         in_tile_offset_by_head,
-        second_half_core);
+        second_half_core,
+        second_core_start_tile);
 }

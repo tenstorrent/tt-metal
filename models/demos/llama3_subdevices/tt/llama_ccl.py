@@ -69,7 +69,7 @@ class TT_CCL:
     def get_all_gather_concat_inter_buffer(self):
         intermediate_core_range_set = ttnn.CoreRangeSet(
             {
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 3)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 4)),
                 ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
                 ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
                 ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9)),
@@ -86,6 +86,7 @@ class TT_CCL:
                 ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(5, 1)),
                 ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
                 ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
             }
         )
         intermediate_mem_config = ttnn.MemoryConfig(

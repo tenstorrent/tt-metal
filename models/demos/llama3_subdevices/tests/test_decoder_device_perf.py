@@ -650,10 +650,8 @@ def test_llama_TG_perf_device(
                 )
 
         else:
-            breakpoint()
-            if op_code_with_id != "AllGatherAsync_0" and op_code_with_id != "AllGatherAsync_1":
-                passing = False
-                logger.info(f"Warning: {op_code_with_id} not found in perf_targets")
+            passing = False
+            logger.info(f"Warning: {op_code_with_id} not found in perf_targets")
 
     # Calculate e2e performance
     e2e_estimate_80l = 0

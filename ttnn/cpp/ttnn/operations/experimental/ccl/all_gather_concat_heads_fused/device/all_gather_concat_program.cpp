@@ -40,32 +40,22 @@ struct llama_config {
     CoreRange nlp_only_core_range_1 = CoreRange({1, 1}, {3, 1});  // cores that are used for NLP op only
     CoreRange nlp_only_core_range_2 = CoreRange({1, 2}, {2, 2});
     uint32_t num_cores_input_tensor = 8;
-    CoreRange sem_mcast_range_1 =
-        CoreRange({5, 9}, {6, 9});  // cores waiting for all gather op to finish to start nlp op
-    CoreRange sem_mcast_range_2 = CoreRange({5, 0}, {6, 2});
-    CoreRange sem_mcast_range_3 = CoreRange({5, 4}, {6, 7});
+    std::array<CoreRange, 3> semaphore_mcast_ranges = {
+        CoreRange({5, 9}, {6, 9}),  // cores waiting for all gather op to finish to start nlp op
+        CoreRange({5, 0}, {6, 2}),
+        CoreRange({5, 4}, {6, 7})};
 
     uint32_t num_semaphore_ranges = 3;
-    CoreRange core_range_1 = CoreRange(CoreCoord{6, 6}, CoreCoord{6, 6});
-    CoreRange core_range_2 = CoreRange(CoreCoord{6, 7}, CoreCoord{6, 7});
-    CoreRange core_range_3 = CoreRange(CoreCoord{6, 9}, CoreCoord{6, 9});
-    CoreRange core_range_4 = CoreRange(CoreCoord{6, 0}, CoreCoord{6, 0});
-    CoreRange core_range_5 = CoreRange(CoreCoord{6, 1}, CoreCoord{6, 1});
-    CoreRange core_range_6 = CoreRange(CoreCoord{6, 2}, CoreCoord{6, 2});
-    CoreRange core_range_7 = CoreRange(CoreCoord{6, 4}, CoreCoord{6, 4});
-    CoreRange core_range_8 = CoreRange(CoreCoord{6, 5}, CoreCoord{6, 5});
-    CoreRange core_range_9 = CoreRange(CoreCoord{5, 5}, CoreCoord{5, 5});
-    CoreRange core_range_10 = CoreRange(CoreCoord{5, 6}, CoreCoord{5, 6});
-    CoreRange core_range_11 = CoreRange(CoreCoord{5, 7}, CoreCoord{5, 7});
-    CoreRange core_range_12 = CoreRange(CoreCoord{5, 9}, CoreCoord{5, 9});
-    CoreRange core_range_13 = CoreRange(CoreCoord{5, 0}, CoreCoord{5, 0});
-    CoreRange core_range_14 = CoreRange(CoreCoord{5, 1}, CoreCoord{5, 1});
-    CoreRange core_range_15 = CoreRange(CoreCoord{5, 2}, CoreCoord{5, 2});
-    CoreRange core_range_16 = CoreRange(CoreCoord{5, 4}, CoreCoord{5, 4});
     uint32_t concat_num_cores = 16;
     uint32_t num_tiles_reshard = 2;
 };
 
+uint32_t get_tile_offset_by_batch(uint32_t i, uint32_t face_h, uint32_t sub_tile_line_bytes) {
+    if (i / 2 < face_h) {
+        return i / 2 * sub_tile_line_bytes;
+    }
+    return (i / 2 + face_h) * sub_tile_line_bytes;
+}
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const Tensor& input_tensor,
     const Tensor& temp_tensor,
@@ -86,6 +76,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     IDevice* device = input_tensor.device();
     TensorSpec output_intermediate_tensor_spec = temp_tensor.tensor_spec();
     auto output_interm_padded_shape = output_intermediate_tensor_spec.padded_shape();
+    auto ring_core_ranges = output_tensor.shard_spec().value().grid.ranges();
 
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
@@ -226,43 +217,27 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     auto cb_q_output = tt::tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
 
     llama_config llama_configuration;
-    const auto& q_cores_updated = CoreRangeSet(std::vector{
-        llama_configuration.core_range_1,
-        llama_configuration.core_range_2,
-        llama_configuration.core_range_3,
-        llama_configuration.core_range_4,
-        llama_configuration.core_range_5,
-        llama_configuration.core_range_6,
-        llama_configuration.core_range_7,
-        llama_configuration.core_range_8,
-        llama_configuration.core_range_9,
-        llama_configuration.core_range_10,
-        llama_configuration.core_range_11,
-        llama_configuration.core_range_12,
-        llama_configuration.core_range_13,
-        llama_configuration.core_range_14,
-        llama_configuration.core_range_15,
-        llama_configuration.core_range_16});
-
-    const auto& sem_cores_updated = CoreRangeSet(std::vector{
-        llama_configuration.sem_drain_core,
-        llama_configuration.core_range_1,
-        llama_configuration.core_range_2,
-        llama_configuration.core_range_3,
-        llama_configuration.core_range_4,
-        llama_configuration.core_range_5,
-        llama_configuration.core_range_6,
-        llama_configuration.core_range_7,
-        llama_configuration.core_range_8,
-        llama_configuration.core_range_9,
-        llama_configuration.core_range_10,
-        llama_configuration.core_range_11,
-        llama_configuration.core_range_12,
-        llama_configuration.core_range_13,
-        llama_configuration.core_range_14,
-        llama_configuration.core_range_15,
-        llama_configuration.core_range_16});
-
+    std::vector<CoreRange> q_cores_vector;
+    uint32_t range_count = 0;
+    for (auto cr : ring_core_ranges) {
+        q_cores_vector.push_back(cr);
+        range_count++;
+        if (range_count == llama_configuration.concat_num_cores) {
+            break;
+        }
+    }
+    const auto& q_cores_updated = CoreRangeSet(q_cores_vector);
+    std::vector<CoreRange> sem_cores_vector;
+    sem_cores_vector.push_back(llama_configuration.sem_drain_core);
+    range_count = 0;
+    for (auto cr : ring_core_ranges) {
+        sem_cores_vector.push_back(cr);
+        range_count++;
+        if (range_count == llama_configuration.concat_num_cores) {
+            break;
+        }
+    }
+    const auto& sem_cores_updated = CoreRangeSet(sem_cores_vector);
     uint32_t q_base_addr = temp_tensor.buffer()->address();
     // cores to read and write to output
     const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
@@ -480,10 +455,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             concat_semaphore_id2,
         };
 
-        auto sem_mcast_ranges = CoreRangeSet(std::vector{
-            llama_configuration.sem_mcast_range_1,
-            llama_configuration.sem_mcast_range_2,
-            llama_configuration.sem_mcast_range_3});
+        auto sem_mcast_ranges = CoreRangeSet(llama_configuration.semaphore_mcast_ranges);
         std::vector<uint32_t> mcast_start_x;
         std::vector<uint32_t> mcast_start_y;
         std::vector<uint32_t> mcast_end_x;
@@ -536,8 +508,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         }
         // in_tile_offset_by_batch is the start address of each batch in the input tile. The first face_h batches are in
         // the upper half of the tile and rest are in the lower half of tile.
-        uint32_t in_tile_offset_by_batch =
-            (i / 2) < face_h ? i / 2 * sub_tile_line_bytes : (i / 2 + face_h) * sub_tile_line_bytes;
+        uint32_t in_tile_offset_by_batch = get_tile_offset_by_batch(i, face_h, sub_tile_line_bytes);
 
         const auto& core = cores[i];
         std::vector<uint32_t> input_cores_x;
@@ -621,8 +592,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
             for (uint32_t i = 0; i < num_concat_worker_cores; ++i) {
                 const auto& core = cores[i];
-                uint32_t in_tile_offset_by_batch =
-                    i / 2 < face_h ? i / 2 * sub_tile_line_bytes : (i / 2 + face_h) * sub_tile_line_bytes;
+                uint32_t in_tile_offset_by_batch = get_tile_offset_by_batch(i, face_h, sub_tile_line_bytes);
                 auto& concat_reader_runtime_args = GetRuntimeArgs(program, concat_reader_kernel_id, core);
                 concat_reader_runtime_args[0] = in_tile_offset_by_batch;
                 concat_reader_runtime_args[1] = q_start_addr;
