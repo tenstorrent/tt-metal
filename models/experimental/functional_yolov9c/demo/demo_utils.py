@@ -3,13 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import cv2
 import requests
-import numpy as np
-
-
-def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
-    return cv2.imdecode(np.fromfile(filename, np.uint8), flags)
 
 
 def load_coco_class_names():
