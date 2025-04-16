@@ -9,7 +9,6 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "impl/context/metal_context.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
 #include "system_memory_manager.hpp"

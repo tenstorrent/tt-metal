@@ -75,7 +75,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
-        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // test parameters
     uint32_t packet_header_address = 0x25000;
@@ -218,7 +218,7 @@ TEST_F(Fabric1DFixture, TestUnicastConnAPI) {
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
-        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // test parameters
     uint32_t packet_header_address = 0x25000;
@@ -348,7 +348,7 @@ TEST_F(Fabric1DFixture, TestMCastConnAPI) {
     CoreCoord receiver_virtual_core = left_recv_device->worker_core_from_logical_core(receiver_logical_core);
 
     auto receiver_noc_encoding =
-        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+        tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // test parameters
     uint32_t packet_header_address = 0x25000;

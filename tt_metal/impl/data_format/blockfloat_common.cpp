@@ -11,7 +11,7 @@
 #include "assert.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tile.hpp"
 #include "tracy/Tracy.hpp"
@@ -328,7 +328,7 @@ std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
     auto subtile_rows = face_H;
     auto subtile_cols = face_W;
 
-    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
     bool exponent_padding = (subtile_rows * subtiles_in_tile_col * subtiles_in_tile_row) < l1_alignment;
 
     int num_float_in_tile = tile_HW;

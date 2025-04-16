@@ -37,7 +37,6 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
-#include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
@@ -725,7 +724,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "test_dispatcher.cpp - Test Passed");

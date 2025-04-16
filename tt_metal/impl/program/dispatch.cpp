@@ -43,7 +43,6 @@
 #include "dispatch_mem_map.hpp"
 #include "hal_types.hpp"
 #include "kernel.hpp"
-#include "llrt/hal.hpp"
 #include "math.hpp"
 #include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"
@@ -87,9 +86,10 @@ CoreCoord get_sub_device_worker_origin(
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
         return device->allocator()->get_config().l1_unreserved_base -
-               hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+               MetalContext::instance().hal().get_dev_addr(
+                   HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     } else {
-        return hal_ref.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+        return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
     }
 }
 };  // namespace
@@ -105,10 +105,11 @@ uint32_t configure_rta_offsets_for_kernel_groups(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset) {
-    uint32_t processor_classes = hal_ref.get_processor_classes_count(programmable_core_type_index);
+    uint32_t processor_classes =
+        MetalContext::instance().hal().get_processor_classes_count(programmable_core_type_index);
     std::vector<uint32_t> max_rtas(processor_classes);
     uint32_t max_unique_rta_size = 0;
-    uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
+    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     for (auto& kg : kernel_groups) {
         for (std::size_t dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
@@ -154,7 +155,8 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     uint32_t crta_base_offset,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
-    uint32_t processor_classes = hal_ref.get_processor_classes_count(programmable_core_type_index);
+    uint32_t processor_classes =
+        MetalContext::instance().hal().get_processor_classes_count(programmable_core_type_index);
     std::vector<uint32_t> max_crtas(processor_classes);
 
     for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
@@ -169,7 +171,7 @@ uint32_t configure_crta_offsets_for_kernel_groups(
 
     // Derive crta offsets and sizes per dispatch class
     uint32_t offset = 0;
-    uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
+    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
         uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
         crta_offsets[dispatch_class] = crta_base_offset + offset;
@@ -202,8 +204,9 @@ uint32_t finalize_rt_args(
     uint32_t& rta_offset,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
     std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes) {
-    CoreType core_type = hal_ref.get_core_type(programmable_core_type_index);
-    HalProgrammableCoreType programmable_core_type = hal_ref.get_programmable_core_type(programmable_core_type_index);
+    CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
+    HalProgrammableCoreType programmable_core_type =
+        MetalContext::instance().hal().get_programmable_core_type(programmable_core_type_index);
 
     uint32_t max_unique_rta_size = program_dispatch::configure_rta_offsets_for_kernel_groups(
         programmable_core_type_index, kernels, kernel_groups, base_offset);
@@ -224,13 +227,13 @@ uint32_t finalize_sems(
     uint32_t& semaphore_offset,
     uint32_t& semaphore_size) {
     int max_id = -1;
-    CoreType core_type = hal_ref.get_core_type(programmable_core_type_index);
+    CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
     for (const auto& sem : semaphores) {
         if (sem.core_type() == core_type && (int)sem.id() > max_id) {
             max_id = sem.id();
         }
     }
-    uint32_t sem_size = (max_id + 1) * hal_ref.get_alignment(HalMemType::L1);
+    uint32_t sem_size = (max_id + 1) * MetalContext::instance().hal().get_alignment(HalMemType::L1);
     semaphore_offset = sem_base_offset;
     semaphore_size = sem_size;
     return sem_base_offset + sem_size;
@@ -266,7 +269,7 @@ uint32_t finalize_cbs(
     cb_offset = base_offset;
     cb_size = total_cb_size;
 
-    return tt::align(base_offset + total_cb_size, hal_ref.get_alignment(HalMemType::L1));
+    return tt::align(base_offset + total_cb_size, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 }
 
 uint32_t finalize_kernel_bins(
@@ -277,7 +280,8 @@ uint32_t finalize_kernel_bins(
     uint32_t base_offset,
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
-    uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     uint32_t max_offset = 0;
     for (auto& kg : kernel_groups) {
@@ -291,7 +295,7 @@ uint32_t finalize_kernel_bins(
                     BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
                 // TODO: this is really ugly, save me future-HAL!
                 if (programmable_core_type_index ==
-                    hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
+                    hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
                     uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
 
                     if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
@@ -327,7 +331,7 @@ uint32_t finalize_kernel_bins(
                     kg->kernel_bin_sizes[class_id] = binary_packed_size;
 
                     // No kernel config buffer on active eth yet
-                    if (hal_ref.get_programmable_core_type(kg->programmable_core_type_index) ==
+                    if (hal.get_programmable_core_type(kg->programmable_core_type_index) ==
                         HalProgrammableCoreType::IDLE_ETH) {
                         kg->kernel_text_offsets[class_id] = offset;
                         kg->launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
@@ -394,10 +398,11 @@ void finalize_program_offsets(T& workload, IDevice* device) {
         program.get_program_config_sizes()[index] = offset;
     };
 
+    const auto& hal = MetalContext::instance().hal();
     auto set_program_attrs_across_core_types = [&](Program& program) {
-        program.get_program_config_sizes()[hal_ref.get_programmable_core_type_count()] =
+        program.get_program_config_sizes()[hal.get_programmable_core_type_count()] =
             workload.runs_on_noc_multicast_only_cores();
-        program.get_program_config_sizes()[hal_ref.get_programmable_core_type_count() + 1] =
+        program.get_program_config_sizes()[hal.get_programmable_core_type_count() + 1] =
             workload.runs_on_noc_unicast_only_cores();
         program.set_launch_msg_sem_offsets();
         // TODO: This check is wrong - it populates dispatch data for dispatch kernels
@@ -406,8 +411,8 @@ void finalize_program_offsets(T& workload, IDevice* device) {
         }
     };
 
-    for (uint32_t index = 0; index < hal_ref.get_programmable_core_type_count(); index++) {
-        HalProgrammableCoreType programmable_core_type = hal_ref.get_programmable_core_type(index);
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
         offset = finalize_rt_args(
             workload.get_kernels(index),
             workload.get_kernel_groups(index),
@@ -417,15 +422,15 @@ void finalize_program_offsets(T& workload, IDevice* device) {
             crta_offsets,
             crta_sizes);
 
-        TT_ASSERT(offset == tt::align(offset, hal_ref.get_alignment(HalMemType::L1)));
+        TT_ASSERT(offset == tt::align(offset, hal.get_alignment(HalMemType::L1)));
 
         offset = finalize_sems(index, offset, workload.semaphores(), sem_offset, sem_size);
 
-        TT_ASSERT(offset == tt::align(offset, hal_ref.get_alignment(HalMemType::L1)));
+        TT_ASSERT(offset == tt::align(offset, hal.get_alignment(HalMemType::L1)));
 
         offset = finalize_cbs(index, workload.get_kernel_groups(index), offset, cb_offset, cb_size, local_cb_size);
 
-        TT_ASSERT(offset == tt::align(offset, hal_ref.get_alignment(HalMemType::L1)));
+        TT_ASSERT(offset == tt::align(offset, hal.get_alignment(HalMemType::L1)));
 
         offset = finalize_kernel_bins(
             device,
@@ -436,7 +441,7 @@ void finalize_program_offsets(T& workload, IDevice* device) {
             kernel_text_offset,
             kernel_text_size);
 
-        TT_ASSERT(offset == tt::align(offset, hal_ref.get_alignment(HalMemType::L1)));
+        TT_ASSERT(offset == tt::align(offset, hal.get_alignment(HalMemType::L1)));
 
         size_t max_size = get_ringbuffer_size(device, programmable_core_type);
 
@@ -532,7 +537,7 @@ void generate_runtime_args_cmds(
 
     thread_local static auto get_runtime_payload_sizeB =
         [](uint32_t num_packed_cmds, uint32_t runtime_args_len, bool is_unicast, bool no_stride) {
-            uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
+            uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
             uint32_t sub_cmd_sizeB =
                 is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
             uint32_t dispatch_cmd_sizeB =
@@ -543,7 +548,7 @@ void generate_runtime_args_cmds(
         };
     thread_local static auto get_runtime_args_data_offset =
         [](uint32_t num_packed_cmds, uint32_t /*runtime_args_len*/, bool is_unicast) {
-            uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
+            uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
             uint32_t sub_cmd_sizeB =
                 is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
             uint32_t dispatch_cmd_sizeB =
@@ -565,8 +570,8 @@ void generate_runtime_args_cmds(
             num_packed_cmds_in_seq,
             max_packed_cmds);
     }
-    uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
-    uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
+    uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     while (num_packed_cmds_in_seq != 0) {
         // Generate the device command
         uint32_t num_packed_cmds = std::min(num_packed_cmds_in_seq, max_packed_cmds);
@@ -670,10 +675,11 @@ BatchedTransfers assemble_runtime_args_commands(
     const DeviceCommandCalculator calculator;
 
     // Unique RTAs
+    const auto& hal = MetalContext::instance().hal();
     for (uint32_t programmable_core_type_index = 0;
-         programmable_core_type_index < hal_ref.get_programmable_core_type_count();
+         programmable_core_type_index < hal.get_programmable_core_type_count();
          programmable_core_type_index++) {
-        if (hal_ref.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::IDLE_ETH) {
+        if (hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::IDLE_ETH) {
             // Fast dispatch not supported on IDLE_ETH yet
             continue;
         }
@@ -711,7 +717,7 @@ BatchedTransfers assemble_runtime_args_commands(
     // CRTA writes with CB and semaphore writes.
     uint32_t kernel_group_crta_multicast_count = 0;
     {
-        uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         for (auto& kg : program.get_kernel_groups(index)) {
             bool has_crtas = false;
             for (auto kernel_id : kg->kernel_ids) {
@@ -743,7 +749,7 @@ BatchedTransfers assemble_runtime_args_commands(
         if ((programmable_core_type == HalProgrammableCoreType::TENSIX) && use_kernel_group_crta_multicast) {
             continue;
         }
-        uint32_t programmable_core_type_index = hal_ref.get_programmable_core_type_index(programmable_core_type);
+        uint32_t programmable_core_type_index = hal.get_programmable_core_type_index(programmable_core_type);
         uint32_t common_size =
             program.get_program_config(programmable_core_type_index).crta_sizes[kernel->dispatch_class()];
         if (common_size != 0) {
@@ -751,7 +757,7 @@ BatchedTransfers assemble_runtime_args_commands(
             const auto& common_rt_args = kernel->common_runtime_args();
 
             if (common_rt_args.size() > 0) {
-                CoreType core_type = hal_ref.get_core_type(programmable_core_type_index);
+                CoreType core_type = hal.get_core_type(programmable_core_type_index);
                 if (core_type == CoreType::ETH) {
                     uint32_t num_sub_cmds = kernel->logical_cores().size();
                     uint32_t max_packed_cmds =
@@ -772,7 +778,7 @@ BatchedTransfers assemble_runtime_args_commands(
     program_command_sequence.runtime_args_command_sequences.reserve(command_count);
 
     if (use_kernel_group_crta_multicast) {
-        uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         for (auto& kg : program.get_kernel_groups(index)) {
             for (auto kernel_id : kg->kernel_ids) {
                 if (kernel_id) {
@@ -802,14 +808,14 @@ BatchedTransfers assemble_runtime_args_commands(
         }
     }
 
-    for (uint32_t index = 0; index < hal_ref.get_programmable_core_type_count(); index++) {
-        if (hal_ref.get_programmable_core_type(index) == HalProgrammableCoreType::IDLE_ETH) {
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        if (hal.get_programmable_core_type(index) == HalProgrammableCoreType::IDLE_ETH) {
             // Fast dispatch not supported on IDLE_ETH yet
             // TODO: can't just loop here as code below confuses ACTIVE/IDLE
             continue;
         }
-        CoreType core_type = hal_ref.get_core_type(index);
-        uint32_t processor_classes = hal_ref.get_processor_classes_count(index);
+        CoreType core_type = hal.get_core_type(index);
+        uint32_t processor_classes = hal.get_processor_classes_count(index);
 
         // Unique RTAs - Unicast
         // Set by the user based on the kernel and core coord
@@ -1029,11 +1035,12 @@ static void size_semaphore_commands(
     semaphore_data.reserve(program.semaphores().size());
 
     // Unicast/Multicast Semaphores
+    const auto& hal = MetalContext::instance().hal();
     for (const Semaphore& semaphore : program.semaphores()) {
         semaphore_data.push_back(semaphore.initial_value());
 
         if (semaphore.core_type() == CoreType::WORKER) {
-            uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+            uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
             std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
                 device->extract_dst_noc_multicast_info(semaphore.core_range_set().ranges(), CoreType::WORKER);
             for (const auto& dst_noc_info : dst_noc_multicast_info) {
@@ -1050,7 +1057,7 @@ static void size_semaphore_commands(
             unicast_semaphore_cmds.push_back({.dst = semaphore.offset(), .size = sizeof(uint32_t)});
             auto& unicast_cmds = unicast_semaphore_cmds.back();
             // TODO: we only fast dispatch to active eth...
-            uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+            uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
             std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                 extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
             for (const auto& dst_noc_info : dst_noc_unicast_info) {
@@ -1075,7 +1082,8 @@ static void assemble_unicast_semaphore_commands(
     const std::vector<UnicastSemaphoreData>& unicast_semaphore_cmds,
     uint32_t packed_write_max_unicast_sub_cmds) {
     // Unicast Semaphore Cmd
-    uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+    uint32_t index =
+        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
     for (auto& cmds : unicast_semaphore_cmds) {
         uint32_t curr_sub_cmd_idx = 0;
         for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : cmds.payload) {
@@ -1123,7 +1131,8 @@ void assemble_device_commands(
         unicast_semaphore_cmds,
         batched_transfers);
 
-    uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
     const auto& circular_buffers_unique_coreranges = program.circular_buffers_unique_coreranges();
     const uint16_t num_multicast_cb_sub_cmds = circular_buffers_unique_coreranges.size();
@@ -1134,7 +1143,7 @@ void assemble_device_commands(
         uint32_t i = 0;
         uint32_t max_overall_index = 0;
         uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
-        auto index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        auto index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
             const CoreCoord& virtual_start =
                 device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
@@ -1183,7 +1192,7 @@ void assemble_device_commands(
     std::vector<std::vector<Transfer>> batched_cmd_data;
     std::vector<std::vector<CQDispatchWritePackedLargeSubCmd>> batched_dispatch_subcmds;
     {
-        uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
+        uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
         // Optimize transfers by combining adjacent or nearly adjacent transfers.
         for (auto& transfer_set : batched_transfers) {
             for (auto it = transfer_set.second.begin(); it != transfer_set.second.end();) {
@@ -1237,7 +1246,7 @@ void assemble_device_commands(
                 }
             }
         }
-        uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
+        uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
         for (size_t i = 0; i < batched_dispatch_subcmds.size(); i++) {
             calculator.add_dispatch_write_packed_large(
                 batched_dispatch_subcmds[i].size(),
@@ -1278,7 +1287,7 @@ void assemble_device_commands(
             cores);
         for (uint32_t kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
             if (write_linear) {
-                kernel_bins_unicast_cmds.emplace_back(2 * hal_ref.get_alignment(HalMemType::HOST));
+                kernel_bins_unicast_cmds.emplace_back(2 * hal.get_alignment(HalMemType::HOST));
                 constexpr bool flush_prefetch = false;
                 calculator.add_dispatch_write_linear<flush_prefetch>(0);
                 kernel_bins_unicast_cmds.back().add_dispatch_write_linear<flush_prefetch>(
@@ -1323,7 +1332,7 @@ void assemble_device_commands(
                 // TODO: pack all these writes into 1 linear write
                 uint32_t kernel_config_buffer_offset = kg_transfer_info.dst_base_addrs[kernel_idx];
                 uint32_t aligned_length =
-                    tt::align(kg_transfer_info.lengths[kernel_idx], hal_ref.get_alignment(HalMemType::DRAM));
+                    tt::align(kg_transfer_info.lengths[kernel_idx], hal.get_alignment(HalMemType::DRAM));
                 uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
                 while (aligned_length != 0) {
                     if (kernel_bins_dispatch_subcmds.empty() ||
@@ -1376,7 +1385,7 @@ void assemble_device_commands(
             subcmd_list.back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
         }
     }
-    uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
+    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
         calculator.add_dispatch_write_packed_large(kernel_bins_dispatch_subcmds[i].size());
         calculator.add_prefetch_relay_paged_packed(kernel_bins_prefetch_subcmds[i].size());
@@ -1388,7 +1397,7 @@ void assemble_device_commands(
     std::vector<std::pair<uint32_t, uint32_t>> multicast_go_signals_payload;
     std::vector<std::pair<uint32_t, uint32_t>> unicast_go_signals_payload;
     constexpr uint32_t go_signal_sizeB = sizeof(launch_msg_t);
-    uint32_t aligned_go_signal_sizeB = tt::align(go_signal_sizeB, hal_ref.get_alignment(HalMemType::L1));
+    uint32_t aligned_go_signal_sizeB = tt::align(go_signal_sizeB, hal.get_alignment(HalMemType::L1));
     uint32_t go_signal_size_words = aligned_go_signal_sizeB / sizeof(uint32_t);
 
     // TODO: eventually the code below could be structured to loop over programmable_indices
@@ -1399,7 +1408,7 @@ void assemble_device_commands(
      *******************
      */
     // and check for mcast/unicast
-    uint32_t programmable_core_index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     for (auto& kernel_group : program.get_kernel_groups(programmable_core_index)) {
         kernel_group->launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
         kernel_group->launch_msg.kernel_config.preload = DISPATCH_ENABLE_FLAG_PRELOAD;
@@ -1440,7 +1449,7 @@ void assemble_device_commands(
      *
      *******************
      */
-    programmable_core_index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+    programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
     // TODO: ugly, can be fixed by looping over indices w/ some work
     if (programmable_core_index != -1) {
         for (auto& kernel_group : program.get_kernel_groups(programmable_core_index)) {
@@ -1505,7 +1514,7 @@ void assemble_device_commands(
 
     auto& device_command_sequence = program_command_sequence.device_command_sequence;
 
-    uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     const std::vector<uint8_t> fill_data(l1_alignment, 0);
 
@@ -1573,7 +1582,7 @@ void assemble_device_commands(
         device_command_sequence.add_data(
             kernel_bins_unicast_cmd.data(), kernel_bins_unicast_cmd.size_bytes(), kernel_bins_unicast_cmd.size_bytes());
     }
-    uint32_t dram_alignment = hal_ref.get_alignment(HalMemType::DRAM);
+    uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
     for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
         device_command_sequence.add_dispatch_write_packed_large(
             CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_PROGRAM_BINARIES,
@@ -1700,19 +1709,19 @@ void assemble_device_commands(
 }
 
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
-    for (uint32_t index = 0; index < tt::tt_metal::hal_ref.get_programmable_core_type_count(); index++) {
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         uint32_t ringbuffer_size;
-        if (tt::tt_metal::hal_ref.get_programmable_core_type(index) == tt::tt_metal::HalProgrammableCoreType::TENSIX) {
-            ringbuffer_size = worker_l1_unreserved_start - tt::tt_metal::hal_ref.get_dev_addr(
-                                                               tt::tt_metal::hal_ref.get_programmable_core_type(index),
-                                                               tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+        if (hal.get_programmable_core_type(index) == tt::tt_metal::HalProgrammableCoreType::TENSIX) {
+            ringbuffer_size =
+                worker_l1_unreserved_start -
+                hal.get_dev_addr(hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
         } else {
-            ringbuffer_size = tt::tt_metal::hal_ref.get_dev_size(
-                tt::tt_metal::hal_ref.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
+            ringbuffer_size =
+                hal.get_dev_size(hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
         }
         config_buffer_mgr.init_add_buffer(
-            tt::tt_metal::hal_ref.get_dev_addr(
-                tt::tt_metal::hal_ref.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
+            hal.get_dev_addr(hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
             ringbuffer_size);
     }
     // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
@@ -1825,9 +1834,10 @@ void update_program_dispatch_commands(
         wait_count_offset, &(dispatch_md.sync_count), sizeof(uint32_t));
 
     // Update preamble based on kernel config ring buffer slot
+    const auto& hal = MetalContext::instance().hal();
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         tensix_l1_write_offset_offset,
-        &dispatch_md.kernel_config_addrs[hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
+        &dispatch_md.kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
         sizeof(uint32_t));
     // May truncate to fit the space.
     static_assert(
@@ -1836,16 +1846,15 @@ void update_program_dispatch_commands(
     uint16_t runtime_id = program.get_runtime_id();
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
-    if (hal_ref.get_programmable_core_type_count() >= 2) {
+    if (hal.get_programmable_core_type_count() >= 2) {
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
             eth_l1_write_offset_offset,
-            &dispatch_md
-                 .kernel_config_addrs[hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)],
+            &dispatch_md.kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)],
             sizeof(uint32_t));
     }
 
     // Update CB Configs
-    uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
     for (const auto& cbs_on_core_range : cached_program_command_sequence.circular_buffers_on_core_ranges) {
         uint32_t* cb_config_payload = cached_program_command_sequence.cb_configs_payloads[i];
@@ -1885,14 +1894,14 @@ void update_program_dispatch_commands(
     }
     // Update launch message addresses to reflect new launch_msg slot in ring buffer
     uint32_t multicast_cores_launch_msg_addr =
-        hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH) +
+        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::LAUNCH) +
         multicast_cores_launch_message_wptr * sizeof(launch_msg_t);
     for (auto launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
     if (cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.size()) {
         uint32_t unicast_cores_launch_message_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH) +
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH) +
             unicast_cores_launch_message_wptr * sizeof(launch_msg_t);
         for (auto launch_msg_cmd_ptr : cached_program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs) {
             launch_msg_cmd_ptr->addr = unicast_cores_launch_message_addr;
@@ -2086,7 +2095,7 @@ KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
 template <typename WorkloadType, typename DeviceType>
 uint32_t program_base_addr_on_core(
     WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType programmable_core_type) {
-    uint32_t index = hal_ref.get_programmable_core_type_index(programmable_core_type);
+    uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
     const auto& sub_device_ids = workload.determine_sub_device_ids(generic_device);
     // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
     // Addresses are not the same across sub-devices
@@ -2095,7 +2104,7 @@ uint32_t program_base_addr_on_core(
     auto sub_device_index = **sub_device_ids.begin();
     auto cq = workload.get_last_used_command_queue();
     return cq ? (cq->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(programmable_core_type))
-              : hal_ref.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+              : MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
 void reset_config_buf_mgrs_and_expected_workers(
@@ -2120,7 +2129,7 @@ void reset_worker_dispatch_state_on_device(
     auto num_sub_devices = device->num_sub_devices();
     uint32_t go_signals_cmd_size = 0;
     if (reset_launch_msg_state) {
-        uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
+        uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
         go_signals_cmd_size = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
     }
 

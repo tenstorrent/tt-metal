@@ -19,7 +19,6 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "logger.hpp"
-#include "rtoptions.hpp"
 #include <umd/device/tt_soc_descriptor.h>
 #include "utils.hpp"
 
@@ -33,9 +32,10 @@ namespace tt {
 
 static string logfile_path = "generated/noc_data/";
 void PrintNocData(noc_data_t noc_data, const string& file_name) {
-    std::filesystem::path output_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + logfile_path);
+    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
-    std::string filename = tt::llrt::RunTimeOptions::get_instance().get_root_dir() + logfile_path + file_name;
+    std::string filename = rtoptions.get_root_dir() + logfile_path + file_name;
     std::ofstream outfile(filename);
 
     for (uint32_t idx = 0; idx < NOC_DATA_SIZE; idx++) {
@@ -82,7 +82,7 @@ void DumpDeviceNocData(chip_id_t device_id, noc_data_t& noc_data, noc_data_t& di
 
 void DumpNocData(const std::vector<chip_id_t>& devices) {
     // Skip if feature is not enabled
-    if (!tt::llrt::RunTimeOptions::get_instance().get_record_noc_transfers()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_record_noc_transfers()) {
         return;
     }
 
@@ -98,13 +98,14 @@ void DumpNocData(const std::vector<chip_id_t>& devices) {
 
 void ClearNocData(chip_id_t device_id) {
     // Skip if feature is not enabled
-    if (!tt::llrt::RunTimeOptions::get_instance().get_record_noc_transfers()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_record_noc_transfers()) {
         return;
     }
 
     // This feature is incomatible with dprint since they share memory space
     TT_FATAL(
-        tt::llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint) == false,
+        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint) ==
+            false,
         "NOC transfer recording is incompatible with DPRINT");
 
     CoreDescriptorSet all_cores = GetAllCores(device_id);

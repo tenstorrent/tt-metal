@@ -12,7 +12,7 @@
 #include <tt-metalium/allocator_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 
 namespace tt::tt_metal {
@@ -23,7 +23,7 @@ TEST(DevicePool, DevicePoolOpenClose) {
     std::vector<chip_id_t> device_ids{0};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
@@ -52,7 +52,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
     int worker_l1_size = 0;
-    const auto& dispatch_core_config = llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
@@ -90,7 +90,7 @@ TEST(DevicePool, DevicePoolAddDevices) {
     std::vector<chip_id_t> device_ids{0};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
@@ -124,7 +124,7 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     std::vector<chip_id_t> device_ids{0, 1, 2, 3};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {

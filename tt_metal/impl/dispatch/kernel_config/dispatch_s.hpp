@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <optional>
 
-#include "impl/context/metal_context.hpp"
 #include "fd_kernel.hpp"
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"

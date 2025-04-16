@@ -22,7 +22,7 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 
@@ -100,18 +100,18 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_acti
 }  // namespace
 
 TEST_F(DPrintFixture, TensixTestPrintPrependDeviceCoreRisc) {
-    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
             [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device); }, device);
     }
-    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, false);
 }
 
 TEST_F(DPrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
-    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (IDevice* device : this->devices_) {
         if (device->get_active_ethernet_cores(true).empty()) {
@@ -122,6 +122,6 @@ TEST_F(DPrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
             [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true); },
             device);
     }
-    tt::llrt::RunTimeOptions::get_instance().set_feature_prepend_device_core_risc(
+    tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, false);
 }

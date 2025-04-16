@@ -18,7 +18,6 @@
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "metal_soc_descriptor.h"
-#include "rtoptions.hpp"
 #include "tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -43,7 +42,7 @@ inline std::string get_core_descriptor_file(
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
-    bool targeting_sim = llrt::RunTimeOptions::get_instance().get_simulator_enabled();
+    bool targeting_sim = tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
     if (targeting_sim) {
         switch (arch) {
             case tt::ARCH::Invalid:
@@ -195,7 +194,7 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        dispatch_cores.size() || llrt::RunTimeOptions::get_instance().get_simulator_enabled(),
+        dispatch_cores.size() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled(),
         "Dispatch cores size must be positive");
 
     std::vector<CoreCoord> logical_compute_cores;
@@ -270,9 +269,11 @@ std::optional<uint32_t> get_storage_core_bank_size(
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     if (core_desc.storage_core_bank_size.has_value()) {
         TT_FATAL(
-            core_desc.storage_core_bank_size.value() % tt_metal::hal_ref.get_alignment(tt_metal::HalMemType::L1) == 0,
+            core_desc.storage_core_bank_size.value() %
+                    tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::L1) ==
+                0,
             "Storage core bank size must be {} B aligned",
-            tt_metal::hal_ref.get_alignment(tt_metal::HalMemType::L1));
+            tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::L1));
     }
     return core_desc.storage_core_bank_size;
 }
