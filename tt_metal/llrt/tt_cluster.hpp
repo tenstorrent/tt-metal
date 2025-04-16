@@ -99,6 +99,8 @@ public:
 
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
 
+    std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
+
     ARCH arch() const { return this->arch_; }
 
     const metal_SocDescriptor& get_soc_desc(chip_id_t chip) const;

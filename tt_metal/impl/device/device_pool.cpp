@@ -302,6 +302,7 @@ void DevicePool::initialize_active_devices() const {
     // Activate fabric (must be before FD)
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_1d_fabric_config(fabric_config) || tt_fabric::is_2d_fabric_config(fabric_config)) {
+        log_info(tt::LogMetal, "Initializing Fabric");
         if (tt_fabric::is_2d_fabric_config(fabric_config)) {
             // write routing tables to all ethernet cores
             tt::tt_metal::MetalContext::instance()
@@ -314,6 +315,7 @@ void DevicePool::initialize_active_devices() const {
         for (const auto& dev : active_devices) {
             dev->init_fabric();
         }
+        log_info(tt::LogMetal, "Fabric Initialized");
     }
 
     // Activate FD kernels

@@ -362,6 +362,10 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coord
     return user_chip_ethernet_coordinates;
 }
 
+std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_all_chip_ethernet_coordinates() const {
+    return this->cluster_desc_->get_chip_locations();
+}
+
 size_t Cluster::number_of_user_devices() const {
     if (this->cluster_type_ == ClusterType::TG) {
         const auto& chips = this->cluster_desc_->get_all_chips();
