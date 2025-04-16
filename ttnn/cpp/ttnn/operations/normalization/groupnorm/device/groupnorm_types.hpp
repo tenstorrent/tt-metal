@@ -8,6 +8,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
+using namespace tt::tt_metal;
 namespace ttnn::operations::normalization {
 
 struct GroupNormMultiCoreProgramConfig {

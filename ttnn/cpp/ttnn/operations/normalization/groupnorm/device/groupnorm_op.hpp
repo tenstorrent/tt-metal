@@ -11,6 +11,7 @@
 #include "groupnorm_types.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
