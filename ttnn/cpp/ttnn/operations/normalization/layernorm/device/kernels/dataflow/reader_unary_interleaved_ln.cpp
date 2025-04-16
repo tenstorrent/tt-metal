@@ -7,27 +7,12 @@
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
-template <bool DRAM, uint32_t tile_hw = 1024>
-void read_row_to_cb(
-    const uint32_t cb_id,
-    const InterleavedAddrGenFast<DRAM, tile_hw>& addr,
-    const uint32_t tile_bytes,
-    const uint32_t offset,
-    const uint32_t blk) {
-    cb_reserve_back(cb_id, blk);
-    uint32_t l1_write_addr = get_write_ptr(cb_id);
-    for (uint32_t r = 0; r < blk; r++) {
-        noc_async_read_tile(offset + r, addr, l1_write_addr);
-        l1_write_addr += tile_bytes;
-    }
-    noc_async_read_barrier();
-    cb_push_back(cb_id, blk);
-}
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t NCHt = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
     uint32_t tile_offset = get_arg_val<uint32_t>(3);
+
     uint32_t gamma_addr = get_arg_val<uint32_t>(6);
     uint32_t beta_addr = get_arg_val<uint32_t>(7);
     uint32_t b_addr = get_arg_val<uint32_t>(8);
@@ -48,6 +33,7 @@ void kernel_main() {
 
     const InterleavedAddrGenFast<src0_is_dram> src_a = {
         .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
+
 #ifdef FUSE_GAMMA
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
     const DataFormat gamma_data_format = get_dataformat(cb_id_gamma);
@@ -79,29 +65,58 @@ void kernel_main() {
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
-    auto read_in0_and_in1 = [&]() {
+
+    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+            cb_reserve_back(cb_id_in0, blk);
+            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+
+            for (uint32_t r = 0; r < blk; r++) {
+                noc_async_read_tile(offs + wt + r + tile_offset, src_a, l1_write_addr);
+                l1_write_addr += src0_tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_id_in0, blk);
+
 #ifdef FUSE_PRE_ADD
             // TODO(AP): refactor the ifdefs
-            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            cb_reserve_back(cb_id_in1, blk);
+            l1_write_addr = get_write_ptr(cb_id_in1);
+            for (uint32_t r = 0; r < blk; r++) {
+                noc_async_read_tile(offs + wt + r + tile_offset, src_b, l1_write_addr);
+                l1_write_addr += src1_tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_id_in1, blk);
 #endif
         }  // wt loop
-    };
-    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        read_in0_and_in1();
+
 #if defined FUSE_GAMMA || defined FUSE_BETA
         if (ncht == 0) {
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
 #ifdef FUSE_GAMMA
                 {
-                    read_row_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
+                    cb_reserve_back(cb_id_gamma, blk);
+                    uint32_t l1_write_addr = get_write_ptr(cb_id_gamma);
+                    for (uint32_t r = 0; r < blk; r++) {
+                        noc_async_read_tile(wt + r, addrg, l1_write_addr);
+                        l1_write_addr += gamma_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_id_gamma, blk);
                 }
 #endif
 
 #ifdef FUSE_BETA
                 {
-                    read_row_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
+                    cb_reserve_back(cb_id_beta, blk);
+                    uint32_t l1_write_addr = get_write_ptr(cb_id_beta);
+                    for (uint32_t r = 0; r < blk; r++) {
+                        noc_async_read_tile(wt + r, addrb, l1_write_addr);
+                        l1_write_addr += beta_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_id_beta, blk);
                 }
 #endif
             }  // wt loop
