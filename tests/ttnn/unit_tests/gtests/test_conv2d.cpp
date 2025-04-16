@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <sys/types.h>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <tuple>
@@ -10,6 +11,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -158,7 +160,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
 
         // Run Conv2D
         auto [output_tensor, output_dimensions] =
-            std::get<std::tuple<ttnn::Tensor, std::tuple<OutputHeight, OutputWidth>>>(conv2d::conv2d(
+            std::get<std::tuple<ttnn::Tensor, std::tuple<OutputHeight, OutputWidth>>>(ttnn::conv2d(
                 DefaultQueueId,
                 input_tensor,
                 weight_tensor,
@@ -171,14 +173,14 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
                 param.kernel_size,
                 param.stride,
                 param.padding,
-                {1, 1},        // dilation
-                1,             // groups
-                std::nullopt,  // bias tensor
-                std::nullopt,  // conv config
-                std::nullopt,  // compute config
-                std::nullopt,  // memory config
-                std::nullopt,  // slice config
-                true           // return_output_dim
+                std::array<uint32_t, 2>{1, 1},  // dilation
+                1,                              // groups
+                std::nullopt,                   // bias tensor
+                std::nullopt,                   // conv config
+                std::nullopt,                   // compute config
+                std::nullopt,                   // memory config
+                std::nullopt,                   // slice config
+                true                            // return_output_dim
                 ));
 
         // move output tensor to dram
