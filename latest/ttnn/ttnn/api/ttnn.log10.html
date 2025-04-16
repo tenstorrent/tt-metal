@@ -338,7 +338,7 @@
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor.</p>
+<p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor. BFLOAT16, BFLOAT8_B</p>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
@@ -368,13 +368,12 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B</p></td>
+<td><p>BFLOAT8_B is only supported in WHB0.</p></td>
 <td><p>TILE</p></td>
 <td><p>2, 3, 4</p></td>
 </tr>
 </tbody>
 </table>
-<p>BFLOAT8_B is only supported in WHB0.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
