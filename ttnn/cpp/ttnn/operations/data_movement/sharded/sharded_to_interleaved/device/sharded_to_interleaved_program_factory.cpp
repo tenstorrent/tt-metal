@@ -82,7 +82,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             num_cores_unpadded = div_up(num_units_per_row, output_unit_size);
         }
     }
-    TT_ASSERT(num_cores_unpadded == num_cores, "number of cores {} in shard spec not equal to the unpadded number of cores {}", num_cores_unpadded, num_cores);
+    end_core = cores[num_cores_unpadded - 1];
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
 

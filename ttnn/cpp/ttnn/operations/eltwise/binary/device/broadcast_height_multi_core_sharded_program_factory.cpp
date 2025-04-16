@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::binary {
 
-static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
+static BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: return BcastOpMath::ADD;
         case BinaryOpType::SUB: return BcastOpMath::SUB;

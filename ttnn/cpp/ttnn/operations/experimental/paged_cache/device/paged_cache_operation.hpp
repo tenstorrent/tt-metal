@@ -30,7 +30,7 @@ struct PagedUpdateCacheDeviceOperation {
     void validate(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    const std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
 
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
@@ -44,7 +44,7 @@ struct PagedUpdateCacheDeviceOperation {
         return std::forward_as_tuple(batch_idx, update_idxs, batch_offset, op_type, compute_kernel_config, share_cache);
     }
 
-    const tt::tt_metal::operation::Hash compute_program_hash(
+    tt::tt_metal::operation::Hash compute_program_hash(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };

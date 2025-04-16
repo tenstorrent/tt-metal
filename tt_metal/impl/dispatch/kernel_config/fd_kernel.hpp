@@ -15,7 +15,6 @@
 #include "mesh_graph.hpp"
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
@@ -93,6 +92,7 @@ public:
     // an intermediary FDKernel for indicating a fabric router path needs to be found.
     virtual void UpdateArgsForFabric(
         const CoreCoord& fabric_router_virtual,
+        uint32_t outbound_eth_chan,
         tt::tt_fabric::mesh_id_t upstream_mesh_id,
         chip_id_t upstream_chip_id,
         tt::tt_fabric::mesh_id_t downstream_mesh_id,

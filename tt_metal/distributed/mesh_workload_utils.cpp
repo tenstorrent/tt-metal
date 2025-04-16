@@ -10,12 +10,11 @@
 #include "dispatch_mem_map.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "impl/context/metal_context.hpp"
 
 enum class CoreType;
 
@@ -34,9 +33,9 @@ void write_go_signal(
     bool send_mcast,
     bool send_unicasts,
     int num_unicast_txns) {
-    uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
-    uint32_t cmd_sequence_sizeB =
-        align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) + hal_ref.get_alignment(HalMemType::HOST);
+    uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    uint32_t cmd_sequence_sizeB = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) +
+                                  MetalContext::instance().hal().get_alignment(HalMemType::HOST);
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 

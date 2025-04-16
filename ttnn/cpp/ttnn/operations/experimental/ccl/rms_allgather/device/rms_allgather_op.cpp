@@ -67,7 +67,7 @@ RMSAllGather create_rms_struct(
         backward_device);
 }
 
-const tt::tt_metal::operation::Hash RMSAllGather::compute_program_hash(
+tt::tt_metal::operation::Hash RMSAllGather::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
@@ -388,7 +388,10 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program(
                         program_config.compute_with_storage_grid_size,
                         program_config.subblock_w,
                         program_config.block_w,
-                        this->compute_kernel_config);
+                        this->compute_kernel_config,
+                        this->semaphore,
+                        this->ring_size,
+                        this->num_links);
                 }
             } else {
                 TT_FATAL(false, "Program Config does not match");

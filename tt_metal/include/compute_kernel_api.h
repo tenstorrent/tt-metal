@@ -84,6 +84,7 @@ ALWI void rsqrt_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
+// clang-format on
 template <bool fast_and_approx = false>
 ALWI void sigmoid_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_sigmoid_init<fast_and_approx>()));
@@ -103,9 +104,9 @@ ALWI void sigmoid_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool fast_and_approx = false>
+template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx>(idst, vec_mode)));
 }
 
 /**
@@ -325,6 +326,22 @@ ALWI void ltz_tile_init() { MATH((llk_math_eltwise_unary_sfpu_ltz_init<APPROX>()
  */
 // clang-format on
 ALWI void eqz_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_eqz<APPROX>(idst))); }
+
+// clang-format off
+/**
+ * Will store in the output of the compute core True if each element of a equal to zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void eqz_tile_int32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_eqz_int32<APPROX>(idst))); }
 
 /**
  * Please refer to documentation for any_init.

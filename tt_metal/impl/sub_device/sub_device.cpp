@@ -12,7 +12,7 @@
 #include <utility>
 
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -31,7 +31,7 @@ SubDevice::SubDevice(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cor
 }
 
 void SubDevice::validate() const {
-    auto num_core_types = hal_ref.get_programmable_core_type_count();
+    auto num_core_types = MetalContext::instance().hal().get_programmable_core_type_count();
     for (uint32_t i = num_core_types; i < NumHalProgrammableCoreTypes; ++i) {
         TT_FATAL(
             this->cores_[i].empty(),
