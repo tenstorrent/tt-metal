@@ -35,7 +35,6 @@ struct AllReduceCreateQkvHeads {
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    bool enable_persistent_fabric_mode;
 
     // create qkv heads parameters
     const uint32_t head_dim;
@@ -55,7 +54,6 @@ struct AllReduceCreateQkvHeads {
         ccl::Topology topology,
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        bool enable_persistent_fabric_mode,
         uint32_t head_dim,
         uint32_t num_heads,
         uint32_t num_kv_heads,
@@ -72,7 +70,6 @@ struct AllReduceCreateQkvHeads {
         topology(topology),
         semaphore(semaphore),
         sub_device_id(sub_device_id),
-        enable_persistent_fabric_mode(enable_persistent_fabric_mode),
         head_dim(head_dim),
         num_heads(num_heads),
         num_kv_heads(num_kv_heads),
@@ -121,7 +118,6 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
     const ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
     std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode,
     uint32_t num_heads,
     uint32_t num_kv_heads,
     bool input_on_subcoregrids,
@@ -155,7 +151,6 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const std::optional<MemoryConfig>& all_reduce_memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false,
     uint32_t head_dim = 0,
     uint32_t num_heads = 8,
     uint32_t num_kv_heads = 1,

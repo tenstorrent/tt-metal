@@ -24,8 +24,7 @@ struct ExecuteAllGatherConcat {
         const std::optional<uint32_t> num_links = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-        bool enable_persistent_fabric_mode = false);
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl
