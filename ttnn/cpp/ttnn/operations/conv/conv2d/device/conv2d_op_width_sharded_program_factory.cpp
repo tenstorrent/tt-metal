@@ -919,14 +919,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // Capture conv_reader_indices_buffer to cache this with the program
     auto override_runtime_arguments_callback =
-        [conv_reader_indices_buffer,
-         cb_input,
-         cb_output,
-         has_bias,
-         full_core_grid,
-         total_num_cores,
-         weights_kernel_id,
-         total_num_active_cores](
+        [cb_input, cb_output, has_bias, full_core_grid, weights_kernel_id, total_num_active_cores](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
