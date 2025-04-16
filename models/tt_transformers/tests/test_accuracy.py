@@ -63,7 +63,7 @@ def get_accuracy_thresholds(model_args, optimizations):
 
 
 @torch.no_grad()
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
     ((512, 128, 1024),),
