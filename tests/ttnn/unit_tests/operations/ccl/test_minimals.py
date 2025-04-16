@@ -6,6 +6,9 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
+    PREFETCHER_NOC1_GRID,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
@@ -14,7 +17,10 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_global_semaphore_with_same_address,
 )
 
-from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import run_rms_trace
+from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import (
+    run_rms_trace,
+    run_rms_fuse_impl,
+)
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test import (
     run_concat_fuse_impl,
@@ -368,7 +374,15 @@ def test_all_gather_only(
             4,
             8192,
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-            None,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in PREFETCHER_NOC1_GRID
+                ]
+            ),
         ),
     ],
 )
@@ -414,6 +428,65 @@ def test_tg_trace_rms_fuse(
         warmup_iters=warmup_iters,
         profiler=profiler,
         use_new_version=use_new_version,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
+        # RMS NORM ALL GATHER FUSION No Reshard
+        (
+            4,
+            8192,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            None,
+        ),
+        (
+            4,
+            8192,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in PREFETCHER_NOC1_GRID
+                ]
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_rms_fuse(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    input_shard_grid,
+    output_shard_grid,
+):
+    run_rms_fuse_impl(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        use_program_cache,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        ttnn.Topology.Linear,
+        num_iters=num_iters,
+        enable_async=enable_async,
     )
 
 
