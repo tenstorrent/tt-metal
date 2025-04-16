@@ -289,14 +289,10 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
     }
 
     // Mcast args
-    uint32_t in0_mcast_sender_semaphore_id = 0;
-    uint32_t in0_mcast_receiver_semaphore_id = 1;
-    uint32_t in1_mcast_sender_semaphore_id = 2;
-    uint32_t in1_mcast_receiver_semaphore_id = 3;
-    program.semaphores.push_back(tt_metal::SemaphoreDescriptor{.core_ranges = {all_cores}, .initial_value = INVALID});
-    program.semaphores.push_back(tt_metal::SemaphoreDescriptor{.core_ranges = {all_cores}, .initial_value = INVALID});
-    program.semaphores.push_back(tt_metal::SemaphoreDescriptor{.core_ranges = {all_cores}, .initial_value = INVALID});
-    program.semaphores.push_back(tt_metal::SemaphoreDescriptor{.core_ranges = {all_cores}, .initial_value = INVALID});
+    uint32_t in0_mcast_sender_semaphore_id = program.add_semaphore({all_cores}, INVALID);
+    uint32_t in0_mcast_receiver_semaphore_id = program.add_semaphore({all_cores}, INVALID);
+    uint32_t in1_mcast_sender_semaphore_id = program.add_semaphore({all_cores}, INVALID);
+    uint32_t in1_mcast_receiver_semaphore_id = program.add_semaphore({all_cores}, INVALID);
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;

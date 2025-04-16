@@ -1406,14 +1406,11 @@ Program CreateProgram(ProgramDescriptor&& descriptor) {
 
     for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
         auto& semaphore_descriptor = descriptor.semaphores[i];
-        auto semaphore_id = CreateSemaphore(
-            program,
+        program.add_semaphore(
             CoreRangeSet(std::move(semaphore_descriptor.core_ranges)),
+            i,
             semaphore_descriptor.initial_value,
             semaphore_descriptor.core_type);
-        if (i != semaphore_id) {
-            TT_THROW("Semaphore id mismatch: expected {}, got {}", i, semaphore_id);
-        }
     }
 
     for (auto& kernel_descriptor : descriptor.kernels) {

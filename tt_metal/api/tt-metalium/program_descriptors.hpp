@@ -124,6 +124,7 @@ struct ProgramDescriptor {
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
 
+    uint32_t add_semaphore(CoreRangeVector core_ranges, uint32_t initial_value, CoreType core_type = CoreType::WORKER);
     size_t calculate_program_hash() const;
 };
 

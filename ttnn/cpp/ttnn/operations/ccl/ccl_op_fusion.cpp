@@ -132,10 +132,8 @@ void MatmulFusedOpSignaler::init_fused_op(
         core_range_to_signal);
 
     // Create the semaphores
-    this->fused_op_receiver_signal_semaphores.push_back(program.semaphores.size());
-    program.semaphores.push_back(SemaphoreDescriptor{.core_ranges = core_range_vector, .initial_value = 0});
-    this->fused_op_receiver_signal_semaphores.push_back(program.semaphores.size());
-    program.semaphores.push_back(SemaphoreDescriptor{.core_ranges = core_range_vector, .initial_value = 0});
+    this->fused_op_receiver_signal_semaphores.push_back(program.add_semaphore(core_range_vector, 0));
+    this->fused_op_receiver_signal_semaphores.push_back(program.add_semaphore(core_range_vector, 0));
 
     // Set the number of fused op cores to signal
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();

@@ -258,15 +258,9 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
     log_debug("bounding_box: {}", bounding_box);
 
     // Mcast args
-    uint32_t in0_mcast_sender_semaphore_id = 0;
-    uint32_t in0_mcast_receiver_semaphore_id = 1;
-    uint32_t in0_mcast_sender_valid_semaphore_id = 2;
-    program.semaphores.push_back(
-        tt_metal::SemaphoreDescriptor{.core_ranges = all_cores_in_rect_grid.ranges(), .initial_value = INVALID});
-    program.semaphores.push_back(
-        tt_metal::SemaphoreDescriptor{.core_ranges = all_cores_in_rect_grid.ranges(), .initial_value = INVALID});
-    program.semaphores.push_back(
-        tt_metal::SemaphoreDescriptor{.core_ranges = all_cores_in_rect_grid.ranges(), .initial_value = VALID});
+    uint32_t in0_mcast_sender_semaphore_id = program.add_semaphore(all_cores_in_rect_grid.ranges(), INVALID);
+    uint32_t in0_mcast_receiver_semaphore_id = program.add_semaphore(all_cores_in_rect_grid.ranges(), INVALID);
+    uint32_t in0_mcast_sender_valid_semaphore_id = program.add_semaphore(all_cores_in_rect_grid.ranges(), VALID);
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;

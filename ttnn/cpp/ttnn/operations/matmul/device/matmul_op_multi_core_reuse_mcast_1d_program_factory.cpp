@@ -259,16 +259,8 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
     }
 
     // Mcast args
-    uint32_t in0_mcast_sender_semaphore_id = 0;
-    uint32_t in0_mcast_receiver_semaphore_id = 1;
-    program.semaphores.push_back(tt_metal::SemaphoreDescriptor{
-        .core_ranges = all_cores.ranges(),
-        .initial_value = INVALID,
-    });
-    program.semaphores.push_back(tt_metal::SemaphoreDescriptor{
-        .core_ranges = all_cores.ranges(),
-        .initial_value = INVALID,
-    });
+    uint32_t in0_mcast_sender_semaphore_id = program.add_semaphore(all_cores.ranges(), INVALID);
+    uint32_t in0_mcast_receiver_semaphore_id = program.add_semaphore(all_cores.ranges(), INVALID);
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
@@ -1077,12 +1069,8 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
     }
 
     // Mcast args
-    uint32_t in1_mcast_sender_semaphore_id = 0;
-    uint32_t in1_mcast_receiver_semaphore_id = 1;
-    program.semaphores.push_back(
-        tt_metal::SemaphoreDescriptor{.core_ranges = all_cores.ranges(), .initial_value = INVALID});
-    program.semaphores.push_back(
-        tt_metal::SemaphoreDescriptor{.core_ranges = all_cores.ranges(), .initial_value = INVALID});
+    uint32_t in1_mcast_sender_semaphore_id = program.add_semaphore(all_cores.ranges(), INVALID);
+    uint32_t in1_mcast_receiver_semaphore_id = program.add_semaphore(all_cores.ranges(), INVALID);
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
@@ -1792,9 +1780,7 @@ tt::tt_metal::ProgramDescriptor create_program_gather_in0(
     }
 
     /* semaphores */
-    uint32_t in0_signal_semaphore_id = 0;
-    program.semaphores.push_back(
-        tt_metal::SemaphoreDescriptor{.core_ranges = all_cores.ranges(), .initial_value = INVALID});
+    uint32_t in0_signal_semaphore_id = program.add_semaphore(all_cores.ranges(), INVALID);
 
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
