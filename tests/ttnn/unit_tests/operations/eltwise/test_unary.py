@@ -530,7 +530,7 @@ def test_unary_ceil(input_shapes, device):
     ],
 )
 @pytest.mark.parametrize(
-    "ttn_function",
+    "ttnn_function",
     [
         ttnn.eqz,
         ttnn.nez,
@@ -540,19 +540,16 @@ def test_unary_ceil(input_shapes, device):
         ttnn.gez,
     ],
 )
-def test_unary_zero_comp_ttnn(input_shapes, low, high, ttn_function, device):
+def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
     in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
     cq_id = 0
-    output_tensor = ttn_function(input_tensor, queue_id=cq_id)
-    golden_function = ttnn.get_golden_function(ttn_function)
+    output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
+    golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    print(in_data)
-    print(golden_tensor)
-    print(output_tensor)
     pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
     assert pcc == 1
 
@@ -567,7 +564,7 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttn_function, device):
     ),
 )
 @pytest.mark.parametrize(
-    "ttn_function",
+    "ttnn_function",
     [
         ttnn.eqz,
         ttnn.nez,
@@ -577,7 +574,7 @@ def test_unary_zero_comp_ttnn(input_shapes, low, high, ttn_function, device):
         ttnn.gez,
     ],
 )
-def test_unary_zero_comp_edge_case(input_shapes, ttn_function, device):
+def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     torch.manual_seed(213919)
 
     # Generate a uniform range of values across the valid int32 range
@@ -591,8 +588,8 @@ def test_unary_zero_comp_edge_case(input_shapes, ttn_function, device):
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttn_function(input_tensor)
-    golden_function = ttnn.get_golden_function(ttn_function)
+    output_tensor = ttnn_function(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)

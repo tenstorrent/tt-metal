@@ -357,14 +357,17 @@ std::pair<string, string> get_op_init_and_func_default(
             }
             break;
         case UnaryOpType::NEZ:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
-                std::cout << "hitting int file";
                 op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile_int32({});", idst)};
             } else {
                 op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile({});", idst)};
             }
             break;
         case UnaryOpType::LTZ:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {"ltz_tile_init();", fmt::format("ltz_tile_int32({});", idst)};
             } else {
@@ -372,6 +375,8 @@ std::pair<string, string> get_op_init_and_func_default(
             }
             break;
         case UnaryOpType::GTZ:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {"gtz_tile_init();", fmt::format("gtz_tile_int32({});", idst)};
             } else {
@@ -379,6 +384,8 @@ std::pair<string, string> get_op_init_and_func_default(
             }
             break;
         case UnaryOpType::GEZ:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {"gez_tile_init();", fmt::format("gez_tile_int32({});", idst)};
             } else {
@@ -386,6 +393,8 @@ std::pair<string, string> get_op_init_and_func_default(
             }
             break;
         case UnaryOpType::LEZ:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {"lez_tile_init();", fmt::format("lez_tile_int32({});", idst)};
             } else {
