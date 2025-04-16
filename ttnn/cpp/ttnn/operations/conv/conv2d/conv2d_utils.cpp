@@ -420,7 +420,6 @@ bool is_1d_deptwise_conv(
     uint32_t image_width,
     bool has_bias) {
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
-    log_info("has_bias: {}", has_bias);
     return is_depthwise_conv && is_1d_conv(kernel_width, image_width) && !has_bias;
 }
 

@@ -112,6 +112,7 @@ def test_prepare_conv_weights(
     ).permute(0, 2, 3, 1)
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor.transpose(-3, -2).transpose(-2, -1), ttnn.bfloat16)
+
     if is_owned:
         temp_tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
         temp_tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
@@ -122,7 +123,7 @@ def test_prepare_conv_weights(
     else:
         tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
         tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
-    print(tt_weight_tensor.storage_type(), tt_bias_tensor.storage_type() if has_bias else None)
+
     conv_config = ttnn.Conv2dConfig(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,

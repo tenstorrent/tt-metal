@@ -1001,7 +1001,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         original_weights_window_w,
         input_width,
         has_bias);
-    log_info("bias = {} is_conv_1d_depthwise_conv = {}", has_bias, is_conv_1d_depthwise_conv);
     TT_FATAL(
         !is_tensor_on_device_or_multidevice(weight_tensor_),
         "prepare_conv_weights_biases_and_move_to_device is not supported when the weights tensor is on the device");
