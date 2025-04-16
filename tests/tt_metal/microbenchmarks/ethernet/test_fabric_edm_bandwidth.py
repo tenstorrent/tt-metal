@@ -309,6 +309,7 @@ def run_fabric_edm(
         ), f"Packets per second mismatch. expected: {expected_Mpps} Mpps, actual: {mega_packets_per_second} Mpps"
 
 
+@pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
@@ -338,6 +339,7 @@ def test_fabric_edm_mcast_half_ring_bw(
     )
 
 
+@pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
@@ -366,6 +368,7 @@ def test_fabric_4chip_one_link_mcast_full_ring_bw(
     )
 
 
+@pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
@@ -395,6 +398,7 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
 
 
 # expected_Mpps = expected millions of packets per second
+@pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
@@ -424,6 +428,7 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
 
 
 # expected_Mpps = expected millions of packets per second
+@pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
@@ -551,6 +556,7 @@ def test_fabric_4chip_two_link_mcast_bw(
     )
 
 
+@pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
@@ -613,6 +619,7 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
     )
 
 
+@pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
@@ -644,6 +651,7 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     )
 
 
+@pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
