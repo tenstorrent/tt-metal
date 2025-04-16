@@ -55,11 +55,7 @@ inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input) {
 
     using enum BinaryOpType;
 
-    if (op == ADD or op == SUB or op == MUL) {
-        return false;
-    }
-
-    return true;
+    return op != ADD and op != SUB and op != MUL;
 }
 
 inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, [[maybe_unused]] float other) {
@@ -238,7 +234,7 @@ inline auto invoke_binary_ng(
                 "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
         }
 
-        const auto result = ttnn::prim::binary_ng(
+        auto result = ttnn::prim::binary_ng(
             queue_id,
             input_a,
             input_b,
