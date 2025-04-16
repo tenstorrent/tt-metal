@@ -957,14 +957,20 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
     std::map<string, string> router_defines = {};
     if (fabric_config == FabricConfig::FABRIC_2D) {
         router_defines["FVC_MODE_PULL"] = "";
+        tt::tt_fabric::set_routing_mode(
+            (tt_fabric::RoutingMode)(ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PULL));
     } else {
         // TODO: delete or selectively set
         //       https://github.com/tenstorrent/tt-metal/issues/20000
         if (isFabricUnitTest()) {
+            tt::tt_fabric::set_routing_mode(
+                (tt_fabric::RoutingMode)(ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH));
             router_defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
+        } else {
+            tt::tt_fabric::set_routing_mode((tt_fabric::RoutingMode)(
+                ROUTING_MODE_MESH | ROUTING_MODE_2D | ROUTING_MODE_PUSH | ROUTING_MODE_LOW_LATENCY));
         }
     }
-    tt::tt_fabric::set_routing_mode(tt_fabric::Topology::Ring, 2);
 
     // TODO: Manual clear of semaphore, move this to proper Metal sempahore apis
     std::vector<uint32_t> fabric_sem_zero_buf(1, 0);

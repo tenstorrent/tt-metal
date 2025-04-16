@@ -63,7 +63,15 @@ tt::tt_fabric::FabricEriscDatamoverConfig get_1d_fabric_config() {
     return tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
 }
 
-void set_routing_mode(Topology topology, uint32_t dimension, RoutingMode routing_mode) {
+void set_routing_mode(RoutingMode routing_mode) {
+    // override for forced routing mode
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    if (routing_mode != RoutingMode::RoutingModeUndefined) {
+        control_plane->set_routing_mode(routing_mode);
+    }
+}
+
+void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
     // TODO: take more parameters to set detail routing mode
     TT_ASSERT(
         dimension == 1 || dimension == 2 || dimension == 3,
@@ -71,10 +79,6 @@ void set_routing_mode(Topology topology, uint32_t dimension, RoutingMode routing
         dimension);
 
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    if (routing_mode != RoutingMode::RoutingModeUndefined) {
-        control_plane->set_routing_mode(routing_mode);
-        return;
-    }
     uint16_t mode = (dimension == 1 ? ROUTING_MODE_1D : dimension == 2 ? ROUTING_MODE_2D : ROUTING_MODE_3D);
     if (topology == Topology::Ring) {
         mode |= ROUTING_MODE_RING;

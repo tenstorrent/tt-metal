@@ -17,6 +17,11 @@ namespace tt::tt_fabric {
 #define ROUTING_MODE_LOW_LATENCY 0x0080
 #define ROUTING_MODE_DYNAMIC 0x0100
 
+// PUSH/PULL is for 2D and will be
+// TODO: remove when tt_fabric removes these notion
+#define ROUTING_MODE_PUSH 0x0200
+#define ROUTING_MODE_PULL 0x0400
+
 // routing mode type for host code
 // other type can be represented by (RoutingMode)(ROUTING_MODE_1D | ROUTING_MODE_RING) etc.
 enum class RoutingMode : uint16_t {

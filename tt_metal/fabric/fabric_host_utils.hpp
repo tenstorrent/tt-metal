@@ -25,9 +25,8 @@ bool is_1d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config);
 bool is_2d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config);
 
 Topology get_1d_topology(const tt::tt_metal::FabricConfig& fabric_config);
-
-void set_routing_mode(
-    Topology topology, uint32_t dimension = 1, RoutingMode routing_mode = RoutingMode::RoutingModeUndefined);
+void set_routing_mode(RoutingMode routing_mode);
+void set_routing_mode(Topology topology, uint32_t dimension = 1);
 
 tt::tt_fabric::FabricEriscDatamoverConfig get_1d_fabric_config();
 
