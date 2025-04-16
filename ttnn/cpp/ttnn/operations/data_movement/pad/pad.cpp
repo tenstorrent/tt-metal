@@ -199,7 +199,7 @@ static ttnn::Tensor pad_impl(
                                  {},
                                  queue_id)
                                  .front();
-        if (original_rank <= 4) {
+        if (original_rank < 4) {
             auto to_vec = [](const auto& span) { return ttnn::SmallVector<uint32_t>{span.begin(), span.end()}; };
             auto output_shape = to_vec(output_tensor.get_padded_shape().view());
             auto padded_shape = to_vec(output_tensor.get_padded_shape().view());
@@ -209,12 +209,7 @@ static ttnn::Tensor pad_impl(
                 remove_prefix(padded_shape, rank_diff);
                 output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(output_shape), ttnn::Shape(padded_shape));
             }
-        } else {
-            output_tensor = ttnn::reshape(
-                output_tensor,
-                update_original_shape(output_tensor.get_padded_shape(), input_tensor.get_logical_shape()));
         }
-
         return output_tensor;
     }
 }
