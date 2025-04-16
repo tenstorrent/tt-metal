@@ -77,14 +77,11 @@ Result conv1d(
         };
     };
 
-    Tensor output_tensor;
-    std::tuple<uint32_t, uint32_t> output_dimensions;
-    std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> weights_and_bias;
-    std::tie(output_tensor, output_dimensions, weights_and_bias) = std::get<std::tuple<
+    auto [output_tensor, output_dimensions, weights_and_bias] = std::get<std::tuple<
         ttnn::Tensor,
         std::tuple<OutputHeight, OutputWidth>,
         std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>(
-        conv2d::conv2d(
+        ttnn::conv2d(
             queue_id,
             input_tensor_4d,
             weight_tensor,

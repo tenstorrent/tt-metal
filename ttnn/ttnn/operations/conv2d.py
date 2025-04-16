@@ -8,15 +8,6 @@ from typing import Tuple, Union, Dict, Optional
 import warnings
 import math
 import ttnn
-from ttnn.device import (
-    is_grayskull,
-    is_wormhole_b0,
-)
-
-
-def _nearest_32(x):
-    return math.ceil(x / 32) * 32
-
 
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 Conv2dSliceConfig = ttnn._ttnn.operations.conv.Conv2dSliceConfig
@@ -34,15 +25,26 @@ def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
     return (input + (2 * pad) - dilation * (window - 1) - 1) // stride + 1
 
 
-def get_activation_function(name: str):
+def get_torch_act_func_from_string(act_string):
     import torch
 
-    if name == "relu":
-        return torch.nn.functional.relu
-    elif name == "":
-        return lambda x: x
-    else:
-        raise RuntimeError(f"Unexpected activation function: '{name}'")
+    act_func_map = {
+        "relu": torch.nn.functional.relu,
+        "silu": torch.nn.functional.silu,
+        "mish": torch.nn.functional.mish,
+        "sigmoid": torch.nn.functional.sigmoid,
+        "sigmoid_approx": torch.nn.functional.sigmoid,
+        "tanh": torch.nn.functional.tanh,
+        "log": torch.log,
+        "softplus": torch.nn.functional.softplus,
+        "gelu": torch.nn.functional.gelu,
+        "sqrt": torch.sqrt,
+    }
+    if act_string == "":
+        return None
+    if act_string in act_func_map:
+        return act_func_map[act_string]
+    raise RuntimeError(f"Activation function {act_string} not supported")
 
 
 def _golden_function(
@@ -111,7 +113,9 @@ def _golden_function(
     )
 
     output_tensor = (
-        get_activation_function(conv_config.activation)(output_tensor) if conv_config is not None else output_tensor
+        get_torch_act_func_from_string(conv_config.activation)(output_tensor)
+        if conv_config is not None
+        else output_tensor
     )
 
     N, C, H, W = output_tensor.shape
