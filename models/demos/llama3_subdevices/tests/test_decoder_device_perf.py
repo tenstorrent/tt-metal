@@ -89,7 +89,7 @@ perf_targets = {
     },
     "Matmul_0": {
         "op_name": "QKV_MM",
-        "kernel_duration": 11233.851851851852,
+        "kernel_duration": 11928.0,
         "op_to_op": 716.4444444444445,
         "non-overlapped-dispatch-time": 6102.0,
         "kernel_duration_relative_margin": 0.03,
