@@ -1,29 +1,27 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-from loguru import logger
-from datetime import datetime
 import hashlib
-import requests
 import json
-
-import torch
-import pytest
 import os
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+import requests
+import torch
+from loguru import logger
+
 import ttnn
-
-
-from models.tt_transformers.tt.generator import Generator, SamplingParams
-from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
-
+from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
-    preprocess_inputs_prefill,
     PagedAttentionConfig,
+    preprocess_inputs_prefill,
     sample_host,
 )
-from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.tt_transformers.tt.generator import Generator, SamplingParams
+from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -166,6 +164,44 @@ def create_tt_page_table(global_batch_size, data_parallel, page_params, use_page
     return page_table
 
 
+def t3k_create_submeshes(mesh_device, data_parallel):
+    # Assumes that device is open in (2, 4) shape
+    if data_parallel == 1:
+        mesh_device.reshape(ttnn.MeshShape(1, 8))
+        return [mesh_device]
+    elif data_parallel == 2:
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2, 2))
+        for submesh in submeshes:
+            submesh.reshape(ttnn.MeshShape(1, 4))
+        return submeshes
+    return mesh_device.create_submeshes(ttnn.MeshShape(1, 8 // data_parallel))
+
+
+def tg_create_submeshes(mesh_device, data_parallel):
+    # Assumes that device is open in (8, 4) shape
+    if data_parallel == 1:
+        device_order = (
+            [ttnn.MeshCoordinate(i, 0) for i in range(8)]
+            + [ttnn.MeshCoordinate(7, i) for i in range(1, 3)]
+            + [ttnn.MeshCoordinate(7 - i, 3) for i in range(8)]
+            + [ttnn.MeshCoordinate(i, 2) for i in range(7)]
+            + [ttnn.MeshCoordinate(6 - i, 1) for i in range(7)]
+        )
+        mesh_device.reshape(ttnn.MeshShape(1, 32), device_order=device_order)
+        return [mesh_device]
+    elif data_parallel == 4:
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2, 4))
+    elif data_parallel == 8:
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2, 2))
+    else:
+        raise ValueError(f"Unsupported data_parallel value: {data_parallel}")
+
+    for submesh in submeshes:
+        submesh.reshape(ttnn.MeshShape(1, 32 // data_parallel))
+
+    return submeshes
+
+
 def prepare_generator_args(
     num_devices,
     data_parallel,
@@ -177,12 +213,18 @@ def prepare_generator_args(
     page_params,
     paged_attention,
 ):
-    # Partition the mesh, singular model implemented for TP on 1xN mesh
-    submesh_devices = (
-        mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
-        if isinstance(mesh_device, ttnn.MeshDevice) and data_parallel > 1
-        else [mesh_device]
-    )
+    device_env = os.environ.get("MESH_DEVICE")
+    if device_env == "T3K":
+        submesh_devices = t3k_create_submeshes(mesh_device, data_parallel)
+    elif device_env == "TG":
+        submesh_devices = tg_create_submeshes(mesh_device, data_parallel)
+    else:
+        # Partition the mesh, singular model implemented for TP on 1xN mesh
+        submesh_devices = (
+            mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+            if isinstance(mesh_device, ttnn.MeshDevice) and data_parallel > 1
+            else [mesh_device]
+        )
     state_dict = None
 
     # Hybrid requires a model per submesh
@@ -419,7 +461,7 @@ def prepare_generator_args(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],

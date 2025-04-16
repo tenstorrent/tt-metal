@@ -468,12 +468,38 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
     return new_device_order;
 }
 
-void MeshDevice::reshape(const MeshShape& new_shape) {
+std::vector<IDevice*> MeshDevice::get_devices_in_order(const std::vector<MeshCoordinate>& device_order) const {
+    std::vector<IDevice*> new_device_order;
+    for (size_t i = 0; i < device_order.size(); i++) {
+        new_device_order.push_back(this->get_device(device_order[i]));
+    }
+    return new_device_order;
+}
+
+void MeshDevice::reshape(const MeshShape& new_shape, const std::optional<std::vector<MeshCoordinate>>& device_order) {
     TT_FATAL(
         new_shape.mesh_size() == this->num_devices(),
         "New shape must have the same number of devices as current shape");
 
-    MeshContainer<IDevice*> devices(new_shape, this->get_row_major_devices(new_shape));
+    if (!device_order.has_value()) {
+        MeshContainer<IDevice*> devices(new_shape, this->get_row_major_devices(new_shape));
+        auto new_view = std::make_unique<MeshDeviceView>(devices);
+        view_ = std::move(new_view);
+
+        return;
+    }
+
+    TT_FATAL(is_line_topology(new_shape), "Device order is only supported for line topology");
+    TT_FATAL(
+        device_order->size() == this->num_devices(),
+        "Device order must have the same number of devices as current shape");
+
+    // Check if the device order is valid
+    std::unordered_set<MeshCoordinate> unique_coords(device_order->begin(), device_order->end());
+    TT_FATAL(
+        unique_coords.size() == device_order->size(), "Device order contains duplicate coordinates: {}", device_order);
+
+    MeshContainer<IDevice*> devices(new_shape, this->get_devices_in_order(device_order.value()));
     auto new_view = std::make_unique<MeshDeviceView>(devices);
     view_ = std::move(new_view);
 }

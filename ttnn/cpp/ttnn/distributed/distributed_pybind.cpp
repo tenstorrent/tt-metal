@@ -262,6 +262,7 @@ void py_module(py::module& module) {
             "reshape",
             &MeshDevice::reshape,
             py::arg("new_shape"),
+            py::arg("device_order") = py::none(),
             R"doc(
                Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
 
@@ -280,6 +281,7 @@ void py_module(py::module& module) {
 
                Args:
                    new_shape (MeshShape): The new shape of the mesh.
+                   device_order (List[MeshCoordinate]): The new order of devices in the mesh. This is only used for reshaping to a line mesh.
 
 
                Raises:

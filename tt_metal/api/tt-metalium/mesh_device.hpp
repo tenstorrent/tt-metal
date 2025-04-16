@@ -124,6 +124,8 @@ private:
 
     // Returns the devices in row-major order for the new mesh shape
     std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
+    // Returns the devices in a given order for the new 1xN mesh
+    std::vector<IDevice*> get_devices_in_order(const std::vector<MeshCoordinate>& device_order) const;
 
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
@@ -296,7 +298,8 @@ public:
     // @throws std::runtime_error if any of the following constraints are not met:
     // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
     // 2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
-    void reshape(const MeshShape& new_shape);
+    void reshape(
+        const MeshShape& new_shape, const std::optional<std::vector<MeshCoordinate>>& device_order = std::nullopt);
     const MeshDeviceView& get_view() const;
 
     std::string to_string() const;
