@@ -458,7 +458,7 @@ class TtLlamaAttention(LightweightModule):
         xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv_fused,
             cluster_axis=1,
-            num_links=1,
+            num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="QKV",
         )
@@ -629,7 +629,7 @@ class TtLlamaAttention(LightweightModule):
         output_11SH = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
-            num_links=1,
+            num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="WO",
         )

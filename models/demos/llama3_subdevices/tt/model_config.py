@@ -510,7 +510,7 @@ class TtModelArgs:
                 per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
                 fused_activation=None,
-                fuse_batch=seq_len <= 2048,
+                fuse_batch=seq_len <= 1024,
             )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * 8) == 0
