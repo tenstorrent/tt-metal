@@ -119,7 +119,7 @@ def run_conv_transpose2d(
     if config_override and "act_block_w_div" in config_override:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
 
-    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv_transpose2d(
+    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv_transpose2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -139,7 +139,6 @@ def run_conv_transpose2d(
         groups=groups,
         mirror_kernel=mirror_kernel,
         return_output_dim=True,
-        return_weights_and_bias=True,
     )
     logger.info(f"Conv2d Transpose Input = {(input_height, input_width)} Output = {out_height, out_width}")
 

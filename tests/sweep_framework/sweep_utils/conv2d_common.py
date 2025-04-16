@@ -139,7 +139,7 @@ def run_conv2d_full_sweep(
                 {ttnn.CoreRange(core_grid[0], core_grid[1]), ttnn.CoreRange(core_grid[2], core_grid[3])}
             )
     start_time = start_measuring_time()
-    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
+    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -157,7 +157,6 @@ def run_conv2d_full_sweep(
         compute_config=compute_config,
         groups=groups,
         return_output_dim=True,
-        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -288,7 +287,7 @@ def run_conv2d_short_sweep(
         )
 
     start_time = start_measuring_time()
-    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
+    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -305,7 +304,6 @@ def run_conv2d_short_sweep(
         groups=groups,
         conv_config=conv_config,
         return_output_dim=True,
-        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -366,7 +364,7 @@ def run_conv1d_short_sweep(
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
 
     start_time = start_measuring_time()
-    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.conv1d(
+    [tt_output_tensor_on_device, out_length] = ttnn.conv1d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -380,7 +378,6 @@ def run_conv1d_short_sweep(
         input_length=input_length,
         groups=groups,
         return_output_dim=True,
-        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
