@@ -98,21 +98,20 @@ uint32_t calculate_L1_usage(
     // scalar CB as coefficient of reduce
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     uint32_t in_scalar_cb_npages = 1;
-    uint32_t in_scalar_cb_config_size = in_scalar_cb_npages /*1*/ * in_scalar_cb_pagesize /*2048*/;
+    uint32_t in_scalar_cb_config_size = in_scalar_cb_npages * in_scalar_cb_pagesize;
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
     auto raw_in_cb_id = tt::CBIndex::c_2;
     uint32_t raw_in_cb_npages = input_memory.shard_spec.value().shape[0];
     uint32_t raw_in_cb_pagesize = in_nbytes_c;
-    uint32_t raw_in_cb_config_size = raw_in_cb_npages /*100*/ * raw_in_cb_pagesize /*192*/;
+    uint32_t raw_in_cb_config_size = raw_in_cb_npages * raw_in_cb_pagesize;
 
     // reader indices
     uint32_t in_reader_indices_cb_pagesize =
         tt::round_up(out_nhw_per_core * indices_nbytes, 4);  // pagesize needs to be multiple of 4
     uint32_t in_reader_indices_cb_npages = 1;
-    uint32_t in_reader_indices_cb_config_size =
-        in_reader_indices_cb_npages /*1*/ * in_reader_indices_cb_pagesize /*72*/;
+    uint32_t in_reader_indices_cb_config_size = in_reader_indices_cb_npages * in_reader_indices_cb_pagesize;
 
     uint32_t in_cb_sz = 0;
     uint32_t in_nblocks_c = 1;
@@ -128,11 +127,11 @@ uint32_t calculate_L1_usage(
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
     uint32_t in_cb_npages = multi_buffering_factor * nblocks;
-    uint32_t in_cb_config_0_size = in_cb_npages /*2*/ * in_cb_pagesize /*6144*/;
+    uint32_t in_cb_config_0_size = in_cb_npages * in_cb_pagesize;
     uint32_t in_cb_config_1_size = 0;
 
     if (split_reader) {
-        in_cb_config_1_size = in_cb_npages /*2*/ * in_cb_pagesize /*6144*/;
+        in_cb_config_1_size = in_cb_npages * in_cb_pagesize;
     }
 
     // after reduction
@@ -140,13 +139,13 @@ uint32_t calculate_L1_usage(
                                out_nbytes;  // there is just one row of channels after each reduction (or 1 block
                                             // of c if its greater than 8 tiles)
     uint32_t out_cb_npages = output_memory.shard_spec.value().shape[0] * in_ntiles_c;
-    uint32_t out_cb_config_size = out_cb_npages /*108*/ * out_cb_pagesize /*62*/;
+    uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
     uint32_t max_pool_partials_cb_config_size = 0;
     if (is_large_kernel) {
         uint32_t max_pool_partials_cb_pagesize = out_cb_pagesize;
         uint32_t max_pool_partials_cb_npages = nblocks;
-        max_pool_partials_cb_config_size = max_pool_partials_cb_npages /*1*/ * max_pool_partials_cb_pagesize /*64*/;
+        max_pool_partials_cb_config_size = max_pool_partials_cb_npages * max_pool_partials_cb_pagesize;
     }
 
     return in_scalar_cb_config_size
@@ -164,47 +163,10 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
     auto output_shape = sliding_window_config.get_output_shape();
     auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
-    auto input_parallel_config_height = conv::determine_parallel_config(
-        TensorMemoryLayout::HEIGHT_SHARDED,
-        batch_size,
-        channels,
-        output_shape[1],
-        output_shape[2],
-        channels,
-        compute_grid_size,
-        ShardOrientation::ROW_MAJOR,
-        false,
-        false);
-    auto output_parallel_config_height =
-        conv::determine_output_parallel_config(input_parallel_config_height, compute_grid_size, channels, false);
-
-    auto input_parallel_config_width = conv::determine_parallel_config(
-        TensorMemoryLayout::WIDTH_SHARDED,
-        batch_size,
-        channels,
-        output_shape[1],
-        output_shape[2],
-        channels,
-        compute_grid_size,
-        ShardOrientation::ROW_MAJOR,
-        false,
-        false);
-    auto output_parallel_config_width =
-        conv::determine_output_parallel_config(input_parallel_config_width, compute_grid_size, channels, false);
-
-    auto input_parallel_config_block = conv::determine_parallel_config(
-        TensorMemoryLayout::BLOCK_SHARDED,
-        batch_size,
-        channels,
-        output_shape[1],
-        output_shape[2],
-        channels,
-        compute_grid_size,
-        ShardOrientation::COL_MAJOR,
-        false,
-        false);
-    auto output_parallel_config_block =
-        conv::determine_output_parallel_config(input_parallel_config_block, compute_grid_size, channels, false);
+    struct l1_usage_config {
+        uint32_t l1_usage;
+        sliding_window::ParallelConfig config;
+    };
 
     auto get_memconfig = [&](const ParallelConfig& parallel_config) {
         uint32_t nhw = batch_size * output_shape[1] * output_shape[2];
@@ -214,47 +176,53 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
             ttnn::Shape({1, 1, nhw, out_channeal_padded}), parallel_config, tt::constants::TILE_HEIGHT);
     };
 
-    uint32_t l1_usage_height = calculate_L1_usage(
-        input_tensor,
-        sliding_window_config.window_hw.first,
-        sliding_window_config.window_hw.second,
-        sliding_window_config.get_output_shape()[1],
-        sliding_window_config.get_output_shape()[2],
-        get_memconfig(input_parallel_config_height),
-        get_memconfig(output_parallel_config_height));
+    auto calc_l1_usage_inner = [&](TensorMemoryLayout layout, ShardOrientation orientation) -> l1_usage_config {
+        auto input_parallel_config = conv::determine_parallel_config(
+            layout,
+            batch_size,
+            channels,
+            output_shape[1],
+            output_shape[2],
+            channels,
+            compute_grid_size,
+            orientation,
+            false,
+            false);
+        auto output_parallel_config =
+            conv::determine_output_parallel_config(input_parallel_config, compute_grid_size, channels, false);
 
-    uint32_t l1_usage_width = calculate_L1_usage(
-        input_tensor,
-        sliding_window_config.window_hw.first,
-        sliding_window_config.window_hw.second,
-        sliding_window_config.get_output_shape()[1],
-        sliding_window_config.get_output_shape()[2],
-        get_memconfig(input_parallel_config_width),
-        get_memconfig(output_parallel_config_width));
+        uint32_t l1_usage = calculate_L1_usage(
+            input_tensor,
+            sliding_window_config.window_hw.first,
+            sliding_window_config.window_hw.second,
+            sliding_window_config.get_output_shape()[1],
+            sliding_window_config.get_output_shape()[2],
+            get_memconfig(input_parallel_config),
+            get_memconfig(output_parallel_config));
 
-    uint32_t l1_usage_block = calculate_L1_usage(
-        input_tensor,
-        sliding_window_config.window_hw.first,
-        sliding_window_config.window_hw.second,
-        sliding_window_config.get_output_shape()[1],
-        sliding_window_config.get_output_shape()[2],
-        get_memconfig(input_parallel_config_block),
-        get_memconfig(output_parallel_config_block));
+        return {l1_usage, input_parallel_config};
+    };
 
-    uint32_t ncores_height = input_parallel_config_height.grid.num_cores();
-    uint32_t ncores_width = input_parallel_config_width.grid.num_cores();
-    uint32_t ncores_block = input_parallel_config_block.grid.num_cores();
+    auto l1_config_height = calc_l1_usage_inner(TensorMemoryLayout::HEIGHT_SHARDED, ShardOrientation::ROW_MAJOR);
+    auto l1_config_width = calc_l1_usage_inner(TensorMemoryLayout::WIDTH_SHARDED, ShardOrientation::ROW_MAJOR);
+    auto l1_config_block = calc_l1_usage_inner(TensorMemoryLayout::BLOCK_SHARDED, ShardOrientation::COL_MAJOR);
+
+    uint32_t l1_usage_height = l1_config_height.l1_usage;
+    uint32_t l1_usage_width = l1_config_width.l1_usage;
+    uint32_t l1_usage_block = l1_config_block.l1_usage;
+
+    uint32_t ncores_block = l1_config_block.config.grid.num_cores();
 
     uint32_t winning_l1_usage = l1_usage_height;
-    auto winning_config = input_parallel_config_height;
+    auto winning_config = l1_config_height.config;
     // Make sure that BS not only has smaller size but provides at least some slicing along the channels.
     // In case we have BS that would slice the tensor only along the HS conv2d code would fail later on.
     if (l1_usage_block < l1_usage_height && ncores_block > compute_grid_size.x) {
         winning_l1_usage = l1_usage_block;
-        winning_config = input_parallel_config_block;
+        winning_config = l1_config_block.config;
     }
     if (l1_usage_width < winning_l1_usage) {
-        winning_config = input_parallel_config_width;
+        winning_config = l1_config_width.config;
     }
 
     return winning_config;

@@ -39,7 +39,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const MemoryConfig& out_mem_config,
     uint32_t nblocks) {
     TT_FATAL(pool_type == Pool2DType::MAX_POOL2D, "Currently only support max pool2d (#12151)");
-
+    auto tmpsize1 = input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
@@ -217,6 +217,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             max_pool_partials_cb_npages);
     }
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
+    auto tmpsize2 = input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
     auto l1_usage = pool::calculate_L1_usage(
         input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config());
