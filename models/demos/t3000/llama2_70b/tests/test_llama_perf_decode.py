@@ -2,28 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import defaultdict
+
 import pytest
-from loguru import logger
 import torch
+from loguru import logger
+
 import ttnn
-
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
-
-from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
     BASE_URL,
+    check_mesh_device,
     load_llama_state_dict,
+    setup_llama_env,
     should_skip_model_load,
 )
-from models.utility_functions import (
-    profiler,
-    skip_for_grayskull,
+from models.demos.t3000.llama2_70b.tt.llama_model_optimized import (
+    TtLlamaModel_optimized,
 )
 from models.perf.perf_utils import prep_perf_report
-
-from collections import defaultdict
+from models.utility_functions import profiler, skip_for_grayskull
 
 
 def get_decode_time(profiler, start_token, end_token):
@@ -202,6 +200,7 @@ def run_test_LlamaModel_end_to_end(
     ids=["gen32", "gen128", "gen2k", "gen8k", "gen128k"],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 20000000}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 def test_Llama_perf_host(
     generation_length,
     expected_compile_time,
@@ -209,24 +208,26 @@ def test_Llama_perf_host(
     batch,
     seq_len,
     max_context_len,
-    t3k_mesh_device,
+    mesh_device,
     llama_version,
     use_program_cache,
     n_layers=80,
     n_devices=8,
 ):
+    mesh_device.reshape(ttnn.MeshShape(1, 8))
+
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
         max_batch_size=batch,
         max_context_len=max_context_len,
     )
 
-    check_mesh_device(t3k_mesh_device, model_config)
+    check_mesh_device(mesh_device, model_config)
 
-    t3k_mesh_device.enable_async(True)
+    mesh_device.enable_async(True)
 
     run_test_LlamaModel_end_to_end(
-        t3k_mesh_device,
+        mesh_device,
         llama_version,
         batch,
         seq_len,
