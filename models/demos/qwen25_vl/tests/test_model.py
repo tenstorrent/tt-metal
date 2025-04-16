@@ -67,11 +67,15 @@ def test_vision_model_inference(
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     if num_layers:
         model_args.hf_config.vision_config.depth = num_layers
+        from transformers import logging as transformers_logging
+
+        # Set logging level to ERROR to suppress warnings about unexpected keys
+        transformers_logging.set_verbosity_error()
     else:
         num_layers = model_args.hf_config.vision_config.depth
 
     # Create reference model
-    reference_model = model_args.reference_vision_model()
+    reference_model = model_args.reference_vision_model(depth=model_args.hf_config.vision_config.depth)
     # reference_model = Qwen2_5_VisionTransformerPretrainedModel(model_args.hf_config.vision_config)
     # reference_model.load_state_dict(model_args.reference_vision_model().state_dict(), strict=False)
     # FIXME: state_dict = model_args.load_state_dict()
