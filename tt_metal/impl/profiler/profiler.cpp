@@ -351,9 +351,9 @@ void DeviceProfiler::logPacketData(
 
     if (packet_type == kernel_profiler::TS_DATA) {
         if (this->current_zone_it != device_events.end()) {
-            // Check if we are in NCRISC Dispatch zone. If so, we could have gotten dispatch meta data packets
+            // Check if we are in BRISC Dispatch zone. If so, we could have gotten dispatch meta data packets
             // These packets can amend parent zone's info
-            if (tracy::riscName[risc_num] == "NCRISC" &&
+            if (tracy::riscName[risc_num] == "BRISC" &&
                 this->current_zone_it->zone_phase == tracy::TTDeviceEventPhase::begin &&
                 this->current_zone_it->zone_name.find("DISPATCH") != std::string::npos) {
                 if (zone_name.find("process_cmd") != std::string::npos) {
