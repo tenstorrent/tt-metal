@@ -6,7 +6,7 @@
 
 namespace tt::tt_metal {
 
-enum class ProfilerDumpState { NORMAL, CLOSE_DEVICE_SYNC, LAST_CLOSE_DEVICE, FORCE_UMD_READ };
+enum class ProfilerDumpState { NORMAL, CLOSE_DEVICE_SYNC, LAST_CLOSE_DEVICE };
 enum class ProfilerSyncState { INIT, CLOSE_DEVICE };
 
 }  // namespace tt::tt_metal

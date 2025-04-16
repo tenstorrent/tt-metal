@@ -666,24 +666,21 @@ def pytest_handlecrashitem(crashitem, report, sched):
 
 
 def reset_tensix(tt_open_devices=None):
-    import ttnn
+    import shutil
 
-    arch = ttnn.get_arch_name()
-    if arch != "grayskull" and arch != "wormhole_b0":
-        raise Exception(f"Unrecognized arch for tensix-reset: {arch}")
+    # Check if tt-smi exists
+    if not shutil.which("tt-smi"):
+        logger.error("tt-smi command not found. Cannot reset devices. Please install tt-smi.")
+        return
 
     if tt_open_devices is None:
-        logger.info(f"Running reset with reset script: /opt/tt_metal_infra/scripts/ci/{arch}/reset.sh")
-        smi_reset_result = run_process_and_get_result(f"/opt/tt_metal_infra/scripts/ci/{arch}/reset.sh")
+        logger.info(f"Running reset for all pci devices")
+        smi_reset_result = run_process_and_get_result(f"tt-smi -r")
     else:
         tt_open_devices_str = ",".join([str(i) for i in tt_open_devices])
-        check_smi_metal = run_process_and_get_result("tt-smi-metal -h")
         logger.info(f"Running reset for pci devices: {tt_open_devices_str}")
-        if check_smi_metal.returncode > 0:
-            logger.info(f"Test failed - resetting {arch} with tt-smi")
-            smi_reset_result = run_process_and_get_result(f"tt-smi -r {tt_open_devices_str}")
-        else:
-            smi_reset_result = run_process_and_get_result(f"tt-smi-metal -r {tt_open_devices_str}")
+        smi_reset_result = run_process_and_get_result(f"tt-smi -r {tt_open_devices_str}")
+
     logger.info(f"tt-smi reset status: {smi_reset_result.returncode}")
 
 

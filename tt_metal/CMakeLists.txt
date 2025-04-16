@@ -30,15 +30,6 @@ target_sources(
             api/tt-metalium/fabric_host_interface.h
             core_descriptors/blackhole_140_arch.yaml
             core_descriptors/wormhole_b0_80_arch.yaml
-            fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/quanta_galaxy_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
-            fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
             impl/dispatch/kernels/cq_helpers.hpp

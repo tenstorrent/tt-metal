@@ -41,6 +41,36 @@ def conv_transpose2d(
     return_output_dim=False,
     return_weights_and_bias=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
+    """
+    Applies a 2D transposed convolution operator over an input image composed of several input planes, sometimes also called “deconvolution”.
+
+        :param ttnn.Tensor input_tensor:  the input tensor.
+        :param ttnn.Tensor weight_tensor: the weight tensor.
+        :param ttnn.Tensor, None bias_tensor:   optional bias tensor. Default: None
+        :param ttnn.IDevice device:  the device to use.
+        :param int: in_channels:  number of input channels.
+        :param int: out_channels:  number of output channels.
+        :param int: batch_size:  batch size.
+        :param int: input_height:  height of the input tensor.
+        :param int: input_width:  width of the input tensor.
+        :param tuple[int  , int] kernel_size: size of the convolving kernel.
+        :param tuple[int, int] stride: stride of the cross-correlation.
+        :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+        :param tuple[int, int] dilation: spacing between kernel elements.
+        :param int groups:  number of blocked connections from input channels to output channels.
+        :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
+        :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
+        :param bool mirror_kernel: Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored.
+        :param bool: return_output_dim:  If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,
+        :param bool: return_weights_and_bias:  If true, the op also returns the preprocessed weight and bias on device .
+
+        :return: The output tensor, output height and width, and the preprocessed weights and bias.
+
+        :rtype: [ttnn.Tensor]: the output tensor, when return_output_dim = False and return_weights_and_bias = False
+        :rtype: [ttnn.Tensor, Tuple[int, int]]: the output tensor, and it's height and width, if return_output_dim = True
+        :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height and width, if return_weights_and_bias = True
+        :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height and width, if return_output_dim = True and return_weights_and_bias = True
+    """
     (
         conv_output,
         output_height,
