@@ -2,23 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import timm
+import torch
 from loguru import logger
 
-
-import timm
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-    comp_allclose,
-    comp_pcc,
-)
-
-from models.experimental.hrnet.tt.high_resolution_module import (
-    TtHighResolutionModule,
-)
 from models.experimental.hrnet.tt.basicblock import TtBasicBlock
+from models.experimental.hrnet.tt.high_resolution_module import TtHighResolutionModule
+from models.utility_functions import comp_allclose, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(
@@ -52,15 +43,10 @@ def test_hrnet_module_inference(device, model_name, pcc, reset_seeds):
 
     torch_outputs = torch_model(inputs)
 
-    tt_inputs = [
-        torch_to_tt_tensor_rm(inputs[i], device, put_on_device=False)
-        for i in range(len(inputs))
-    ]
+    tt_inputs = [torch_to_tt_tensor_rm(inputs[i], device, put_on_device=False) for i in range(len(inputs))]
     tt_outputs = tt_model(tt_inputs)
 
-    tt_outputs_torch = [
-        tt_to_torch_tensor(tt_outputs[i]) for i in range(len(tt_outputs))
-    ]
+    tt_outputs_torch = [tt_to_torch_tensor(tt_outputs[i]) for i in range(len(tt_outputs))]
 
     does_pass_list = []
     for i in range(len(tt_outputs_torch)):

@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import List
+
 import torch.nn as nn
 
-from typing import List
 import ttnn
-from models.experimental.vovnet.tt.separable_conv_norm_act import (
-    TtSeparableConvNormAct,
-)
+from models.experimental.vovnet.tt.separable_conv_norm_act import TtSeparableConvNormAct
 
 
 class TtSequentialAppendList(nn.Sequential):

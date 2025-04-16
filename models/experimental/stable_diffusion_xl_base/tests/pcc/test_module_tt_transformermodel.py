@@ -1,13 +1,14 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
+from diffusers import DiffusionPipeline
+
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
-from diffusers import DiffusionPipeline
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(

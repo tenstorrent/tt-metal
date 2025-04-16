@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
+
 import torch
 from loguru import logger
 
@@ -12,15 +13,12 @@ if os.getenv("CI") == "true":
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
 
 import ttnn
-from ttnn import ConcatMeshToTensor
+from models.experimental.grok.reference.model import MultiHeadAttention
 from models.experimental.grok.tt.grok_attention import TtGrokAttention
 from models.experimental.grok.tt.grok_common import prepare_inputs_ttnn, prepare_rotation_mat_ttnn
-from models.experimental.grok.reference.model import MultiHeadAttention
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_allclose, comp_pcc
+from ttnn import ConcatMeshToTensor
 
 
 def test_grok_attention_inference(t3k_mesh_device, use_program_cache, reset_seeds):

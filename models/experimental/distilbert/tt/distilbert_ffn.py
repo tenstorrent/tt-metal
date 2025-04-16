@@ -4,11 +4,9 @@
 
 import torch.nn as nn
 
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-)
 import ttnn
 from models.helper_funcs import Linear as TtLinear
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtFFN(nn.Module):

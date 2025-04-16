@@ -3,17 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from functools import partial
+
 import torch
 import torch.nn as nn
 
-from functools import partial
-
 import ttnn
-
 from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import (
-    pad_by_zero,
-)
+from models.utility_functions import pad_by_zero
 
 
 # Copied from transformers.models.bert.modeling_bert.BertOutput

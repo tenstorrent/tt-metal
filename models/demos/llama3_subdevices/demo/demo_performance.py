@@ -2,27 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-from time import perf_counter
-from datetime import datetime
-from loguru import logger
 import os
-import ttnn
+from datetime import datetime
+from time import perf_counter
+
 import pytest
+import torch
+from loguru import logger
+from tracy import signpost
 
-from models.demos.llama3_subdevices.tt.llama_common import (
-    PagedAttentionConfig,
-)
-from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
+import ttnn
+from models.demos.llama3_subdevices.tt.llama_common import PagedAttentionConfig
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
+from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
-
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 
 from .demo_decode import load_inputs
-from tracy import signpost
 
 
 def run_llama3_decode_performance(

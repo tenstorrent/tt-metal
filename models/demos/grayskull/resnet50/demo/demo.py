@@ -4,6 +4,7 @@
 
 
 import pytest
+
 from models.demos.ttnn_resnet.demo.demo import run_resnet_imagenet_inference, run_resnet_inference
 
 

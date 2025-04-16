@@ -22,12 +22,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
-from torch import nn
+import json
 from dataclasses import dataclass
 from pathlib import Path
-import json
 from typing import Optional, Tuple
+
+import torch
+from torch import nn
 
 
 @dataclass

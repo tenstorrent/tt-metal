@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import random
-from loguru import logger
 
 import torch
-
+from loguru import logger
 from tt_lib.utils import is_close
+
+import ttnn
 
 
 def ref_stable_softmax(x):

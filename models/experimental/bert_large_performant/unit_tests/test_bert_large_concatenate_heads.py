@@ -2,14 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 from loguru import logger
 
-
 import ttnn
-from models.utility_functions import (
-    comp_pcc,
-)
-import torch
+from models.utility_functions import comp_pcc
 
 
 def run_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config, out_mem_config):

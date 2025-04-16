@@ -2,28 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-
 import copy
-from typing import List, Sequence, Union, Tuple, Optional, Any
-from tt_lib.fallback_ops import fallback_ops
-import torchvision
 from functools import partial
-from loguru import logger
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
-from models.utility_functions import (
-    torch2tt_tensor,
-)
-from models.experimental.efficientnet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation
+import torch
+import torchvision
+from loguru import logger
+from tt_lib.fallback_ops import fallback_ops
+
+import ttnn
 from models.experimental.efficientnet.reference.efficientnet_lite import build_efficientnet_lite
-from models.experimental.efficientnet.tt.efficientnet_mbconv import (
-    _MBConvConfig,
-    MBConvConfig,
-)
-from models.experimental.efficientnet.tt.efficientnet_fused_mbconv import (
-    FusedMBConvConfig,
-)
+from models.experimental.efficientnet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation
+from models.experimental.efficientnet.tt.efficientnet_fused_mbconv import FusedMBConvConfig
+from models.experimental.efficientnet.tt.efficientnet_mbconv import MBConvConfig, _MBConvConfig
+from models.utility_functions import torch2tt_tensor
 
 
 class TtEfficientNet(torch.nn.Module):

@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import json
-import ttnn
 
+import torch
+
+import ttnn
 from models.generation_utils import get_logits_processor
 
 mem_config = ttnn.L1_MEMORY_CONFIG

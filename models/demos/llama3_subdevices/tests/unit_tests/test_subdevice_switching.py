@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
 import ttnn
-from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
+from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 @pytest.mark.parametrize(

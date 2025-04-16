@@ -3,20 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+
+import evaluate
 import pytest
 import torch
-import evaluate
-from loguru import logger
-
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
 from datasets import load_dataset
-from models import generation_utils
+from loguru import logger
+from transformers import BloomConfig, BloomForCausalLM, BloomTokenizerFast
 from ttnn.model_preprocessing import preprocess_model_parameters
-from transformers import BloomTokenizerFast, BloomForCausalLM, BloomConfig
+
+from models import generation_utils
 from models.demos.grayskull.functional_bloom.tt import ttnn_functional_bloom, ttnn_optimized_functional_bloom
+from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def generate_next_token(

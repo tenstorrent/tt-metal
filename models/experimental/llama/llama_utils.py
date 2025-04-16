@@ -2,11 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional
+
 import torch
 from loguru import logger
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.logits_process import LogitsProcessorList
-from typing import Optional
+
 import ttnn
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 

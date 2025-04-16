@@ -4,8 +4,10 @@
 
 import os
 from pathlib import Path
-from loguru import logger
+
 import torch
+from loguru import logger
+
 import ttnn
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 

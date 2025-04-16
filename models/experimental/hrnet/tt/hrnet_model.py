@@ -3,22 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import torch.nn as nn
+
 import timm
+import torch.nn as nn
+from tt_lib.fallback_ops import fallback_ops
 
 import ttnn
-from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import torch_to_tt_tensor_rm
-
-from models.helper_funcs import Linear as TtLinear
-
+from models.experimental.hrnet.hrnet_utils import create_batchnorm
 from models.experimental.hrnet.tt.basicblock import TtBasicBlock
 from models.experimental.hrnet.tt.bottleneck import TtBottleneck
 from models.experimental.hrnet.tt.high_resolution_module import TtHighResolutionModule
-
-
-from models.experimental.hrnet.hrnet_utils import create_batchnorm
-
+from models.helper_funcs import Linear as TtLinear
+from models.utility_functions import torch_to_tt_tensor_rm
 
 logger = logging.getLogger(__name__)
 

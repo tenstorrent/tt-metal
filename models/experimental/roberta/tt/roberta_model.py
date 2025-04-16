@@ -3,20 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from dataclasses import dataclass
+from typing import List, Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
 
-from dataclasses import dataclass
-from typing import Optional, Tuple, Union, List
-
 import ttnn
+from models.experimental.roberta.roberta_common import torch2tt_tensor
+from models.experimental.roberta.tt.roberta_embeddings import PytorchEmbeddings
 from models.experimental.roberta.tt.roberta_encoder import TtRobertaEncoder
 from models.experimental.roberta.tt.roberta_pooler import TtRobertaPooler
-from models.experimental.roberta.tt.roberta_embeddings import PytorchEmbeddings
-from models.utility_functions import (
-    tt2torch_tensor,
-)
-from models.experimental.roberta.roberta_common import torch2tt_tensor
+from models.utility_functions import tt2torch_tensor
 
 
 @dataclass

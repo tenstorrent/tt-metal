@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List
+
 import ttnn
-from ttnn import ShardTensorToMesh
-from models.utility_functions import nearest_32
 from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config
+from models.utility_functions import nearest_32
+from ttnn import ShardTensorToMesh
 
 
 class TtLlamaMLP_optimized:

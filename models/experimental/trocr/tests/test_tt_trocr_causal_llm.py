@@ -2,13 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-
+import torch
 from loguru import logger
 from PIL import Image
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-from transformers import VisionEncoderDecoderModel
 
 from models.experimental.trocr.trocr_generate_utils import GenerationMixin
 

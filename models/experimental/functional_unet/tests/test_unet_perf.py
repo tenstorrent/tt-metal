@@ -3,16 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 from loguru import logger
 
-from models.perf.perf_utils import prep_perf_report
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import (
-    skip_for_grayskull,
-)
-
 from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_SIZE
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
@@ -65,9 +61,7 @@ def test_unet_trace_perf(
     use_program_cache,
     reset_seeds,
 ):
-    from models.experimental.functional_unet.tests.test_unet_trace import (
-        test_unet_trace_2cq_same_io,
-    )
+    from models.experimental.functional_unet.tests.test_unet_trace import test_unet_trace_2cq_same_io
 
     logger.info(f"Invoking underlying model test for {iterations} iterations...")
     result = test_unet_trace_2cq_same_io(batch, groups, iterations, device, use_program_cache, reset_seeds)
@@ -113,9 +107,7 @@ def test_unet_trace_perf_multi_device(
     use_program_cache,
     reset_seeds,
 ):
-    from models.experimental.functional_unet.tests.test_unet_trace import (
-        test_unet_trace_2cq_same_io_multi_device,
-    )
+    from models.experimental.functional_unet.tests.test_unet_trace import test_unet_trace_2cq_same_io_multi_device
 
     mesh_device.enable_async(use_async_mode)
     model_name = "unet_shallow-trace_2cq_same_io-multi_device"

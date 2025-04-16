@@ -2,25 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-from torch.utils.data import DataLoader
-from torchvision import transforms, datasets
-from loguru import logger
-import pytest
-import ttnn
 import evaluate
+import pytest
+import torch
+from loguru import logger
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
 
+import ttnn
+from models.experimental.lenet.lenet_utils import load_torch_lenet
+from models.experimental.lenet.tt.lenet import lenet5
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
-    profiler,
-    enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    profiler,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
-
-from models.experimental.lenet.tt.lenet import lenet5
-from models.experimental.lenet.lenet_utils import load_torch_lenet
-from models.perf.perf_utils import prep_perf_report
 
 
 def run_perf_inference(device, pcc, iterations, model_location_generator, reset_seeds):

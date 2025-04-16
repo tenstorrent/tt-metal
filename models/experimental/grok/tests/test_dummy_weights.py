@@ -4,7 +4,6 @@
 from loguru import logger
 
 import ttnn
-
 from models.experimental.grok.tt.grok_model import TtTransformer
 from models.experimental.grok.tt.model_config import TtModelArgs
 

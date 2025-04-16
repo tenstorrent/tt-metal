@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torchvision import models
 from loguru import logger
-
+from torchvision import models
 
 _batch_size = 1
 

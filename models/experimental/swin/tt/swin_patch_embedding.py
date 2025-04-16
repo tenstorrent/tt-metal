@@ -2,17 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
 import collections.abc
+from typing import Optional, Tuple
+
 import torch.nn as nn
-
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-)
-
+from tt_lib.fallback_ops import fallback_ops
 
 import ttnn
-from tt_lib.fallback_ops import fallback_ops
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtSwinPatchEmbeddings(nn.Module):

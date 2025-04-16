@@ -3,24 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
+
 import ttnn
-
-from models.experimental.stable_diffusion_xl_base.tt.tt_timesteps import TtTimesteps
-from models.experimental.stable_diffusion_xl_base.tt.tt_embedding import TtTimestepEmbedding
-
-from models.experimental.stable_diffusion_xl_base.tt.tt_downblock2d import TtDownBlock2D
-from models.experimental.stable_diffusion_xl_base.tt.tt_crossattndownblock2d import TtCrossAttnDownBlock2D
-
-from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnmidblock2d import TtUNetMidBlock2DCrossAttn
-
-from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnupblock2d import TtCrossAttnUpBlock2D
-from models.experimental.stable_diffusion_xl_base.tt.tt_upblock2d import TtUpBlock2D
-
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
     prepare_gn_beta_gamma,
     prepare_gn_mask,
 )
+from models.experimental.stable_diffusion_xl_base.tt.tt_crossattndownblock2d import TtCrossAttnDownBlock2D
+from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnmidblock2d import TtUNetMidBlock2DCrossAttn
+from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnupblock2d import TtCrossAttnUpBlock2D
+from models.experimental.stable_diffusion_xl_base.tt.tt_downblock2d import TtDownBlock2D
+from models.experimental.stable_diffusion_xl_base.tt.tt_embedding import TtTimestepEmbedding
+from models.experimental.stable_diffusion_xl_base.tt.tt_timesteps import TtTimesteps
+from models.experimental.stable_diffusion_xl_base.tt.tt_upblock2d import TtUpBlock2D
 
 
 class TtUNet2DConditionModel(nn.Module):

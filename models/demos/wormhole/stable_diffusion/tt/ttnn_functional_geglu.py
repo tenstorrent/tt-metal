@@ -2,11 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    determine_blocking,
-)
+
+import ttnn
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import determine_blocking
 
 
 def split_linear_params(params):

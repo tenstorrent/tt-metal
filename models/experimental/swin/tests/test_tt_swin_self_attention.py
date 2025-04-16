@@ -2,20 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
-
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-    comp_allclose,
-    comp_pcc,
-)
-from models.experimental.swin.tt.swin_self_attention import (
-    TtSwinSelfAttention,
-)
 from transformers import SwinModel
+
+from models.experimental.swin.tt.swin_self_attention import TtSwinSelfAttention
+from models.utility_functions import comp_allclose, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(

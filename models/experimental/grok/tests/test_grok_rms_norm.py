@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
+
 import torch
 from loguru import logger
 
@@ -12,15 +13,11 @@ if os.getenv("CI") == "true":
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
-
-from models.experimental.grok.tt.grok_rms_norm import TtRMSNorm, TtRMSNormSharded
 from models.experimental.grok.reference.model import RMSNorm
+from models.experimental.grok.tt.grok_rms_norm import TtRMSNorm, TtRMSNormSharded
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_allclose, comp_pcc
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 def test_grok_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds):

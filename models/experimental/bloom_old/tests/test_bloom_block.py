@@ -3,18 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
-from transformers import BloomForCausalLM
-from models.utility_functions import print_diff_argmax
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
-
 from loguru import logger
+from transformers import BloomForCausalLM
 
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.bloom_block as bloom_block
+from models.utility_functions import print_diff_argmax
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 def run_bloom_block_test(device):

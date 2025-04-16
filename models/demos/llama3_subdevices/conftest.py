@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import pytest
 import gc
+
+import pytest
 
 
 @pytest.fixture(autouse=True)

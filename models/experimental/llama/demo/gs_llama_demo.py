@@ -2,22 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-import ttnn
+import torch
 from loguru import logger
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
-from transformers import AutoTokenizer, AutoModelForCausalLM
-
+import ttnn
 from models.experimental.llama.llama_utils import (
-    pad_input_32_left,
-    get_next_llama_output_token,
     gen_position_ids,
     get_logits_processor,
+    get_next_llama_output_token,
+    pad_input_32_left,
 )
-
 from models.experimental.llama.tt.llama import llama_first_half, llama_second_half
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 def run_llama_split_inference(

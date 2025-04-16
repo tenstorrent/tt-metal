@@ -3,34 +3,32 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import torch
-import ttnn
-import pytest
-import numpy as np
-
-from pathlib import Path
-from loguru import logger
 from collections import defaultdict
+from pathlib import Path
 
-from models.perf.perf_utils import prep_perf_report
+import numpy as np
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
 from models.experimental.yolov3.reference.models.common import DetectMultiBackend
-from models.experimental.yolov3.tt.yolov3_detection_model import TtDetectionModel
 from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
-from models.utility_functions import (
-    torch2tt_tensor,
-    Profiler,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-)
 from models.experimental.yolov3.reference.utils.general import (
     check_img_size,
     non_max_suppression,
     scale_boxes,
     xyxy2xywh,
-    check_img_size,
 )
 from models.experimental.yolov3.reference.utils.metrics import *
-
+from models.experimental.yolov3.tt.yolov3_detection_model import TtDetectionModel
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import (
+    Profiler,
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    torch2tt_tensor,
+)
 
 BATCH_SIZE = 1
 

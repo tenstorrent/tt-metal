@@ -5,17 +5,12 @@
 
 import pytest
 from loguru import logger
-
-
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    comp_allclose,
-    comp_pcc,
-)
-import ttnn
-from models.experimental.swin.tt.swin_embeddings import TtSwinEmbeddings
-from models.experimental.swin.swin_utils import get_shape
 from transformers import SwinModel
+
+import ttnn
+from models.experimental.swin.swin_utils import get_shape
+from models.experimental.swin.tt.swin_embeddings import TtSwinEmbeddings
+from models.utility_functions import comp_allclose, comp_pcc, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(

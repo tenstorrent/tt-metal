@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
 
+import ttnn
 from models.experimental.t5.tt.t5_attention import TtT5Attention
 from models.experimental.t5.tt.t5_layer_norm import TtT5LayerNorm
 

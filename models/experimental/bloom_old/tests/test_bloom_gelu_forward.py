@@ -3,17 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
-from models.utility_functions import print_diff_argmax
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
-
 from loguru import logger
 
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.bloom_gelu_forward as bloom_gelu_forward
+from models.utility_functions import print_diff_argmax
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
 def run_bloom_gelu_forward_test(device):

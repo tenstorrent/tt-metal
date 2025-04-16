@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from loguru import logger
-
 import torch
+from loguru import logger
 from transformers import BertForQuestionAnswering
-import ttnn
 from tt_lib.utils import pad_activation, pad_weight
+
+import ttnn
 from models.experimental.bert.fused_ops.linear import Linear as TtLinear
-from models.utility_functions import comp_pcc, comp_allclose
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device):

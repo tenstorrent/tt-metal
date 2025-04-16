@@ -3,20 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
-
 from loguru import logger
 
-
+import ttnn
+from models.experimental.functional_unet.tests.common import check_pcc_conv, is_n300_with_eth_dispatch_cores
+from models.experimental.functional_unet.tt import unet_shallow_torch, unet_shallow_ttnn
 from models.experimental.functional_unet.tt.model_preprocessing import (
     create_unet_input_tensors,
     create_unet_model_parameters,
-)
-from models.experimental.functional_unet.tt import unet_shallow_torch
-from models.experimental.functional_unet.tt import unet_shallow_ttnn
-from models.experimental.functional_unet.tests.common import (
-    check_pcc_conv,
-    is_n300_with_eth_dispatch_cores,
 )
 
 

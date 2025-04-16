@@ -1,17 +1,14 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
+import torch
 from loguru import logger
-import ttnn
-
-from models.experimental.bert_tiny.tt.bert_output import TtBertoutput
 from transformers import BertForQuestionAnswering
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+
+import ttnn
+from models.experimental.bert_tiny.tt.bert_output import TtBertoutput
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 @pytest.mark.parametrize(

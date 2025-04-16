@@ -2,25 +2,27 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
+import numpy as np
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoTokenizer
 from tqdm import tqdm
-import time
-import numpy as np
+from transformers import AutoTokenizer
+
 import ttnn
-from ttnn import ConcatMeshToTensor
-from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.t3000.falcon40b.tt.model_config import get_model_config
-from models.demos.t3000.falcon40b.tests.test_utils import load_hf_model
 from models.datasets.llm_dataset_utils import (
-    prepare_textgen_dataset,
-    prepare_textgen_dataloader,
     calculate_acc_metrics,
+    prepare_textgen_dataloader,
+    prepare_textgen_dataset,
     verify_acc_metrics,
 )
+from models.demos.t3000.falcon40b.tests.test_utils import load_hf_model
+from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.utility_functions import is_wormhole_b0
+from ttnn import ConcatMeshToTensor
 
 
 def calculate_perplexity(

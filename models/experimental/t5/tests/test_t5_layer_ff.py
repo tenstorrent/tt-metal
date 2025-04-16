@@ -2,17 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import json
-from loguru import logger
 
+import torch
+from loguru import logger
 from transformers import T5Model
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    comp_pcc,
-)
+
 from models.experimental.t5.tt.t5_layer_ff import TtT5LayerFF
+from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor
 
 
 def run_test_T5LayerFF_inference(device, model_name, input_h, input_w):

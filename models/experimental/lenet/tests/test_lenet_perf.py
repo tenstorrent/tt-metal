@@ -2,21 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from loguru import logger
-import pytest
-import ttnn
 
+import ttnn
+from models.experimental.lenet.lenet_utils import load_torch_lenet, prepare_image
+from models.experimental.lenet.tt.lenet import lenet5
 from models.utility_functions import (
-    profiler,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
     comp_pcc,
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    profiler,
     torch2tt_tensor,
 )
-
-from models.experimental.lenet.tt.lenet import lenet5
-from models.experimental.lenet.lenet_utils import load_torch_lenet, prepare_image
 
 
 @pytest.mark.parametrize(

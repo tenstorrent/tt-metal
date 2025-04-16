@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
 
-from models.experimental.t5.tt.t5_layer_norm import TtT5LayerNorm
+import ttnn
 from models.experimental.t5.tt.t5_dense_act_dense import TtT5DenseActDense
 from models.experimental.t5.tt.t5_dense_gated_act_dense import TtT5DenseGatedActDense
+from models.experimental.t5.tt.t5_layer_norm import TtT5LayerNorm
 
 
 class TtT5LayerFF(torch.nn.Module):

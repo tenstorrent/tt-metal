@@ -2,26 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-import ttnn
-from models.experimental.nanogpt.nanogpt_utils import get_tt_cache_path, store_weights
-from pathlib import Path
 import os
+from pathlib import Path
 
+import pytest
+import torch
+from loguru import logger
 from transformers import GPT2LMHeadModel
 
-from loguru import logger
 import models.experimental.nanogpt.tt.nanogpt_mlp as nanogpt_mlp
-
-
+import ttnn
+from models.experimental.nanogpt.nanogpt_utils import get_tt_cache_path, store_weights
 from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
     comp_allclose,
     comp_pcc,
-    is_wormhole_b0,
     is_blackhole,
+    is_wormhole_b0,
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
 )
 
 

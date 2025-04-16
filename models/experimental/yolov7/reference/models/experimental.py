@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
 import random
+
+import numpy as np
 import torch
 import torch.nn as nn
 from loguru import logger

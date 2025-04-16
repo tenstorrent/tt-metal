@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 from tqdm import tqdm
+from vllm.inputs import INPUT_REGISTRY
+
+import ttnn
 from models.demos.llama3_subdevices.tt.generator import Generator
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations, TtModelArgs
-from vllm.inputs import INPUT_REGISTRY
 
 
 def generate_submeshes(mesh_device, data_parallel):

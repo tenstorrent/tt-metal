@@ -2,8 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import json
+
+import torch
+
 import ttnn
 
 

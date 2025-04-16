@@ -2,14 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import torch
-
+import torch.nn as nn
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import (
-    tt2torch_tensor,
-    torch_to_tt_tensor_rm,
-)
+
+from models.utility_functions import torch_to_tt_tensor_rm, tt2torch_tensor
 
 
 class TtDetect(nn.Module):

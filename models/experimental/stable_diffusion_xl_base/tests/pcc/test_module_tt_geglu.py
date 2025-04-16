@@ -1,14 +1,16 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
+from functools import reduce
+
 import pytest
+import torch
+from diffusers import DiffusionPipeline
+
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
-from diffusers import DiffusionPipeline
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
-from functools import reduce
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(

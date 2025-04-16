@@ -2,23 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from loguru import logger
-import pytest
-import ttnn
-from models.utility_functions import profiler
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-)
-from models.perf.perf_utils import prep_perf_report
-
 from transformers import BloomForCausalLM, BloomTokenizerFast
 
-from loguru import logger
-
 import models.experimental.bloom.tt.bloom_model as bloom_model
-
+import ttnn
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
 
 BATCH_SIZE = 1
 

@@ -2,21 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
+import os
+
 import pytest
+import torch
+import torch.nn.functional as F
 from loguru import logger
-from models.perf.perf_utils import prep_perf_report
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import (
-    profiler,
-)
-from models.utility_functions import skip_for_grayskull
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
+
+import ttnn
 from models.experimental.functional_vanilla_unet.reference.unet import UNet
 from models.experimental.functional_vanilla_unet.ttnn.ttnn_unet import TtUnet
-import os
-from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
-import torch.nn.functional as F
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import profiler, skip_for_grayskull
 
 
 def create_custom_preprocessor(device):

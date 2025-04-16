@@ -5,32 +5,27 @@
 import math
 from copy import copy
 from pathlib import Path
-from loguru import logger
+
 import numpy as np
 import pandas as pd
 import requests
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from loguru import logger
 from PIL import Image
 from torch.cuda import amp
 
 from models.experimental.yolov7.reference.utils.datasets import letterbox
 from models.experimental.yolov7.reference.utils.general import (
-    non_max_suppression,
-    make_divisible,
-    scale_coords,
     increment_path,
+    make_divisible,
+    non_max_suppression,
+    scale_coords,
     xyxy2xywh,
 )
-from models.experimental.yolov7.reference.utils.plots import (
-    color_list,
-    plot_one_box,
-)
-from models.experimental.yolov7.reference.utils.torch_utils import (
-    time_synchronized,
-)
-
+from models.experimental.yolov7.reference.utils.plots import color_list, plot_one_box
+from models.experimental.yolov7.reference.utils.torch_utils import time_synchronized
 
 ##### basic ####
 

@@ -2,27 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-from loguru import logger
 from typing import List
-from llama_models.llama3.api.datatypes import (
-    InterleavedTextMedia,
-    StopReason,
-)
 
-from llama_models.llama3.reference_impl.generation import (
-    ChatPrediction,
-    CompletionPrediction,
-)
+import torch
+from llama_models.llama3.api.datatypes import InterleavedTextMedia, StopReason
+from llama_models.llama3.reference_impl.generation import ChatPrediction, CompletionPrediction
+from loguru import logger
+
+import ttnn
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
-    get_padded_prefill_len,
-    num_blocks_in_seq,
     get_block_size,
     get_max_prefill_chunk_size,
+    get_padded_prefill_len,
+    num_blocks_in_seq,
 )
-
 from models.tt_transformers.tt.generator import SamplingParams
 
 

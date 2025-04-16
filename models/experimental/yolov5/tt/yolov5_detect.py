@@ -4,8 +4,8 @@
 
 import torch
 
-from models.utility_functions import tt2torch_tensor
 from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv2D
+from models.utility_functions import tt2torch_tensor
 
 
 class TtYolov5Detect(torch.nn.Module):

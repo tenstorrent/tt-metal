@@ -2,20 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import cv2
 import time
-
-from loguru import logger
 from pathlib import Path
+
+import cv2
+import torch
+from loguru import logger
 from numpy import random
 
-
-
-
-from models.experimental.yolov7.reference.models.load_torch_model import (
-    get_yolov7_fused_cpu_model,
-)
+from models.experimental.yolov7.reference.models.load_torch_model import get_yolov7_fused_cpu_model
 from models.experimental.yolov7.reference.utils.datasets import LoadImages
 from models.experimental.yolov7.reference.utils.general import (
     check_img_size,
@@ -24,12 +19,11 @@ from models.experimental.yolov7.reference.utils.general import (
     set_logging,
 )
 from models.experimental.yolov7.reference.utils.plots import plot_one_box
-from models.experimental.yolov7.reference.utils.torch_utils import (
-    time_synchronized,
-)
-
+from models.experimental.yolov7.reference.utils.torch_utils import time_synchronized
 
 file_path = f"{Path(__file__).parent}"
+
+
 def test_cpu_demo(model_location_generator):
     torch.manual_seed(1234)
     logger.info(file_path)
@@ -88,9 +82,7 @@ def test_cpu_demo(model_location_generator):
             agnostic_nms = False
             save_conf = True
             # Apply NMS
-            pred = non_max_suppression(
-                pred, conf_thres, iou_thres, classes=classes, agnostic=False
-            )
+            pred = non_max_suppression(pred, conf_thres, iou_thres, classes=classes, agnostic=False)
             t3 = time_synchronized()
 
             # Process predictions
@@ -129,9 +121,7 @@ def test_cpu_demo(model_location_generator):
                         )
 
                 # Print time (inference + NMS)
-                logger.info(
-                    f"{s}Done. ({(1E3 * (t2 - t1)):.1f}ms) Inference, ({(1E3 * (t3 - t2)):.1f}ms) NMS"
-                )
+                logger.info(f"{s}Done. ({(1E3 * (t2 - t1)):.1f}ms) Inference, ({(1E3 * (t3 - t2)):.1f}ms) NMS")
 
                 # Save input image
                 cv2.imwrite(save_path_input, im0s)

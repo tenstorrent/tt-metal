@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
+
 import ttnn
-from ttnn.model_preprocessing import infer_ttnn_module_args
-from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
 from models.experimental.functional_vgg_unet.reference.vgg_unet import UNetVGG19
 
 

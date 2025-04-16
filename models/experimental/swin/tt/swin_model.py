@@ -2,21 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from typing import Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
-
-
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
+from tt_lib.fallback_ops import fallback_ops
 
 import ttnn
-from tt_lib.fallback_ops import fallback_ops
-from models.experimental.swin.tt.swin_encoder import TtSwinEncoder
 from models.experimental.swin.tt.swin_embeddings import TtSwinEmbeddings
-from dataclasses import dataclass
+from models.experimental.swin.tt.swin_encoder import TtSwinEncoder
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @dataclass

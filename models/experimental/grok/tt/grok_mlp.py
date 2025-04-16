@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from ttnn import ShardTensorToMesh
 from models.experimental.grok.tt.grok_common import LightweightModule
+from ttnn import ShardTensorToMesh
 
 
 class TtGrokMLP(LightweightModule):

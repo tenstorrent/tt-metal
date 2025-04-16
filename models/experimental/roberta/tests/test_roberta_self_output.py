@@ -3,18 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
 from loguru import logger
 from transformers import RobertaModel
 
-
-from models.experimental.roberta.tt.roberta_self_output import TtRobertaSelfOutput
-from models.utility_functions import (
-    tt2torch_tensor,
-    comp_allclose,
-    comp_pcc,
-)
 from models.experimental.roberta.roberta_common import torch2tt_tensor
+from models.experimental.roberta.tt.roberta_self_output import TtRobertaSelfOutput
+from models.utility_functions import comp_allclose, comp_pcc, tt2torch_tensor
 
 
 def test_roberta_self_output_inference(device):

@@ -3,13 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Tuple
+
 import torch.nn as nn
 
 import ttnn
-
-from models.experimental.swin.tt.swin_self_attention import (
-    TtSwinSelfAttention,
-)
+from models.experimental.swin.tt.swin_self_attention import TtSwinSelfAttention
 from models.experimental.swin.tt.swin_self_output import TtSwinSelfOutput
 
 

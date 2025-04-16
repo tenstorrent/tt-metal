@@ -3,17 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
-from transformers import RobertaModel
 from loguru import logger
+from transformers import RobertaModel
 
-from models.experimental.roberta.tt.roberta_attention import TtRobertaAttention
-from models.utility_functions import (
-    tt2torch_tensor,
-    comp_allclose,
-    comp_pcc,
-)
 from models.experimental.roberta.roberta_common import torch2tt_tensor
+from models.experimental.roberta.tt.roberta_attention import TtRobertaAttention
+from models.utility_functions import comp_allclose, comp_pcc, tt2torch_tensor
 
 
 def test_roberta_attention_inference(device):

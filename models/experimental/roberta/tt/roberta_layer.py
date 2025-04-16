@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch.nn as nn
 from typing import Optional, Tuple
 
-import ttnn
+import torch.nn as nn
 
+import ttnn
 from models.experimental.roberta.tt.roberta_attention import TtRobertaAttention
 from models.experimental.roberta.tt.roberta_intermediate import TtRobertaIntermediate
 from models.experimental.roberta.tt.roberta_output import TtRobertaOutput
