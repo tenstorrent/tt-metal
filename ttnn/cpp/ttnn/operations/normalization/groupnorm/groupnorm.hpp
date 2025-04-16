@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
+#include "device/groupnorm_types.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -22,7 +23,8 @@ struct ExecuteGroupNorm {
         const std::optional<ttnn::DataType> dtype = std::nullopt,
         std::optional<CoreGrid> core_grid = std::nullopt,
         std::optional<bool> inplace = std::nullopt,
-        std::optional<ttnn::Layout> output_layout = std::nullopt);
+        std::optional<ttnn::Layout> output_layout = std::nullopt,
+        std::optional<int> num_out_blocks = std::nullopt);
 };
 
 }  // namespace normalization
