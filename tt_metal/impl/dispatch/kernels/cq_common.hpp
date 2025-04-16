@@ -165,7 +165,7 @@ FORCE_INLINE void cq_noc_async_write_with_state(
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config
 // (dst_noc, VC..) have been specified.
-template <bool write_last_packet = true>
+template <bool write_last_packet = true, bool update_counters = false>
 uint32_t cq_noc_async_write_with_state_any_len(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     if (size > NOC_MAX_BURST_SIZE) {
@@ -173,15 +173,27 @@ uint32_t cq_noc_async_write_with_state_any_len(
         src_addr += NOC_MAX_BURST_SIZE;
         dst_addr += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
+        if constexpr (update_counters) {
+            noc_nonposted_writes_num_issued[noc_index] += 1;
+            noc_nonposted_writes_acked[noc_index] += ndests;
+        }
         while (size > NOC_MAX_BURST_SIZE) {
             cq_noc_async_write_with_state<CQ_NOC_SnDl>(src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
             src_addr += NOC_MAX_BURST_SIZE;
             dst_addr += NOC_MAX_BURST_SIZE;
             size -= NOC_MAX_BURST_SIZE;
+            if constexpr (update_counters) {
+                noc_nonposted_writes_num_issued[noc_index] += 1;
+                noc_nonposted_writes_acked[noc_index] += ndests;
+            }
         }
     }
     if constexpr (write_last_packet) {
         cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, size, ndests);
+        if constexpr (update_counters) {
+            noc_nonposted_writes_num_issued[noc_index] += 1;
+            noc_nonposted_writes_acked[noc_index] += ndests;
+        }
         return 0;
     } else {
         return size;
