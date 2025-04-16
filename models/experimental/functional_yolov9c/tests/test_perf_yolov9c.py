@@ -29,19 +29,19 @@ def get_expected_times(name):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "use_pretrained_weight",
+    "use_weights_from_ultralytics",
     [
         # "False",
         "True",
     ],
 )
-def test_perf(device, use_pretrained_weight):
+def test_perf(device, use_weights_from_ultralytics):
     disable_persistent_kernel_cache()
     torch_input, ttnn_input = create_yolov9c_input_tensors(device, model=True)
     batch_size = torch_input.shape[0]
     torch_model = yolov9c.YoloV9()
 
-    if use_pretrained_weight:
+    if use_weights_from_ultralytics:
         pretrained_model = YOLO("yolov9c.pt")
         torch_model.load_state_dict(pretrained_model.state_dict(), strict=False)
 
