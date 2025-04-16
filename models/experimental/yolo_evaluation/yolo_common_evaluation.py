@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 
+from ultralytics import YOLO
 import cv2
 import fiftyone
 import numpy as np
@@ -218,7 +219,7 @@ def evaluation(
         else:
             ttnn_im = im.permute((0, 2, 3, 1))
 
-        if model_name == "YOLOv11":  # only for YOLOv11
+        if model_name in ["YOLOv11", "YOLOv9c", "YOLOv10"]:
             ttnn_im = ttnn_im.reshape(
                 1,
                 1,
@@ -229,12 +230,12 @@ def evaluation(
             ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout, device=device)
 
         if model_type != "torch_model":
-            preprocessed_images.append(ttnn_im)  # Append preprocessed image to list
+            preprocessed_images.append((ttnn_im, im, im0s))
         else:
-            preprocessed_images.append(im)
+            preprocessed_images.append((im, im, im0s))
 
     # Model inference loop
-    for im in preprocessed_images:
+    for ttnn_im, im, im0s in preprocessed_images:
         if model_type == "torch_model":
             preds = model(im)
             if model_name == "YOLOv4":
@@ -243,20 +244,24 @@ def evaluation(
                 y1, y2, y3 = gen_yolov4_boxes_confs(preds)
                 output = get_region_boxes([y1, y2, y3])
         else:
-            preds = model._execute_yolov4_trace_2cqs_inference(im)
-            if model_name == "YOLOv11":
+            if model_name in ["YOLOv11", "YOLOv9c", "YOLOv10"]:
+                preds = model(ttnn_im)
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
             elif model_name == "YOLOv4":
+                preds = model._execute_yolov4_trace_2cqs_inference(im)
                 result_boxes = preds[0]
                 result_confs = preds[1]
                 output = [result_boxes.to(torch.float16), result_confs.to(torch.float16)]
             else:
+                preds = model(ttnn_im)
                 preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
 
         if model_name == "YOLOv4":
             from models.demos.yolov4.post_processing import post_processing
 
             results = post_processing(img, 0.3, 0.4, output)
+        elif model_name == "YOLOv10":
+            results = postprocess(preds, im, im0s, batch, classes, model_name=model_name, conf=0.5)[0]
         else:
             results = postprocess(preds, im, im0s, batch, classes)[0]
 
@@ -375,4 +380,265 @@ def test_run_yolov4_eval(
         save_dir=save_dir,
         model_name=model_name,
         additional_layer=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+    ],
+    #  ("torch_model")],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("res", [(640, 640)])
+def test_yolov8x(device, model_type, res, reset_seeds):
+    from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8xModel  # depends on model which we take
+    from models.experimental.functional_yolov8x.reference import yolov8x_utils  # depends on model which we take
+    from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
+        custom_preprocessor,
+    )  # depends on model which we take
+
+    torch_model = YOLO("yolov8x.pt")
+    torch_model = torch_model.model
+    model = torch_model.eval()
+
+    if model_type == "torch_model":
+        model = attempt_load(
+            "yolov8x.pt", model_path="models/experimental/functional_yolov8x/demo/yolov8x.pt", map_location="cpu"
+        )
+        logger.info("Inferencing using Torch Model")
+    else:
+        state_dict = attempt_load(
+            "yolov8x.pt", model_path="models/experimental/functional_yolov8x/demo/yolov8x.pt", map_location="cpu"
+        ).state_dict()
+        parameters = custom_preprocessor(device, state_dict, inp_h=res[0], inp_w=res[1])
+        model = YOLOv8xModel(device=device, parameters=parameters)
+        logger.info("Inferencing using ttnn Model")
+
+    save_dir = "models/experimental/functional_yolov8x/demo/runs"
+
+    input_dtype = ttnn.bfloat16
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    evaluation(
+        device=device,
+        res=res,
+        model_type=model_type,
+        model=model,
+        parameters=None,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
+    )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("res", [(640, 640)])
+def test_yolov8s_world(device, model_type, res, reset_seeds):
+    from models.experimental.yolov8s_world.reference import yolov8s_world
+    from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
+    from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
+        create_custom_preprocessor,
+        attempt_load,
+        move_to_device,
+    )
+
+    from ttnn.model_preprocessing import preprocess_model_parameters
+
+    if model_type == "torch_model":
+        model = attempt_load("yolov8s-world.pt", map_location="cpu")
+    else:
+        weights_torch_model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        torch_model = yolov8s_world.YOLOWorld(model_torch=weights_torch_model)
+
+        state_dict = weights_torch_model.state_dict()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+        torch_model = torch_model.model
+
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device)
+        )
+
+        for i in [12, 15, 19, 22]:
+            parameters["model"][i]["attn"]["gl"]["weight"] = ttnn.to_device(
+                parameters["model"][i]["attn"]["gl"]["weight"], device=device
+            )
+            parameters["model"][i]["attn"]["gl"]["bias"] = ttnn.to_device(
+                parameters["model"][i]["attn"]["gl"]["bias"], device=device
+            )
+            parameters["model"][i]["attn"]["bias"] = ttnn.to_device(
+                parameters["model"][i]["attn"]["bias"], device=device
+            )
+
+        parameters["model"][16] = move_to_device(parameters["model"][16], device)
+
+        parameters["model"][23]["cv4"] = move_to_device(parameters["model"][23]["cv4"], device)
+
+        model = TtYOLOWorld(device=device, parameters=parameters)
+
+    input_dtype = ttnn.bfloat16
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    save_dir = "models/experimental/yolov8s_world/demo/runs"
+
+    evaluation(
+        device=device,
+        res=res,
+        model_type=model_type,
+        model=model,
+        parameters=None,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
+    )
+
+
+# The outputs are not good should check, not working in latest main
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        "tt_model",
+    ],
+)
+def test_yolov9c(device, model_type, reset_seeds):
+    from models.experimental.functional_yolov9c.reference import yolov9c
+    from models.experimental.functional_yolov9c.tt.model_preprocessing import (
+        create_yolov9c_input_tensors,
+        create_yolov9c_model_parameters,
+    )
+    from models.experimental.functional_yolov9c.tt import ttnn_yolov9c
+
+    if model_type == "torch_model":
+        state_dict = None
+
+        torch_model = YOLO("yolov9c.pt")
+        state_dict = torch_model.state_dict()
+
+        model = yolov9c.YoloV9()
+        state_dict = model.state_dict() if state_dict is None else state_dict
+
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(model.state_dict().items(), ds_state_dict.items()):
+            if isinstance(parameter2, torch.FloatTensor):
+                new_state_dict[name1] = parameter2
+        model.load_state_dict(new_state_dict)
+        model.eval()
+        logger.info("Inferencing [Torch] Model")
+    else:
+        torch_input, ttnn_input = create_yolov9c_input_tensors(device)
+        state_dict = None
+
+        torch_model = YOLO("yolov9c.pt")
+        state_dict = torch_model.state_dict()
+
+        torch_model = yolov9c.YoloV9()
+        state_dict = torch_model.state_dict() if state_dict is None else state_dict
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            if isinstance(parameter2, torch.FloatTensor):
+                new_state_dict[name1] = parameter2
+
+        torch_model.load_state_dict(new_state_dict)
+        torch_model.eval()
+        parameters = create_yolov9c_model_parameters(torch_model, torch_input, device=device)
+        model = ttnn_yolov9c.YoloV9(device, parameters)
+        logger.info("Inferencing [TTNN] Model")
+
+    save_dir = "models/experimental/functional_yolov9c/demo/runs"
+
+    input_dtype = ttnn.bfloat16
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    evaluation(
+        device=device,
+        res=(640, 640),
+        model_type=model_type,
+        model=model,
+        parameters=None,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
+        model_name="YOLOv9c",
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        "tt_model",
+    ],
+)
+def test_yolov10(device, model_type, reset_seeds):
+    from models.experimental.yolov10.reference.yolov10 import YOLOv10
+    from models.experimental.yolov10.tt.yolov10 import TtnnYolov10
+    from models.experimental.yolov10.tt.model_preprocessing import (
+        create_yolov10x_input_tensors,
+        create_yolov10x_model_parameters,
+    )
+
+    if model_type == "torch_model":
+        state_dict = None
+        torch_model = YOLO("yolov10x.pt")
+        state_dict = torch_model.state_dict()
+
+        torch_model = YOLOv10()
+        state_dict = torch_model.state_dict() if state_dict is None else state_dict
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            if isinstance(parameter2, torch.FloatTensor):
+                new_state_dict[name1] = parameter2
+        torch_model.load_state_dict(new_state_dict)
+        torch_model.eval()
+        model = torch_model
+        logger.info("Inferencing [Torch] Model")
+    else:
+        torch_input, ttnn_input = create_yolov10x_input_tensors(device)
+        state_dict = None
+        torch_model = YOLO("yolov10x.pt")
+        state_dict = torch_model.state_dict()
+
+        torch_model = YOLOv10()
+        state_dict = torch_model.state_dict() if state_dict is None else state_dict
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            if isinstance(parameter2, torch.FloatTensor):
+                new_state_dict[name1] = parameter2
+        torch_model.load_state_dict(new_state_dict)
+        torch_model.eval()
+        parameters = create_yolov10x_model_parameters(torch_model, torch_input, device=device)
+        model = TtnnYolov10(device, parameters, conv_pt=parameters)
+
+    save_dir = "models/experimental/yolov10/demo/runs"
+
+    input_dtype = ttnn.bfloat8_b
+    input_layout = ttnn.TILE_LAYOUT
+
+    evaluation(
+        device=device,
+        res=(640, 640),
+        model_type=model_type,
+        model=model,
+        parameters=None,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
+        model_name="YOLOv10",
     )

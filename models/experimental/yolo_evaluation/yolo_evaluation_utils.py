@@ -278,9 +278,20 @@ def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xyw
     return clip_boxes(boxes, img0_shape)
 
 
-def postprocess(preds, img, orig_imgs, batch, names):
-    args = {"conf": 0.25, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
-
+def postprocess(preds, img, orig_imgs, batch, names, model_name=None, conf=0.25):
+    args = {"conf": conf, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
+    if model_name == "YOLOv10":
+        nc = 80
+        max_det = 300
+        preds = preds.permute(0, 2, 1)
+        batch_size, anchors, _ = preds.shape
+        boxes, scores = preds.split([4, nc], dim=-1)
+        index = scores.amax(dim=-1).topk(min(max_det, anchors))[1].unsqueeze(-1)
+        boxes = boxes.gather(dim=1, index=index.repeat(1, 1, 4))
+        scores = scores.gather(dim=1, index=index.repeat(1, 1, nc))
+        scores, index = scores.flatten(1).topk(min(max_det, anchors))
+        i = torch.arange(batch_size)[..., None]
+        preds = torch.cat([boxes[i, index // nc], scores[..., None], (index % nc)[..., None].float()], dim=-1)
     preds = non_max_suppression(
         preds,
         args["conf"],
