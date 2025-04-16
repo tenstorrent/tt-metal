@@ -93,7 +93,7 @@ void init_sync_registers() {
 }
 
 int main(int argc, char *argv[]) {
-    // Workaround for tt-metal#16439, making sure gathering is disabled
+    // Workaround for tt-metal#16439, making sure gathering multiple instructions issued to Tensix is disabled
 #ifdef ARCH_BLACKHOLE
     disable_gathering();
 #endif
