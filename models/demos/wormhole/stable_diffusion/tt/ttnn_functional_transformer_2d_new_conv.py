@@ -270,23 +270,23 @@ class transformer_2d_model:
             "conv_config": conv_config,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.proj_in_conv_weights):
-            self.proj_in_conv_weights = ttnn.prepare_conv_weights(
-                weight_tensor=self.proj_in_conv_weights,
-                weights_format="OIHW",
-                input_memory_config=hidden_states.memory_config(),
-                input_layout=hidden_states.get_layout(),
-                has_bias=True,
-                **conv_kwargs,
-            )
-            self.proj_in_conv_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.proj_in_conv_bias,
-                input_memory_config=hidden_states.memory_config(),
-                input_layout=hidden_states.get_layout(),
-                **conv_kwargs,
-            )
-            self.proj_in_conv_weights = ttnn.to_device(self.proj_in_conv_weights, self.device)
-            self.proj_in_conv_bias = ttnn.to_device(self.proj_in_conv_bias, self.device)
+        # if not ttnn.is_tensor_storage_on_device(self.proj_in_conv_weights):
+        #     self.proj_in_conv_weights = ttnn.prepare_conv_weights(
+        #         weight_tensor=self.proj_in_conv_weights,
+        #         weights_format="OIHW",
+        #         input_memory_config=hidden_states.memory_config(),
+        #         input_layout=hidden_states.get_layout(),
+        #         has_bias=True,
+        #         **conv_kwargs,
+        #     )
+        #     self.proj_in_conv_bias = ttnn.prepare_conv_bias(
+        #         bias_tensor=self.proj_in_conv_bias,
+        #         input_memory_config=hidden_states.memory_config(),
+        #         input_layout=hidden_states.get_layout(),
+        #         **conv_kwargs,
+        #     )
+        #     self.proj_in_conv_weights = ttnn.to_device(self.proj_in_conv_weights, self.device)
+        #     self.proj_in_conv_bias = ttnn.to_device(self.proj_in_conv_bias, self.device)
 
         hidden_states = ttnn.conv2d(
             input_tensor=hidden_states,
@@ -346,23 +346,23 @@ class transformer_2d_model:
                     "conv_config": conv_config,
                 }
 
-                if not ttnn.is_tensor_storage_on_device(self.proj_out_conv_weights):
-                    self.proj_out_conv_weights = ttnn.prepare_conv_weights(
-                        weight_tensor=self.proj_out_conv_weights,
-                        weights_format="OIHW",
-                        input_memory_config=hidden_states.memory_config(),
-                        input_layout=hidden_states.get_layout(),
-                        has_bias=True,
-                        **conv_kwargs_1,
-                    )
-                    self.proj_out_conv_bias = ttnn.prepare_conv_bias(
-                        bias_tensor=self.proj_out_conv_bias,
-                        input_memory_config=hidden_states.memory_config(),
-                        input_layout=hidden_states.get_layout(),
-                        **conv_kwargs_1,
-                    )
-                    self.proj_out_conv_weights = ttnn.to_device(self.proj_out_conv_weights, self.device)
-                    self.proj_out_conv_bias = ttnn.to_device(self.proj_out_conv_bias, self.device)
+                # if not ttnn.is_tensor_storage_on_device(self.proj_out_conv_weights):
+                #     self.proj_out_conv_weights = ttnn.prepare_conv_weights(
+                #         weight_tensor=self.proj_out_conv_weights,
+                #         weights_format="OIHW",
+                #         input_memory_config=hidden_states.memory_config(),
+                #         input_layout=hidden_states.get_layout(),
+                #         has_bias=True,
+                #         **conv_kwargs_1,
+                #     )
+                #     self.proj_out_conv_bias = ttnn.prepare_conv_bias(
+                #         bias_tensor=self.proj_out_conv_bias,
+                #         input_memory_config=hidden_states.memory_config(),
+                #         input_layout=hidden_states.get_layout(),
+                #         **conv_kwargs_1,
+                #     )
+                #     self.proj_out_conv_weights = ttnn.to_device(self.proj_out_conv_weights, self.device)
+                #     self.proj_out_conv_bias = ttnn.to_device(self.proj_out_conv_bias, self.device)
                 # hidden_states = ttnn.to_memory_config(hidden_states, self.proj_out.conv.input_sharded_memory_config)
                 [hidden_states, [_out_height, _out_width]] = ttnn.conv2d(
                     input_tensor=hidden_states,
