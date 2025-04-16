@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,11 +18,18 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
 
     // Writer loop
     uint32_t count = 0;
-    for (uint32_t i = 0; i < 2; ++i) {
-        for (uint32_t j = 0; j < 2; ++j) {
-            for (uint32_t k = 0; k < 16; ++k) {
-                for (uint32_t l = 0; l < 16; l++) {
-                    const uint16_t value = l + 16 * j + wt_offset;
+    /*
+    The 32x32 tile is subdivided into four 16x16 quadrants(faces): top-left, top-right, bottom-left, and bottom-right.
+    These quadrants are stored contiguously in memory. Therefore, indices must be written in memory according
+    to their respective quadrant, rather than sequentially from left to right across the entire tile.
+    */
+    constexpr uint32_t tile_faces = 2;
+    constexpr uint32_t face_size = 16;
+    for (uint32_t i = 0; i < tile_faces; ++i) {
+        for (uint32_t j = 0; j < tile_faces; ++j) {
+            for (uint32_t k = 0; k < face_size; ++k) {
+                for (uint32_t l = 0; l < face_size; l++) {
+                    const uint16_t value = l + face_size * j + wt_offset;
                     ptr[count] = value;
                     count++;
                 }  // l loop
