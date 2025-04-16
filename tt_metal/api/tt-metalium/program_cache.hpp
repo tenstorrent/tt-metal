@@ -120,12 +120,17 @@ struct ProgramCache {
 
     bool is_enabled() { return is_enabled_; }
 
+    void allow_cache_misses() { allow_cache_misses_ = true; }
+    void forbid_cache_misses() { allow_cache_misses_ = false; }
+    bool cache_misses_allowed() { return allow_cache_misses_; }
+
     void clear() { this->cache_.clear(); }
 
     std::size_t num_entries() const { return this->cache_.size(); }
 
 private:
     bool is_enabled_ = false;
+    bool allow_cache_misses_ = true;
     std::unordered_map<uint64_t, CachedProgramFactory> cache_{};
 };
 

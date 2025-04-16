@@ -189,6 +189,8 @@ public:
     // modifying this structure, since worker threads use this for compiling ops
     virtual void enable_program_cache() = 0;
     virtual void disable_and_clear_program_cache() = 0;
+    void allow_program_cache_misses();
+    void forbid_program_cache_misses();
     virtual program_cache::detail::ProgramCache& get_program_cache() = 0;
     virtual std::size_t num_program_cache_entries() = 0;
 
