@@ -7,7 +7,6 @@
 #include <host_api.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <nlohmann/json.hpp>
-#include <rtoptions.hpp>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -72,7 +71,8 @@ void DeviceProfiler::readRiscProfilerResults(
 
         riscCount = 1;
     }
-    profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
     uint32_t coreFlatID =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
@@ -635,8 +635,8 @@ void DeviceProfiler::serializeJsonNocTraces(
 }
 
 CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const {
-    bool coord_is_translated =
-        c.x >= hal_ref.get_virtual_worker_start_x() && c.y >= hal_ref.get_virtual_worker_start_y();
+    bool coord_is_translated = c.x >= MetalContext::instance().hal().get_virtual_worker_start_x() &&
+                               c.y >= MetalContext::instance().hal().get_virtual_worker_start_y();
     if (device_architecture == tt::ARCH::WORMHOLE_B0 && coord_is_translated) {
         const metal_SocDescriptor& soc_desc =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
@@ -731,6 +731,7 @@ void DeviceProfiler::dumpResults(
     ZoneScoped;
 
     auto device_id = device->id();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
 
     generateZoneSourceLocationsHashes();
@@ -739,7 +740,7 @@ void DeviceProfiler::dumpResults(
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+                if (rtoptions.get_profiler_do_dispatch_cores()) {
                     tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
                 }
             } else {
@@ -751,7 +752,7 @@ void DeviceProfiler::dumpResults(
             }
         }
 
-        if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+        if (rtoptions.get_profiler_noc_events_enabled()) {
             log_warning("Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
         }
 
@@ -778,12 +779,12 @@ void DeviceProfiler::dumpResults(
             }
 
             // if defined, used profiler_noc_events_report_path to write json log. otherwise use output_dir
-            auto rpt_path = tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_report_path();
+            auto rpt_path = rtoptions.get_profiler_noc_events_report_path();
             if (rpt_path.empty()) {
                 rpt_path = output_dir;
             }
 
-            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+            if (rtoptions.get_profiler_noc_events_enabled()) {
                 serializeJsonNocTraces(noc_trace_json_log, rpt_path, device_id);
             }
         }
@@ -868,7 +869,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
 #endif
 }
 
-bool getDeviceProfilerState() { return tt::llrt::RunTimeOptions::get_instance().get_profiler_enabled(); }
+bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled(); }
 
 }  // namespace tt_metal
 

@@ -14,7 +14,7 @@
 #include "blockfloat_common.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tile.hpp"
 #include "tracy/Tracy.hpp"
@@ -35,7 +35,7 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
 
-    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 
     auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;

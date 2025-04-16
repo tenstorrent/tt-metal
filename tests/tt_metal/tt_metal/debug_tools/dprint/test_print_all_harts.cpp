@@ -21,7 +21,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt {
@@ -182,19 +182,19 @@ static void RunTest(DPrintFixture* fixture, IDevice* device) {
     // failing test cases, although all three kernels simply print.
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
-        llrt::RunTimeOptions::get_instance().get_root_dir() +
+        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
         program,
-        llrt::RunTimeOptions::get_instance().get_root_dir() +
+        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/ncrisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     KernelHandle trisc_print_kernel_id = CreateKernel(
         program,
-        llrt::RunTimeOptions::get_instance().get_root_dir() +
+        tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/trisc_print.cpp",
         core,
         ComputeConfig{});

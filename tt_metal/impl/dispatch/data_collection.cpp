@@ -7,7 +7,6 @@
 #include <core_coord.hpp>
 #include <kernel.hpp>
 #include <magic_enum/magic_enum.hpp>
-#include <rtoptions.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -23,6 +22,7 @@
 #include "dev_msgs.h"
 #include "tt-metalium/program.hpp"
 #include <umd/device/tt_core_coordinates.h>
+#include "impl/context/metal_context.hpp"
 #include "utils.hpp"
 
 using namespace tt;
@@ -271,7 +271,7 @@ namespace tt {
 
 void RecordDispatchData(Program& program, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 
@@ -281,7 +281,7 @@ void RecordDispatchData(Program& program, data_collector_t type, uint32_t transa
 
 void RecordKernelGroups(Program& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 
@@ -291,7 +291,7 @@ void RecordKernelGroups(Program& program, CoreType core_type, std::vector<Kernel
 
 void RecordProgramRun(Program& program) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 

@@ -9,34 +9,34 @@
 #include <string>
 
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 
 using tt::tt_metal::HalL1MemAddrType;
 using tt::tt_metal::HalMemType;
 using tt::tt_metal::HalProgrammableCoreType;
-using tt::tt_metal::HalSingleton;
 
 namespace tt::tt_metal::hal {
 
-tt::ARCH get_arch() { return HalSingleton::getInstance().get_arch(); }
+tt::ARCH get_arch() { return tt::tt_metal::MetalContext::instance().hal().get_arch(); }
 
 std::string get_arch_name() {
-    auto arch_enum = HalSingleton::getInstance().get_arch();
+    auto arch_enum = tt::tt_metal::MetalContext::instance().hal().get_arch();
     return tt::get_string_lowercase(arch_enum);
 }
 
 uint32_t get_l1_size() {
-    return HalSingleton::getInstance().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    return tt::tt_metal::MetalContext::instance().hal().get_dev_size(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
 }
 
-uint32_t get_dram_alignment() { return HalSingleton::getInstance().get_alignment(HalMemType::DRAM); }
+uint32_t get_dram_alignment() { return tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::DRAM); }
 
-uint32_t get_l1_alignment() { return HalSingleton::getInstance().get_alignment(HalMemType::L1); }
+uint32_t get_l1_alignment() { return tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1); }
 
-uint32_t get_pcie_alignment() { return HalSingleton::getInstance().get_alignment(HalMemType::HOST); }
+uint32_t get_pcie_alignment() { return tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST); }
 
 uint32_t get_erisc_l1_unreserved_base() {
-    auto& hal_ref = HalSingleton::getInstance();
+    auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
     if (hal_ref.get_arch() != tt::ARCH::GRAYSKULL) {
         return hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     }
@@ -44,7 +44,7 @@ uint32_t get_erisc_l1_unreserved_base() {
 }
 
 uint32_t get_erisc_l1_unreserved_size() {
-    auto& hal_ref = HalSingleton::getInstance();
+    auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
     if (hal_ref.get_arch() != tt::ARCH::GRAYSKULL) {
         return hal_ref.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     }
@@ -52,16 +52,16 @@ uint32_t get_erisc_l1_unreserved_size() {
 }
 
 uint32_t get_max_worker_l1_unreserved_size() {
-    auto& hal_ref = HalSingleton::getInstance();
+    auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
     size_t l1_end = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
                     hal_ref.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
     return l1_end - hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
-float get_eps() { return HalSingleton::getInstance().get_eps(); }
+float get_eps() { return tt::tt_metal::MetalContext::instance().hal().get_eps(); }
 
-float get_nan() { return HalSingleton::getInstance().get_nan(); }
+float get_nan() { return tt::tt_metal::MetalContext::instance().hal().get_nan(); }
 
-float get_inf() { return HalSingleton::getInstance().get_inf(); }
+float get_inf() { return tt::tt_metal::MetalContext::instance().hal().get_inf(); }
 
 }  // namespace tt::tt_metal::hal

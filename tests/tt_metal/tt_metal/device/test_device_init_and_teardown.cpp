@@ -17,7 +17,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -94,7 +94,7 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
-    const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {
@@ -113,7 +113,7 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
-    const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {

@@ -24,9 +24,7 @@
 #include "kernel_types.hpp"
 #include "mux.hpp"
 #include "prefetch.hpp"
-#include "rtoptions.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_cluster.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
@@ -127,9 +125,11 @@ void FDKernel::configure_kernel_variant(
     KernelBuildOptLevel opt_level) {
     // TODO: just pass in the programmable index
     uint32_t programmable_core_type_index =
-        (GetCoreType() == CoreType::WORKER) ? hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
-        : is_active_eth_core ? hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
-                             : hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+        (GetCoreType() == CoreType::WORKER)
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
+        : is_active_eth_core
+            ? MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)
+            : MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
@@ -138,7 +138,7 @@ void FDKernel::configure_kernel_variant(
     if (force_watcher_no_inline) {
         defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
     }
-    auto& rt_options = tt::llrt::RunTimeOptions::get_instance();
+    auto& rt_options = tt::tt_metal::MetalContext::instance().rtoptions();
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }

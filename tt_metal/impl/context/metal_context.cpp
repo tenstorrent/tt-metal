@@ -6,13 +6,13 @@
 #include <tt-metalium/dispatch_settings.hpp>
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/debug/debug_helpers.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/llrt/llrt.hpp"
+#include "tt_metal/llrt/get_platform_architecture.hpp"
 
 namespace tt::tt_metal {
 
@@ -36,7 +36,7 @@ void MetalContext::initialize(
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
-    tt_metal::DispatchSettings::initialize(cluster_);
+    tt_metal::DispatchSettings::initialize(*cluster_);
 
     // TODO: Move FW, fabric, dispatch init here
 }
@@ -46,9 +46,29 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
-MetalContext::MetalContext() = default;
+MetalContext::MetalContext() {
+    hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_));
+    cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
+}
 
-Cluster& MetalContext::get_cluster() { return cluster_; }
+llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
+
+Cluster& MetalContext::get_cluster() {
+    TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
+    return *cluster_;
+}
+
+const llrt::RunTimeOptions& MetalContext::rtoptions() const { return rtoptions_; }
+
+const Cluster& MetalContext::get_cluster() const {
+    TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
+    return *cluster_;
+}
+
+const Hal& MetalContext::hal() const {
+    TT_FATAL(hal_, "Trying to get hal before intializing it.");
+    return *hal_;
+}
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before intializing it.");

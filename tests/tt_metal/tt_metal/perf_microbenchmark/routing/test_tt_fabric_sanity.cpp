@@ -45,7 +45,6 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
-#include "rtoptions.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
@@ -227,7 +226,7 @@ typedef struct test_board {
     void _init_control_plane(const std::string& mesh_graph_descriptor) {
         try {
             const std::filesystem::path mesh_graph_desc_path =
-                std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+                std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
                 "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
             cp_owning_ptr = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
             control_plane = cp_owning_ptr.get();
@@ -651,7 +650,7 @@ typedef struct test_device {
 
     inline uint32_t get_noc_offset(CoreCoord& logical_core) {
         CoreCoord phys_core = device_handle->worker_core_from_logical_core(logical_core);
-        return tt_metal::hal_ref.noc_xy_encoding(phys_core.x, phys_core.y);
+        return tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_core.x, phys_core.y);
     }
 
     void get_available_router_cores(
@@ -921,7 +920,7 @@ typedef struct test_traffic {
         test_results_address = test_results_address_;
 
         {
-            uint32_t mcast_encoding = tt::tt_metal::hal_ref.noc_multicast_encoding(
+            uint32_t mcast_encoding = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
                 tx_device->core_range_start_virtual.x,
                 tx_device->core_range_start_virtual.y,
                 tx_device->core_range_end_virtual.x,
@@ -1852,7 +1851,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

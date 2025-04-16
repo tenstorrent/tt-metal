@@ -22,8 +22,8 @@
 
 #include "fmt/base.h"
 #include "lightmetal/host_api_capture_helpers.hpp"
-#include "rtoptions.hpp"
 #include <tt_stl/strong_type.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
 #include "util.hpp"
@@ -415,7 +415,7 @@ void Buffer::allocate_impl() {
         TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
 
 #if defined(TRACY_ENABLE)
-        if (tt::llrt::RunTimeOptions::get_instance().get_profiler_buffer_usage_enabled()) {
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_buffer_usage_enabled()) {
             TracyAllocN(
                 reinterpret_cast<const void*>(address_), size_, get_buffer_location_name(buffer_type_, device_->id()));
         }
@@ -463,7 +463,7 @@ void Buffer::deallocate_impl() {
         GraphTracker::instance().track_deallocate(this);
         if (not GraphTracker::instance().hook_deallocate(this)) {
 #if defined(TRACY_ENABLE)
-            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_buffer_usage_enabled()) {
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_buffer_usage_enabled()) {
                 TracyFreeN(
                     reinterpret_cast<const void*>(address()), get_buffer_location_name(buffer_type_, device_->id()));
             }

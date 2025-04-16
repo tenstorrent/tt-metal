@@ -6,14 +6,14 @@
 
 #include <cstdint>
 
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt {
 
 // Host MMIO reads/writes don't have alignment restrictions, so no need to check alignment here.
 #define DEBUG_VALID_L1_ADDR(a, l) (((a) >= HAL_MEM_L1_BASE) && ((a) + (l) <= HAL_MEM_L1_BASE + HAL_MEM_L1_SIZE))
 
-#define DEBUG_VALID_REG_ADDR(a) tt::tt_metal::hal_ref.valid_reg_addr(a)
+#define DEBUG_VALID_REG_ADDR(a) tt::tt_metal::MetalContext::instance().hal().valid_reg_addr(a)
 #define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 #define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= b) && ((a) + (l) <= e))
 
