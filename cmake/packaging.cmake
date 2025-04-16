@@ -33,6 +33,13 @@ set(CPACK_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
 
 set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS TRUE)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS FALSE)
+set(CPACK_DEBIAN_jit-build_PACKAGE_SHLIBDEPS FALSE)
+set(CPACK_DEBIAN_metalium_PACKAGE_SHLIBDEPS TRUE)
+set(CPACK_DEBIAN_metalium-runtime_PACKAGE_SHLIBDEPS TRUE)
+set(CPACK_DEBIAN_METALIUM_PACKAGE_SHLIBDEPS TRUE)
+set(CPACK_DEBIAN_METALIUM-RUNTIME_PACKAGE_SHLIBDEPS TRUE)
+
+set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "libboost-dev (>= 1.78) | libboost1.81-dev")
 
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
@@ -75,6 +82,7 @@ cpack_add_component_group(metalium)
 
 cpack_add_component(fmt-core GROUP metalium-dev)
 cpack_add_component(json-dev GROUP metalium-dev)
+cpack_add_component(magic-enum-dev GROUP metalium-dev)
 cpack_add_component(umd-dev GROUP metalium-dev)
 cpack_add_component_group(metalium-dev)
 

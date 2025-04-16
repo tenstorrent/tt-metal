@@ -46,7 +46,9 @@ target_sources(
             api/tt-metalium/circular_buffer_constants.h
             api/tt-metalium/circular_buffer_types.hpp
             api/tt-metalium/command_queue.hpp
+            api/tt-metalium/command_queue_common.hpp
             api/tt-metalium/command_queue_interface.hpp
+            api/tt-metalium/constants.hpp
             api/tt-metalium/core_coord.hpp
             api/tt-metalium/core_descriptor.hpp
             api/tt-metalium/data_format.hpp
@@ -56,6 +58,7 @@ target_sources(
             api/tt-metalium/device_impl.hpp
             api/tt-metalium/device_pool.hpp
             api/tt-metalium/dispatch_core_common.hpp
+            api/tt-metalium/dispatch_mem_map.hpp
             api/tt-metalium/dispatch_settings.hpp
             api/tt-metalium/event.hpp
             api/tt-metalium/fabric_host_interface.h
@@ -64,18 +67,22 @@ target_sources(
             api/tt-metalium/global_semaphore.hpp
             api/tt-metalium/graph_tracking.hpp
             api/tt-metalium/hal.hpp
+            api/tt-metalium/hal_types.hpp
             api/tt-metalium/hlk_desc.hpp
             api/tt-metalium/host_api.hpp
             api/tt-metalium/kernel.hpp
+            api/tt-metalium/lightmetal_binary.hpp
             api/tt-metalium/kernel_types.hpp
             api/tt-metalium/launch_message_ring_buffer_state.hpp
             api/tt-metalium/logger.hpp
+            api/tt-metalium/math.hpp
             api/tt-metalium/memory_reporter.hpp
             api/tt-metalium/mesh_config.hpp
             api/tt-metalium/mesh_device.hpp
             api/tt-metalium/mesh_device_view.hpp
             api/tt-metalium/metal_soc_descriptor.h
             api/tt-metalium/persistent_kernel_cache.hpp
+            api/tt-metalium/program.hpp
             api/tt-metalium/program_cache.hpp
             api/tt-metalium/program_device_map.hpp
             api/tt-metalium/runtime_args_data.hpp
@@ -85,6 +92,8 @@ target_sources(
             api/tt-metalium/sub_device_manager_tracker.hpp
             api/tt-metalium/sub_device_types.hpp
             api/tt-metalium/system_mesh.hpp
+            api/tt-metalium/system_memory_manager.hpp
+            api/tt-metalium/system_memory_cq_interface.hpp
             api/tt-metalium/tile.hpp
             api/tt-metalium/trace.hpp
             api/tt-metalium/trace_buffer.hpp
@@ -95,6 +104,7 @@ target_sources(
             api/tt-metalium/util.hpp
             api/tt-metalium/utils.hpp
             api/tt-metalium/work_split.hpp
+            api/tt-metalium/work_executor_types.hpp
             api/tt-metalium/worker_config_buffer.hpp
 )
 
