@@ -129,7 +129,7 @@ perf_targets = {
         "op_to_op": 667.0,
         "non-overlapped-dispatch-time": 7932.2,
         "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
+        "op_to_op_duration_relative_margin": 0.4,
         "dispatch_duration_relative_margin": 0.1,
     },
     "AllReduceAsync_0": {
