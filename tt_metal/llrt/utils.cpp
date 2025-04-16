@@ -8,7 +8,7 @@
 #include <iostream>
 #include <mutex>
 
-#include "rtoptions.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace fs = std::filesystem;
 
@@ -50,7 +50,7 @@ void create_file(const string& file_path_str) {
 const std::string& get_reports_dir() {
     static std::string outpath;
     if (outpath == "") {
-        outpath = tt::llrt::RunTimeOptions::get_instance().get_root_dir() + "/generated/reports/";
+        outpath = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + "/generated/reports/";
     }
     return outpath;
 }

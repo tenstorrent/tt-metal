@@ -349,7 +349,8 @@ TEST_F(DeviceFixture, TensixInlineWriteDedicatedNoc) {
 
     for (tt_metal::IDevice* device : this->devices_) {
         uint32_t first_receiver_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-        uint32_t second_receiver_addr = first_receiver_addr + hal_ref.get_alignment(HalMemType::L1);
+        uint32_t second_receiver_addr =
+            first_receiver_addr + MetalContext::instance().hal().get_alignment(HalMemType::L1);
         std::vector<uint32_t> readback(32 / sizeof(uint32_t), 0);
         tt_metal::detail::WriteToDeviceL1(device, receiver_core, first_receiver_addr, readback);
 
@@ -442,7 +443,7 @@ TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
 
     for (tt_metal::IDevice* device : this->devices_) {
         uint32_t receiver_addr0 = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-        uint32_t receiver_addr2 = receiver_addr0 + (2 * hal_ref.get_alignment(HalMemType::L1));
+        uint32_t receiver_addr2 = receiver_addr0 + (2 * MetalContext::instance().hal().get_alignment(HalMemType::L1));
         std::vector<uint32_t> readback(80 / sizeof(uint32_t), 0);
         tt_metal::detail::WriteToDeviceL1(device, receiver_core, receiver_addr0, readback);
 
@@ -467,7 +468,7 @@ TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
              receiver_addr0,
              value_to_write,
              2,
-             hal_ref.get_alignment(HalMemType::L1)});
+             MetalContext::instance().hal().get_alignment(HalMemType::L1)});
 
         tt_metal::KernelHandle kernel1 = tt_metal::CreateKernel(
             program,
@@ -487,7 +488,7 @@ TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
              receiver_addr2,
              value_to_write + 2,
              2,
-             hal_ref.get_alignment(HalMemType::L1)});
+             MetalContext::instance().hal().get_alignment(HalMemType::L1)});
 
         tt_metal::detail::LaunchProgram(device, program);
 
