@@ -48,7 +48,7 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="
         post_processed_results[f"MIN {d_col}"] = results[f"MIN {d_col}"]
         post_processed_results[f"MAX {d_col}"] = results[f"MAX {d_col}"]
 
-    logger.info(
+    logger.enfo(
         f"\nTest: {command}"
         f"\nPerformance statistics over {num_iterations} iterations"
         f"\n{json.dumps(post_processed_results, indent=4)}"
