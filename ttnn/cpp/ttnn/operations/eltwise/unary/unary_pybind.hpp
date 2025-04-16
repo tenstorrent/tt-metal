@@ -124,6 +124,7 @@ void bind_unary_operation(
     py::module& module,
     const unary_operation_t& operation,
     const std::string& math,
+    const std::string& range = "",
     const std::string& supported_dtype ="BFLOAT16",
     const std::string& note = "",
     const std::string& example_tensor = "torch.rand([2, 2], dtype=torch.bfloat16)") {
@@ -135,7 +136,7 @@ void bind_unary_operation(
             {2}
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor): the input tensor. {3}
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
@@ -154,19 +155,20 @@ void bind_unary_operation(
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - {3}
+               * - {4}
                  - TILE
                  - 2, 3, 4
 
-            {4}
+            {5}
 
         Example:
-            >>> tensor = ttnn.from_torch({5}, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor = ttnn.from_torch({6}, layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         math,
+        range,
         supported_dtype,
         note,
         example_tensor);
@@ -1761,6 +1763,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::log, R"doc(\mathrm{{output\_tensor}}_i = \verb|log|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::log10, R"doc(\mathrm{{output\_tensor}}_i = \verb|log10|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(BFLOAT8_B is only supported in WHB0.)doc");
     detail::bind_unary_operation(module, ttnn::log2, R"doc(\mathrm{{output\_tensor}}_i = \verb|log2|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(BFLOAT8_B is only supported in WHB0.)doc");
+    detail::bind_unary_operation(module, ttnn::log1p, R"doc(\mathrm{{output\_tensor}}_i = \verb|log1p|(\mathrm{{input\_tensor}}_i))doc", R"doc([supported range: [-1, 1e7]])doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::logical_not, R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::ltz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::neg, R"doc(\mathrm{{output\_tensor}}_i = \verb|neg|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1878,7 +1881,6 @@ void py_module(py::module& module) {
     detail::bind_unary_composite(module, ttnn::digamma, R"doc(Performs digamma function on :attr:`input_tensor`.)doc", "[supported for values greater than 0].",
         R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(TILE)doc", R"doc(2, 3, 4)doc", "", R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
     detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0].", R"doc(BFLOAT16)doc");
-    detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1].", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf].", R"doc(BFLOAT16)doc",
         R"doc(TILE)doc", R"doc(2, 3, 4)doc", "", R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
     detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -9 to 9].", R"doc(BFLOAT16, BFLOAT8_B)doc");

@@ -292,14 +292,6 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
     return result;
 }
 
-// log1p 1
-// use transformation y = log(1.0 + x) by broadcast
-Tensor _log1p(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor x_1 = ttnn::add(x, 1.0f, std::nullopt, output_mem_config);
-    Tensor result_log1p = ttnn::log(x_1, output_mem_config);
-    return result_log1p;
-}
-
 // multivariate log-gamma function
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {

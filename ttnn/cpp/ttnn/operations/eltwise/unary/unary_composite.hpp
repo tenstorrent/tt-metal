@@ -198,9 +198,6 @@ constexpr auto digamma = ttnn::register_operation_with_auto_launch_op<
 constexpr auto lgamma = ttnn::register_operation_with_auto_launch_op<
     "ttnn::lgamma",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LGAMMA>>();
-constexpr auto log1p = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::log1p",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOG1P>>();
 constexpr auto multigammaln = ttnn::register_operation_with_auto_launch_op<
     "ttnn::multigammaln",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>();

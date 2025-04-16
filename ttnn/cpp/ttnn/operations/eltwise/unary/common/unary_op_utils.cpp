@@ -65,6 +65,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::FMOD: return "SFPU_OP_FMOD_INCLUDE";
         case UnaryOpType::FILL: return "SFPU_OP_FILL_INCLUDE";
         case UnaryOpType::ROUND: return "SFPU_OP_ROUND_INCLUDE";
+        case UnaryOpType::LOG1P: return "SFPU_OP_LOG1P_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -286,6 +287,7 @@ std::pair<string, string> get_op_init_and_func_default(
         case UnaryOpType::RELU: op_init_and_name = {"relu_tile_init();", fmt::format("relu_tile({});", idst)}; break;
         case UnaryOpType::SQRT: op_init_and_name = {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)}; break;
         case UnaryOpType::LOG: op_init_and_name = {"log_tile_init();", fmt::format("log_tile({});", idst)}; break;
+        case UnaryOpType::LOG1P: op_init_and_name = {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)}; break;
         case UnaryOpType::TANH: op_init_and_name = {"tanh_tile_init();", fmt::format("tanh_tile({});", idst)}; break;
         case UnaryOpType::SIGNBIT:
             op_init_and_name = {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)};
@@ -421,6 +423,8 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::RECIP);
     } else if (name == "log") {
         return UnaryWithParam(UnaryOpType::LOG);
+    } else if (name == "log1p") {
+        return UnaryWithParam(UnaryOpType::LOG1P);
     } else if (name == "tanh") {
         return UnaryWithParam(UnaryOpType::TANH);
     } else if (name == "log2") {
