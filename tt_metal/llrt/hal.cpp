@@ -6,7 +6,6 @@
 
 #include <assert.hpp>
 
-#include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include <umd/device/types/arch.h>
 
@@ -16,7 +15,7 @@ namespace tt_metal {
 
 // Hal Constructor determines the platform architecture by using UMD
 // Once it knows the architecture it can self initialize architecture specific memory maps
-Hal::Hal() : arch_(get_platform_architecture()) {
+Hal::Hal(tt::ARCH arch) : arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::GRAYSKULL: /*TT_THROW("Unsupported arch for HAL")*/; break;
 

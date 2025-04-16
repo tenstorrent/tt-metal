@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 5
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 355, "max": 375}, 10: {"min": 180, "max": 200}, 80: {"min": 40, "max": 44}}
+TSU_THRESHOLDS = {1: {"min": 360, "max": 380}, 10: {"min": 195, "max": 215}, 80: {"min": 43, "max": 47}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -508,8 +508,8 @@ def run_llama3_demo(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg-llama-demo-e2e",
-            ml_model_name="tg-llama",
+            run_type=f"tg_llama_demo_decode",
+            ml_model_name="llama70b-tg",
         )
 
     if not stress_test:
