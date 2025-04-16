@@ -240,6 +240,8 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
 
     profiler.print()
 
+    # we calculate average time per prompt only when there is more than 1 iteration,
+    # since first iteration includes compile time
     if num_prompts > 1:
         # skip first for compile
         total_time = sum([profiler.get("inference_prompt_" + str(i)) for i in range(2, num_prompts + 1)])
