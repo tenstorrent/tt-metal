@@ -228,7 +228,7 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
             )
 
             assert cond_z_1BNI.shape == uncond_z_1BNI.shape
-            return uncond_z_1BNI + cfg_scale * (cond_z_1BNI - uncond_z_1BNI)
+            return cond_z_1BNI, uncond_z_1BNI
 
         start = time.perf_counter()
         # Preparation before first iteration
@@ -240,7 +240,6 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
         uncond_y_feat_1BLY, uncond_y_pool_11BX = dit.prepare_text_features(
             t5_feat=cond_null["y_feat"][0], t5_mask=cond_null["y_mask"][0]
         )
-        z_1BNI, N = dit.preprocess_input(z_BCTHW)
         ttnn.synchronize_device(mesh_device)
         device_prepare = time.perf_counter() - start
 
@@ -249,20 +248,23 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
             sigma = sigma_schedule[i]
             dsigma = sigma - sigma_schedule[i + 1]
 
+            z_1BNI, N = dit.preprocess_input(z_BCTHW)
             sigma_B = torch.full([B], sigma, device=device)
-            pred_1BNI = model_fn(z_1BNI=z_1BNI, sigma_B=sigma_B, cfg_scale=cfg_schedule[i])
-            # assert pred_BCTHW.dtype == torch.float32
-            z_1BNI = z_1BNI + dsigma * pred_1BNI
+
+            cond_z_1BNI, uncond_z_1BNI = model_fn(z_1BNI=z_1BNI, sigma_B=sigma_B, cfg_scale=cfg_schedule[i])
+
+            torch_cond = dit.reverse_preprocess(cond_z_1BNI, latent_t, latent_h, latent_w, N)
+            torch_uncond = dit.reverse_preprocess(uncond_z_1BNI, latent_t, latent_h, latent_w, N)
+
+            pred = torch_uncond + cfg_scale * (torch_cond - torch_uncond)
+            z_BCTHW = z_BCTHW + dsigma * pred
             if dump_performance:
                 logger.info("Dumping performance")
                 for d in mesh_device.get_devices():
                     ttnn.DumpDeviceProfiler(d)
         ttnn.synchronize_device(mesh_device)
         device_steps = time.perf_counter() - start
-        # Postprocess z
-        start = time.perf_counter()
-        z_BCTHW = dit.reverse_preprocess(z_1BNI, latent_t, latent_h, latent_w, N).float()
-        device_postprocess = time.perf_counter() - start
+
         ttnn.synchronize_device(mesh_device)
         start = time.perf_counter()
         latents = dit_latents_to_vae_latents(z_BCTHW)
@@ -271,11 +273,11 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
             "host_prepare": host_prepare,
             "device_prepare": device_prepare,
             "device_steps": device_steps,
-            "device_postprocess": device_postprocess,
             "host_postprocess": host_postprocess,
         }
 
     logger.info("Running warmup")
+
     warmup_output = sample_model_profile(device=device, dit=tt_dit, conditioning=conditioning, **sample_args)
 
     num_bench_steps = 10
@@ -290,11 +292,12 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
         "seed": 1234,
     }
     logger.info(f"Running benchmark for {num_bench_steps} steps")
+    start = time.perf_counter()
     bench_output = sample_model_profile(device=device, dit=tt_dit, conditioning=conditioning, **bench_args)
+    end = time.perf_counter()
+    logger.info(f"Time taken to run benchmark: {end - start} s | {(end - start) / 60:.2f} min")
 
     logger.info(f"Host prepare: {bench_output['host_prepare']*1000:.3f} ms")
     logger.info(f"Device prepare: {bench_output['device_prepare']*1000:.3f} ms")
-    logger.info(f"Device steps: {bench_output['device_steps']*1000:.3f} ms")
     logger.info(f"Device per-step: {bench_output['device_steps'] / num_bench_steps*1000:.3f} ms")
-    logger.info(f"Device postprocess: {bench_output['device_postprocess']*1000:.3f} ms")
     logger.info(f"Host postprocess: {bench_output['host_postprocess']*1000:.3f} ms")
