@@ -194,6 +194,8 @@ void DispatchKernel::GenerateStaticConfigs() {
     } else {
         TT_FATAL(false, "DispatchKernel must be one of (or both) H and D variants");
     }
+    static_config_.dispatch_shared_region =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_SHARED_REGION);
 }
 
 void DispatchKernel::GenerateDependentConfigs() {
@@ -451,6 +453,8 @@ void DispatchKernel::CreateKernel() {
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_s_virtual_noc_coords.x)},
         {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_s_virtual_noc_coords.y)},
+
+        {"DISPATCH_SHARED_REGION", std::to_string(static_config_.dispatch_shared_region.value())},
     };
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
