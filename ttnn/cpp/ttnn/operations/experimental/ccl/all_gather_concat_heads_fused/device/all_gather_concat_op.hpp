@@ -36,7 +36,6 @@ struct AllGatherConcat {
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    bool enable_persistent_fabric_mode;
     const uint32_t num_heads;
 
     AllGatherConcat(
@@ -50,7 +49,6 @@ struct AllGatherConcat {
         ccl::Topology topology,
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        bool enable_persistent_fabric_mode,
         uint32_t num_heads) :
         forward_device(forward_device),
         backward_device(backward_device),
@@ -62,7 +60,6 @@ struct AllGatherConcat {
         topology(topology),
         semaphore(semaphore),
         sub_device_id(sub_device_id),
-        enable_persistent_fabric_mode(enable_persistent_fabric_mode),
         num_heads(num_heads) {}
 
     // Add attributes method for reflection
@@ -100,7 +97,6 @@ AllGatherConcat create_all_gather_concat_struct(
     const ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode,
     const uint32_t num_heads);
 }  // namespace all_gather_concat_detail
 }  // namespace ccl
@@ -126,7 +122,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode,
     const uint32_t num_heads);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_subgrids(
@@ -142,7 +137,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_su
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode,
     const uint32_t num_heads);
 
 namespace operations {
@@ -160,8 +154,7 @@ Tensor all_gather_concat(
     const std::optional<uint32_t> num_links = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental
