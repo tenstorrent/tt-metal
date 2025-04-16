@@ -441,10 +441,10 @@ class BertEncoder(nn.Module):
             )
             print("wts are dumped")
             hidden_states = layer_outputs[0]
-            torch.save(
-                hidden_states,
-                f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/torch_out_{i}.pth",
-            )
+            # torch.save(
+            #     hidden_states,
+            #     f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/torch_out_{i}.pth",
+            # )
 
         if not return_dict:
             return tuple(

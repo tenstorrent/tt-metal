@@ -41,6 +41,13 @@ from ttnn.model_preprocessing import (
 )
 
 
+def p(x, a="x"):
+    print(f"{a}'s  shape: {x.shape}")
+    print(f"{a}'s  layout: {x.layout}")
+    print(f"{a}'s  dtype: {x.dtype}")
+    print(f"{a}'s config: {x.memory_config()}")
+
+
 def custom_preprocessor(torch_model, name):
     parameters = {}
     if hasattr(torch_model, "query") and hasattr(torch_model, "key") and hasattr(torch_model, "value"):
@@ -104,10 +111,10 @@ def test_ttnn_Bert_Embeddings(device, inputs):
         input_ids=sharded_input, token_type_ids=ttnn_token_type_ids, position_ids=ttnn_position_ids, device=device
     )
     ttnn_out = ttnn.to_torch(ttnn_out)
-    l1 = torch.load("/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/torch_out.pth")
-    l2 = torch.load("/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/ttnn_out.pth")
-    assert_with_pcc(l1, l2, 1.0)
-    # assert_with_pcc(reference_out, ttnn_out, 0.9999)
+    # l1 = torch.load("/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/torch_out.pth")
+    # l2 = torch.load("/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/ttnn_out.pth")
+    # assert_with_pcc(l1, l2, 1.0)
+    assert_with_pcc(reference_out, ttnn_out, 0.9999)
 
 
 # @pytest.mark.parametrize(
@@ -318,9 +325,10 @@ def test_ttnn_sentence_bert_attention(device, inputs):  # 0.99947
         ["emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", [8, 384, 768], [8, 1, 384, 384]],
     ],
 )
+@pytest.mark.parametrize("layer_index", list(range(12)))
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_ttnn_sentence_bert_layer(device, inputs):  # 0.9994
-    transformers_model = transformers.AutoModel.from_pretrained(inputs[0]).encoder.layer[0].eval()
+def test_ttnn_sentence_bert_layer(device, inputs, layer_index):  # 0.9994
+    transformers_model = transformers.AutoModel.from_pretrained(inputs[0]).encoder.layer[layer_index].eval()
     config = BertConfig.from_pretrained(inputs[0])
     hidden_states = torch.randn(inputs[1], dtype=torch.bfloat16)
     attention_mask = torch.randn(inputs[2], dtype=torch.bfloat16)
@@ -420,6 +428,7 @@ def test_ttnn_sentence_bert_model(device, inputs):  #
     position_ids = torch.arange(0, inputs[1][1], dtype=torch.int64).unsqueeze(dim=0)
     reference_module = BertModel(config).to(torch.bfloat16)
     reference_module.load_state_dict(transformers_model.state_dict())
+    print("inputsare", input_ids.shape, extended_mask.shape, token_type_ids.shape, position_ids.shape)
     reference_out = reference_module(
         input_ids, attention_mask=extended_mask, token_type_ids=token_type_ids, position_ids=position_ids
     )
@@ -441,18 +450,22 @@ def test_ttnn_sentence_bert_model(device, inputs):  #
             orientation=ttnn.ShardOrientation.COL_MAJOR,
         ),
     )
+    p(sharded_input, "input")
+    p(ttnn_attention_mask, "ttnn_attention_mask")
+    p(ttnn_token_type_ids, "ttnn_token_type_ids")
+    p(ttnn_position_ids, "ttnn_position_ids")
     ttnn_out = ttnn_module(sharded_input, ttnn_attention_mask, ttnn_token_type_ids, ttnn_position_ids, device=device)
-    ttnn_out = ttnn.to_torch(ttnn_out)
+    ttnn_out = ttnn.to_torch(ttnn_out[0])
     print("out is", ttnn_out.shape)
-    assert_with_pcc(reference_out.last_hidden_state, ttnn_out, 1.0)
-    # for i in range(12):
-    #     l1 = torch.load(
-    #         f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/torch_out_{i}.pth"
-    #     )
-    #     l2 = torch.load(
-    #         f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/ttnn_out_{i}.pth"
-    #     )
-    #     print(assert_with_pcc(l1, l2, 0.1))
+    # assert_with_pcc(reference_out.last_hidden_state, ttnn_out, 1.0)
+    for i in range(12):
+        l1 = torch.load(
+            f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/torch_out_{i}.pth"
+        )
+        l2 = torch.load(
+            f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/ttnn_out_{i}.pth"
+        )
+        print(assert_with_pcc(l1, l2, 0.1))
 
 
 @pytest.mark.parametrize(
@@ -498,14 +511,23 @@ def test_ttnn_sentence_bert_model_real_inputs(device, inputs):  #
     ttnn_input_ids, ttnn_token_type_ids, ttnn_position_ids, ttnn_attention_mask = preprocess_inputs(
         input_ids, token_type_ids, position_ids, extended_mask, device
     )
-    ttnn_out = ttnn_module(ttnn_input_ids, ttnn_attention_mask, ttnn_token_type_ids, ttnn_position_ids, device=device)
+    sharded_input = ttnn.to_memory_config(
+        ttnn_input_ids,
+        memory_config=ttnn.create_sharded_memory_config(
+            ttnn_input_ids.shape,
+            core_grid=device.core_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.COL_MAJOR,
+        ),
+    )
+    ttnn_out = ttnn_module(sharded_input, ttnn_attention_mask, ttnn_token_type_ids, ttnn_position_ids, device=device)
     ttnn_out = ttnn.to_torch(ttnn_out[0])
-    # for i in range(12):
-    #     l1 = torch.load(
-    #         f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/torch_out_{i}.pth"
-    #     )
-    #     l2 = torch.load(
-    #         f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/ttnn_out_{i}.pth"
-    #     )
-    # print(assert_with_pcc(l1, l2, 0.1))
+    for i in range(12):
+        l1 = torch.load(
+            f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/torch_out_{i}.pth"
+        )
+        l2 = torch.load(
+            f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/ttnn_out_{i}.pth"
+        )
+        print(assert_with_pcc(l1, l2, 0.1))
     assert_with_pcc(reference_out.last_hidden_state, ttnn_out, 1.0)

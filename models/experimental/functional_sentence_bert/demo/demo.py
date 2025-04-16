@@ -65,7 +65,7 @@ def test_sentence_bert_demo_inference(device, inputs):
         input_ids, token_type_ids, position_ids, extended_mask, device
     )
     ttnn_out = ttnn_module(ttnn_input_ids, ttnn_attention_mask, ttnn_token_type_ids, ttnn_position_ids, device=device)
-    ttnn_out = ttnn.to_torch(ttnn_out)
+    ttnn_out = ttnn.to_torch(ttnn_out[0])
     Reference_sentence_embeddings = mean_pooling(reference_out[0], attention_mask)
     ttnn_sentence_embeddings = mean_pooling(ttnn_out, attention_mask)
     print(assert_with_pcc(reference_out.last_hidden_state, ttnn_out, 0))
@@ -76,10 +76,10 @@ def test_sentence_bert_demo_inference(device, inputs):
     upper_triangle1 = np.triu(cosine_sim_matrix1, k=1)  # Upper
     similarities1 = upper_triangle1[upper_triangle1 != 0]  #
     mean_similarity1 = similarities1.mean()
-    # print("all sim",cosine_sim_matrix1)
-    # print("upper once",upper_triangle1)
+    print("all sim", cosine_sim_matrix1)
+    print("upper once", upper_triangle1)
     print("sim1", similarities1)
-    # print("mean sim",mean_similarity1)
+    print("mean sim", mean_similarity1)
     cosine_sim_matrix2 = cosine_similarity(ttnn_sentence_embeddings.detach().squeeze().cpu().numpy())
     upper_triangle2 = np.triu(cosine_sim_matrix2, k=1)  # Upper
     similarities2 = upper_triangle2[upper_triangle2 != 0]  #
@@ -88,16 +88,17 @@ def test_sentence_bert_demo_inference(device, inputs):
     print(f"Mean Cosine Similarity for Reference Model: {mean_similarity1}")
     print(f"Mean Cosine Similarity for TTNN Model:: {mean_similarity2}")
 
-    # ref_emb1 = Reference_sentence_embeddings[0].detach().squeeze().cpu().numpy()
-    # ref_emb2 = Reference_sentence_embeddings[1].detach().squeeze().cpu().numpy()
-    # cos_sim1 = cosine_similarity([ref_emb1], [ref_emb2])[0][0]
-    # pearson_corr1, _ = pearsonr(ref_emb1, ref_emb2)
-    # spearman_corr1, _ = spearmanr(ref_emb1, ref_emb2)
-    # ttnn_emb1 = ttnn_sentence_embeddings[0].squeeze().cpu().numpy()
-    # ttnn_emb2 = ttnn_sentence_embeddings[1].squeeze().cpu().numpy()
-    # cos_sim2 = cosine_similarity([ttnn_emb1], [ttnn_emb2])[0][0]
-    # pearson_corr2, _ = pearsonr(ttnn_emb1, ttnn_emb2)
-    # spearman_corr2, _ = spearmanr(ttnn_emb1, ttnn_emb2)
-    # logger.info(f"Cosine Similarity for Reference and ttnn Models: {cos_sim1} and {cos_sim2}")
-    # logger.info(f"Pearson Correlation for Reference and ttnn Models: {pearson_corr1} and {pearson_corr2}")
-    # logger.info(f"Spearman Correlation for Reference and ttnn Models: {spearman_corr1} and {spearman_corr2}")
+
+# ref_emb1 = Reference_sentence_embeddings[0].detach().squeeze().cpu().numpy()
+# ref_emb2 = Reference_sentence_embeddings[1].detach().squeeze().cpu().numpy()
+# cos_sim1 = cosine_similarity([ref_emb1], [ref_emb2])[0][0]
+# pearson_corr1, _ = pearsonr(ref_emb1, ref_emb2)
+# spearman_corr1, _ = spearmanr(ref_emb1, ref_emb2)
+# ttnn_emb1 = ttnn_sentence_embeddings[0].squeeze().cpu().numpy()
+# ttnn_emb2 = ttnn_sentence_embeddings[1].squeeze().cpu().numpy()
+# cos_sim2 = cosine_similarity([ttnn_emb1], [ttnn_emb2])[0][0]
+# pearson_corr2, _ = pearsonr(ttnn_emb1, ttnn_emb2)
+# spearman_corr2, _ = spearmanr(ttnn_emb1, ttnn_emb2)
+# logger.info(f"Cosine Similarity for Reference and ttnn Models: {cos_sim1} and {cos_sim2}")
+# logger.info(f"Pearson Correlation for Reference and ttnn Models: {pearson_corr1} and {pearson_corr2}")
+# logger.info(f"Spearman Correlation for Reference and ttnn Models: {spearman_corr1} and {spearman_corr2}")
