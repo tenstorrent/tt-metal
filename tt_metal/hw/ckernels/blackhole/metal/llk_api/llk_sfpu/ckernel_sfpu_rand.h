@@ -39,14 +39,12 @@ inline void rand(uint32_t from, uint32_t scale) {
         // -1 to ensure the float is within the range [0, 1).
         // lreg0 = lreg0 - 1
         TTI_SFPADDI(0xbf80 /*-1*/, p_sfpu::LREG0, 0);
-        TTI_SFPNOP;
 
         // Scale the float from [0, 1) to [from, from + scale)
         // lreg0 = lreg0 * scale + from
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-        TTI_SFPNOP;
 
-        TTI_SFPSTORE(0, 3, 7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::LREG3, ADDR_MOD_7, 0);
         dst_reg++;
     }
 }
