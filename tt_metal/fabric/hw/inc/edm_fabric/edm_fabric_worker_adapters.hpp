@@ -215,15 +215,7 @@ struct WorkerToFabricEdmSenderImpl {
         ASSERT(remote_buffer_index_addr > 0);
         noc_async_read(
             remote_buffer_index_addr, reinterpret_cast<size_t>(this->buffer_slot_index_ptr), sizeof(uint32_t));
-        const uint64_t remote_buffer_slot_write_counter_addr =
-            dest_noc_addr_coord_only | edm_buffer_slot_write_counter_addr;
-        // TODO: Sucks extra read
-        // Abuse the teardown sem not being used at this stage
-        // TODO: Use 16 bit counters, shove index into top of rd counter
-        noc_async_read(
-            remote_buffer_slot_write_counter_addr,
-            reinterpret_cast<size_t>(this->worker_teardown_addr),
-            sizeof(uint32_t));
+        ASSERT(remote_buffer_index_addr > 0);
 
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
@@ -258,8 +250,9 @@ struct WorkerToFabricEdmSenderImpl {
     // Must be called alongside (after) open_start().
     void open_finish() {
         noc_async_read_barrier();
-        this->buffer_slot_write_counter = *this->worker_teardown_addr;
-        this->buffer_slot_index = *this->buffer_slot_index_ptr;
+        uint32_t index_and_counter = *this->buffer_slot_index_ptr;
+        this->buffer_slot_write_counter = (uint16_t)index_and_counter;
+        this->buffer_slot_index = (uint8_t)(index_and_counter >> 16);
         *this->worker_teardown_addr = 0;
         if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
             this->edm_buffer_addr =
@@ -287,7 +280,9 @@ struct WorkerToFabricEdmSenderImpl {
 
         // buffer index stored at location after handshake addr
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
-        noc_inline_dw_write(remote_buffer_index_addr, this->buffer_slot_index);
+        uint32_t index_and_counter =
+            ((uint32_t)this->buffer_slot_index << 16) | (uint32_t)this->buffer_slot_write_counter;
+        noc_inline_dw_write(remote_buffer_index_addr, index_and_counter);
     }
 
     // Advanced usage API:
@@ -327,7 +322,7 @@ struct WorkerToFabricEdmSenderImpl {
     // TODO: keep a local copy that we use during the lifetime of the channel to avoid repeated L1 reads
     volatile tt_l1_ptr uint32_t* buffer_slot_index_ptr;
     uint8_t buffer_slot_index;
-    size_t buffer_slot_write_counter;
+    uint16_t buffer_slot_write_counter;
 
     uint16_t buffer_size_bytes;
     uint8_t num_buffers_per_channel;

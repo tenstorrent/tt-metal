@@ -201,9 +201,9 @@ struct EdmChannelWorkerInterface {
     uint8_t sender_sync_noc_cmd_buf;
 
     BufferIndex local_write_buffer_index;
-    uint32_t local_write_counter;
-    uint32_t local_read_counter;  // also used as completion_ptr
-    uint32_t local_ack_counter;
+    uint16_t local_write_counter;
+    uint16_t local_read_counter;  // also used as completion_ptr
+    uint16_t local_ack_counter;
 };
 
 }  // namespace tt::tt_fabric
