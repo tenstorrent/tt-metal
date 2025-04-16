@@ -47,8 +47,9 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    uint32_t log_2_tile_bytes = (tile_bytes == 2048 ? 11 : 10);
+    constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    constexpr uint32_t log_2_tile_bytes = tile_bytes == 2048 ? 11 : (tile_bytes == 1024 ? 10 : 0);
+    static_assert(log_2_tile_bytes);  // catch invalid tile size
 
     constexpr bool read_from_dram = get_read_from_dram();
 

@@ -264,9 +264,9 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
     uint32_t HW = H * W;
     uint32_t N = test_config.shape[0] * test_config.shape[1];
-    TT_FATAL((tile_H == 16 && tile_W == 32) || (tile_H == 32 && tile_W == 32), "Error");
-    TT_FATAL(W % tile_W == 0 && H % tile_H == 0, "Error");
-    TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
+    TT_FATAL((tile_H == 16 && tile_W == 32) || (tile_H == 32 && tile_W == 32), "Error: Invalid tile shape");
+    TT_FATAL(W % tile_W == 0 && H % tile_H == 0, "Error: Tensor height/width must be multiple of tile height/width");
+    TT_FATAL(H > 0 && W > 0 && NC > 0, "Error: All tensor dims must be greater than 0");
     uint32_t Wt = W / tile_W;
     uint32_t Ht = H / tile_H;
 
