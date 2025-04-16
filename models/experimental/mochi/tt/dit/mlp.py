@@ -140,7 +140,7 @@ class FeedForward(LightweightModule):
         w2_in_1BSF = ttnn.multiply(
             w1_out_1BSF,
             w3_out_1BSF,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat16,
             memory_config=w1_out_1BSF.memory_config(),
         )
