@@ -72,7 +72,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::PRELU_SFPU:
         case UnaryOpType::FMOD:
         case UnaryOpType::MINIMUM:
-        case UnaryOpType::MAXIMUM: return true;
+        case UnaryOpType::MAXIMUM:
+        case UnaryOpType::LOG1P: return true;
         default: return false;
     }
     return false;
