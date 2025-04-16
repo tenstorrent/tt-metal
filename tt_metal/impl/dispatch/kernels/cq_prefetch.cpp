@@ -9,6 +9,7 @@
 //    double buffered ScratchBuf for out of band data (e.g., from DRAM)
 //  - syncs w/ dispatcher via 2 semaphores, page_ready, page_done
 
+#include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -1425,6 +1426,8 @@ bool process_cmd(
     return done;
 }
 
+// This function is only valid when called on the H variant
+// It expects the NoC async write state to be initialized to point to the downstream
 static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool is_exec_buf) {
     uint32_t length = fence - data_ptr;
 
@@ -1450,22 +1453,32 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
         stall_state = NOT_STALLED;
     }
 
+    // Write sizes below may exceed NOC_MAX_BURST_SIZE so we use the any_len version
+    // Amount to write depends on how much free space
     uint32_t downstream_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
+    uint32_t writes_done = 0;
     if (downstream_pages_left >= npages) {
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
+        cq_noc_async_write_with_state_any_len_count_writes(
+            data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), writes_done, length);
         downstream_data_ptr += npages * downstream_cb_page_size;
     } else {
         uint32_t tail_pages = npages - downstream_pages_left;
         uint32_t available = downstream_pages_left * downstream_cb_page_size;
         if (available > 0) {
-            noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
+            cq_noc_async_write_with_state_any_len_count_writes(
+                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), writes_done, available);
             data_ptr += available;
             length -= available;
         }
 
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
+        // Remainder
+        cq_noc_async_write_with_state_any_len_count_writes(
+            data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), writes_done, length);
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
+
+    noc_nonposted_writes_num_issued[noc_index] += writes_done;
+    noc_nonposted_writes_acked[noc_index] += writes_done;
 
     noc_async_writes_flushed();
     cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
@@ -1514,6 +1527,10 @@ void kernel_main_h() {
     uint32_t fence = cmddat_q_base;
     bool done = false;
     uint32_t heartbeat = 0;
+
+    // Fetch q uses read buf. Write buf for process_relay_inline_all can be setup once
+    cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
+
     while (!done) {
         fetch_q_get_cmds<sizeof(CQPrefetchHToPrefetchDHeader)>(fence, cmd_ptr, pcie_read_ptr);
 
