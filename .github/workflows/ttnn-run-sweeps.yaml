@@ -431,7 +431,9 @@ on:
           - eltwise.binary_backward.fmod_bw.fmod_bw
           - eltwise.binary_backward.remainder_bw.remainder_bw
           - eltwise.binary_backward.rsub_bw.rsub_bw
+          - eltwise.binary_backward.rsub_bw.rsub_bw_sharded
           - eltwise.binary_backward.squared_difference_bw.squared_difference_bw
+          - eltwise.binary_backward.squared_difference_bw.squared_difference_bw_sharded
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
