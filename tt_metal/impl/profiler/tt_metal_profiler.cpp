@@ -881,6 +881,9 @@ void DumpDeviceProfileResults(
             } else {
                 InitDeviceProfiler(device);
             }
+            if (state == ProfilerDumpState::FORCE_PUSH_TO_TRACY) {
+                tt_metal_device_profiler_map.at(device_id).pushTracyDeviceResults();
+            }
         }
     }
 #endif
