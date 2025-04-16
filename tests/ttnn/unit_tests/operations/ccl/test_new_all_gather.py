@@ -629,7 +629,6 @@ def test_all_gather_real_workloads(
         num_iters=num_iters,
         enable_async=enable_async,
         rand_tensor=True,
-        create_persistent_fabric=True,
         teardown_persistent_fabric=True,
         mem_config=mem_config,
     )
