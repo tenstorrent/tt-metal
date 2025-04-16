@@ -88,10 +88,6 @@ runs:
           --net=host
           --log-driver local
           --log-opt max-size=50m
-          --cap-add=ALL
-          --security-opt seccomp=unconfined
-          --ulimit nproc=65536:65536
-          --ulimit nofile=65536:65536
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL || 'INFO' }}
           -e PYTHONPATH=${{ github.workspace }}
