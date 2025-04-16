@@ -85,14 +85,14 @@ ALWI void reduce_revert_delta(uint32_t ocb) {
  * |----------------|-----------------------------------------------------------------|----------|------------------------------------------------|----------|
  * | icb0           | The identifier of the circular buffer (CB) containing A         | uint32_t | 0 to 31                                        | True     |
  * | icb1           | CB for Scaling factor applied to each element of the result.    | uint32_t | 0 to 31                                        | True     |
- * | itile0         | The index of the tile within the first CB                       | uint32_t | Must be less than the size of the CB           | True     | 
- * | itile1         | The index of the tile within the scaling factor CB.             | uint32_t | Must be less than the size of the CB           | True     | 
+ * | itile0         | The index of the tile within the first CB                       | uint32_t | Must be less than the size of the CB           | True     |
+ * | itile1         | The index of the tile within the scaling factor CB.             | uint32_t | Must be less than the size of the CB           | True     |
  * | idst           | The index of the tile in DST REG for the result                 | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
- // clang-format on
+// clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_tile(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    MATH((llk_math_reduce<reduce_type, reduce_dim, MATH_FIDELITY, DST_ACCUM_MODE>(idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, MATH_FIDELITY, DST_ACCUM_MODE>(icb0, icb1, idst)));
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
 }
 
