@@ -21,20 +21,14 @@ namespace ttnn::operations::generic {
 struct GenericOpDeviceOperation {
     using operation_attributes_t = program_attributes_t;
 
-    // Define the return types for the tensor(s) of the operation
-    // Can be a single Tensor, std::optional<Tensor, ...>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
     using tensor_return_value_t = Tensor;
 
     using spec_return_value_t = TensorSpec;
 
     struct tensor_args_t {
         const std::vector<Tensor>& io_tensors;
-        // const Tensor& output_tensor;
-        // reflections assume there are no two params of the same type?
-        // note: in instantiation of function template specialization 'reflect::size<ttnn::operations::generic::GenericOpDeviceOperation::tensor_args_t>' requested here
     };
 
-    // Program factories
     struct GenericProgram {
         // to refactor this when we implement caching
         struct shared_variables_t {
@@ -48,7 +42,6 @@ struct GenericOpDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
-        // where/when is this used?
         static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
@@ -59,7 +52,6 @@ struct GenericOpDeviceOperation {
     using program_factory_t = std::variant<GenericProgram>;
 
     // Mandatory methods
-
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

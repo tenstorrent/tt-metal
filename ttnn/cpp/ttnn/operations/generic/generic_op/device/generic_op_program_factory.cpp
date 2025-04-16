@@ -67,7 +67,7 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
 
         for (const auto& [core, args] : compute_attributes.runtime_args_per_core)
         {
-            // assuming core is in the compute_attributes.core_spec, would be better to check
+            // assuming core is in the compute_attributes.core_spec
             tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
         }
     }
