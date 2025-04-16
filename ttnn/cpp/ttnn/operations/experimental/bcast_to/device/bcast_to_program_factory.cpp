@@ -166,7 +166,7 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
         tt::CBIndex::c_0, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
 
     auto [output_cb, output_cb_handle] = create_cb(
-        tt::CBIndex::c_16, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
+        tt::CBIndex::c_1, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
 
     const auto src_is_dram = static_cast<const uint32_t>(input.buffer()->is_dram());
     const auto dst_is_dram = static_cast<const uint32_t>(output.buffer()->is_dram());
@@ -178,18 +178,22 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
         program,
         get_kernel_file_path(kernel_config.reader_kernel),
         all_device_cores,
-        tt::tt_metal::ReaderDataMovementConfig({src_is_dram}));
+        tt::tt_metal::ReaderDataMovementConfig({src_is_dram, (uint32_t)tt::CBIndex::c_0}));
 
     // WRITER KERNEL
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.writer_kernel),
         all_device_cores,
-        tt::tt_metal::WriterDataMovementConfig({dst_is_dram}));
+        tt::tt_metal::WriterDataMovementConfig({dst_is_dram, (uint32_t)tt::CBIndex::c_1, (uint32_t)tt::CBIndex::c_0}));
 
     // COMPUTE KERNEL
     auto compute_id = tt::tt_metal::CreateKernel(
-        program, get_kernel_file_path(kernel_config.compute_kernel), all_device_cores, tt::tt_metal::ComputeConfig{});
+        program,
+        get_kernel_file_path(kernel_config.compute_kernel),
+        all_device_cores,
+        tt::tt_metal::ComputeConfig{
+            .math_approx_mode = false, .compile_args = {(uint32_t)tt::CBIndex::c_0, (uint32_t)tt::CBIndex::c_1}});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
