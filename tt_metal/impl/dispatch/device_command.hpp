@@ -73,6 +73,12 @@ public:
         uint16_t num_sub_cmds,
         uint32_t offset_idx = 0);
 
+    void add_prefetch_paged_to_ringbuffer(uint32_t length, uint32_t page_size, uint32_t pages);
+
+    void add_prefetch_set_ringbuffer_offset(uint32_t offset);
+
+    void add_prefetch_relay_ringbuffer(uint32_t count, uint32_t stride);
+
     template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear(
         uint8_t num_mcast_dests,

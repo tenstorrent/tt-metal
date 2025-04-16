@@ -1235,7 +1235,7 @@ void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {
 template <bool cmddat_wrap_enable>
 uint32_t process_relay_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_ptr, uint32_t* l1_cache) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
-    uint32_t count = cmd->relay_ringbuffer.count;
+    uinat32_t count = cmd->relay_ringbuffer.count;
     uint32_t sub_cmds_length = count * sizeof(CQPrefetchRelayRingbufferSubCmd);
     uint32_t stride = cmd->relay_ringbuffer.stride;
     // DPRINT << "relay_ringbuffer: " << count << " " << cmd->relay_ringbuffer.stride << ENDL();
