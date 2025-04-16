@@ -2520,3 +2520,40 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_pro
     assert passing_w2_out
     assert passing_input
     assert passing
+
+
+# prior to https://github.com/tenstorrent/tt-metal/pull/20538 this would throw a tt_assert. This test ensures the fix
+# works and does not break anything.
+def test_unused_cores(device):
+    shape = (1, 1, 32, 192)
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 1))}),
+            shard_shape=[32, 64],
+            shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_mode=ttnn.ShardMode.PHYSICAL,
+        ),
+    )
+
+    torch_input1 = torch.randn(shape, dtype=torch.bfloat16)
+    torch_input2 = torch.randn(shape, dtype=torch.bfloat16)
+
+    torch_output = torch_input1 * torch_input2
+
+    tt_input1 = ttnn.from_torch(
+        torch_input1, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config, dtype=ttnn.bfloat16
+    )
+    tt_input2 = ttnn.from_torch(
+        torch_input2, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config, dtype=ttnn.bfloat16
+    )
+
+    tt_input1 = ttnn.sharded_to_interleaved(tt_input1)
+    tt_input2 = ttnn.sharded_to_interleaved(tt_input2)
+
+    ttnn_output = ttnn.multiply(tt_input1, tt_input2)
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert comp_pcc(torch_output, ttnn_output, 0.99)[0]
