@@ -403,7 +403,7 @@ class TtModelArgs:
             )
 
             self.model_config["DECODE_SAMPLING_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(1, 1, self.max_batch_size, 32),
+                shape=(1, 1, max(self.max_batch_size, self.tile_size), self.tile_size),
                 core_grid=shard_grid,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
