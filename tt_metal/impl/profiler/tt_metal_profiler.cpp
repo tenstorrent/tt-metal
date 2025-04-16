@@ -141,13 +141,13 @@ void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
         if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
             // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
             // generic API to read from an address instead of a buffer. (#15015)
-            CoreCoord logical_worker_core =
+            auto logical_worker_core =
                 soc_d.translate_coord_to(curr_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
             auto control_buffer_view = get_control_buffer_view(
                 device,
                 reinterpret_cast<uint64_t>(profiler_msg->control_vector),
                 kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                logical_worker_core);
+                CoreCoord(logical_worker_core.x, logical_worker_core.y));
             EnqueueWriteBuffer(device->command_queue(), control_buffer_view, control_buffer, true);
         } else {
             tt::llrt::write_hex_vec_to_core(
