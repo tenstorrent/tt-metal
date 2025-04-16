@@ -35,6 +35,29 @@ static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 static constexpr std::uint32_t PACKET_HEADER_SIZE_BYTES = 48;
 static constexpr std::uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
 
+// offsets from FABRIC_ROUTER_MISC_START (ERISC_L1_UNRESERVED_BASE)
+static constexpr std::uint32_t FABRIC_ROUTER_SYNC_SEM_OFFSET = 0;
+static constexpr std::uint32_t FABRIC_ROUTER_SYNC_SEM_SIZE = 16;
+static constexpr std::uint32_t FABRIC_ROUTER_STATUS_PTR_OFFSET =
+    FABRIC_ROUTER_SYNC_SEM_OFFSET + FABRIC_ROUTER_SYNC_SEM_SIZE;
+static constexpr std::uint32_t FABRIC_ROUTER_STATUS_PTR_SIZE = 16;
+static constexpr std::uint32_t FABRIC_ROUTER_HOST_SIGNAL_PTR_OFFSET =
+    FABRIC_ROUTER_STATUS_PTR_OFFSET + FABRIC_ROUTER_STATUS_PTR_SIZE;
+static constexpr std::uint32_t FABRIC_ROUTER_HOST_SIGNAL_PTR_SIZE = 16;
+
+enum class fabric_router_host_signal : uint32_t {
+    Process_Traffic = 0xD0C0B0A0,
+    Terminate = Process_Traffic + 0x01010101
+};
+
+enum class fabric_router_status : uint32_t {
+    Started = 0xA0B0C0D0,
+    Ready = Started + 0x01010101,
+    Processing_Traffic = Ready + 0x01010101,
+    Terminating = Processing_Traffic + 0x01010101,
+    Terminated = Terminating + 0x01010101
+};
+
 enum eth_chan_magic_values {
     INVALID_DIRECTION = 0xDD,
     INVALID_ROUTING_TABLE_ENTRY = 0xFF,
