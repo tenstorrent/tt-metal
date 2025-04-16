@@ -149,6 +149,12 @@ struct EdmChannelWorkerInterface {
     }
 
     template <bool enable_ring_support>
+    FORCE_INLINE void update_worker_copy_of_read_ptr2() {
+        noc_inline_dw_write<UPDATE_STREAM_REG_ON_PRODUCER_WRPTR_UPDATE, true>(
+            this->cached_worker_semaphore_address, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    }
+
+    template <bool enable_ring_support>
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
         if constexpr (UPDATE_STREAM_REG_ON_PRODUCER_WRPTR_UPDATE) {
             noc_inline_dw_write<UPDATE_STREAM_REG_ON_PRODUCER_WRPTR_UPDATE, true>(

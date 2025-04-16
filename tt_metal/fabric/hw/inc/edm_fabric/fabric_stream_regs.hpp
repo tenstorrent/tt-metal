@@ -24,12 +24,12 @@ FORCE_INLINE int32_t get_ptr_val(uint8_t stream_id) {
 // inline the eth command (without requiring source L1)
 template <uint32_t stream_id>
 FORCE_INLINE void increment_local_update_ptr_val(int32_t val) {
-    NOC_STREAM_WRITE_REG_FIELD(
-        stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX, REMOTE_DEST_BUF_WORDS_FREE_INC, val);
+    NOC_STREAM_WRITE_REG(
+        stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
 }
 FORCE_INLINE void increment_local_update_ptr_val(uint8_t stream_id, int32_t val) {
-    NOC_STREAM_WRITE_REG_FIELD(
-        stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX, REMOTE_DEST_BUF_WORDS_FREE_INC, val);
+    NOC_STREAM_WRITE_REG(
+        stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
 }
 
 template <uint32_t stream_id>
