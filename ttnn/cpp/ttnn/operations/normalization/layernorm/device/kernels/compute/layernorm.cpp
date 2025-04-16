@@ -11,16 +11,18 @@
 #define BCAST_DIM BroadcastType::COL
 
 #include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
+#include "debug/dprint_pages.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
-
 namespace NAMESPACE {
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
+    uint32_t W = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
@@ -65,6 +67,8 @@ void MAIN {
 #else
     binary_op_init_common(cb_in, cb_in, cb_xmm2);
 #endif
+    ACQ();
+    pack_reconfig_data_format(cb_scaler);
 
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
