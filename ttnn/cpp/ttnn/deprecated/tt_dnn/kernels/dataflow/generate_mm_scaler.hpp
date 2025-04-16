@@ -26,12 +26,15 @@ FORCE_INLINE void generate_mm_scaler(const uint32_t cb_id, const uint32_t scaler
     noc_async_read_barrier();
 
     uint32_t single_packed_scalar = scaler & 0xFFFF;
-    for (int i = 0; i < 128; i += 8) {
+    // for (int i = 0; i < 128; i += 1) {
+    //     ptr[i] = single_packed_scalar;
+    // }
+    for (int i = 0; i < 1024; i += 1) {
         ptr[i] = single_packed_scalar;
     }
-    for (int i = 256; i < 384; i += 8) {
-        ptr[i] = single_packed_scalar;
-    }
+    // for (int i = 256; i < 384; i += 1) {
+    //     ptr[i] = single_packed_scalar;
+    // }
 
     cb_push_back(cb_id, 1);
 }

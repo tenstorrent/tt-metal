@@ -69,11 +69,11 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for layernorm compute
-    // {
-    //     constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-    //     uint32_t scaler = get_arg_val<uint32_t>(4);
-    //     generate_mm_scaler(cb_in_2, scaler);
-    // }
+    {
+        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
+        uint32_t scaler = get_arg_val<uint32_t>(4);
+        generate_mm_scaler(cb_in_2, scaler);
+    }
     constexpr uint32_t eps_cb_id = 3;
     const uint32_t eps = get_arg_val<uint32_t>(5);
     generate_bcast_col_scalar(eps_cb_id, eps);
