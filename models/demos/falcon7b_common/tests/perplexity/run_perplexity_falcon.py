@@ -22,28 +22,36 @@ from models.utility_functions import tt_tensors_to_torch_tensors
 
 
 def calculate_perplexity(
-    model, dataloader, llm_mode, batch_size, seq_len, kv_cache, configuration, use_hf_model=False, mesh_device=None
+    model,
+    dataloader,
+    llm_mode: ttnn.InferenceMode,
+    batch_size,
+    seq_len,
+    kv_cache,
+    configuration,
+    use_hf_model=False,
+    mesh_device=None,
 ):
     if not use_hf_model:
         assert mesh_device is not None
-    if llm_mode == "prefill" and not use_hf_model:
+    if llm_mode == ttnn.InferenceMode.PREFILL and not use_hf_model:
         assert batch_size == 1
     use_cache = True
     running_nll, running_top1_acc, running_top5_acc = 0.0, 0.0, 0.0
     with torch.no_grad():
         for input_ids, labels in tqdm(dataloader, desc="Evaluating batches"):
-            if llm_mode == "prefill":
+            if llm_mode == ttnn.InferenceMode.PREFILL:
                 if not use_hf_model:
                     user_id = 0
                     (
                         tt_prefill_input_ids,
                         tt_prefill_attention_mask,
                     ) = model.model_preprocessing(
-                        "prefill", input_ids[user_id::batch_size], 0, num_input_tokens=seq_len
+                        ttnn.InferenceMode.PREFILL, input_ids[user_id::batch_size], 0, num_input_tokens=seq_len
                     )
                     tt_logits, kv_cache = model(
                         input_ids=tt_prefill_input_ids,
-                        llm_mode="prefill",
+                        llm_mode=ttnn.InferenceMode.PREFILL,
                         attention_mask=tt_prefill_attention_mask,
                         user_id=user_id,
                         layer_past=kv_cache,
@@ -63,7 +71,7 @@ def calculate_perplexity(
                 else:  # huggingface model
                     logits, _ = model(input_ids=input_ids, use_cache=use_cache, return_dict=False)
 
-            elif llm_mode == "decode":
+            elif llm_mode == ttnn.InferenceMode.DECODE:
                 logits = []
                 layer_present = None
                 for kv_cache_len in tqdm(range(seq_len), desc="Decoding tokens for current batch"):
@@ -73,11 +81,11 @@ def calculate_perplexity(
                             tt_decode_input_ids,
                             tt_decode_attention_mask,
                         ) = model.model_preprocessing(
-                            "decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
+                            ttnn.InferenceMode.DECODE, decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
                         )
                         tt_logits, kv_cache = model(
                             input_ids=tt_decode_input_ids,
-                            llm_mode="decode",
+                            llm_mode=ttnn.InferenceMode.DECODE,
                             attention_mask=tt_decode_attention_mask,
                             layer_past=kv_cache,
                             layer_past_len=kv_cache_len,
@@ -114,7 +122,7 @@ def calculate_perplexity(
 
 
 def run_test_perplexity(
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch_size,
     max_seq_len,
     model_config_str,

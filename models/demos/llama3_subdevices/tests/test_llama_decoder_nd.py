@@ -155,7 +155,7 @@ def test_llama_decoder_same(
             res,
             current_pos_tensor,
             rot_mats=rot_mats,
-            mode="decode",
+            mode=ttnn.InferenceMode.DECODE,
             page_table=page_table_tt,
         )
         tt_out = ttnn.to_torch(

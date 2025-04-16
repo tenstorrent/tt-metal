@@ -43,7 +43,7 @@ class TtFalconCausalLM(TtFalconModelShared):
     def __call__(
         self,
         input_embeddings: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode.DECODE,
         attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
         layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,

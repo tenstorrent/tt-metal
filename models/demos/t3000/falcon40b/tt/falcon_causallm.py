@@ -61,14 +61,14 @@ class TtFalconCausalLM(TtFalconModelShared):
     def __call__(
         self,
         input_ids: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
         layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
     ) -> ttnn.Tensor:
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             return self.fwd_prefill_causallm(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -78,7 +78,7 @@ class TtFalconCausalLM(TtFalconModelShared):
                 layer_past_len=layer_past_len,
                 use_cache=use_cache,
             )
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             return self.fwd_decode_causallm(
                 input_ids=input_ids,
                 attention_mask=attention_mask,

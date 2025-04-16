@@ -143,7 +143,7 @@ def test_chunked_prefill_single_user(
 
     start_pos = 0
     logger.info("Running reference model")
-    ref_output = reference_model(pt_prefill_input, start_pos, mode="decode")
+    ref_output = reference_model(pt_prefill_input, start_pos, mode=ttnn.InferenceMode.DECODE)
 
     # Run TT model, collecting various last_token_idxs
     logger.info("Running TT model")

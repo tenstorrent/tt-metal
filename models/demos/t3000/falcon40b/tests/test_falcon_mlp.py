@@ -37,7 +37,7 @@ class PytorchFalconMLPModel(torch.nn.Module):
 def run_test_FalconMLP_inference(
     mesh_device,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode.DECODE,
     batch,
     seq_len,
     pcc,
@@ -56,7 +56,7 @@ def run_test_FalconMLP_inference(
 
     # Prepare input
     torch.manual_seed(0)
-    if llm_mode == "decode":
+    if llm_mode == ttnn.InferenceMode.DECODE:
         input_shape = [seq_len, 1, batch, configuration.hidden_size]
     else:
         input_shape = [batch, 1, seq_len, configuration.hidden_size]
@@ -106,10 +106,10 @@ def run_test_FalconMLP_inference(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len",
     (
-        ("decode", 32, 1),
-        ("prefill", 1, 32),
-        ("prefill", 1, 128),
-        ("prefill", 1, 2048),
+        (ttnn.InferenceMode.DECODE, 32, 1),
+        (ttnn.InferenceMode.PREFILL, 1, 32),
+        (ttnn.InferenceMode.PREFILL, 1, 128),
+        (ttnn.InferenceMode.PREFILL, 1, 2048),
     ),
     ids=(
         "decode_batch32",
@@ -136,7 +136,7 @@ def run_test_FalconMLP_inference(
 def test_FalconMLP_inference(
     num_devices,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     pcc,
@@ -146,9 +146,11 @@ def test_FalconMLP_inference(
     t3k_mesh_device,
     use_program_cache,
 ):
-    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
+    if llm_mode == ttnn.InferenceMode.PREFILL and (
+        model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8
+    ):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
+    if llm_mode == ttnn.InferenceMode.DECODE and model_config_str not in ["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED"]:
         pytest.skip("Decode is only supported for SHARDED memory config!")
 
     input_shape = [batch, seq_len]

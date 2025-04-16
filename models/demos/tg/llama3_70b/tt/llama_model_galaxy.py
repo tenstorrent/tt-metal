@@ -156,13 +156,20 @@ class TtLlamaModel_galaxy:
             cache_file_name=self.cache_path / norm_sharded_cache_str,
         )
 
-    def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None, attn_mask=None, mode="decode"):
+    def prepare_inputs(
+        self,
+        inp_ids,
+        start_pos,
+        valid_seq_len=None,
+        attn_mask=None,
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
+    ):
         assert inp_ids.dim() == 2
         batch, seq_len = inp_ids.shape
 
         cache_name = lambda name: self.cache_path / (f"{'llama3_' if self.llama3 else ''}{name}")
 
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             inp_ids = inp_ids.reshape(seq_len, 1, 1, batch)
         else:
             inp_ids = inp_ids.reshape(batch, 1, 1, seq_len)
@@ -178,7 +185,7 @@ class TtLlamaModel_galaxy:
 
         xs = self.tt_embd(x)
 
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             assert xs.shape == (seq_len, 1, batch, self.hidden_size // self.cluster_shape[0])
 
@@ -231,7 +238,7 @@ class TtLlamaModel_galaxy:
 
             attn_masks = None
 
-        elif mode == "prefill":
+        elif mode == ttnn.InferenceMode.PREFILL:
             # check if seq_len is power of 2
             assert is_power_of_two(seq_len), "Prefill mode only supports seq_len as power of 2"
             assert xs.shape == (batch, 1, seq_len, self.hidden_size // self.cluster_shape[0])
@@ -290,12 +297,12 @@ class TtLlamaModel_galaxy:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
     ) -> ttnn.Tensor:
         self.core_model_config = self.model_config["core_model"][mode]
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
-        elif mode == "prefill":
+        elif mode == ttnn.InferenceMode.PREFILL:
             return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
@@ -309,7 +316,7 @@ class TtLlamaModel_galaxy:
     ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
-            xs = layer(xs, rot_mats, start_pos, attn_masks, mode="decode")  # xs is fractured
+            xs = layer(xs, rot_mats, start_pos, attn_masks, mode=ttnn.InferenceMode.DECODE)  # xs is fractured
 
         norm_out = tt_sharded_distributed_rmsnorm(
             xs,

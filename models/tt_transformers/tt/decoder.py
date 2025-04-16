@@ -101,7 +101,7 @@ class TransformerBlock(LightweightModule):
         current_pos,
         rot_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
@@ -130,12 +130,12 @@ class TransformerBlock(LightweightModule):
         # Here x and attn_out are both fractured across devices
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
         ttnn.deallocate(attn_out)
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             x.deallocate(True)
 
         # Norms take fractured inputs and output replicated across devices
         ff_in = self.ff_norm(h, mode)
-        if TG and mode == "decode":
+        if TG and mode == ttnn.InferenceMode.DECODE:
             ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in, mode)

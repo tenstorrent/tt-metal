@@ -114,7 +114,7 @@ class TtFalconDecoderLayer(nn.Module):
         hidden_states: ttnn.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         user_id: int = 0,
         layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
@@ -137,7 +137,7 @@ class TtFalconDecoderLayer(nn.Module):
 
         # Attention and MLP execution
         # mlp will deallocate layernorm_output
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             attn_outputs = self.self_attn_prefill(
                 hidden_states=layernorm_output,
                 alibi=alibi,
@@ -152,7 +152,7 @@ class TtFalconDecoderLayer(nn.Module):
             attention_output, layer_present = attn_outputs[0], attn_outputs[1]
             mlp_output = self.mlp_prefill(layernorm_output)
 
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             attn_outputs = self.self_attn_decode(
                 hidden_states=layernorm_output,
                 alibi=alibi,

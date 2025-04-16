@@ -45,7 +45,7 @@ class TtFalconDecoderLayer:
         hidden_states: ttnn.Tensor,
         alibi: ttnn.Tensor,
         attention_mask: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         user_id: int = 0,
         layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,

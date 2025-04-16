@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import ttnn
 
 from models.demos.t3000.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
 from models.demos.t3000.falcon40b.tt.model_config import (
@@ -19,11 +20,11 @@ from models.utility_functions import (
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
-        ("prefill", 1, 32, 0),
-        ("prefill", 2, 32, 0),
-        ("prefill", 1, 128, 0),
-        ("prefill", 1, 2048, 0),
-        ("decode", 32, 1, 128),
+        (ttnn.InferenceMode.PREFILL, 1, 32, 0),
+        (ttnn.InferenceMode.PREFILL, 2, 32, 0),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0),
+        (ttnn.InferenceMode.PREFILL, 1, 2048, 0),
+        (ttnn.InferenceMode.DECODE, 32, 1, 128),
     ),
     ids=[
         "prefill_seq32",
@@ -69,7 +70,7 @@ from models.utility_functions import (
 def test_FalconCausalLM_end_to_end_with_program_cache(
     num_devices,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -84,9 +85,9 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     async_mode,
 ):
     model_config_str = f"{data_type}-{memcfg}"
-    if llm_mode == "prefill" and memcfg != "DRAM" or num_devices != 8:
+    if llm_mode == ttnn.InferenceMode.PREFILL and memcfg != "DRAM" or num_devices != 8:
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and memcfg != "SHARDED":
+    if llm_mode == ttnn.InferenceMode.DECODE and memcfg != "SHARDED":
         pytest.skip("Decode is only supported for SHARDED memory config!")
 
     out_pcc = 0.99

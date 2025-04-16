@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import ttnn
 
 from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
     DECODE_CONFIG_TO_PCC,
@@ -23,12 +24,12 @@ from models.utility_functions import disable_persistent_kernel_cache, skip_for_g
 @pytest.mark.parametrize(
     "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str",
     (
-        ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM"),
-        ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM"),
-        ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM"),
-        ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED"),
-        ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED"),
-        ("decode", 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED"),
+        (ttnn.InferenceMode.PREFILL, 32, 1, 128, 0, "BFLOAT16-DRAM"),
+        (ttnn.InferenceMode.PREFILL, 32, 1, 1024, 0, "BFLOAT16-DRAM"),
+        (ttnn.InferenceMode.PREFILL, 32, 1, 2048, 0, "BFLOAT16-DRAM"),
+        (ttnn.InferenceMode.DECODE, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED"),
+        (ttnn.InferenceMode.DECODE, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED"),
+        (ttnn.InferenceMode.DECODE, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED"),
     ),
     ids=[
         "prefill_seq128_bfloat16-dram",
@@ -42,7 +43,7 @@ from models.utility_functions import disable_persistent_kernel_cache, skip_for_g
 @pytest.mark.parametrize("mesh_device", (1,), indirect=True)
 def test_device_perf_wh_bare_metal(
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -59,7 +60,7 @@ def test_device_perf_wh_bare_metal(
 
     disable_persistent_kernel_cache()
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
             DeviceSetup.WORMHOLE_B0
         ][model_config_str][seq_len]
@@ -89,12 +90,12 @@ def test_device_perf_wh_bare_metal(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, model_config_str, samples",
     (
-        ("prefill", 1, 128, 0, "BFLOAT16-DRAM", 2068),
-        ("prefill", 1, 1024, 0, "BFLOAT16-DRAM", 2895),
-        ("prefill", 1, 2048, 0, "BFLOAT16-DRAM", 2684),
-        ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 629),
-        ("decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 572),
-        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 553),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0, "BFLOAT16-DRAM", 2068),
+        (ttnn.InferenceMode.PREFILL, 1, 1024, 0, "BFLOAT16-DRAM", 2895),
+        (ttnn.InferenceMode.PREFILL, 1, 2048, 0, "BFLOAT16-DRAM", 2684),
+        (ttnn.InferenceMode.DECODE, 32, 1, 128, "BFLOAT16-L1_SHARDED", 629),
+        (ttnn.InferenceMode.DECODE, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 572),
+        (ttnn.InferenceMode.DECODE, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 553),
     ),
 )
 @skip_for_grayskull()
@@ -102,7 +103,7 @@ def test_device_perf(llm_mode, batch, seq_len, kv_cache_len, model_config_str, s
     margin = 0.03
     num_iterations = 1
     model_config = model_config_str.lower()
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         test_id = f"{llm_mode}_seq{seq_len}_{model_config}"
     else:
         test_id = f"{llm_mode}_seq{kv_cache_len}_{model_config}"

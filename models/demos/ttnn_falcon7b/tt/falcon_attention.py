@@ -57,7 +57,7 @@ class TtFalconAttention:
         hidden_states: ttnn.Tensor,
         alibi: ttnn.Tensor,
         attention_mask: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         user_id: int = 0,
         layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
@@ -71,11 +71,11 @@ class TtFalconAttention:
 
         assert not output_attentions
 
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             batch = hidden_states.shape[0]
             q_len = hidden_states.shape[2]
             assert layer_past is not None
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             batch = hidden_states.shape[2]
             q_len = hidden_states.shape[0]
             # We always store max_position_embeddings for kv_cache,
@@ -118,20 +118,20 @@ class TtFalconAttention:
         #########################
         ### ROTARY EMBEDDINGS ###
         #########################
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             query_layer = self.rotary_embedding(query_layer)
             key_layer = self.rotary_embedding(key_layer)
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             query_layer = self.rotary_embedding(query_layer, layer_past_len)
             key_layer = self.rotary_embedding(key_layer, layer_past_len)
 
         ######################
         ### K CACHE UPDATE ###
         ######################
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             ttnn.kv_cache.fill_cache_for_user_(layer_past[0], key_layer, user_id)
 
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             ttnn.kv_cache.update_cache_for_token_(layer_past[0], key_layer, layer_past_len)
             # key and value layers will have kv_seq_len padded to nearest 32
             # memory_config=self.model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"] TODO: add memory_config to __getitem__
@@ -147,7 +147,7 @@ class TtFalconAttention:
         )
         ttnn.deallocate(key_layer, force=False)
 
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             attn_weights = ttnn.matmul(
                 input_tensor_a=query_layer,
                 input_tensor_b=key_layer_transposed,
@@ -155,7 +155,7 @@ class TtFalconAttention:
                 core_grid=self.core_grid,
             )
 
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
             if is_wormhole_b0():
                 attn_weights = ttnn.experimental.attn_matmul(
@@ -198,10 +198,10 @@ class TtFalconAttention:
         ######################
         ### V CACHE UPDATE ###
         ######################
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             ttnn.kv_cache.fill_cache_for_user_(layer_past[1], value_layer, user_id)
 
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             ttnn.kv_cache.update_cache_for_token_(layer_past[1], value_layer, layer_past_len)
             # memory_config=self.model_config["V_CACHE_SLICE_OUTPUT_MEMCFG" TODO: add memory_config to __getitem__
             value_layer = layer_past[1][:, :, : nearest_32(layer_past_len + 1), : self.head_dim]
@@ -211,14 +211,14 @@ class TtFalconAttention:
         ########################
         ### POST-SOFTMAX MM ###
         ########################
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             attn_output = ttnn.matmul(
                 attn_weights,
                 value_layer,
                 memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
             )
 
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
             if is_wormhole_b0():
                 attn_output = ttnn.experimental.attn_matmul(

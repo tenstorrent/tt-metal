@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import ttnn
 from torch import nn
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -230,7 +231,13 @@ class Transformer(nn.Module):
         # Additionally, the official Qwen2-7B model is expected to use bfloat16 for inference. Refer to https://huggingface.co/Qwen/Qwen2-7B/blob/main/config.json for the `torch_dtype` setting.
         self.to(torch.bfloat16)
 
-    def forward(self, input_ids: torch.Tensor, freqs_cis_i, positions: torch.Tensor, mode="decode"):
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        freqs_cis_i,
+        positions: torch.Tensor,
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
+    ):
         h = input_ids.to(torch.bfloat16)  # self.tok_embeddings(input_ids)
         freqs_cis = freqs_cis_i  # [positions]
 
@@ -249,6 +256,6 @@ class Transformer(nn.Module):
             mask = torch.log(mask)
         for layer in self.layers:
             h = layer(h, freqs_cis, positions, mask)
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             return h.float()
         return self.lm_head(self.norm(h)).float()

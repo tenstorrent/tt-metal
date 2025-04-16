@@ -31,7 +31,7 @@ from models.perf.perf_utils import prep_perf_report
 def run_test_FalconCausalLM_end_to_end(
     mesh_device,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -76,12 +76,12 @@ def run_test_FalconCausalLM_end_to_end(
         model_input = torch.stack([torch.randint(0, seq_len)] * batch).reshape(batch, seq_len)
 
     # Generate dummy kv_cache --------------------------------------------------------------
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         q_len, kv_len = seq_len, seq_len
         assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
         assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         q_len, kv_len = seq_len, kv_cache_len + 1
         assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
         assert q_len == 1, "For decode, q_len must be 1!"
@@ -114,7 +114,7 @@ def run_test_FalconCausalLM_end_to_end(
     tt_layer_past = tt_FalconCausalLM.initialize_kv_cache()
 
     profiler.start("processing_of_input")
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         model_inputs = torch.split(model_input, 1)
         tt_inputs, tt_attention_mask = zip(
             *[
@@ -122,7 +122,7 @@ def run_test_FalconCausalLM_end_to_end(
                 for m_i in model_inputs
             ]
         )
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
@@ -138,7 +138,7 @@ def run_test_FalconCausalLM_end_to_end(
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("COMPILE_RUN")
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tt_outs = []
         for user_id in range(batch):
             tt_out, tt_layer_present = tt_FalconCausalLM(
@@ -158,7 +158,7 @@ def run_test_FalconCausalLM_end_to_end(
         ]
         tt_out = tt_outs
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_out, tt_layer_present = tt_FalconCausalLM(
             input_ids=tt_inputs,
             llm_mode=llm_mode,
@@ -186,7 +186,7 @@ def run_test_FalconCausalLM_end_to_end(
     for _ in range(warmup_iterations):
         for device in devices:
             ttnn.DumpDeviceProfiler(device)
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             model_inputs = torch.split(model_input, 1)
             tt_inputs, tt_attention_mask = zip(
                 *[
@@ -211,7 +211,7 @@ def run_test_FalconCausalLM_end_to_end(
                 ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
                 for tt_out in tt_outs
             ]
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
                 llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
             )
@@ -239,7 +239,7 @@ def run_test_FalconCausalLM_end_to_end(
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("PERF_RUN")
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         # Push inputs to device and do preprocessing
         model_inputs = torch.split(model_input, 1)
         tt_inputs, tt_attention_mask = zip(
@@ -262,7 +262,7 @@ def run_test_FalconCausalLM_end_to_end(
             )
             tt_outs.append(tt_out)
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         # Prepare inputs
         tt_inputs, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
@@ -307,9 +307,9 @@ def run_test_FalconCausalLM_end_to_end(
     tokens_per_s_per_user = 1 / second_iter_time
     tokens_per_s_overall = tokens_per_s_per_user * batch * seq_len
     logger.info(f"Time per iteration: {second_iter_time}")
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         logger.info(f"Prompt per s per user: {tokens_per_s_per_user}")
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         logger.info(f"Tokens per s per user: {tokens_per_s_per_user}")
     logger.info(f"Tokens per s overall: {tokens_per_s_overall}")
 
@@ -322,13 +322,13 @@ def run_test_FalconCausalLM_end_to_end(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, num_layers, model_config_str",
     (
-        ("prefill", 1, 32, 0, 62, 0.37 + 0.04, 60, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 128, 0, 60, 0.39 + 0.04, 60, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 2048, 0, 60, 0.94 + 0.1, 60, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 32, 0, 60, 0.42 + 0.04, 60, "BFLOAT16-DRAM"),
-        ("prefill", 1, 128, 0, 60, 0.46 + 0.04, 60, "BFLOAT16-DRAM"),
-        ("prefill", 1, 2048, 0, 60, 1.18 + 0.1, 60, "BFLOAT16-DRAM"),
-        ("decode", 32, 1, 128, 60, 0.21 + 0.02, 60, "BFLOAT8_B-SHARDED"),
+        (ttnn.InferenceMode.PREFILL, 1, 32, 0, 62, 0.37 + 0.04, 60, "BFLOAT8_B-DRAM"),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0, 60, 0.39 + 0.04, 60, "BFLOAT8_B-DRAM"),
+        (ttnn.InferenceMode.PREFILL, 1, 2048, 0, 60, 0.94 + 0.1, 60, "BFLOAT8_B-DRAM"),
+        (ttnn.InferenceMode.PREFILL, 1, 32, 0, 60, 0.42 + 0.04, 60, "BFLOAT16-DRAM"),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0, 60, 0.46 + 0.04, 60, "BFLOAT16-DRAM"),
+        (ttnn.InferenceMode.PREFILL, 1, 2048, 0, 60, 1.18 + 0.1, 60, "BFLOAT16-DRAM"),
+        (ttnn.InferenceMode.DECODE, 32, 1, 128, 60, 0.21 + 0.02, 60, "BFLOAT8_B-SHARDED"),
     ),
     ids=[
         "prefill_seq32_bfp8",
@@ -352,7 +352,7 @@ def run_test_FalconCausalLM_end_to_end(
 def test_perf_bare_metal(
     num_devices,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -368,9 +368,11 @@ def test_perf_bare_metal(
     is_ci_env,
     async_mode,
 ):
-    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
+    if llm_mode == ttnn.InferenceMode.PREFILL and (
+        model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8
+    ):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED"]:
+    if llm_mode == ttnn.InferenceMode.DECODE and model_config_str not in ["BFLOAT8_B-SHARDED"]:
         pytest.skip("Decode is only supported for SHARDED memory config!")
 
     input_shape = [batch, seq_len]
@@ -410,8 +412,8 @@ def test_perf_bare_metal(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, num_layers, model_config_str",
     (
-        ("prefill", 1, 128, 0, 60, 0.39 + 0.04, 1, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 2048, 0, 60, 0.94 + 0.1, 1, "BFLOAT8_B-DRAM"),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0, 60, 0.39 + 0.04, 1, "BFLOAT8_B-DRAM"),
+        (ttnn.InferenceMode.PREFILL, 1, 2048, 0, 60, 0.94 + 0.1, 1, "BFLOAT8_B-DRAM"),
     ),
     ids=[
         "prefill_seq128_bfp8_layers1",
@@ -426,7 +428,7 @@ def test_perf_bare_metal(
 def test_device_perf_bare_metal(
     num_devices,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -441,9 +443,11 @@ def test_device_perf_bare_metal(
     use_program_cache,
     is_ci_env,
 ):
-    if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
+    if llm_mode == ttnn.InferenceMode.PREFILL and (
+        model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8
+    ):
         pytest.skip("Prefill is only supported for DRAM memory config and 8 chips!")
-    if llm_mode == "decode" and model_config_str not in ["BFLOAT8_B-SHARDED"]:
+    if llm_mode == ttnn.InferenceMode.DECODE and model_config_str not in ["BFLOAT8_B-SHARDED"]:
         pytest.skip("Decode is only supported for SHARDED memory config!")
 
     input_shape = [batch, seq_len]

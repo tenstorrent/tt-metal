@@ -166,11 +166,11 @@ class TtFalconModelShared:
         for layer_num in range(self.num_layers):
             self.layers[layer_num].set_model_config(model_config)
 
-    def model_preprocessing(self, llm_mode, input_ids, kv_cache_len, num_input_tokens):
+    def model_preprocessing(self, llm_mode: ttnn.InferenceMode, input_ids, kv_cache_len, num_input_tokens):
         assert input_ids.dim() == 2
         batch_size, sequence_size = input_ids.shape
 
-        if llm_mode == "decode":
+        if llm_mode == ttnn.InferenceMode.DECODE:
             input_ids = input_ids.reshape(sequence_size, 1, 1, batch_size)
         else:
             input_ids = input_ids.reshape(batch_size, 1, 1, sequence_size)
@@ -185,7 +185,7 @@ class TtFalconModelShared:
         )
 
         # Generate input and attention_mask ---------------------------------------------
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             assert batch_size == 1, "For prefill, batch_size must be 1!"
             assert sequence_size % 32 == 0, "For prefill, sequence_size must be multiple of 32!"
             assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
@@ -206,7 +206,7 @@ class TtFalconModelShared:
                     self.hidden_size,
                     self.model_config["LN_MLP_OUTPUT_DTYPE"],
                 )
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             assert batch_size % 32 == 0, "For decode, batch_size must be multiple of 32!"
             assert sequence_size == 1, "For decode, q_len must be 1!"
 
@@ -249,7 +249,7 @@ class TtFalconModelShared:
     def __call__(
         self,
         input_ids: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
         layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
@@ -258,7 +258,7 @@ class TtFalconModelShared:
     ) -> ttnn.Tensor:
         input_embeddings = self.embeddings(input_ids)
 
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             return self.fwd_prefill(
                 input_embeddings=input_embeddings,
                 llm_mode=llm_mode,
@@ -268,7 +268,7 @@ class TtFalconModelShared:
                 layer_past_len=layer_past_len,
                 use_cache=use_cache,
             )
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             return self.fwd_decode(
                 input_embeddings=input_embeddings,
                 llm_mode=llm_mode,
@@ -284,7 +284,7 @@ class TtFalconModelShared:
     def fwd_prefill(
         self,
         input_embeddings: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
         layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
@@ -342,7 +342,7 @@ class TtFalconModelShared:
     def fwd_decode(
         self,
         input_embeddings: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
         layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
@@ -422,7 +422,7 @@ class TtFalconModel(TtFalconModelShared):
     def __call__(
         self,
         input_ids: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
         layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,

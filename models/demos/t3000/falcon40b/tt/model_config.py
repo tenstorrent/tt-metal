@@ -136,13 +136,13 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(model_config_str, llm_mode, input_shape, num_devices):
-    assert llm_mode in ("prefill", "decode")
+def get_model_config(model_config_str, llm_mode: ttnn.InferenceMode, input_shape, num_devices):
+    assert llm_mode in (ttnn.InferenceMode.PREFILL, ttnn.InferenceMode.DECODE)
     assert len(input_shape) == 2
     assert num_devices == 8, "Currently only supporting 8 devices"
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         model_config = get_prefill_model_config(model_config_str, input_shape, num_devices)
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         model_config = get_decode_model_config(model_config_str, input_shape, num_devices)
     else:
         assert False
@@ -176,7 +176,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
 
     # Set defaults for dtype and mem_config for all ops
     model_config = {
-        "LLM_MODE": "decode",
+        "LLM_MODE": ttnn.InferenceMode.DECODE,
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_DECODER_OUTPUT_BOOL": False,

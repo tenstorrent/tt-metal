@@ -24,6 +24,7 @@
 
 import torch
 from torch import nn
+import ttnn
 from typing import Optional, Tuple
 from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
 from torch.nn.utils import skip_init
@@ -221,13 +222,17 @@ class Transformer(nn.Module):
         self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim)
 
     def forward(
-        self, input_ids: torch.Tensor, positions: torch.Tensor, mask: Optional[torch.Tensor] = None, mode="decode"
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
     ):
         h = input_ids
         freqs_cis = self.freqs_cis[positions]
 
         for layer in self.layers:
             h = layer(h, freqs_cis, positions, mask)
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             return h.float()
         return self.output(self.norm(h)).float()

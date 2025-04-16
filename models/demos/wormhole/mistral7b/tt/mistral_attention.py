@@ -646,9 +646,16 @@ class TtMistralAttention(nn.Module):
         return [output_11SH]
 
     def forward(
-        self, xs, current_pos, attn_masks=None, rot_mats=None, transformation_mats=None, user_id=0, mode="decode"
+        self,
+        xs,
+        current_pos,
+        attn_masks=None,
+        rot_mats=None,
+        transformation_mats=None,
+        user_id=0,
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
     ):
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             return self.forward_prefill(xs[0], attn_masks[0], rot_mats, transformation_mats, user_id)
         else:
             return self.forward_decode(xs, current_pos, attn_masks)

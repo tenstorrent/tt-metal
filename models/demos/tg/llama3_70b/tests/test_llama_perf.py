@@ -53,7 +53,7 @@ def get_reference_model(
 
 
 def prepare_inputs_for_tt_model(
-    tt_model, batch, seq_len, vocab_size, generation_start_pos, attn_mask=None, mode="decode"
+    tt_model, batch, seq_len, vocab_size, generation_start_pos, attn_mask=None, mode=ttnn.InferenceMode.DECODE
 ):
     input_ids = torch.randint(0, vocab_size, (batch, seq_len))
     tt_input_ids = input_ids.clone()
@@ -103,9 +103,9 @@ def run_test_LlamaModel_end_to_end(
         read_cache=True,
     )
 
-    mode = "decode" if seq_len == 1 else "prefill"
+    mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE if seq_len == 1 else ttnn.InferenceMode.PREFILL
 
-    if mode == "prefill":
+    if mode == ttnn.InferenceMode.PREFILL:
         generation_start_pos = 0
     else:
         # Decode mode not supported

@@ -236,13 +236,16 @@ def run_falcon_demo_kv(
             tt_prefill_input_ids,
             tt_prefill_attention_mask,
         ) = tt_FalconCausalLM_singlelayer.model_preprocessing(
-            "prefill", prefill_ids[user_id::batch_size], 0, num_input_tokens=nearest_32(num_input_tokens)
+            ttnn.InferenceMode.PREFILL,
+            prefill_ids[user_id::batch_size],
+            0,
+            num_input_tokens=nearest_32(num_input_tokens),
         )
         assert tt_prefill_attention_mask is not None
 
         tt_logits, kv_cache_singlelayer = tt_FalconCausalLM_singlelayer(
             input_ids=tt_prefill_input_ids,
-            llm_mode="prefill",
+            llm_mode=ttnn.InferenceMode.PREFILL,
             attention_mask=tt_prefill_attention_mask,
             user_id=user_id,
             layer_past=kv_cache_singlelayer,
@@ -281,13 +284,13 @@ def run_falcon_demo_kv(
             tt_decode_input_ids,
             tt_decode_attention_mask,
         ) = tt_FalconCausalLM_singlelayer.model_preprocessing(
-            "decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
+            ttnn.InferenceMode.DECODE, decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
         )
         assert tt_decode_attention_mask is not None
 
         tt_logits, kv_cache_singlelayer = tt_FalconCausalLM_singlelayer(
             input_ids=tt_decode_input_ids,
-            llm_mode="decode",
+            llm_mode=ttnn.InferenceMode.DECODE,
             attention_mask=tt_decode_attention_mask,
             layer_past=kv_cache_singlelayer,
             layer_past_len=kv_cache_len,
@@ -351,13 +354,16 @@ def run_falcon_demo_kv(
             tt_prefill_input_ids,
             tt_prefill_attention_mask,
         ) = tt_FalconCausalLM.model_preprocessing(
-            "prefill", prefill_ids[user_id::batch_size], 0, num_input_tokens=nearest_32(num_input_tokens)
+            ttnn.InferenceMode.PREFILL,
+            prefill_ids[user_id::batch_size],
+            0,
+            num_input_tokens=nearest_32(num_input_tokens),
         )
         assert tt_prefill_attention_mask is not None
 
         tt_logits, kv_cache = tt_FalconCausalLM(
             input_ids=tt_prefill_input_ids,
-            llm_mode="prefill",
+            llm_mode=ttnn.InferenceMode.PREFILL,
             attention_mask=tt_prefill_attention_mask,
             user_id=user_id,
             layer_past=kv_cache,
@@ -425,12 +431,14 @@ def run_falcon_demo_kv(
         (
             tt_decode_input_ids,
             tt_decode_attention_mask,
-        ) = tt_FalconCausalLM.model_preprocessing("decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1)
+        ) = tt_FalconCausalLM.model_preprocessing(
+            ttnn.InferenceMode.DECODE, decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
+        )
         assert tt_decode_attention_mask is not None
 
         tt_logits, kv_cache = tt_FalconCausalLM(
             input_ids=tt_decode_input_ids,
-            llm_mode="decode",
+            llm_mode=ttnn.InferenceMode.DECODE,
             attention_mask=tt_decode_attention_mask,
             layer_past=kv_cache,
             layer_past_len=kv_cache_len,

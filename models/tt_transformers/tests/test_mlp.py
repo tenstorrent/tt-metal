@@ -41,7 +41,7 @@ from models.utility_functions import skip_for_grayskull
 )
 def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
-    mode = "decode" if seq_len <= 32 else "prefill"
+    mode: ttnn.InferenceMode.DECODE = ttnn.InferenceMode.DECODE if seq_len <= 32 else ttnn.InferenceMode.PREFILL
 
     mesh_device.enable_async(True)
 
@@ -82,7 +82,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, rese
                 if model_args.is_galaxy
                 else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
             )
-            if mode == "decode"
+            if mode == ttnn.InferenceMode.DECODE
             else ttnn.DRAM_MEMORY_CONFIG
         ),
         layout=ttnn.TILE_LAYOUT,

@@ -109,7 +109,7 @@ def test_rotary_embedding_llama_fused_qk_with_program_cache(
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:
         pytest.skip(f"Requires grid size of at least {(8, 8)} to run")
 
-    mode = "decode" if seq_len == 1 else "prefill"
+    mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE if seq_len == 1 else ttnn.InferenceMode.PREFILL
 
     cache_tensors = []
     for _ in range(3):

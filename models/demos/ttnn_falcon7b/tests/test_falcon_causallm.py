@@ -26,8 +26,8 @@ from models.demos.ttnn_falcon7b.tt.common import (
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
-        ("prefill", 1, 128, 0),
-        ("decode", 32, 1, 128),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0),
+        (ttnn.InferenceMode.DECODE, 32, 1, 128),
     ),
     ids=["prefill_seq128_batch32", "decode_batch32"],
 )
@@ -54,7 +54,7 @@ def test_falcon_causal_lm(
     device,
     use_program_cache,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -70,18 +70,18 @@ def test_falcon_causal_lm(
     ).eval()
     model_config = get_model_config(model_config_str)
     dtype = model_config["DEFAULT_DTYPE"]
-    kv_len = seq_len if llm_mode == "prefill" else kv_cache_len + 1
+    kv_len = seq_len if llm_mode == ttnn.InferenceMode.PREFILL else kv_cache_len + 1
 
     model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
 
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         past_key_values = None
         tt_layer_past = ()
         for i in range(num_layers):
             _, tt_current_layer_past = create_kv_cache(llm_mode, dtype, batch, kv_cache_len, configuration, device)
             tt_layer_past += (tt_current_layer_past,)
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         q_len, kv_len = seq_len, kv_cache_len + 1
         assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
         assert q_len == 1, "For decode, q_len must be 1!"
@@ -125,7 +125,7 @@ def test_falcon_causal_lm(
         parameters,
     )
     # TODO: Generate embeddings and attention_mask on device
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tt_outs = []
         model_inputs = torch.split(model_input, 1)
         tt_embeddings, tt_attention_mask = zip(
@@ -147,7 +147,7 @@ def test_falcon_causal_lm(
             tt_outs.append(ttnn.to_torch(tt_out).squeeze(1))
         tt_out = torch.vstack(tt_outs)
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
@@ -170,13 +170,13 @@ def test_falcon_causal_lm(
             ttnn.to_torch(tt_layer_present[i][0]),
             ttnn.to_torch(tt_layer_present[i][1]),
         )
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             pytorch_layer_pres = pytorch_layer_present[i]
             tt_layer_pres = (
                 tt_layer_pres[0][:, :, :kv_len, :],
                 tt_layer_pres[1][:, :, :kv_len, :],
             )
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             pytorch_layer_pres = (
                 pytorch_layer_present[i][0][:, :, kv_cache_len, :],
                 pytorch_layer_present[i][1][:, :, kv_cache_len, :],

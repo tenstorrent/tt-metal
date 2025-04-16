@@ -108,14 +108,14 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
 
 
 def tt_llama_attention_prepare_inputs(
-    llama_attention_model, x, start_pos, mode, rope_theta, rope_setup=None, use_scaled_rope=False
+    llama_attention_model, x, start_pos, mode: ttnn.InferenceMode, rope_theta, rope_setup=None, use_scaled_rope=False
 ):
     assert len(x.size()) == 3
     batch, seq_len, _ = x.shape
 
     cache_name = lambda name: llama_attention_model.cache_path / (f"{name}")
 
-    if mode == "prefill":
+    if mode == ttnn.InferenceMode.PREFILL:
         assert (
             seq_len % 128 == 0 and seq_len > 0 and seq_len <= 8192
         ), "Prefill mode only supports seqlen as a multiple of 128 up to 8k"
@@ -164,7 +164,7 @@ def tt_llama_attention_prepare_inputs(
 
         cache_idxs_tt = None
 
-    elif mode == "decode":
+    elif mode == ttnn.InferenceMode.DECODE:
         assert seq_len == 1, "Only supporting decode mode"
         x = x.transpose(0, 1).unsqueeze(1)
         assert x.shape == (seq_len, 1, batch, llama_attention_model.hidden_size)
@@ -237,7 +237,7 @@ def run_test_LlamaAttention_inference(
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
-    mode = "prefill" if seq_len > 1 else "decode"
+    mode = ttnn.InferenceMode.PREFILL if seq_len > 1 else ttnn.InferenceMode.DECODE
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(
@@ -245,7 +245,7 @@ def run_test_LlamaAttention_inference(
     )
     # TT model -------------------------------------------------------------------------
 
-    if mode == "decode":
+    if mode == ttnn.InferenceMode.DECODE:
         head_dim = configuration.dim // configuration.n_heads
         rope_setup = TtLlamaRotarySetup(
             t3k_mesh_device, head_dim, max_seq_len, configuration.rope_theta, configuration.use_scaled_rope
@@ -298,7 +298,7 @@ def run_test_LlamaAttention_inference(
     )
 
     all_tests_pass, all_pccs = True, []
-    if mode == "prefill":
+    if mode == ttnn.InferenceMode.PREFILL:
         generation_start_pos = 0
         generation_length = 1
     else:
@@ -325,7 +325,7 @@ def run_test_LlamaAttention_inference(
         )
 
         if is_chunked_prefill:
-            assert mode == "prefill", "Chunked prefill should only be run in prefill mode"
+            assert mode == ttnn.InferenceMode.PREFILL, "Chunked prefill should only be run in prefill mode"
             assert start_pos == 0, "Start pos should be 0 for chunked prefill"
             assert batch == 1, "Batch should be 1 for chunked prefill"
 
@@ -402,7 +402,7 @@ def run_test_LlamaAttention_inference(
                 start_pos,
                 mode,
                 configuration.rope_theta,
-                rope_setup=rope_setup if mode == "decode" else None,
+                rope_setup=rope_setup if mode == ttnn.InferenceMode.DECODE else None,
                 use_scaled_rope=configuration.use_scaled_rope,
             )
 
@@ -419,7 +419,7 @@ def run_test_LlamaAttention_inference(
             tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
             tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [batch, seq_len, hidden_dim]
 
-            if mode == "decode":
+            if mode == ttnn.InferenceMode.DECODE:
                 tt_out = tt_out[:batch]
 
             # check outputs ----------------------------------------------------------------------
@@ -479,7 +479,7 @@ def run_test_LlamaAttention_inference(
         generation_start_pos,
         generation_length,
         seq_len,
-        mode == "prefill",
+        mode == ttnn.InferenceMode.PREFILL,
         pcc,
     )
 

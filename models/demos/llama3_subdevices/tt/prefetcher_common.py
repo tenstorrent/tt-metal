@@ -25,7 +25,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         mesh_device,
         n_tensors,
         n_layers,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         mesh_sub_device_manager_id_prefill=None,
         mesh_sub_device_manager_id_decode=None,
         save_tensor_addresses=False,
@@ -68,7 +68,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
 
         ##### Setup up sub devices #####
 
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             self.all_sub_device = ttnn.SubDevice([self.all_core_range_set])
             self.all_sub_device_id = ttnn.SubDeviceId(0)
             self.worker_sub_device_id = self.all_sub_device_id

@@ -74,11 +74,11 @@ class TtTransformer(LightweightModule):
         rot_mats=None,
         transformation_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         get_last_token=-1,
     ):
         for i, layer in enumerate(self.layers):
-            if mode == "decode":
+            if mode == ttnn.InferenceMode.DECODE:
                 if self.rotary_on_host:
                     rot_mats = ttnn.from_torch(
                         self.current_rot_mat,  # 1,1,head_dim,head_dim
@@ -94,7 +94,7 @@ class TtTransformer(LightweightModule):
         if attn_masks is not None:
             attn_masks.deallocate(True)
 
-        if mode == "prefill" and get_last_token == -1:
+        if mode == ttnn.InferenceMode.PREFILL and get_last_token == -1:
             return x
 
         # slicing for the last token

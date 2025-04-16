@@ -28,8 +28,8 @@ from models.demos.qwen.tt.distributed_norm import DistributedNorm
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("mode", ["prefill", "decode"])
-def test_qwen_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc, mode):
+@pytest.mark.parametrize("mode", [ttnn.InferenceMode.PREFILL, ttnn.InferenceMode.DECODE])
+def test_qwen_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc, mode: ttnn.InferenceMode):
     if mesh_device.shape != (1, 1):
         pytest.skip("Only N150 is supported")
     dtype = ttnn.bfloat16
@@ -75,7 +75,7 @@ def test_qwen_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, en
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        memory_config=ttnn.L1_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG if mode == ttnn.InferenceMode.DECODE else ttnn.DRAM_MEMORY_CONFIG,
     )
 
     tt_output = tt_model(tt_input, mode=mode)

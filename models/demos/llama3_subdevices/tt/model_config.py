@@ -1279,12 +1279,14 @@ class TtModelArgs:
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
-    def is_distributed_norm(self, mode):
+    def is_distributed_norm(self, mode: ttnn.InferenceMode):
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
             return True
-        elif self.dim >= 8192 and mode == "prefill":  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
+        elif (
+            self.dim >= 8192 and mode == ttnn.InferenceMode.PREFILL
+        ):  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
             return True
         return False
 

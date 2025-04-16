@@ -414,8 +414,17 @@ class TtMixtralAttention(LightweightModule):
         output_11BH_gathered.deallocate(True)
         return output_11BH_reduced
 
-    def forward(self, xs, start_pos_ids, attn_masks, rot_mats, transformation_mats=None, user_id=0, mode="decode"):
-        if mode == "prefill":
+    def forward(
+        self,
+        xs,
+        start_pos_ids,
+        attn_masks,
+        rot_mats,
+        transformation_mats=None,
+        user_id=0,
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
+    ):
+        if mode == ttnn.InferenceMode.PREFILL:
             return self.forward_prefill(xs, attn_masks, rot_mats, transformation_mats, user_id)
         else:
             assert attn_masks is None, "attn_masks should be None for decode mode"

@@ -40,7 +40,7 @@ class Emb(torch.nn.Module):
 def run_test_perplexity(
     mesh_device,
     batch_size,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     max_seq_len,
     num_samples,
     expected_acc_metrics,
@@ -145,10 +145,10 @@ def run_test_perplexity(
 
     logger.info("Starting inference...")
     for input_ids, labels in tqdm(dataloader, desc="Evaluating batches"):
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             # TODO Add prefill support
             assert "Prefill mode not yet supported"
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             logits = []
             if validate_ref_model:
                 ref_logits = []
@@ -247,7 +247,7 @@ def run_test_perplexity(
         # ("prefill", 1024, 64, -, -, -),
         # ("prefill", 2048, 64, -, -, -),
         # ("prefill", 4096, 64, -, -, -),
-        ("decode", 128, 64, 8.80, 0.52, 0.75),
+        (ttnn.InferenceMode.DECODE, 128, 64, 8.80, 0.52, 0.75),
         # ("decode", 1024, 64, 5.10, 0.62, 0.83),
         # ("decode", 2048, 64, 4.23, 0.64, 0.85),
         # ("decode", 4096, 32, 10.59, 0.49, 0.73),
@@ -267,7 +267,7 @@ def test_mixtral_perplexity(
     t3k_mesh_device,
     use_program_cache,
     reset_seeds,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     max_seq_len,
     num_samples,
     expected_ppl,
@@ -275,7 +275,7 @@ def test_mixtral_perplexity(
     expected_top5,
 ):
     assert (
-        llm_mode == "decode"
+        llm_mode == ttnn.InferenceMode.DECODE
     ), "Only decode mode is supported for now"  # TODO Add prefill support when it reaches main
 
     t3k_mesh_device.enable_async(True)

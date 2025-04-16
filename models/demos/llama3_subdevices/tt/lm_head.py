@@ -161,16 +161,16 @@ class LMHead(LightweightModule):
 
         return [output]
 
-    def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode):
+    def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode: ttnn.InferenceMode):
         # workaround for OOM issue
-        # if mode == "prefill":
+        # if mode == ttnn.InferenceMode.PREFILL:
         #     return self.forward_on_host(x)
 
         # ttnn.device.dump_device_memory_state(self.mesh_device.get_device(self.mesh_device.get_device_ids()[0]), prefix="")
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
             weight_l1 = weight  # ttnn.to_memory_config(weight, self.args.model_config["LM_HEAD_RING_MEMCFG"])
-            if mode == "decode":
+            if mode == ttnn.InferenceMode.DECODE:
                 x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
                 output = ttnn.linear(
                     x,

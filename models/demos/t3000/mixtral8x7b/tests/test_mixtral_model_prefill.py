@@ -168,7 +168,7 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
             model_args.dim,
             tt_model.mesh_device,
         )
-        tt_out = tt_model(decode_input, start_pos_ids, mode="decode")
+        tt_out = tt_model(decode_input, start_pos_ids, mode=ttnn.InferenceMode.DECODE)
 
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (

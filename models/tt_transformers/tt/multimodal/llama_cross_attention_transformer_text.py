@@ -272,7 +272,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         current_pos,
         rot_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         page_table=None,
         kv_cache=None,
         cross_page_table=None,

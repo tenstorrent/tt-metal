@@ -689,7 +689,7 @@ w1_out = ttnn.linear(
     core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
     dtype=ttnn.bfloat16,
     program_config=pc_1,
-    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == ttnn.InferenceMode.DECODE else ttnn.DRAM_MEMORY_CONFIG,
 )
 
 w3_out = ttnn.linear(
@@ -699,7 +699,7 @@ w3_out = ttnn.linear(
     core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
     dtype=ttnn.bfloat16,
     program_config=pc_1,
-    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == ttnn.InferenceMode.DECODE else ttnn.DRAM_MEMORY_CONFIG,
 )
 ```
 
@@ -712,16 +712,16 @@ In the case of TG systems, where we have access to a 2D device mesh, we can leve
       self.mesh_device,
       cluster_axis=1,
       num_links=2,
-      sharded=True if mode == "decode" else False,
-      memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+      sharded=True if mode == ttnn.InferenceMode.DECODE else False,
+      memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == ttnn.InferenceMode.DECODE else None,
   )
   w3_out = tt_all_reduce(
       w3_out,
       self.mesh_device,
       cluster_axis=1,
       num_links=2,
-      sharded=True if mode == "decode" else False,
-      memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+      sharded=True if mode == ttnn.InferenceMode.DECODE else False,
+      memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == ttnn.InferenceMode.DECODE else None,
   )
 ```
 
@@ -739,7 +739,7 @@ w2_in = ttnn.multiply(
     memory_config=(
         self.model_config["SHARDED_MLP2_INPUT_MEMCFG"] if TG else ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
     )
-    if mode == "decode"
+    if mode == ttnn.InferenceMode.DECODE
     else ttnn.DRAM_MEMORY_CONFIG,
     input_tensor_a_activation=ttnn.UnaryOpType.SILU,
     dtype=ttnn.bfloat8_b,
@@ -767,7 +767,7 @@ w2_out = ttnn.linear(
     core_grid=ttnn.CoreGrid(y=1, x=8) if not pc_2 else None,
     dtype=ttnn.bfloat16,
     program_config=pc_2,
-    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
+    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == ttnn.InferenceMode.DECODE else ttnn.DRAM_MEMORY_CONFIG,
 )
 
 # Undo the reshape operation used to fit the matmul on device
@@ -786,7 +786,7 @@ Since the output of FF2 is the correct shape but only a partial on each device, 
         scatter_dim=3,
         math_op=ttnn.ReduceType.Sum,
         num_links=1,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG if mode == "prefill" else ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG if mode == ttnn.InferenceMode.PREFILL else ttnn.L1_MEMORY_CONFIG,
     )
     ```
 2. 2D Device Mesh (TG): Use an all-reduce operation along the same cluster axis that the inner dimension is fractured on. The FF2 matmul inner dim is fractured across cluster axis 0 (row-parallel across 8 devices), and the outer dim is fractured across cluster axis 1 (4 devices). Then an all-reduce operation is performed on cluster axis 0, it will accumulate partials across the inner dim of the matmul and replicate them along all the devices in that axis, while keeping them fractured across cluster axis 1 (4 devices).
@@ -798,7 +798,7 @@ Since the output of FF2 is the correct shape but only a partial on each device, 
         num_links=2,
         dim=0,
         memory_config=(self.model_config["FF2_OUT_GATHERED_MEMCFG"],
-        sharded=(mode == "decode"),
+        sharded=(mode == ttnn.InferenceMode.DECODE),
     )
     ```
 
@@ -831,12 +831,12 @@ def forward(
         rot_mat=None,
         transformation_mats=None,
         user_id=0,
-        mode="decode",
+        mode:ttnn.InferenceMode=ttnn.InferenceMode.DECODE,
         page_table=None,
     ) -> ttnn.Tensor:
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-        elif mode == 'decode':
+        elif mode == ttnn.InferenceMode.DECODE:
             skip_mem_cfg = self.model_config["DEC_SKIP_OUTPUT_MEMCFG"]
         # Attention RMSNorm
         attn_in = self.attention_norm(x)
@@ -990,14 +990,14 @@ def forward(
     rot_mat=None,
     transformation_mats=None,
     user_id=0,
-    mode="decode",
+    mode=ttnn.InferenceMode.DECODE,
     page_table=None,
     get_last_token=-1,
 ):
     for layer in self.layers:
         x = layer(x, current_pos, rot_mat, transformation_mats, user_id, mode, page_table)
 
-    if mode == "prefill" and get_last_token == -1:
+    if mode == ttnn.InferenceMode.PREFILL and get_last_token == -1:
         return x
 
     # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
@@ -1007,7 +1007,7 @@ def forward(
     # Output norm
     x = self.norm(x, mode=mode)
 
-    if mode == "prefill":
+    if mode == ttnn.InferenceMode.PREFILL:
         x = ttnn.interleaved_to_sharded(
             x,
             self.model_config["LM_HEAD_INPUT_MEMCFG"],

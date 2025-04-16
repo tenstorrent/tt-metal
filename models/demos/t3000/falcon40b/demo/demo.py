@@ -289,7 +289,9 @@ def run_falcon_demo_kv(
 
     ### First run decode stage with compile ###
     # Update model_config for decode
-    model_config = get_model_config(model_config_str_for_decode, "decode", [batch_size, 1], len(devices))
+    model_config = get_model_config(
+        model_config_str_for_decode, ttnn.InferenceMode.DECODE, [batch_size, 1], len(devices)
+    )
     tt_FalconCausalLM_singlelayer.set_model_config(model_config)
 
     logger.info("Running 1st run decode stage with compile...")
@@ -302,13 +304,13 @@ def run_falcon_demo_kv(
             tt_decode_inputs,
             tt_decode_attention_mask,
         ) = tt_FalconCausalLM_singlelayer.model_preprocessing(
-            "decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
+            ttnn.InferenceMode.DECODE, decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
         )
         assert tt_decode_attention_mask is not None
 
         tt_logits, kv_cache_singlelayer = tt_FalconCausalLM_singlelayer(
             input_ids=tt_decode_inputs,
-            llm_mode="decode",
+            llm_mode=ttnn.InferenceMode.DECODE,
             attention_mask=tt_decode_attention_mask,
             layer_past=kv_cache_singlelayer,
             layer_past_len=kv_cache_len,
@@ -436,7 +438,9 @@ def run_falcon_demo_kv(
     logger.info("Running inference decode stage...")
 
     # Update model_config for decode
-    model_config = get_model_config(model_config_str_for_decode, "decode", [batch_size, 1], len(devices))
+    model_config = get_model_config(
+        model_config_str_for_decode, ttnn.InferenceMode.DECODE, [batch_size, 1], len(devices)
+    )
     tt_FalconCausalLM.set_model_config(model_config)
 
     decode_ids = torch.zeros(batch_size, 1, dtype=torch.int64)
@@ -458,12 +462,14 @@ def run_falcon_demo_kv(
         (
             tt_decode_inputs,
             tt_decode_attention_mask,
-        ) = tt_FalconCausalLM.model_preprocessing("decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1)
+        ) = tt_FalconCausalLM.model_preprocessing(
+            ttnn.InferenceMode.DECODE, decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
+        )
         assert tt_decode_attention_mask is not None
 
         tt_logits, kv_cache = tt_FalconCausalLM(
             input_ids=tt_decode_inputs,
-            llm_mode="decode",
+            llm_mode=ttnn.InferenceMode.DECODE,
             attention_mask=tt_decode_attention_mask,
             layer_past=kv_cache,
             layer_past_len=kv_cache_len,

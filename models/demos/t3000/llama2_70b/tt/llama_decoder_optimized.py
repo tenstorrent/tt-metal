@@ -151,11 +151,11 @@ class TtLlamaDecoder_optimized:
         cache_idxs=None,
         page_table=None,
         kv_cache=None,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         chunk_page_table=None,
         chunk_start_idx=None,
     ) -> ttnn.Tensor:
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             return self.prefill_forward(
                 xs,
                 rot_mats,
@@ -166,7 +166,7 @@ class TtLlamaDecoder_optimized:
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
             )
-        elif mode == "decode":
+        elif mode == ttnn.InferenceMode.DECODE:
             return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache)
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
@@ -207,7 +207,7 @@ class TtLlamaDecoder_optimized:
             cache_idxs=cache_idxs,
             page_table=page_table,
             kv_cache=kv_cache,
-            mode="decode",
+            mode=ttnn.InferenceMode.DECODE,
         )
 
         ### Fractured residual add
@@ -238,7 +238,7 @@ class TtLlamaDecoder_optimized:
         )
         # ffn_norm_replicated is sharded
 
-        ffn_out = self.mlp(ffn_norm_replicated, mode="decode")
+        ffn_out = self.mlp(ffn_norm_replicated, mode=ttnn.InferenceMode.DECODE)
 
         ### residual in place
         output = ttnn.add(

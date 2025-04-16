@@ -74,14 +74,14 @@ class TtTransformer(LightweightModule):
         rot_mat=None,
         transformation_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         page_table=None,
         get_last_token=-1,
     ):
         for layer in self.layers:
             x = layer(x, current_pos, rot_mat, transformation_mats, user_id, mode, page_table)
 
-        if mode == "prefill" and get_last_token == -1:
+        if mode == ttnn.InferenceMode.PREFILL and get_last_token == -1:
             return x
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
@@ -91,7 +91,7 @@ class TtTransformer(LightweightModule):
         # Output norm
         x = self.norm(x, mode=mode)
 
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
         return self.lm_head(x)

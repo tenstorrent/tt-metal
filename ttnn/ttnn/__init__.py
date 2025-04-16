@@ -196,6 +196,7 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    InferenceMode,
 )
 
 from ttnn.device import (

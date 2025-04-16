@@ -26,7 +26,7 @@ class TtLlamaRotary(torch.nn.Module):
         self,
         device,
         head_dim: int,
-        mode: str,
+        mode: ttnn.InferenceMode.DECODE,
         datatype=ttnn.bfloat16,
         fuse_qk=False,
     ):
@@ -58,7 +58,7 @@ class TtLlamaRotary(torch.nn.Module):
             cos,
             sin,
             self.transformation_mat,
-            is_decode_mode=self.mode == "decode",
+            is_decode_mode=self.mode == ttnn.InferenceMode.DECODE,
             compute_kernel_config=self.compute_kernel_config,
         )
 
@@ -131,9 +131,9 @@ def run_test_rotary_embedding_llama(
 ):
     # Prepare input
     torch.manual_seed(0)
-    mode = "decode" if seq_len == 1 else "prefill"
+    mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE if seq_len == 1 else ttnn.InferenceMode.PREFILL
 
-    if mode == "decode":
+    if mode == ttnn.InferenceMode.DECODE:
         max_seq_len = MAX_SEQ_LEN
 
     inp = [
@@ -143,7 +143,7 @@ def run_test_rotary_embedding_llama(
 
     # To test with different position ids, assume that batch
     # dimension is the seq len dimension when passing inputs to torch
-    if mode == "decode":
+    if mode == ttnn.InferenceMode.DECODE:
         inp = [x.permute(2, 1, 0, 3) for x in inp]
         # inp: [seq_len, n_heads, batch, head_dim]
 
@@ -156,7 +156,7 @@ def run_test_rotary_embedding_llama(
 
     start_pos = 0  # Must pick non-zero start pos to get non-zero freqs_cis
 
-    position_ids = torch.arange(batch) if mode == "decode" else slice(start_pos, start_pos + seq_len)
+    position_ids = torch.arange(batch) if mode == ttnn.InferenceMode.DECODE else slice(start_pos, start_pos + seq_len)
 
     freqs_cis = freqs_cis[position_ids]
 
@@ -174,7 +174,7 @@ def run_test_rotary_embedding_llama(
     # TT hardware / Modified PyTorch execution -------------------------------------------------------------
     tt_model = TtLlamaRotary(device, head_dim, mode, datatype, fuse_qk)
 
-    if mode == "decode":
+    if mode == ttnn.InferenceMode.DECODE:
         # For decode, TTNN expects inputs to be [1, batch, nh, dhead]
         inp = [x.transpose(1, 2) for x in inp]
         # inp: [seq_len, batch, n_heads, head_dim]
@@ -261,7 +261,7 @@ def run_test_rotary_embedding_llama(
     tt_out = tt_model(*tt_inp)
     tt_out = [ttnn.to_torch(tt_out_tensor) for tt_out_tensor in tt_out]
 
-    if mode == "decode":
+    if mode == ttnn.InferenceMode.DECODE:
         tt_out = [x.transpose(1, 2) for x in tt_out]
         # tt_out: [seq_len, n_heads, batch, head_dim]
 
@@ -429,7 +429,7 @@ def test_rotary_embedding_llama_with_program_cache(
 
     max_seq_len = max(4096, seq_len)
 
-    mode = "decode" if seq_len == 1 else "prefill"
+    mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE if seq_len == 1 else ttnn.InferenceMode.PREFILL
 
     cache_tensors = []
     for _ in range(3):
@@ -453,7 +453,7 @@ def test_rotary_embedding_llama_with_program_cache(
         cache_tensors.append(test_tensor)
 
     num_ops = 2  # 2 * rope
-    if mode == "decode":
+    if mode == ttnn.InferenceMode.DECODE:
         num_ops += 4  # untilize cos/sin + embedding + transpose + interleaved_to_sharded
 
         if batch % ttnn.TILE_SIZE != 0:

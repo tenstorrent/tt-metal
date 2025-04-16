@@ -286,7 +286,7 @@ class Generator:
         argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
 
         if self.model.is_decode_setup is False:
-            self.model.switch_mode("decode")
+            self.model.switch_mode(ttnn.InferenceMode.DECODE)
         kv_cache = kv_cache[0]
         decode_kwargs = {
             "current_pos": start_pos,

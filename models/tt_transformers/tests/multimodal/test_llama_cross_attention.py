@@ -116,8 +116,8 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
     """
     n_iter = 10
     for i in range(n_iter):
-        mode = "prefill" if i == 0 else "decode"
-        seq_len = text_seq_len if mode == "prefill" else 1
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.PREFILL if i == 0 else ttnn.InferenceMode.DECODE
+        seq_len = text_seq_len if mode == ttnn.InferenceMode.PREFILL else 1
         pt_x = (torch.rand(batch, seq_len, dim) * 2) - 1
         tt_x = pt_x.clone()
 
@@ -153,7 +153,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
             pt_x, xattn_mask=xattn_mask, full_text_row_masked_out_mask=full_text_mask, xattn_cache=pt_xattn_cache
         )
 
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             outputs = []
             for b in range(batch):
                 tt_tensor_xattn_tokens = model_args.prepare_residual_tensor_prefill(
@@ -248,7 +248,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         logger.info(f"PCC: {pcc_message}")
         all_tests_pass = all_tests_pass and passing
 
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,

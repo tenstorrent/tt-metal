@@ -219,7 +219,7 @@ def test_llama_decoder_inference(
             res,
             current_pos_tensor,
             rot_mats=rot_mats,
-            mode="decode",
+            mode=ttnn.InferenceMode.DECODE,
             page_table=page_table_tt,
         )
         tt_output_torch = ttnn.to_torch(

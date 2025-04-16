@@ -133,12 +133,12 @@ class TtLlamaDecoder_galaxy:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
     ) -> ttnn.Tensor:
         self.decoder_config = self.model_config["decoder"][mode]
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
-        elif mode == "prefill":
+        elif mode == ttnn.InferenceMode.PREFILL:
             return self.prefill_forward(xs, rot_mats, attn_masks, user_id)
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
@@ -160,7 +160,7 @@ class TtLlamaDecoder_galaxy:
             ln_sharded_stats_memcfg=self.decoder_config["LN_SHARDED_STATS_MEMCFG"],
         )
 
-        attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, attn_masks, mode="decode")
+        attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, attn_masks, mode=ttnn.InferenceMode.DECODE)
 
         output = ttnn.add(
             xs,
@@ -180,7 +180,7 @@ class TtLlamaDecoder_galaxy:
         )
 
         ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=self.decoder_config["MLP_ACT_MEMCFG"])
-        ffn_out = self.mlp(ffn_norm_out, mode="decode")
+        ffn_out = self.mlp(ffn_norm_out, mode=ttnn.InferenceMode.DECODE)
         ffn_norm_out.deallocate(True)
         ffn_out = ttnn.to_memory_config(ffn_out, memory_config=self.decoder_config["ATTN_ACT_MEMCFG"])
         ### residual add
@@ -208,7 +208,7 @@ class TtLlamaDecoder_galaxy:
             compute_kernel_config=self.decoder_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
 
-        attn_outs = self.attention(attn_outs, rot_mats, 0, attn_masks, user_id, mode="prefill")
+        attn_outs = self.attention(attn_outs, rot_mats, 0, attn_masks, user_id, mode=ttnn.InferenceMode.PREFILL)
 
         output = xs
         output = ttnn.add(
@@ -225,7 +225,7 @@ class TtLlamaDecoder_galaxy:
             compute_kernel_config=self.decoder_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
 
-        ffn_out = self.mlp(ffn_norm_out, mode="prefill")
+        ffn_out = self.mlp(ffn_norm_out, mode=ttnn.InferenceMode.PREFILL)
 
         # residual add
         output = ttnn.add(

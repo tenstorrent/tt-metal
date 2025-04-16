@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import ttnn
 import pytest
 from loguru import logger
 
@@ -46,7 +47,7 @@ class PytorchFalconCausalLM(torch.nn.Module):
 def run_test_FalconCausalLM_inference(
     mesh_device,
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -114,7 +115,7 @@ def run_test_FalconCausalLM_inference(
     )
 
     # TODO: Generate attention_mask on device
-    if llm_mode == "prefill":
+    if llm_mode == ttnn.InferenceMode.PREFILL:
         tt_outs = torch.zeros(global_batch, seq_len, configuration.vocab_size)  # Output tensor to overwrite
         tt_input_ids, tt_attention_mask = zip(
             *[
@@ -138,7 +139,7 @@ def run_test_FalconCausalLM_inference(
             tt_outs[user_id::batch] = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=0).squeeze(1)
         tt_out = tt_outs
 
-    elif llm_mode == "decode":
+    elif llm_mode == ttnn.InferenceMode.DECODE:
         tt_input_ids, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
@@ -157,10 +158,10 @@ def run_test_FalconCausalLM_inference(
     logger.info(f"Output: {output_pcc}")
 
     for i in range(num_layers):
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             pytorch_layer_pres = (pytorch_layer_present[i][0].squeeze(1), pytorch_layer_present[i][1].squeeze(1))
             tt_layer_pres = concat_device_out_layer_present(mesh_device, tt_layer_present[i], kv_len)
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             pytorch_layer_pres = (
                 pytorch_layer_present[i][0].squeeze(1)[:, kv_cache_len, :],
                 pytorch_layer_present[i][1].squeeze(1)[:, kv_cache_len, :],
@@ -191,10 +192,10 @@ def run_test_FalconCausalLM_inference(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
-        ("prefill", 1, 128, 0),
-        ("prefill", 1, 1024, 0),
-        ("prefill", 1, 2048, 0),
-        ("decode", 32, 1, 128),
+        (ttnn.InferenceMode.PREFILL, 1, 128, 0),
+        (ttnn.InferenceMode.PREFILL, 1, 1024, 0),
+        (ttnn.InferenceMode.PREFILL, 1, 2048, 0),
+        (ttnn.InferenceMode.DECODE, 32, 1, 128),
     ),
     ids=["prefill_seq128", "prefill_seq1024", "prefill_seq2048", "decode_batch32"],
 )
@@ -211,7 +212,7 @@ def run_test_FalconCausalLM_inference(
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"))
 def test_FalconCausalLM_inference(
     model_version,
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch,
     seq_len,
     kv_cache_len,
@@ -224,7 +225,7 @@ def test_FalconCausalLM_inference(
     mesh_device,
     enable_async_mode,
 ):
-    if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
+    if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == ttnn.InferenceMode.PREFILL:
         pytest.skip(f"prefill does not support L1_SHARDED")
 
     model_config = get_model_config(model_config_str, seq_len, batch)

@@ -110,7 +110,7 @@ class MLP(LightweightModule):
         ttnn.deallocate(x)
 
         if TG:
-            # if mode == "decode" and self.dim!=8192:
+            # if mode == ttnn.InferenceMode.DECODE and self.dim!=8192:
             #     w1_out = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
             #     w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
             if self.dim == 8192 or mode == "prefill":
@@ -197,7 +197,7 @@ class MLP(LightweightModule):
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
         ttnn.deallocate(w2_in)
-        # if mode == "decode" and not TG:
+        # if mode == ttnn.InferenceMode.DECODE and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
         w2_out_reduced = tt_all_reduce(
             w2_out,

@@ -123,8 +123,8 @@ def test_cross_attention_transformer_text_inference(
     tokens = torch.randint(0, model_args.vocab_size, (batch, text_seq_len + n_iter), dtype=torch.long)
     for i in range(n_iter):
         # Test prefill and decode
-        mode = "prefill" if i == 0 else "decode"
-        seq_len = text_seq_len if mode == "prefill" else 1
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.PREFILL if i == 0 else ttnn.InferenceMode.DECODE
+        seq_len = text_seq_len if mode == ttnn.InferenceMode.PREFILL else 1
         cur_pos = seq_len + prev_pos
 
         # Prepare pytorch inputs
@@ -175,7 +175,7 @@ def test_cross_attention_transformer_text_inference(
         )
 
         # Prepare TT inputs
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
             outputs = []
             for b in range(batch):
@@ -335,7 +335,7 @@ def test_cross_attention_transformer_text_inference(
         assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
         prev_pos = cur_pos
 
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,

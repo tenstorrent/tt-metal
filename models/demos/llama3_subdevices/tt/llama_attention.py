@@ -181,12 +181,12 @@ class TtLlamaAttention(LightweightModule):
             self.init_kv_cache(configuration, weight_cache_path)
 
         self.scale = self.head_dim**-0.5
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == ttnn.InferenceMode.DECODE:
             self.prefetch(prefetcher_setup, tt_ccl)
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        if tt_ccl.mode == "decode":
+        if tt_ccl.mode == ttnn.InferenceMode.DECODE:
             self.prefetcher_setup.insert_tensor(self.wqkv)
             self.prefetcher_setup.insert_tensor(self.wo)
         self.tt_ccl = tt_ccl
@@ -641,13 +641,13 @@ class TtLlamaAttention(LightweightModule):
         current_pos,
         rot_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
     ):
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             return self.forward_prefill(
                 x,
                 rot_mats,

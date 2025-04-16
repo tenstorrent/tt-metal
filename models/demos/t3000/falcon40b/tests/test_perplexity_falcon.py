@@ -24,26 +24,34 @@ from models.utility_functions import is_wormhole_b0
 
 
 def calculate_perplexity(
-    model, dataloader, llm_mode, batch_size, seq_len, kv_cache, configuration, mesh_device, use_hf_model=False
+    model,
+    dataloader,
+    llm_mode: ttnn.InferenceMode,
+    batch_size,
+    seq_len,
+    kv_cache,
+    configuration,
+    mesh_device,
+    use_hf_model=False,
 ):
-    if llm_mode == "prefill" and not use_hf_model:
+    if llm_mode == ttnn.InferenceMode.PREFILL and not use_hf_model:
         assert batch_size == 1
     use_cache = True
     running_nll, running_top1_acc, running_top5_acc = 0.0, 0.0, 0.0
     with torch.no_grad():
         for input_ids, labels in tqdm(dataloader, desc="Evaluating batches"):
-            if llm_mode == "prefill":
+            if llm_mode == ttnn.InferenceMode.PREFILL:
                 if not use_hf_model:
                     user_id = 0
                     (
                         tt_prefill_input_ids,
                         tt_prefill_attention_mask,
                     ) = model.model_preprocessing(
-                        "prefill", input_ids[user_id::batch_size], 0, num_input_tokens=seq_len
+                        ttnn.InferenceMode.PREFILL, input_ids[user_id::batch_size], 0, num_input_tokens=seq_len
                     )
                     tt_logits, kv_cache = model(
                         input_ids=tt_prefill_input_ids,
-                        llm_mode="prefill",
+                        llm_mode=ttnn.InferenceMode.PREFILL,
                         attention_mask=tt_prefill_attention_mask,
                         user_id=user_id,
                         layer_past=kv_cache,
@@ -61,7 +69,7 @@ def calculate_perplexity(
                 else:  # huggingface model
                     logits, _ = model(input_ids=input_ids, use_cache=use_cache, return_dict=False)
 
-            elif llm_mode == "decode":
+            elif llm_mode == ttnn.InferenceMode.DECODE:
                 logits = []
                 layer_present = None
                 for kv_cache_len in tqdm(range(seq_len), desc="Decoding tokens for current batch"):
@@ -71,11 +79,11 @@ def calculate_perplexity(
                             tt_decode_input_ids,
                             tt_decode_attention_mask,
                         ) = model.model_preprocessing(
-                            "decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
+                            ttnn.InferenceMode.DECODE, decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
                         )
                         tt_logits, kv_cache = model(
                             input_ids=tt_decode_input_ids,
-                            llm_mode="decode",
+                            llm_mode=ttnn.InferenceMode.DECODE,
                             attention_mask=tt_decode_attention_mask,
                             layer_past=kv_cache,
                             layer_past_len=kv_cache_len,
@@ -114,7 +122,7 @@ def calculate_perplexity(
 
 
 def run_test_perplexity(
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch_size,
     max_seq_len,
     model_config_str,
@@ -207,12 +215,12 @@ def run_test_perplexity(
 @pytest.mark.parametrize(
     "llm_mode, batch_size, max_seq_len, num_samples, expected_ppl, expected_top1, expected_top5",
     (
-        ("prefill", 32, 128, 64, 12.67, 0.47, 0.71),
-        ("prefill", 32, 1024, 64, 7.21, 0.55, 0.79),
-        ("prefill", 32, 2048, 64, 9.81, 0.50, 0.74),  # TODO: run for falcon40b
-        ("decode", 64, 128, 64, 12.67, 0.47, 0.71),
-        ("decode", 64, 1024, 64, 7.21, 0.55, 0.79),
-        ("decode", 64, 2048, 64, 9.81, 0.50, 0.74),  # TODO: run for falcon40b
+        (ttnn.InferenceMode.PREFILL, 32, 128, 64, 12.67, 0.47, 0.71),
+        (ttnn.InferenceMode.PREFILL, 32, 1024, 64, 7.21, 0.55, 0.79),
+        (ttnn.InferenceMode.PREFILL, 32, 2048, 64, 9.81, 0.50, 0.74),  # TODO: run for falcon40b
+        (ttnn.InferenceMode.DECODE, 64, 128, 64, 12.67, 0.47, 0.71),
+        (ttnn.InferenceMode.DECODE, 64, 1024, 64, 7.21, 0.55, 0.79),
+        (ttnn.InferenceMode.DECODE, 64, 2048, 64, 9.81, 0.50, 0.74),  # TODO: run for falcon40b
     ),
     ids=[
         "prefill_seq128",
@@ -224,7 +232,7 @@ def run_test_perplexity(
     ],
 )
 def test_perplexity_huggingface(
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch_size,
     max_seq_len,
     num_samples,  # Total number of prompts to evaluate (all if None)
@@ -254,12 +262,12 @@ def test_perplexity_huggingface(
 @pytest.mark.parametrize(
     "llm_mode, batch_size, max_seq_len, model_config_str, num_samples, expected_ppl, expected_top1, expected_top5",
     (
-        ("prefill", 1, 128, "BFLOAT8_B-DRAM", 64, 12.74, 0.47, 0.71),
-        ("prefill", 1, 1024, "BFLOAT8_B-DRAM", 64, 7.25, 0.55, 0.78),
-        ("prefill", 1, 2048, "BFLOAT8_B-DRAM", 64, 6.55, 0.56, 0.80),
-        ("decode", 32, 128, "BFLOAT8_B-SHARDED", 64, 13.90, 0.45, 0.71),
-        ("decode", 32, 1024, "BFLOAT8_B-SHARDED", 64, 7.79, 0.54, 0.78),
-        ("decode", 32, 2048, "BFLOAT8_B-SHARDED", 64, 6.96, 0.55, 0.79),  # TODO: Hangs on CI
+        (ttnn.InferenceMode.PREFILL, 1, 128, "BFLOAT8_B-DRAM", 64, 12.74, 0.47, 0.71),
+        (ttnn.InferenceMode.PREFILL, 1, 1024, "BFLOAT8_B-DRAM", 64, 7.25, 0.55, 0.78),
+        (ttnn.InferenceMode.PREFILL, 1, 2048, "BFLOAT8_B-DRAM", 64, 6.55, 0.56, 0.80),
+        (ttnn.InferenceMode.DECODE, 32, 128, "BFLOAT8_B-SHARDED", 64, 13.90, 0.45, 0.71),
+        (ttnn.InferenceMode.DECODE, 32, 1024, "BFLOAT8_B-SHARDED", 64, 7.79, 0.54, 0.78),
+        (ttnn.InferenceMode.DECODE, 32, 2048, "BFLOAT8_B-SHARDED", 64, 6.96, 0.55, 0.79),  # TODO: Hangs on CI
     ),
     ids=[
         "prefill_seq128",
@@ -271,7 +279,7 @@ def test_perplexity_huggingface(
     ],
 )
 def test_perplexity(
-    llm_mode,
+    llm_mode: ttnn.InferenceMode,
     batch_size,
     max_seq_len,
     model_config_str,
@@ -286,7 +294,7 @@ def test_perplexity(
 ):
     assert is_wormhole_b0(), "This test is only for Wormhole B0"
 
-    if llm_mode == "decode" and max_seq_len > 128:
+    if llm_mode == ttnn.InferenceMode.DECODE and max_seq_len > 128:
         pytest.skip("Decode mode is hanging for seqlen > 128")
 
     run_test_perplexity(

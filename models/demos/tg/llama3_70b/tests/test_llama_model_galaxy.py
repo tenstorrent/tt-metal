@@ -86,9 +86,9 @@ def run_test_LlamaModel_inference(
         read_cache=True,
     )
 
-    mode = "decode" if seq_len == 1 else "prefill"
+    mode = ttnn.InferenceMode.DECODE if seq_len == 1 else ttnn.InferenceMode.PREFILL
 
-    if mode == "prefill":
+    if mode == ttnn.InferenceMode.PREFILL:
         generation_start_pos = 0
         generation_length = 1
     else:
@@ -140,10 +140,10 @@ def run_test_LlamaModel_inference(
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
 
         tt_out = tt_out.float()
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             tt_out = tt_out[:batch]
             pytorch_out = pytorch_out.squeeze()  # [batch, hidden_dim]
-        elif mode == "prefill":
+        elif mode == ttnn.InferenceMode.PREFILL:
             # Take only the last token to compare with PyTorch output
             tt_out = tt_out[-1, :].unsqueeze(0)
             pytorch_out = pytorch_out[:, -1, :]
@@ -210,7 +210,7 @@ def run_test_LlamaModel_inference(
             generation_start_pos,
             generation_length,
             seq_len,
-            mode == "prefill",
+            mode == ttnn.InferenceMode.PREFILL,
             pcc,
         )
     all_tests_pass = all_tests_pass and cache_test_pass

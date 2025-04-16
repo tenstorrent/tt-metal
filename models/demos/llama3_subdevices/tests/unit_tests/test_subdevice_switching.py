@@ -28,7 +28,7 @@ def test_switching(mesh_device):
 
     print("Switching to decode")
 
-    prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="decode")
+    prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode=ttnn.InferenceMode.DECODE)
     mesh_device.set_sub_device_stall_group(
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
     )

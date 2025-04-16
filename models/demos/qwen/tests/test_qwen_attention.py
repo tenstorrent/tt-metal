@@ -97,7 +97,7 @@ def test_qwen_attention_inference(mesh_device, use_program_cache, reset_seeds, e
             force_replicated=True,
         )
 
-        tt_out = tt_model(attention_input, current_pos_tensor, rot_mats=current_rot_mat, mode="decode")
+        tt_out = tt_model(attention_input, current_pos_tensor, rot_mats=current_rot_mat, mode=ttnn.InferenceMode.DECODE)
         # multi-device attention module returns replicated output
 
         tt_output_torch = (

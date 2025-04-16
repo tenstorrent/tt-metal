@@ -97,13 +97,13 @@ class TtFalconModelShared(torch.nn.Module):
 
         self.layernorm_eps = config.layer_norm_epsilon
 
-    def model_preprocessing(self, llm_mode, input_ids, kv_cache_len, num_input_tokens):
+    def model_preprocessing(self, llm_mode: ttnn.InferenceMode, input_ids, kv_cache_len, num_input_tokens):
         assert input_ids.dim() == 2
         global_batch_size, sequence_size = input_ids.shape
         batch_size = global_batch_size // self.num_devices
 
         # Generate input and attention_mask ---------------------------------------------
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             assert batch_size == 1, "For prefill, batch_size must be 1!"
             assert sequence_size % 32 == 0, "For prefill, sequence_size must be multiple of 32!"
             assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
@@ -179,7 +179,7 @@ class TtFalconModelShared(torch.nn.Module):
                 memory_config=self.model_config["INPUT_MEMCFG"],
                 mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
             )
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             assert batch_size % 32 == 0, "For decode, batch_size must be multiple of 32!"
             assert sequence_size == 1, "For decode, q_len must be 1!"
 
@@ -237,7 +237,7 @@ class TtFalconModelShared(torch.nn.Module):
     def forward(
         self,
         input_ids: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
         layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,

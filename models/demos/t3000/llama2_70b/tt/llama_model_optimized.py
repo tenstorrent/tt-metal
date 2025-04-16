@@ -174,7 +174,13 @@ class TtLlamaModel_optimized:
         ), f"Sequence length {seq_len} exceeds MAX_CONTEXT_LEN {self.model_config['MAX_CONTEXT_LEN']}"
 
     def prepare_inputs(
-        self, inp_ids, start_pos, valid_seq_len=None, mode="decode", page_table=None, chunk_page_table=None
+        self,
+        inp_ids,
+        start_pos,
+        valid_seq_len=None,
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
+        page_table=None,
+        chunk_page_table=None,
     ):
         """
         Prepare inputs for decode mode. Assume that current token is at
@@ -196,7 +202,7 @@ class TtLlamaModel_optimized:
 
         cache_name = lambda name: self.cache_path / (f"{'llama3_' if self.llama3 else ''}{name}")
 
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             inp_ids = inp_ids.reshape(seq_len, 1, 1, batch)
             # Pad to PADDED_BATCH_SIZE
             inp_ids = torch.nn.functional.pad(inp_ids, (0, self.model_config["PADDED_BATCH_SIZE"] - batch), value=0)
@@ -210,7 +216,7 @@ class TtLlamaModel_optimized:
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
 
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             assert seq_len % 32 == 0 and seq_len > 0, "Prefill mode only supports seqlen as a multiple of 32"
             assert batch == 1, "prefill mode only supports batch size 1"
 
@@ -272,7 +278,7 @@ class TtLlamaModel_optimized:
 
             return (xs, start_pos, rot_mats, rot_idxs_tt, cache_idxs_tt, page_table, chunk_page_table)
 
-        elif mode == "decode":
+        elif mode == ttnn.InferenceMode.DECODE:
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             xs = x
             # User can provide a single start pos which applies to the whole batch or a list of start positions
@@ -309,12 +315,12 @@ class TtLlamaModel_optimized:
         tokens: torch.Tensor,
         start_pos: int,
         valid_seq_len=None,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         page_table=None,
         return_tokens=False,  # if true, return tokens for decode mode
         return_rot_idxs=False,  # if true, return rot_idxs for decode mode
     ):
-        assert mode == "decode"
+        assert mode == ttnn.InferenceMode.DECODE
         tt_inp, start_pos, rot_mat, rot_idxs_tt, cache_idxs_tt, tt_page_table = self.prepare_inputs(
             tokens, start_pos, valid_seq_len=valid_seq_len, mode=mode, page_table=page_table
         )
@@ -347,14 +353,14 @@ class TtLlamaModel_optimized:
         last_token_idx=None,
         page_table=None,
         kv_cache=None,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         chunk_page_table=None,
         chunk_start_idx=None,
     ) -> ttnn.Tensor:
         if self.vllm:
             assert page_table is not None
             assert kv_cache is not None
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             return self.prefill_forward(
                 xs,
                 rot_mats,
@@ -366,7 +372,7 @@ class TtLlamaModel_optimized:
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
             )
-        elif mode == "decode":
+        elif mode == ttnn.InferenceMode.DECODE:
             return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache)
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
@@ -383,7 +389,13 @@ class TtLlamaModel_optimized:
         ### Run all layers
         for layer in self.layers:
             xs = layer(
-                xs, rot_mats, start_pos, cache_idxs=cache_idxs, page_table=page_table, kv_cache=kv_cache, mode="decode"
+                xs,
+                rot_mats,
+                start_pos,
+                cache_idxs=cache_idxs,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                mode=ttnn.InferenceMode.DECODE,
             )  # xs is sharded
 
         xs = ttnn.all_gather(
@@ -468,7 +480,7 @@ class TtLlamaModel_optimized:
                 user_id,
                 page_table=page_table,
                 kv_cache=kv_cache,
-                mode="prefill",
+                mode=ttnn.InferenceMode.PREFILL,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
             )  # xs is sharded

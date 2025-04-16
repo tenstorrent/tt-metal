@@ -247,7 +247,7 @@ class TtFalconAttention:
         hidden_states: ttnn.Tensor,
         alibi: torch.Tensor,
         attention_mask: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         user_id: int = 0,
         layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
@@ -258,7 +258,7 @@ class TtFalconAttention:
         Prefill input shape: [batch, 1, seq_len, hidden_size]
         Decode input shape: [seq_len, 1, batch, hidden_size]
         """
-        if llm_mode == "prefill":
+        if llm_mode == ttnn.InferenceMode.PREFILL:
             return self.fwd_prefill(
                 hidden_states=hidden_states,
                 alibi=alibi,
@@ -270,7 +270,7 @@ class TtFalconAttention:
                 output_attentions=output_attentions,
                 use_cache=use_cache,
             )
-        elif llm_mode == "decode":
+        elif llm_mode == ttnn.InferenceMode.DECODE:
             return self.fwd_decode(
                 hidden_states=hidden_states,
                 alibi=alibi,
@@ -290,7 +290,7 @@ class TtFalconAttention:
         hidden_states: ttnn.Tensor,
         alibi: torch.Tensor,
         attention_mask: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         user_id: int = 0,
         layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
@@ -394,7 +394,7 @@ class TtFalconAttention:
         hidden_states: ttnn.Tensor,
         alibi: torch.Tensor,
         attention_mask: ttnn.Tensor,
-        llm_mode: str,
+        llm_mode: ttnn.InferenceMode,
         user_id: int = 0,
         layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
