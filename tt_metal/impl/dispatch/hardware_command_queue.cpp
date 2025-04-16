@@ -33,9 +33,8 @@
 #include "logger.hpp"
 #include "program_device_map.hpp"
 #include "rtoptions.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"

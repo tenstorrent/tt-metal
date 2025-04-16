@@ -26,7 +26,7 @@ void bind_quantize_operation(
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             scale (ttnn.Tensor or Number): the quantization scale.
-            zero_point (Number): the quantization zero point.
+            zero_point (ttnn.Tensor or Number): the quantization zero point.
 
         Keyword Args:
             axis (Number, optional): the axis of the quantization dimension of the input tensor.
@@ -69,7 +69,7 @@ void bind_quantize_operation(
             [](const T& self,
                const ttnn::Tensor& input_tensor,
                const std::variant<ttnn::Tensor, float>& scale,
-               const int32_t zero_point,
+               const std::variant<Tensor, int32_t>& zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -101,9 +101,9 @@ void bind_requantize_operation(
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             in_scale (ttnn.Tensor or Number): the input quantization scale.
-            in_zero_point (Number): the input quantization zero point.
+            in_zero_point (ttnn.Tensor or Number): the input quantization zero point.
             out_scale (ttnn.Tensor or Number): the output quantization scale.
-            out_zero_point (Number): the output quantization zero point.
+            out_zero_point (ttnn.Tensor or Number): the output quantization zero point.
 
         Keyword Args:
             axis (Number, optional): the axis of the quantization dimension of the input tensor.
@@ -148,9 +148,9 @@ void bind_requantize_operation(
             [](const T& self,
                const ttnn::Tensor& input_tensor,
                const std::variant<ttnn::Tensor, float>& in_scale,
-               const int32_t in_zero_point,
+               const std::variant<Tensor, int32_t>& in_zero_point,
                const std::variant<ttnn::Tensor, float>& out_scale,
-               const int32_t out_zero_point,
+               const std::variant<Tensor, int32_t>& out_zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -194,7 +194,7 @@ void bind_dequantize_operation(
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             scale (ttnn.Tensor or Number): the quantization scale.
-            zero_point (Number): the quantization zero point.
+            zero_point (ttnn.Tensor or Number): the quantization zero point.
 
         Keyword Args:
             axis (Number, optional): the axis of the quantization dimension of the input tensor.
@@ -237,7 +237,7 @@ void bind_dequantize_operation(
             [](const T& self,
                const ttnn::Tensor& input_tensor,
                const std::variant<ttnn::Tensor, float>& scale,
-               const int32_t zero_point,
+               const std::variant<Tensor, int32_t>& zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,

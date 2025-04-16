@@ -272,12 +272,28 @@ struct ExecuteGCD {
 
 struct ExecuteMaximum {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
+        std::optional<bool> use_legacy = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor, float scalar, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        QueueId queue_id,
+        const Tensor& input_a,
+        const float value,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
+        std::optional<bool> use_legacy = std::nullopt);
 };
 
 struct ExecuteMinimum {

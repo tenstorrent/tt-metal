@@ -63,11 +63,10 @@
 #include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "trace_buffer.hpp"
 #include "tracy/Tracy.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"

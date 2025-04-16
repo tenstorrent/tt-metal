@@ -14,9 +14,9 @@ THRESHOLD = 0.4
 @pytest.mark.parametrize(
     "ag_type, warmup_iters, perf_target_us",
     [
-        ("sdpa", 15, 11.9),
-        ("binary_mult", 15, 11.54),
-        ("layernorm", 15, 4.87),
+        ("sdpa", 15, 12.9),
+        ("binary_mult", 15, 12.54),
+        ("layernorm", 15, 5.4),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

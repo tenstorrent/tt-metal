@@ -27,7 +27,7 @@
 // FIXME: ARCH_NAME
 #include "noc/noc_parameters.h"
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/tt_core_coordinates.h"
@@ -299,7 +299,7 @@ TEST_F(DeviceFixture, TensixIncrementStreamRegWrite) {
                      bottom_right.x,
                      top_left.y,
                      bottom_right.y,
-                     all_cores.size()});
+                     all_cores.size() - 1});
             }
         }
 

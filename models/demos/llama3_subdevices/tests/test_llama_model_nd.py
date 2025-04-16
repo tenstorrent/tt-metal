@@ -196,7 +196,7 @@ def test_llama_model_inference(
             )
             tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=model_args.sub_core_grids)
             tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-                tt_out_rm, dim=3, use_multicore=True, sub_core_grids=model_args.sub_core_grids
+                tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=model_args.sub_core_grids
             )
 
             tt_output_torch = ttnn.to_torch(tt_out_tok, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))

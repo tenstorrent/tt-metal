@@ -38,7 +38,7 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include "rtoptions.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
@@ -594,6 +594,8 @@ int main(int argc, char** argv) {
             host_completion_queue_wr_ptr,
             dev_completion_queue_wr_ptr,
             dev_completion_queue_rd_ptr,
+            0,
+            0,
             0,
             0,
             0,

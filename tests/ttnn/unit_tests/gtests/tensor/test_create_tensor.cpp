@@ -18,7 +18,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_constants.hpp>
 #include "common_tensor_test_utils.hpp"
-#include "fmt/base.h"
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
 #include "ttnn/async_runtime.hpp"
