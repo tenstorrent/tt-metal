@@ -6,7 +6,7 @@ target_sources(
     INTERFACE
         FILE_SET tt_stl
         TYPE HEADERS
-        BASE_DIRS tt_stl
+        BASE_DIRS .
         FILES
             tt_stl/aligned_allocator.hpp
             tt_stl/any_range.hpp
@@ -20,8 +20,6 @@ target_sources(
             tt_stl/type_name.hpp
             tt_stl/unique_any.hpp
 )
-
-target_include_directories(tt_stl INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # These dependencies are currently brought in by dependencies/CMakeLists.txt
 # However, it would probably be more appropriate to bring them in here so that tt_stl can be standalone header only library

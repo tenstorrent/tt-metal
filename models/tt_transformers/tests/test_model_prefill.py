@@ -12,7 +12,7 @@ from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -56,10 +56,9 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "optimizations",
     [
-        lambda model_args: DecodersPrecision.performance(model_args.n_layers),
-        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers),
+        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
+        pytest.param(ModelOptimizations.performance, id="performance"),
     ],
-    ids=["performance", "accuracy"],
 )
 def test_model_inference(
     seq_len,
@@ -71,10 +70,8 @@ def test_model_inference(
     reset_seeds,
     ensure_gc,
     is_ci_env,
-    request,
 ):
-    test_id = request.node.callspec.id
-    if is_ci_env and test_id == "accuracy":
+    if is_ci_env and optimizations == ModelOptimizations.accuracy:
         pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
@@ -84,10 +81,10 @@ def test_model_inference(
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # This sets the minimum PCC for each iteration based on optimization mode
-    if test_id == "accuracy":
+    if optimizations == ModelOptimizations.accuracy:
         pcc = 0.91  # TODO Look on improving PCC
     else:  # performance mode
-        assert test_id == "performance"
+        assert optimizations == ModelOptimizations.performance
         pcc = 0.869  # TODO Look on improving PCC
 
     mesh_device.enable_async(True)

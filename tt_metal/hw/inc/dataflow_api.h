@@ -1539,7 +1539,8 @@ template <bool posted = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
     uint64_t addr, uint8_t be = 0xF, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
-    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    // DEBUG_SANITIZE_NOC_ADDR is not needed here because it doesn't send out the request
+    // The address could be set here or later in noc_inline_dw_write_with_state
 
     uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_CPY | NOC_CMD_WR |
                              NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
@@ -1700,14 +1701,15 @@ void noc_async_read_tile_dram_sharded_with_state(
     }
 }
 
-FORCE_INLINE
-void noc_async_read_tile_dram_sharded_with_state_with_trid(
+template <bool skip_ptr_update = false>
+FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
 
     WAYPOINT("NRDW");
 #ifndef ARCH_GRAYSKULL
-    ncrisc_noc_fast_read_with_transaction_id<noc_mode>(noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
+    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
+        noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
 #endif
     WAYPOINT("NRDD");
 }

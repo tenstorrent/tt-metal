@@ -6,43 +6,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
+#include <xtensor/xdynamic_view.hpp>
 
 namespace ttnn::experimental::xtensor {
-namespace {
-
-using ::tt::tt_metal::Tensor;
-
-template <typename T, std::size_t... Indices>
-auto vector_to_tuple_helper(const std::vector<T>& v, std::index_sequence<Indices...>) {
-    return std::make_tuple(v[Indices]...);
-}
-
-template <std::size_t N, typename T>
-auto vector_to_tuple(const std::vector<T>& buffer) {
-    TT_FATAL(buffer.size() >= N, "Buffer size {} is less than N {}", buffer.size(), N);
-    return vector_to_tuple_helper(buffer, std::make_index_sequence<N>());
-}
-
-template <typename T, int N>
-xt::xarray<T> concat_helper(const std::vector<xt::xarray<T>>& v, size_t axis = 0) {
-    constexpr int FIXED_N = N < 2 ? 2 : N;
-    TT_FATAL(N > 1, "Tuple size in concatenate must be greater than 1; got N: {}", N);
-    auto tuple = vector_to_tuple<FIXED_N>(v);
-    return xt::concatenate(std::move(tuple), axis);
-}
-
-template <class T, size_t... I>
-consteval auto create_array_impl(std::index_sequence<I...>) {
-    return std::array<xt::xarray<T> (*)(const std::vector<xt::xarray<T>>& v, size_t axis), sizeof...(I)>{
-        concat_helper<T, I>...};
-}
-
-template <class T, size_t max>
-consteval auto create_array() {
-    return create_array_impl<T>(std::make_index_sequence<max>());
-}
-
-}  // namespace
 
 template <typename T>
 std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& xtensor, int num_chunks, int dim) {
@@ -95,20 +61,56 @@ std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& xtensor, int num_chunks, i
 
 template <typename T>
 xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim) {
-    constexpr size_t MAX_TUPLE_SIZE = 64;
-
     if (v.empty()) {
         return {};
     } else if (v.size() == 1) {
         return v.front();
-    } else if (v.size() > MAX_TUPLE_SIZE) {
-        TT_THROW(
-            "Number of tensors to concatenate exceeds the maximum supported size {}; got size: {}",
-            MAX_TUPLE_SIZE,
-            v.size());
     } else {
-        constexpr auto table = create_array<T, MAX_TUPLE_SIZE>();
-        return (*table[v.size()])(v, dim);
+        // Make sure all input tensors have the same dimensions except for the concatenation dimension
+        if (dim < 0) {
+            dim += static_cast<int>(v.front().dimension());
+        }
+        TT_FATAL(
+            dim >= 0 && dim < static_cast<int>(v.front().dimension()),
+            "Invalid concatenation dimension {}, tensor dimension: {}",
+            dim,
+            v.front().dimension());
+
+        size_t num_dims = v.front().dimension();
+        auto expected_shape = v.front().shape();
+        for (size_t i = 1; i < v.size(); ++i) {
+            TT_FATAL(v[i].dimension() == num_dims, "All tensors must have the same number of dimensions");
+            for (size_t j = 0; j < num_dims; ++j) {
+                if (j != dim) {
+                    TT_FATAL(
+                        v[i].shape()[j] == expected_shape[j],
+                        "All tensors must have the same shape except for the concatenation dimension. Dimension {} "
+                        "differes, expected: {}, got: {}",
+                        j,
+                        expected_shape[j],
+                        v[i].shape()[j]);
+                }
+            }
+        }
+
+        auto result_shape = v.front().shape();
+        for (size_t i = 1; i < v.size(); ++i) {
+            result_shape[dim] += v[i].shape()[dim];
+        }
+        xt::xarray<T> result;
+        result.resize(result_shape);
+        xt::xdynamic_slice_vector indices(num_dims, xt::all());
+        size_t offset = 0;
+        // TODO: Since source and destination tensors are contiguous. We can potentially optimize
+        // when concatenating along the last dimension and do memcpy.
+        for (size_t i = 0; i < v.size(); ++i) {
+            size_t dim_size = v[i].shape()[dim];
+            indices[dim] = xt::range(offset, offset + dim_size);
+            auto view = xt::dynamic_view(result, indices);
+            view = v[i];
+            offset += dim_size;
+        }
+        return result;
     }
 }
 

@@ -185,6 +185,7 @@ public:
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;
     CommandQueue& command_queue(size_t cq_id = 0) override;
+    bool dispatch_firmware_active() const override;
 
     // Trace APIs
     void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
@@ -268,7 +269,7 @@ public:
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
 
-    const DeviceIds get_device_ids() const;
+    DeviceIds get_device_ids() const;
 
     size_t num_devices() const;
 

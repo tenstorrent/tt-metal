@@ -30,8 +30,8 @@
 #include "launch_message_ring_buffer_state.hpp"
 #include "mesh_trace.hpp"
 #include "shape_base.hpp"
-#include "span.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
@@ -330,7 +330,7 @@ MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
     return *(mesh_command_queues_[cq_id]);
 }
 
-const DeviceIds MeshDevice::get_device_ids() const {
+DeviceIds MeshDevice::get_device_ids() const {
     DeviceIds device_ids;
     for (auto device : this->get_devices()) {
         device_ids.push_back(device->id());
@@ -643,6 +643,11 @@ SystemMemoryManager& MeshDevice::sysmem_manager() {
 CommandQueue& MeshDevice::command_queue(size_t cq_id) {
     TT_THROW("command_queue() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->command_queue(cq_id);
+}
+
+bool MeshDevice::dispatch_firmware_active() const {
+    return validate_and_get_reference_value(
+        scoped_devices_->root_devices(), [](const auto& device) { return device->dispatch_firmware_active(); });
 }
 
 // Trace management

@@ -79,12 +79,12 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        # True,
-        False,
+        True,
+        # False,
     ),
     ids=(
-        # "paged_attention",
-        "default_attention",
+        "paged_attention",
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -104,11 +104,7 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 )
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-        }
-    ],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
 def test_tt_model_acc(
@@ -268,7 +264,7 @@ def test_tt_model_acc(
             )
             tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
             tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-                tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
+                tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids
             )
             tt_out_tok = ttnn.to_torch(
                 tt_out_tok,
@@ -277,7 +273,7 @@ def test_tt_model_acc(
                     dims=(3, 1) if model_args.is_galaxy else (1, 3),
                     mesh_shape=model_args.cluster_shape,
                 ),
-            )[0, 0, 0, :32].view(32, 1)
+            )[0, 0, :32, 0].view(32, 1)
             print("output", tokenizer.decode([ref_token]), tokenizer.decode([tt_out_tok.squeeze(1).tolist()[0]]))
             ttnn.plus_one(
                 current_pos_tensor,
@@ -335,7 +331,7 @@ def test_tt_model_acc(
         )
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
         tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-            tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
+            tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids
         )
         if not use_reference_file:
             tt_logits = ttnn.to_torch(

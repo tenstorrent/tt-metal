@@ -79,7 +79,8 @@ private:
     string out_kernel_root_;
 
     // Tools
-    string gpp_;
+    string gpp_ = "";
+    string gpp_include_dir_ = "";
 
     // Compilation options
     string cflags_;

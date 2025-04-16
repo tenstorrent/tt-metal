@@ -29,7 +29,11 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
 )
 
 
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 @pytest.mark.parametrize("is_rmsnorm", [True])
 @pytest.mark.parametrize("seed", [0])
 @pytest.mark.parametrize("eps", [1e-6])
@@ -182,8 +186,8 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
         q_dtype,
         cur_pos=127,
         block_size=32,
-        q_chunk_size=256,
-        k_chunk_size=256,
+        q_chunk_size=0,
+        k_chunk_size=0,
         sharded_in=True,
         sharded_out=True,
         start_core=start_core,

@@ -9,12 +9,14 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import run_rms_trace
+
+from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test import (
+    run_concat_fuse_impl,
+)
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
@@ -26,7 +28,6 @@ def run_allgather_only_with_trace(
     dim,
     num_links,
     output_mem_config,
-    enable_persistent_fabric,
     multi_device_global_semaphore,
     num_iter=20,
     subdevice_id=None,
@@ -41,7 +42,6 @@ def run_allgather_only_with_trace(
         memory_config=output_mem_config,
         topology=all_gather_topology,
         subdevice_id=subdevice_id,
-        enable_persistent_fabric_mode=enable_persistent_fabric,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -57,7 +57,6 @@ def run_allgather_only_with_trace(
             memory_config=output_mem_config,
             topology=all_gather_topology,
             subdevice_id=subdevice_id,
-            enable_persistent_fabric_mode=enable_persistent_fabric,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -91,7 +90,6 @@ def run_all_gather_impl(
     output_shard_grid=None,
     tensor_mem_layout=None,
 ):
-    enable_persistent_fabric = True
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
     # Use Async mode based on test input config
@@ -111,14 +109,8 @@ def run_all_gather_impl(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-        mesh_device,
-        [worker_sub_device],
-        0,
-        0,
-        enable_persistent_fabric,
-        wrap_fabric_around_mesh=True,
-    )
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -196,7 +188,6 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
-            enable_persistent_fabric,
             multi_device_global_semaphore=ccl_semaphore_handles[0],
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
@@ -212,7 +203,6 @@ def run_all_gather_impl(
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
-                enable_persistent_fabric_mode=enable_persistent_fabric,
             )
             tt_out_tensor_list.append(tt_out_tensor)
 
@@ -242,9 +232,7 @@ def run_all_gather_impl(
             or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
         ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
 
-    if enable_persistent_fabric:
-        mesh_device.reset_sub_device_stall_group()
-        teardown_fabric_interface(mesh_device)
+    mesh_device.reset_sub_device_stall_group()
 
     if not passed:
         assert eq, f"{i} FAILED: {output}"
@@ -315,6 +303,7 @@ def run_all_gather_impl(
 )
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_only(
     t3k_mesh_device,
     num_devices,
@@ -375,7 +364,12 @@ def test_all_gather_only(
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872}],
+    [
+        {
+            "trace_region_size": 23887872,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
@@ -410,4 +404,94 @@ def test_tg_trace_rms_fuse(
         warmup_iters=warmup_iters,
         profiler=profiler,
         use_new_version=use_new_version,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
+    [
+        # Before Concat Heads
+        (
+            4,
+            [1, 32, 32, 128],
+            1,
+            ttnn.TILE_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                }
+            ),
+            (32, 128),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                }
+            ),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [3])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize("num_iters, warmup_iters", [[75, 5]])
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 23887872, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_concat_fuse(
+    mesh_device,
+    num_devices,
+    output_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    num_iters,
+    warmup_iters,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    input_shard_shape,
+    input_shard_grid,
+    output_shard_shape,
+    output_shard_grid,
+    tensor_mem_layout,
+    trace_mode,
+):
+    profiler = BenchmarkProfiler()
+    run_concat_fuse_impl(
+        mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        use_program_cache,
+        function_level_defaults,
+        input_shard_shape,
+        input_shard_grid,
+        all_gather_topology=ttnn.Topology.Linear,
+        warmup_iters=warmup_iters,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        output_shard_shape=output_shard_shape,
+        output_shard_grid=output_shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
+        trace_mode=trace_mode,
+        profiler=profiler,
     )

@@ -64,8 +64,8 @@
 #include "program_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "rtoptions.hpp"
-#include "span.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "system_memory_manager.hpp"
 #include "tile.hpp"
@@ -73,7 +73,6 @@
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
@@ -586,8 +585,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(
                                 "buffer already exists",
                                 buffer_index);
                         }
-                        cb_indices[buffer_index] = 1;
-                        target_cb_indices[buffer_index] = 1;
+                        cb_indices[buffer_index] = true;
+                        target_cb_indices[buffer_index] = true;
                     }
                 };
                 add_buffer_indices(circular_buffer->config().local_buffer_indices(), local_cb_indices);
@@ -946,37 +945,6 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         return dst_noc_unicast_info;
     };
 
-    // Unicast/Multicast Semaphores
-    for (const Semaphore &semaphore : this->semaphores()) {
-        std::vector<uint32_t> semaphore_data(1);
-        semaphore_data[0] = semaphore.initial_value();
-
-        // TODO: use semaphore.core_type from main
-        if (semaphore.core_type() == CoreType::WORKER) {
-            uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-            std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                device->extract_dst_noc_multicast_info(
-                    semaphore.core_range_set().ranges(), CoreType::WORKER);
-            transfer_info transfer_info = {
-                .dst_base_addr = semaphore.offset(),
-                .dst_noc_info = dst_noc_multicast_info,
-                .linked = false,
-                .data = semaphore_data};
-            this->program_transfer_info.multicast_semaphores[semaphore.offset()].push_back(transfer_info);
-        } else if (semaphore.core_type() == CoreType::ETH) {
-            // TODO: we only fast dispatch to active eth...
-            uint32_t index = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-            std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
-                extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
-            transfer_info transfer_info = {
-                .dst_base_addr = semaphore.offset(),
-                .dst_noc_info = dst_noc_unicast_info,
-                .linked = false,
-                .data = semaphore_data};
-            this->program_transfer_info.unicast_semaphores[semaphore.offset()].push_back(transfer_info);
-        }
-    }
-
     // Circular Buffer Configs handled in EnqueueProgram
 
     // Assume here and in command queue that kg_buffers is populated with multicast buffers first then unicast buffers
@@ -1218,7 +1186,7 @@ void Program::generate_dispatch_commands(IDevice* device) {
 
 void Program::allocate_kernel_bin_buf_on_device(IDevice* device) { pimpl_->allocate_kernel_bin_buf_on_device(device); }
 
-void detail::ProgramImpl::compile(IDevice* device, bool fd_bootloader_mode) {
+void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     //ZoneScoped;
     if (compiled_.contains(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
         return;
@@ -1245,7 +1213,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool fd_bootloader_mode) {
         }
     };
 
-    auto validate_kernel_placement = [&device, &fd_bootloader_mode](std::shared_ptr<Kernel> kernel) {
+    auto validate_kernel_placement = [&device, &force_slow_dispatch](std::shared_ptr<Kernel> kernel) {
         // Placement rules:
         //  Slow dispatch:
         //      - kernels cannot be on storage only cores
@@ -1268,7 +1236,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool fd_bootloader_mode) {
         TT_FATAL(not on_storage_only_core, "Illegal kernel placement for {}. Kernels cannot be placed on storage only cores!", kernel->name());
 
         // Kernels used to implement fast dispatch can be placed on dispatch cores
-        if (not slow_dispatch and not fd_bootloader_mode) {
+        if (not slow_dispatch and not force_slow_dispatch) {
             const std::vector<CoreCoord>& dispatch_cores =
                 MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
             bool on_dispatch_core = std::any_of(dispatch_cores.begin(), dispatch_cores.end(), [&kernel, &dispatch_core_type](const CoreCoord &dispatch_core) {
@@ -1335,7 +1303,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool fd_bootloader_mode) {
     compiled_.insert(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
 }
 
-void Program::compile(IDevice* device, bool fd_bootloader_mode) { pimpl_->compile(device, fd_bootloader_mode); }
+void Program::compile(IDevice* device, bool force_slow_dispatch) { pimpl_->compile(device, force_slow_dispatch); }
 
 void detail::ProgramImpl::set_runtime_id(uint64_t id) { this->runtime_id = id; }
 

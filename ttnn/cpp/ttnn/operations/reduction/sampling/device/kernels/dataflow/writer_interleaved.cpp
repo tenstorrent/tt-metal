@@ -114,7 +114,7 @@ void kernel_main() {
 
     // generate the top-k mask
     constexpr uint32_t one = 1;
-    generate_mask<cb_id_mask, one, ids_per_batch / 32>(one, k - 1);
+    generate_mask<cb_id_mask, one>(one, ids_per_batch / 32, k - 1);
 
     // get random number
     cb_wait_front(rand_tile_index, 1);

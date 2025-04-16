@@ -427,7 +427,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto c_dtype = c.get_dtype();
     const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
-    const auto c_data_format = datatype_to_dataformat_converter(c.get_dtype());
+    const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
 
     uint32_t a_single_tile_size = tt_metal::detail::TileSize(a_data_format);
     uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);
@@ -464,16 +464,15 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             post_activations.insert(post_activations.begin(), *op_config.postprocess);
         }
 
-        if (binary::utils::is_typecast(a_dtype, c_dtype) and op_type != BinaryOpType::QUANT and
-            op_type != BinaryOpType::REQUANT and op_type != BinaryOpType::DEQUANT) {
+        if (binary::utils::is_typecast(a_dtype, c_dtype) and !is_quant_op) {
             post_activations.push_back({
                 unary::UnaryOpType::TYPECAST,
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
             });
         }
 
-        add_activation_defines(compute_kernel_defines, lhs_activations, "LHS");
-        add_activation_defines(compute_kernel_defines, rhs_activations, "RHS");
+        add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
+        add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
 
         if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
             compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
@@ -485,10 +484,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
-                add_activation_defines(compute_kernel_defines, post_activations, "POST");
+                add_activation_defines(compute_kernel_defines, post_activations, "POST", c.get_dtype());
             }
         } else {
-            add_activation_defines(compute_kernel_defines, post_activations, "POST");
+            add_activation_defines(compute_kernel_defines, post_activations, "POST", c.get_dtype());
         }
     }
 

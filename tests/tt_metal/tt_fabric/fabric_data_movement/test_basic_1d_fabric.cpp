@@ -27,13 +27,11 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_graph.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "impl/context/metal_context.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "impl/context/metal_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {

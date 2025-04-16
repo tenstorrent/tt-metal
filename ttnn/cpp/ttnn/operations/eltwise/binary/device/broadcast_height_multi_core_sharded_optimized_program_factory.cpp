@@ -15,7 +15,7 @@ namespace ttnn::operations::binary {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
+static BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: return BcastOpMath::ADD;
         case BinaryOpType::SUB: return BcastOpMath::SUB;
@@ -146,10 +146,10 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     auto src0_buffer = a.buffer();
     auto src1_buffer = b->buffer();
     auto dst_buffer = output.buffer();
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index, (uint32_t)src1_is_dram};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
