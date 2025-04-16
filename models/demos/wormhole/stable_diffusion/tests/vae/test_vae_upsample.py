@@ -46,6 +46,8 @@ def test_upsample(
         torch_upsample,
         device,
         input_channels,
+        input_height,
+        input_width,
         out_channels,
         output_height,
         output_width,
@@ -67,6 +69,10 @@ def test_upsample(
     ttnn_output.deallocate(True)
     ttnn_output = ttnn_model(ttnn_input)
 
+    ttnn_output = ttnn.reshape(
+        ttnn_output,
+        [1, output_height, output_width, out_channels],
+    )
     ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
     ttnn_output = ttnn.to_torch(ttnn_output)
 
