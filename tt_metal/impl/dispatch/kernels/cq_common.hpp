@@ -164,28 +164,48 @@ FORCE_INLINE void cq_noc_async_write_with_state(
 }
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config
-// (dst_noc, VC..) have been specified.
-template <bool write_last_packet = true>
-uint32_t cq_noc_async_write_with_state_any_len(
-    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+// (dst_noc, VC..) have been specified. A write counter can be provided to count the number of writes done. Useful
+// to use for incrementing noc_nonposted_writes_num_issued and noc_nonposted_writes_acked.
+template <bool write_last_packet = true, bool count_writes = true>
+uint32_t cq_noc_async_write_with_state_any_len_count_writes(
+    uint32_t src_addr, uint64_t dst_addr, uint32_t& writes_done, uint32_t size = 0, uint32_t ndests = 1) {
     if (size > NOC_MAX_BURST_SIZE) {
         cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
         src_addr += NOC_MAX_BURST_SIZE;
         dst_addr += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
+        if constexpr (count_writes) {
+            writes_done++;
+        }
         while (size > NOC_MAX_BURST_SIZE) {
             cq_noc_async_write_with_state<CQ_NOC_SnDl>(src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
             src_addr += NOC_MAX_BURST_SIZE;
             dst_addr += NOC_MAX_BURST_SIZE;
             size -= NOC_MAX_BURST_SIZE;
+            if constexpr (count_writes) {
+                writes_done++;
+            }
         }
     }
     if constexpr (write_last_packet) {
         cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, size, ndests);
+        if constexpr (count_writes) {
+            writes_done++;
+        }
         return 0;
     } else {
         return size;
     }
+}
+
+// More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config
+// (dst_noc, VC..) have been specified.
+template <bool write_last_packet = true>
+uint32_t cq_noc_async_write_with_state_any_len(
+    uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+    uint32_t writes_done = 0;
+    return cq_noc_async_write_with_state_any_len_count_writes<write_last_packet, false>(
+        src_addr, dst_addr, writes_done, size, ndests);
 }
 
 template <enum CQNocFlags flags, bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
