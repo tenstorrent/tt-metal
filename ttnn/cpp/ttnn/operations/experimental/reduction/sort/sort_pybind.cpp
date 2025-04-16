@@ -33,6 +33,10 @@ void bind_reduction_sort_operation(py::module& module) {
                 * `memory_config` (MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
                 * `out` (tuple of Tensors, optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`.
 
+            Additional info:
+                * For now the `stable` argument is not supported.
+                * For now the input tensor shape must be a multiple of 64 in the sorting dimension.
+
             Example:
 
             .. code-block:: python
