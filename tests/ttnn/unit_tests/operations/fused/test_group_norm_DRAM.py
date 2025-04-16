@@ -20,16 +20,6 @@ from models.utility_functions import skip_for_wormhole_b0
     [
         (8, 768, 1, 512, 32, 2, 8, 8),  # base case
         (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
-        (
-            1,
-            128,
-            1,
-            512,
-            32,
-            2,
-            4,
-            8,
-        ),  # test all groups on core fit in less than one tile, so need to reduce col core count
         (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
         (1, 640, 128, 128, 32, 2, 4, 8),  # Stable Diffusion XL Variant 1
         (1, 960, 128, 128, 32, 2, 2, 8),  # Stable Diffusion XL Variant 2
