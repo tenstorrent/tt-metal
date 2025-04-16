@@ -7,8 +7,8 @@
 
 // L1 to L1 send
 void kernel_main() {
-    constexpr uint32_t src_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_addr = get_compile_time_arg_val(1);
+    uint32_t src_addr = get_compile_time_arg_val(0);
+    uint32_t dst_addr = get_compile_time_arg_val(1);
     constexpr uint32_t num_of_transactions = get_compile_time_arg_val(2);
     constexpr uint32_t transaction_num_pages = get_compile_time_arg_val(3);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(4);
@@ -28,10 +28,15 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("RISCV0");
-        uint64_t dst_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, dst_addr);
+        for (uint32_t i = 0; i < num_of_transactions; i++) {
+            uint64_t dst_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, dst_addr);
 
-        noc_async_write(src_addr, dst_noc_addr, transaction_size_bytes);
-        noc_async_write_barrier();
-        noc_semaphore_inc(sem_addr, 1);
+            noc_async_write(src_addr, dst_noc_addr, transaction_size_bytes);
+            noc_async_write_barrier();
+
+            src_addr += transaction_size_bytes;
+            dst_addr += transaction_size_bytes;
+        }
     }
+    noc_semaphore_inc(sem_addr, 1);
 }

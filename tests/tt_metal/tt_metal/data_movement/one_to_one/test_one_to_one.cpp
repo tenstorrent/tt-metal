@@ -154,10 +154,10 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 }  // namespace unit_tests::dm::core_to_core
 
 /* ========== Test case for one to one data movement; Test id = 3 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToOne) {
+TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     // Parameters
-    uint32_t num_of_transactions = 1;
-    uint32_t transaction_size_pages = 1;
+    uint32_t max_transactions = 64;
+    uint32_t max_transaction_size_pages = 64;
     uint32_t page_size_bytes = 32;  // =Flit size: 32 bytes for WH, 64 for BH
     if (arch_ == tt::ARCH::BLACKHOLE) {
         page_size_bytes *= 2;
@@ -167,20 +167,25 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOne) {
     CoreCoord master_core_coord = {0, 0};
     CoreCoord slave_core_coord = {1, 1};
 
-    // Test config
-    unit_tests::dm::core_to_core::OneToOneConfig test_config = {
-        .test_id = 3,
-        .master_core_coord = master_core_coord,
-        .slave_core_coord = slave_core_coord,
-        .num_of_transactions = num_of_transactions,
-        .transaction_size_pages = transaction_size_pages,
-        .page_size_bytes = page_size_bytes,
-        .l1_data_format = DataFormat::Float16_b,
-    };
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+        for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
+             transaction_size_pages *= 2) {
+            // Test config
+            unit_tests::dm::core_to_core::OneToOneConfig test_config = {
+                .test_id = 3,
+                .master_core_coord = master_core_coord,
+                .slave_core_coord = slave_core_coord,
+                .num_of_transactions = num_of_transactions,
+                .transaction_size_pages = transaction_size_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+            };
 
-    // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
+        }
     }
 }
 
