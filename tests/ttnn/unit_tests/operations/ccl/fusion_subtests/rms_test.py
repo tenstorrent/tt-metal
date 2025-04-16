@@ -345,6 +345,7 @@ def run_rms_fuse_impl(
         ]
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
     mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
         mesh_device,
         [worker_sub_device],
@@ -353,9 +354,8 @@ def run_rms_fuse_impl(
         True,
         wrap_fabric_around_mesh=True,
     )
-    mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-    torch.manual_seed(432)
+    torch.manual_seed(1234)
     num_cores = input_shard_grid.num_cores()
     total_cores = num_cores * num_devices
     padded_dim_per_core = int(math.ceil(elements_per_batch / total_cores / 32) * 32)
