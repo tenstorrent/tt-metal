@@ -508,8 +508,8 @@ def run_llama3_demo(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"tg-llama-demo-e2e",
-            ml_model_name="tg-llama",
+            run_type=f"tg_llama_demo_decode",
+            ml_model_name="llama70b-tg",
         )
 
     if not stress_test:
