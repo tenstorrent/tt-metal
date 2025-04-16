@@ -28,14 +28,7 @@ std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
         std::forward<Tuple>(tuple));
 }
 
-uint32_t get_nearest_supported_k_value(uint32_t k) {
-    // LLK only support k = 32, 64 for now
-    if (k <= 32) {
-        return 32;
-    } else {
-        return 64;
-    }
-}
+uint32_t get_nearest_supported_k_value(uint32_t k) { return 32 * ((k + 31) / 32); }
 
 Tensor perform_transpose(
     const Tensor& input_tensor, const bool is_dim_last_idx, const int8_t dim1 = -1, const int8_t dim2 = -1) {

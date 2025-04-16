@@ -68,6 +68,14 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device):
         (1, 1, 32, 8192, 3, 6),  # passed
         (1, 2048, 1, 64, 1, 8),  # passed
         (1, 1, 32, 32768, 3, 16),  # passed
+        (1, 1, 32768, 32, 1, 96),  # passed
+        (1, 32768, 32, 1, 1, 200),  # passed
+        (1, 1, 32, 32768, 3, 500),  # passed
+        (1, 2048, 1, 64, 1, 256),  # passed
+        (1, 1, 32, 8192, 3, 800),  # passed
+        (1, 2048, 1, 64, 1, 1000),  # skipped
+        (1, 1, 32, 32768, 3, 3500)
+        # (1, 1, 2048, 32768, 3, 3500),  # //current k max is around 3500 - really slow variant, use to test future multicore implementation of new topk implementation
     ),
 )
 @pytest.mark.parametrize(
