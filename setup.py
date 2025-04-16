@@ -15,7 +15,7 @@ from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext
 
 
-BUNDLE_SFPI = True
+BUNDLE_SFPI = False
 
 
 def expand_patterns(patterns):
@@ -190,30 +190,30 @@ class CMakeBuild(build_ext):
         runtime_patterns = [
             "hw/**/*",
         ]
+        runtime_exclude_files = []
         if BUNDLE_SFPI:
             runtime_patterns.append("sfpi/**/*")
-
-        runtime_exclude_files = [
-            "riscv32-unknown-elf-lto-dump",
-            "riscv32-unknown-elf-gdb",
-            "riscv32-unknown-elf-objdump",
-            "riscv32-unknown-elf-run",
-            "riscv32-unknown-elf-ranlib",
-            "riscv32-unknown-elf-gprof",
-            "riscv32-unknown-elf-strings",
-            "riscv32-unknown-elf-size",
-            "riscv32-unknown-elf-readelf",
-            "riscv32-unknown-elf-nm",
-            "riscv32-unknown-elf-c++filt",
-            "riscv32-unknown-elf-addr2line",
-            "riscv32-unknown-elf-gcov",
-            "riscv32-unknown-elf-gcov-tool",
-            "riscv32-unknown-elf-gcov-dump",
-            "riscv32-unknown-elf-elfedit",
-            "riscv32-unknown-elf-gcc-ranlib",
-            "riscv32-unknown-elf-gcc-nm",
-            "riscv32-unknown-elf-gdb-add-index",
-        ]
+            runtime_exclude_files = [
+                "riscv32-unknown-elf-lto-dump",
+                "riscv32-unknown-elf-gdb",
+                "riscv32-unknown-elf-objdump",
+                "riscv32-unknown-elf-run",
+                "riscv32-unknown-elf-ranlib",
+                "riscv32-unknown-elf-gprof",
+                "riscv32-unknown-elf-strings",
+                "riscv32-unknown-elf-size",
+                "riscv32-unknown-elf-readelf",
+                "riscv32-unknown-elf-nm",
+                "riscv32-unknown-elf-c++filt",
+                "riscv32-unknown-elf-addr2line",
+                "riscv32-unknown-elf-gcov",
+                "riscv32-unknown-elf-gcov-tool",
+                "riscv32-unknown-elf-gcov-dump",
+                "riscv32-unknown-elf-elfedit",
+                "riscv32-unknown-elf-gcc-ranlib",
+                "riscv32-unknown-elf-gcc-nm",
+                "riscv32-unknown-elf-gdb-add-index",
+            ]
         ttnn_cpp_patterns = [
             "ttnn/tensor/**/*",
             "ttnn/deprecated/**/kernels/**/*",

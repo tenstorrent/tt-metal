@@ -12,7 +12,7 @@ from .download_sfpi import download_sfpi
 
 # Configuration flags
 # Allows us to chage our minds later
-SFPI_IS_BUNDLED = True  # If true, the SFPI compiler is bundled with the wheel
+SFPI_IS_BUNDLED = False  # If true, the SFPI compiler is bundled with the wheel
 SFPI_IS_SYSTEM_PACKAGE = not SFPI_IS_BUNDLED  # If true, the SFPI compiler is installed via a system package manager
 AUTO_DOWNLOAD_SFPI = (
     not SFPI_IS_BUNDLED and not SFPI_IS_SYSTEM_PACKAGE
