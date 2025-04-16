@@ -58,35 +58,35 @@ jobs:
       build-wheel: true
       version: "22.04"
       build-umd-tests: true
-  # build-artifact-profiler:
-  #   uses: ./.github/workflows/build-artifact.yaml
-  #   secrets: inherit
-  #   with:
-  #     build-type: ${{ inputs.build-type || 'Release' }}
-  #     build-wheel: true
-  #     tracy: true
-  #     version: "22.04"
-  # run-profiler-regression:
-  #   needs: build-artifact-profiler
-  #   uses: ./.github/workflows/run-profiler-regression.yaml
-  #   secrets: inherit
-  #   with:
-  #     arch: "blackhole"
-  #     timeout: 20
-  #     runner-label: ${{ inputs.runner-label || 'BH' }}
-  #     docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-  #     build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-  #     wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-  #     enable-watcher: ${{ inputs.enable-watcher || false }}
-  # umd-unit-tests:
-  #   needs: build-artifact
-  #   secrets: inherit
-  #   uses: ./.github/workflows/umd-unit-tests.yaml
-  #   with:
-  #     arch: blackhole
-  #     runner-label: ${{ inputs.runner-label || 'BH' }}
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      tracy: true
+      version: "22.04"
+  run-profiler-regression:
+    needs: build-artifact-profiler
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    secrets: inherit
+    with:
+      arch: "blackhole"
+      timeout: 20
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  umd-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/umd-unit-tests.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   sd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml
@@ -99,41 +99,41 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-  # fd-unit-tests:
-  #   needs: build-artifact
-  #   uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
-  #   secrets: inherit
-  #   with:
-  #     timeout: 20
-  #     arch: blackhole
-  #     runner-label: ${{ inputs.runner-label || 'BH' }}
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     enable-watcher: ${{ inputs.enable-watcher || false }}
-  # # FD C++ Unit Tests
-  # cpp-unit-tests:
-  #   needs: build-artifact
-  #   secrets: inherit
-  #   uses: ./.github/workflows/cpp-post-commit.yaml
-  #   with:
-  #     arch: blackhole
-  #     runner-label: ${{ inputs.runner-label || 'BH' }}
-  #     timeout: 20
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     enable-watcher: ${{ inputs.enable-watcher || false }}
-  # models-unit-tests:
-  #   needs: build-artifact
-  #   secrets: inherit
-  #   uses: ./.github/workflows/models-post-commit.yaml
-  #   with:
-  #     arch: blackhole
-  #     runner-label: ${{ inputs.runner-label || 'BH' }}
-  #     timeout: 20
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     enable-watcher: ${{ inputs.enable-watcher || false }}
+  fd-unit-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+    secrets: inherit
+    with:
+      timeout: 20
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  # FD C++ Unit Tests
+  cpp-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 20
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  models-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/models-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 20
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
 
 #   profiler-regression:
 #     needs: build-artifact-profiler
