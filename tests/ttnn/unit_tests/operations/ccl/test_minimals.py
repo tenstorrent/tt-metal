@@ -12,6 +12,8 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
+    create_and_load_sub_device_manager_with_fabric_interface,
+    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
 
@@ -34,6 +36,7 @@ def run_allgather_only_with_trace(
     dim,
     num_links,
     output_mem_config,
+    enable_persistent_fabric,
     multi_device_global_semaphore,
     num_iter=20,
     subdevice_id=None,
@@ -48,6 +51,7 @@ def run_allgather_only_with_trace(
         memory_config=output_mem_config,
         topology=all_gather_topology,
         subdevice_id=subdevice_id,
+        enable_persistent_fabric_mode=enable_persistent_fabric,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -63,6 +67,7 @@ def run_allgather_only_with_trace(
             memory_config=output_mem_config,
             topology=all_gather_topology,
             subdevice_id=subdevice_id,
+            enable_persistent_fabric_mode=enable_persistent_fabric,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -96,6 +101,7 @@ def run_all_gather_impl(
     output_shard_grid=None,
     tensor_mem_layout=None,
 ):
+    enable_persistent_fabric = True
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
     # Use Async mode based on test input config
@@ -115,8 +121,14 @@ def run_all_gather_impl(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+        mesh_device,
+        [worker_sub_device],
+        0,
+        0,
+        enable_persistent_fabric,
+        wrap_fabric_around_mesh=True,
+    )
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -194,6 +206,7 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
+            enable_persistent_fabric,
             multi_device_global_semaphore=ccl_semaphore_handles[0],
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
@@ -209,6 +222,7 @@ def run_all_gather_impl(
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
+                enable_persistent_fabric_mode=enable_persistent_fabric,
             )
             tt_out_tensor_list.append(tt_out_tensor)
 
@@ -238,7 +252,9 @@ def run_all_gather_impl(
             or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
         ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
 
-    mesh_device.reset_sub_device_stall_group()
+    if enable_persistent_fabric:
+        mesh_device.reset_sub_device_stall_group()
+        teardown_fabric_interface(mesh_device)
 
     if not passed:
         assert eq, f"{i} FAILED: {output}"
@@ -309,7 +325,6 @@ def run_all_gather_impl(
 )
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_only(
     t3k_mesh_device,
     num_devices,
@@ -378,12 +393,7 @@ def test_all_gather_only(
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "trace_region_size": 23887872,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
+    [{"trace_region_size": 23887872}],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
@@ -521,7 +531,7 @@ def test_rms_fuse(
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 23887872, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"trace_region_size": 23887872}],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)

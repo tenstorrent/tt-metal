@@ -127,9 +127,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
 @pytest.mark.parametrize("replication_factor", [8])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-@pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 17068032, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
-)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 17068032}], indirect=True)
 def test_all_gather_tg_llama(
     mesh_device,
     num_devices,
@@ -192,6 +190,9 @@ def test_all_gather_tg_llama(
         profiler=profiler,
         trace_mode=True,
         use_all_gather_async=True,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
         use_persistent_output=True,
     )
 
@@ -222,13 +223,7 @@ def test_all_gather_tg_llama(
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "trace_region_size": 23887872,
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
+    [{"trace_region_size": 23887872, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 @pytest.mark.parametrize(
