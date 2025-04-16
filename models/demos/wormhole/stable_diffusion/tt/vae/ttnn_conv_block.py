@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import (
     get_default_compute_config,
@@ -81,8 +80,5 @@ class ConvBlock:
             self.return_weights_and_bias = False
         else:
             hidden_states = conv_result
-
-        if hidden_states.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states
