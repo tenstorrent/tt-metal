@@ -5,4 +5,4 @@
 
 .. _ttnn.fill_ones_rm:
 
-.. autofastoperation:: ttnn.fill_ones_rm
+.. autodata:: ttnn.fill_ones_rm

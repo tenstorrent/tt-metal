@@ -5,4 +5,4 @@
 
 .. _ttnn.lcm:
 
-.. autofastoperation:: ttnn.lcm
+.. autodata:: ttnn.lcm

@@ -5,4 +5,4 @@
 
 .. _ttnn.floor:
 
-.. autofastoperation:: ttnn.floor
+.. autodata:: ttnn.floor

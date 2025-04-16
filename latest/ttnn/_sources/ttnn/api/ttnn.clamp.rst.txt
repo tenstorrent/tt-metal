@@ -5,4 +5,4 @@
 
 .. _ttnn.clamp:
 
-.. autofastoperation:: ttnn.clamp
+.. autodata:: ttnn.clamp

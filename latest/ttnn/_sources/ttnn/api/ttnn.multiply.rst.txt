@@ -5,4 +5,4 @@
 
 .. _ttnn.multiply:
 
-.. autofastoperation:: ttnn.multiply
+.. autodata:: ttnn.multiply

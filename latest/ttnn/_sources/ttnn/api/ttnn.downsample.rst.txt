@@ -5,4 +5,4 @@
 
 .. _ttnn.downsample:
 
-.. autofastoperation:: ttnn.downsample
+.. autodata:: ttnn.downsample

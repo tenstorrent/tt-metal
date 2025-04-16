@@ -23,7 +23,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.global_avg_pool2d" href="ttnn.global_avg_pool2d.html" />
+    <link rel="next" title="ttnn.conv1d" href="ttnn.conv1d.html" />
     <link rel="prev" title="ttnn.experimental.all_reduce" href="ttnn.experimental.all_reduce.html" /> 
 </head>
 
@@ -78,6 +78,7 @@
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.embedding</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
@@ -135,9 +136,9 @@
   <section id="ttnn-embedding">
 <h1>ttnn.embedding<a class="headerlink" href="#ttnn-embedding" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py function">
+<span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.embedding">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">embedding</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">input</span> <span class="pre">tensor</span> <span class="pre">memory</span> <span class="pre">config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">queue_id:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding_idx:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">layout:</span> <span class="pre">ttnn.Layout</span> <span class="pre">=</span> <span class="pre">ttnn.ROW_MAJOR_LAYOUT</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">embeddings_type:</span> <span class="pre">ttnn.EmbeddingsType</span> <span class="pre">=</span> <span class="pre">ttnn._ttnn.operations.embedding.EmbeddingsType.GENERIC</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype:</span> <span class="pre">ttnn.DataType</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></span><a class="headerlink" href="#ttnn.embedding" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">embedding</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.embedding',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.embedding.embedding_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.embedding" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Retrieves word embeddings using input_tensor. The input_tensor is a list of indices, and the embedding matrix, and the output is the corresponding word embeddings.</p>
@@ -200,7 +201,7 @@
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="ttnn.experimental.all_reduce.html" class="btn btn-neutral float-left" title="ttnn.experimental.all_reduce" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.global_avg_pool2d.html" class="btn btn-neutral float-right" title="ttnn.global_avg_pool2d" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.conv1d.html" class="btn btn-neutral float-right" title="ttnn.conv1d" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

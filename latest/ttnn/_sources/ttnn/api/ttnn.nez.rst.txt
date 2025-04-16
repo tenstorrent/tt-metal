@@ -5,4 +5,4 @@
 
 .. _ttnn.nez:
 
-.. autofastoperation:: ttnn.nez
+.. autodata:: ttnn.nez

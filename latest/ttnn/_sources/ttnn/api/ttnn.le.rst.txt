@@ -5,4 +5,4 @@
 
 .. _ttnn.le:
 
-.. autofastoperation:: ttnn.le
+.. autodata:: ttnn.le

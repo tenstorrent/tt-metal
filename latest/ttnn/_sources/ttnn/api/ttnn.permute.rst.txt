@@ -5,4 +5,4 @@
 
 .. _ttnn.permute:
 
-.. autofastoperation:: ttnn.permute
+.. autodata:: ttnn.permute

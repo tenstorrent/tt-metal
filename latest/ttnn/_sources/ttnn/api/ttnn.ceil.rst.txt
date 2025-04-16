@@ -5,4 +5,4 @@
 
 .. _ttnn.ceil:
 
-.. autofastoperation:: ttnn.ceil
+.. autodata:: ttnn.ceil

@@ -5,4 +5,4 @@
 
 .. _ttnn.fmod:
 
-.. autofastoperation:: ttnn.fmod
+.. autodata:: ttnn.fmod

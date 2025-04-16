@@ -5,4 +5,4 @@
 
 .. _ttnn.experimental.sort:
 
-.. autofastoperation:: ttnn.experimental.sort
+.. autodata:: ttnn.experimental.sort

@@ -5,4 +5,4 @@
 
 .. _ttnn.square:
 
-.. autofastoperation:: ttnn.square
+.. autodata:: ttnn.square

@@ -5,4 +5,4 @@
 
 .. _ttnn.sign_bw:
 
-.. autofastoperation:: ttnn.sign_bw
+.. autodata:: ttnn.sign_bw

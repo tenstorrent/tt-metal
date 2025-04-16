@@ -5,4 +5,4 @@
 
 .. _ttnn.sinh_bw:
 
-.. autofastoperation:: ttnn.sinh_bw
+.. autodata:: ttnn.sinh_bw

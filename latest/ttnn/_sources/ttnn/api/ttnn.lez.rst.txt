@@ -5,4 +5,4 @@
 
 .. _ttnn.lez:
 
-.. autofastoperation:: ttnn.lez
+.. autodata:: ttnn.lez

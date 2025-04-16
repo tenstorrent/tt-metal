@@ -5,4 +5,4 @@
 
 .. _ttnn.embedding_bw:
 
-.. autofastoperation:: ttnn.embedding_bw
+.. autodata:: ttnn.embedding_bw

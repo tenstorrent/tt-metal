@@ -5,4 +5,4 @@
 
 .. _ttnn.triu:
 
-.. autofastoperation:: ttnn.triu
+.. autodata:: ttnn.triu

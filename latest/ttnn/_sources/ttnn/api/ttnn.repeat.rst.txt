@@ -5,4 +5,4 @@
 
 .. _ttnn.repeat:
 
-.. autofastoperation:: ttnn.repeat
+.. autodata:: ttnn.repeat

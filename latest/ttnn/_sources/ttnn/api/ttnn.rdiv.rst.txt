@@ -5,4 +5,4 @@
 
 .. _ttnn.rdiv:
 
-.. autofastoperation:: ttnn.rdiv
+.. autodata:: ttnn.rdiv

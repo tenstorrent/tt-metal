@@ -88,6 +88,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
@@ -145,25 +146,20 @@
   <section id="ttnn-deallocate">
 <h1>ttnn.deallocate<a class="headerlink" href="#ttnn-deallocate" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py function">
+<span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.deallocate">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">deallocate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">force</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">`None`</span></span></span><a class="headerlink" href="#ttnn.deallocate" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">deallocate</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.deallocate',</span> <span class="pre">function=&lt;function</span> <span class="pre">PyCapsule.deallocate&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=False,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.deallocate" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Deallocates device tensor. Releases the resources for <cite>ttnn.Tensor</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> explicitly.</p>
+<p>Releases the resources for <cite>ttnn.Tensor</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> explicitly.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor.</p></li>
-<li><p><strong>force</strong> (<em>bool</em><em>, </em><em>optional</em>) – force deallocation even if the buffer may have multiple references. Defaults to <cite>True</cite>.</p></li>
+<li><p><strong>tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – The tensor whose resources will be released.</p></li>
+<li><p><strong>force</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to force deallocation, even if the buffer may have multiple references. Defaults to True.</p></li>
 </ul>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span>
-</dt>
-<dd class="field-even">
-<p><cite>None</cite> – deallocates the tensor.</p>
 </dd>
 </dl>
 <div class="admonition-example admonition">
@@ -173,7 +169,7 @@
 <span class="gp">&gt;&gt;&gt; </span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">tensor</span><span class="o">=</span><span class="n">tensor</span><span class="p">,</span> <span class="n">force</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">ttnn</span><span class="o">.</span><span class="n">deallocate</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

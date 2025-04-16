@@ -5,4 +5,4 @@
 
 .. _ttnn.imag:
 
-.. autofastoperation:: ttnn.imag
+.. autodata:: ttnn.imag

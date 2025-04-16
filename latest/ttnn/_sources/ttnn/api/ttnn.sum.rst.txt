@@ -5,4 +5,4 @@
 
 .. _ttnn.sum:
 
-.. autofastoperation:: ttnn.sum
+.. autodata:: ttnn.sum

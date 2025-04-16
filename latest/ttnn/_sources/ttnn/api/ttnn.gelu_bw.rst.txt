@@ -5,4 +5,4 @@
 
 .. _ttnn.gelu_bw:
 
-.. autofastoperation:: ttnn.gelu_bw
+.. autodata:: ttnn.gelu_bw

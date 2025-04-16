@@ -266,6 +266,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
@@ -323,11 +324,12 @@
   <section id="ttnn-softmax">
 <h1>ttnn.softmax<a class="headerlink" href="#ttnn-softmax" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py function">
+<span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.softmax">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">softmax</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.softmax" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">softmax</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.softmax',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.softmax_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.softmax" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p>ttnn.Tensor, dim: int, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -&gt; ttnn.Tensor</p>
 <p>Compute softmax over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p>
 <p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: the input tensor
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>: the dimension along which to compute softmax.</p>
@@ -343,6 +345,13 @@
 </pre></div>
 </div>
 </div>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p>softmax(input_tensor</p>
+</dd>
+</dl>
 </dd>
 </dl>
 

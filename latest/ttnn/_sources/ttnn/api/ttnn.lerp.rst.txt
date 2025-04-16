@@ -5,4 +5,4 @@
 
 .. _ttnn.lerp:
 
-.. autofastoperation:: ttnn.lerp
+.. autodata:: ttnn.lerp

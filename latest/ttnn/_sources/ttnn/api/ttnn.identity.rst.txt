@@ -5,4 +5,4 @@
 
 .. _ttnn.identity:
 
-.. autofastoperation:: ttnn.identity
+.. autodata:: ttnn.identity

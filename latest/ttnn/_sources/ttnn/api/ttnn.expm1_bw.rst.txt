@@ -5,4 +5,4 @@
 
 .. _ttnn.expm1_bw:
 
-.. autofastoperation:: ttnn.expm1_bw
+.. autodata:: ttnn.expm1_bw

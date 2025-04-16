@@ -5,4 +5,4 @@
 
 .. _ttnn.glu:
 
-.. autofastoperation:: ttnn.glu
+.. autodata:: ttnn.glu

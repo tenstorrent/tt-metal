@@ -5,4 +5,4 @@
 
 .. _ttnn.acos_bw:
 
-.. autofastoperation:: ttnn.acos_bw
+.. autodata:: ttnn.acos_bw

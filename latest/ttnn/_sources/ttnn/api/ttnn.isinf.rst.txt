@@ -5,4 +5,4 @@
 
 .. _ttnn.isinf:
 
-.. autofastoperation:: ttnn.isinf
+.. autodata:: ttnn.isinf

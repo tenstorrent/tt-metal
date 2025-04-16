@@ -5,4 +5,4 @@
 
 .. _ttnn.eqz:
 
-.. autofastoperation:: ttnn.eqz
+.. autodata:: ttnn.eqz

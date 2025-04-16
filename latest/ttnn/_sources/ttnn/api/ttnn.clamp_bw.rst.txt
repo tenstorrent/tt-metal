@@ -5,4 +5,4 @@
 
 .. _ttnn.clamp_bw:
 
-.. autofastoperation:: ttnn.clamp_bw
+.. autodata:: ttnn.clamp_bw

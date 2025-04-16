@@ -5,4 +5,4 @@
 
 .. _ttnn.concat:
 
-.. autofastoperation:: ttnn.concat
+.. autodata:: ttnn.concat

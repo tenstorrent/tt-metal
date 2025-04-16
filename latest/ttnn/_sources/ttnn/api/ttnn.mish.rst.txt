@@ -5,4 +5,4 @@
 
 .. _ttnn.mish:
 
-.. autofastoperation:: ttnn.mish
+.. autodata:: ttnn.mish

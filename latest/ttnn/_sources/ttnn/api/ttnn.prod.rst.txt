@@ -5,4 +5,4 @@
 
 .. _ttnn.prod:
 
-.. autofastoperation:: ttnn.prod
+.. autodata:: ttnn.prod

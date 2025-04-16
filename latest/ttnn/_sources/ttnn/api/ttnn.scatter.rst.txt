@@ -5,4 +5,4 @@
 
 .. _ttnn.scatter:
 
-.. autofastoperation:: ttnn.scatter
+.. autodata:: ttnn.scatter

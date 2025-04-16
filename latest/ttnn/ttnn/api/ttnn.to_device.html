@@ -88,6 +88,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
@@ -145,46 +146,27 @@
   <section id="ttnn-to-device">
 <h1>ttnn.to_device<a class="headerlink" href="#ttnn-to-device" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py function">
+<span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.to_device">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">to_device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">*args</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">***kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.to_device" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">to_device</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.to_device',</span> <span class="pre">function=&lt;function</span> <span class="pre">PyCapsule.to_device&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=False,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.to_device" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Overloaded function.</p>
-<ol class="arabic">
-<li><p>to_device(tensor: ttnn._ttnn.tensor.Tensor, device: ttnn._ttnn.device.IDevice, memory_config: Optional[ttnn._ttnn.tensor.MemoryConfig] = None, cq_id: ttnn._ttnn.types.QueueId = QueueId(0)) -&gt; ttnn._ttnn.tensor.Tensor</p></li>
-<li>
-<p>to_device(tensor: ttnn._ttnn.tensor.Tensor, device: ttnn._ttnn.multi_device.MeshDevice, memory_config: Optional[ttnn._ttnn.tensor.MemoryConfig] = None, cq_id: ttnn._ttnn.types.QueueId = QueueId(0)) -&gt; ttnn._ttnn.tensor.Tensor</p>
-<blockquote>
-<div>
-<p>Copy tensor from host to device.</p>
-<dl>
-<dt>Args:</dt>
-<dd>
-<p>tensor (ttnn.Tensor): The tensor to be copied from host to device.
-device (ttnn.Device | ttnn.MeshDevice): The target device where the tensor will be copied.
-memory_config (ttnn.MemoryConfig, optional): The memory configuration to use. Defaults to <cite>None</cite>.
-cq_id (int, optional): The command queue ID to use. Defaults to <cite>0</cite>.</p>
-</dd>
-<dt>Returns:</dt>
-<dd>
-<p>ttnn.Tensor: The device tensor copy.</p>
-</dd>
-<dt>Example:</dt>
-<dd>
-<div class="doctest highlight-default notranslate">
+<p>Copies the <cite>ttnn.Tensor</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> to the <cite>tt_lib.device.Device</cite>.</p>
+<p>The tensor may be placed in DRAM or L1 memory.</p>
+<p>Currently memory_config must be of an Interleaved tensor (not sharded)</p>
+<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code>: the ttnn.Tensor
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">device</span></code>: the ttnn.Device
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: the optional MemoryConfig (DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG). Defaults to DRAM_MEMORY_CONFIG.</p>
+<p>Example:</p>
+<div class="highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">))</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">device_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">tensor</span><span class="o">=</span><span class="n">tensor</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor_on_host</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">)),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor_on_device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">tensor_on_host</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">L1_MEMORY_CONFIG</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">tensor_on_device</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,:</span><span class="mi">3</span><span class="p">])</span>
+<span class="go">Tensor([ 0.800781, -0.455078, -0.585938], dtype=bfloat16 )</span>
 </pre></div>
 </div>
-</dd>
-</dl>
-</div>
-</blockquote>
-</li>
-</ol>
 </dd>
 </dl>
 

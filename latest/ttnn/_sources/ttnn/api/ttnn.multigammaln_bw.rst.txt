@@ -5,4 +5,4 @@
 
 .. _ttnn.multigammaln_bw:
 
-.. autofastoperation:: ttnn.multigammaln_bw
+.. autodata:: ttnn.multigammaln_bw

@@ -5,4 +5,4 @@
 
 .. _ttnn.xlogy:
 
-.. autofastoperation:: ttnn.xlogy
+.. autodata:: ttnn.xlogy

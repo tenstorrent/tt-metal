@@ -5,4 +5,4 @@
 
 .. _ttnn.erfc:
 
-.. autofastoperation:: ttnn.erfc
+.. autodata:: ttnn.erfc

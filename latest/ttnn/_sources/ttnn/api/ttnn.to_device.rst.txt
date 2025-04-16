@@ -5,4 +5,4 @@
 
 .. _ttnn.to_device:
 
-.. autofastoperation:: ttnn.to_device
+.. autodata:: ttnn.to_device

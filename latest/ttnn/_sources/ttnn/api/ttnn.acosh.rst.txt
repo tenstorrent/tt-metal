@@ -5,4 +5,4 @@
 
 .. _ttnn.acosh:
 
-.. autofastoperation:: ttnn.acosh
+.. autodata:: ttnn.acosh

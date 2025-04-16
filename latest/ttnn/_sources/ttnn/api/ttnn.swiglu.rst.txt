@@ -5,4 +5,4 @@
 
 .. _ttnn.swiglu:
 
-.. autofastoperation:: ttnn.swiglu
+.. autodata:: ttnn.swiglu

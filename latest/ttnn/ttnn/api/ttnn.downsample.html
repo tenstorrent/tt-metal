@@ -75,6 +75,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#vision">Vision</a><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="ttnn.upsample.html">ttnn.upsample</a></li>
@@ -136,9 +137,9 @@
   <section id="ttnn-downsample">
 <h1>ttnn.downsample<a class="headerlink" href="#ttnn-downsample" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py function">
+<span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.downsample">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">downsample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">downsample_params</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></span><a class="headerlink" href="#ttnn.downsample" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">downsample</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.downsample',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.pool.downsample_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.downsample" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Downsamples a given multi-channel 2D (spatial) data.

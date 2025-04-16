@@ -5,4 +5,4 @@
 
 .. _ttnn.as_tensor:
 
-.. autofastoperation:: ttnn.as_tensor
+.. autodata:: ttnn.as_tensor

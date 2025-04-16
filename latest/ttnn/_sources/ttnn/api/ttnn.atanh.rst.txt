@@ -5,4 +5,4 @@
 
 .. _ttnn.atanh:
 
-.. autofastoperation:: ttnn.atanh
+.. autodata:: ttnn.atanh

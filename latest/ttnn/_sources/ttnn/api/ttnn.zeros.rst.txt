@@ -5,4 +5,4 @@
 
 .. _ttnn.zeros:
 
-.. autofastoperation:: ttnn.zeros
+.. autodata:: ttnn.zeros

@@ -5,4 +5,4 @@
 
 .. _ttnn.erfinv:
 
-.. autofastoperation:: ttnn.erfinv
+.. autodata:: ttnn.erfinv

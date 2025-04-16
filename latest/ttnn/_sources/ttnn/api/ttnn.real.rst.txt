@@ -5,4 +5,4 @@
 
 .. _ttnn.real:
 
-.. autofastoperation:: ttnn.real
+.. autodata:: ttnn.real

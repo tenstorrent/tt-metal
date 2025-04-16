@@ -5,4 +5,4 @@
 
 .. _ttnn.where:
 
-.. autofastoperation:: ttnn.where
+.. autodata:: ttnn.where

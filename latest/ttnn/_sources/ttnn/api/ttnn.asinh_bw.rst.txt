@@ -5,4 +5,4 @@
 
 .. _ttnn.asinh_bw:
 
-.. autofastoperation:: ttnn.asinh_bw
+.. autodata:: ttnn.asinh_bw

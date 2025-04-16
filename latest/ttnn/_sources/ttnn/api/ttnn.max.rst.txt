@@ -5,4 +5,4 @@
 
 .. _ttnn.max:
 
-.. autofastoperation:: ttnn.max
+.. autodata:: ttnn.max

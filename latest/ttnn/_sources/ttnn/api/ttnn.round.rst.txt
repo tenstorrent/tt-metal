@@ -5,4 +5,4 @@
 
 .. _ttnn.round:
 
-.. autofastoperation:: ttnn.round
+.. autodata:: ttnn.round

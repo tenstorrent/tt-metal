@@ -5,4 +5,4 @@
 
 .. _ttnn.mse_loss:
 
-.. autofastoperation:: ttnn.mse_loss
+.. autodata:: ttnn.mse_loss

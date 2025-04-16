@@ -5,4 +5,4 @@
 
 .. _ttnn.cos_bw:
 
-.. autofastoperation:: ttnn.cos_bw
+.. autodata:: ttnn.cos_bw

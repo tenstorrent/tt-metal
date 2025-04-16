@@ -26,7 +26,7 @@
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="ttnn.max_pool2d" href="ttnn.max_pool2d.html" />
-    <link rel="prev" title="ttnn.embedding" href="ttnn.embedding.html" /> 
+    <link rel="prev" title="ttnn.Conv2dSliceConfig" href="ttnn.Conv2dSliceConfig.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -77,6 +77,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3 current"><a class="reference internal" href="../api.html#pooling">Pooling</a><ul class="current">
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.global_avg_pool2d</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.max_pool2d.html">ttnn.max_pool2d</a></li>
@@ -138,9 +139,9 @@
   <section id="ttnn-global-avg-pool2d">
 <h1>ttnn.global_avg_pool2d<a class="headerlink" href="#ttnn-global-avg-pool2d" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py function">
+<span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.global_avg_pool2d">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">global_avg_pool2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><span class="pre">ttnn.MemoryConfig</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></span><a class="headerlink" href="#ttnn.global_avg_pool2d" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">global_avg_pool2d</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.global_avg_pool2d',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.pool.global_avg_pool2d_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">golden_global_avg_pool2d&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.global_avg_pool2d" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Applies global_avg_pool2d to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> by performing a 2D adaptive average pooling over an input signal composed of several input planes. This operation computes the average of all elements in each channel across the entire spatial dimensions.</p>
@@ -184,7 +185,7 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.embedding.html" class="btn btn-neutral float-left" title="ttnn.embedding" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.Conv2dSliceConfig.html" class="btn btn-neutral float-left" title="ttnn.Conv2dSliceConfig" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="ttnn.max_pool2d.html" class="btn btn-neutral float-right" title="ttnn.max_pool2d" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

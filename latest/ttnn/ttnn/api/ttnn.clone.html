@@ -266,6 +266,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
@@ -323,11 +324,12 @@
   <section id="ttnn-clone">
 <h1>ttnn.clone<a class="headerlink" href="#ttnn-clone" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py function">
+<span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.clone">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">clone</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.clone" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">clone</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.clone',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.data_movement.clone_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.clone" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p>Tensor, dtype: DataType, memory_config: MemoryConfig) -&gt; Tensor</p>
 <p>Clones the input, creating a copy with the specified <cite>memory_config</cite> and converting its data type to <cite>dtype</cite>.
 This operation does not alter the tensor’s layout.
 - ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.
@@ -337,6 +339,13 @@ If the input’s current layout matches the specified layout, padding adjustment
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dtype</span></code>: The target data type of the cloned tensor.
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: The memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG.
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">compute_kernel_config</span></code>: The configuration for the compute kernel.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p>clone(input</p>
+</dd>
+</dl>
 </dd>
 </dl>
 

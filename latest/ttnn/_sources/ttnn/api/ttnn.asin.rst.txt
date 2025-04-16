@@ -5,4 +5,4 @@
 
 .. _ttnn.asin:
 
-.. autofastoperation:: ttnn.asin
+.. autodata:: ttnn.asin

@@ -5,4 +5,4 @@
 
 .. _ttnn.repeat_bw:
 
-.. autofastoperation:: ttnn.repeat_bw
+.. autodata:: ttnn.repeat_bw

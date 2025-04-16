@@ -5,4 +5,4 @@
 
 .. _ttnn.addcdiv_bw:
 
-.. autofastoperation:: ttnn.addcdiv_bw
+.. autodata:: ttnn.addcdiv_bw

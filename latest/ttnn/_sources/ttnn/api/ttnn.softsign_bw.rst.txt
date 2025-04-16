@@ -5,4 +5,4 @@
 
 .. _ttnn.softsign_bw:
 
-.. autofastoperation:: ttnn.softsign_bw
+.. autodata:: ttnn.softsign_bw

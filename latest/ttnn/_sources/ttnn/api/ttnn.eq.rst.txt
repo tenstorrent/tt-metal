@@ -5,4 +5,4 @@
 
 .. _ttnn.eq:
 
-.. autofastoperation:: ttnn.eq
+.. autodata:: ttnn.eq

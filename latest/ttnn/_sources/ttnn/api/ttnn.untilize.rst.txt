@@ -5,4 +5,4 @@
 
 .. _ttnn.untilize:
 
-.. autofastoperation:: ttnn.untilize
+.. autodata:: ttnn.untilize

@@ -5,4 +5,4 @@
 
 .. _ttnn.gtz:
 
-.. autofastoperation:: ttnn.gtz
+.. autodata:: ttnn.gtz

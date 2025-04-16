@@ -5,4 +5,4 @@
 
 .. _ttnn.reglu:
 
-.. autofastoperation:: ttnn.reglu
+.. autodata:: ttnn.reglu

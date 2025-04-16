@@ -5,4 +5,4 @@
 
 .. _ttnn.tanhshrink_bw:
 
-.. autofastoperation:: ttnn.tanhshrink_bw
+.. autodata:: ttnn.tanhshrink_bw

@@ -5,4 +5,4 @@
 
 .. _ttnn.softshrink:
 
-.. autofastoperation:: ttnn.softshrink
+.. autodata:: ttnn.softshrink

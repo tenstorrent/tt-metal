@@ -5,4 +5,4 @@
 
 .. _ttnn.repeat_interleave:
 
-.. autofastoperation:: ttnn.repeat_interleave
+.. autodata:: ttnn.repeat_interleave

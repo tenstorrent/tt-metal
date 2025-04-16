@@ -5,4 +5,4 @@
 
 .. _ttnn.isfinite:
 
-.. autofastoperation:: ttnn.isfinite
+.. autodata:: ttnn.isfinite

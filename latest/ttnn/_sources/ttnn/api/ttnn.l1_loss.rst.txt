@@ -5,4 +5,4 @@
 
 .. _ttnn.l1_loss:
 
-.. autofastoperation:: ttnn.l1_loss
+.. autodata:: ttnn.l1_loss

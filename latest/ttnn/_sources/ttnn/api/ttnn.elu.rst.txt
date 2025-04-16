@@ -5,4 +5,4 @@
 
 .. _ttnn.elu:
 
-.. autofastoperation:: ttnn.elu
+.. autodata:: ttnn.elu

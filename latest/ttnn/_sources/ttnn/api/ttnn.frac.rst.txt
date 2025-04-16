@@ -5,4 +5,4 @@
 
 .. _ttnn.frac:
 
-.. autofastoperation:: ttnn.frac
+.. autodata:: ttnn.frac

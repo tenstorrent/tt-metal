@@ -5,4 +5,4 @@
 
 .. _ttnn.clone:
 
-.. autofastoperation:: ttnn.clone
+.. autodata:: ttnn.clone

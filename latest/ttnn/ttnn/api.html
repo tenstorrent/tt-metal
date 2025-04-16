@@ -453,6 +453,17 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.embedding.html">ttnn.embedding</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#convolution">Convolution</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.conv1d.html">ttnn.conv1d</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.conv2d.html">ttnn.conv2d</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.experimental.conv3d.html">ttnn.experimental.conv3d</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.conv_transpose2d.html">ttnn.conv_transpose2d</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.prepare_conv_weights.html">ttnn.prepare_conv_weights</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.prepare_conv_bias.html">ttnn.prepare_conv_bias</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.Conv2dConfig.html">ttnn.Conv2dConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.Conv2dSliceConfig.html">ttnn.Conv2dSliceConfig</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="#pooling">Pooling</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.global_avg_pool2d.html">ttnn.global_avg_pool2d</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.max_pool2d.html">ttnn.max_pool2d</a></li>
@@ -610,11 +621,11 @@
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.to_device.html#ttnn.to_device" title="ttnn.to_device"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.to_device</span></code></a></p></td>
-<td><p>Overloaded function.</p></td>
+<td><p>Copies the <cite>ttnn.Tensor</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> to the <cite>tt_lib.device.Device</cite>.</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.from_device.html#ttnn.from_device" title="ttnn.from_device"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.from_device</span></code></a></p></td>
-<td><p>Copy tensor from device to host.</p></td>
+<td><p>Copies the <cite>ttnn.Tensor</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> to the host.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.to_layout.html#ttnn.to_layout" title="ttnn.to_layout"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.to_layout</span></code></a></p></td>
@@ -630,11 +641,11 @@
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.deallocate.html#ttnn.deallocate" title="ttnn.deallocate"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.deallocate</span></code></a></p></td>
-<td><p>Deallocates device tensor.</p></td>
+<td><p>Releases the resources for <cite>ttnn.Tensor</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> explicitly.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.reallocate.html#ttnn.reallocate" title="ttnn.reallocate"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.reallocate</span></code></a></p></td>
-<td><p>Deallocates device tensor and returns a reallocated tensor.</p></td>
+<td><p>ttnn._ttnn.tensor.Tensor, memory_config: Optional[ttnn._ttnn.tensor.MemoryConfig] = None) -&gt; ttnn._ttnn.tensor.Tensor</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.to_memory_config.html#ttnn.to_memory_config" title="ttnn.to_memory_config"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.to_memory_config</span></code></a></p></td>
@@ -770,7 +781,7 @@
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.clone.html#ttnn.clone" title="ttnn.clone"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.clone</span></code></a></p></td>
-<td><p>Clones the input, creating a copy with the specified <cite>memory_config</cite> and converting its data type to <cite>dtype</cite>.</p></td>
+<td><p>Tensor, dtype: DataType, memory_config: MemoryConfig) -&gt; Tensor</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.cos.html#ttnn.cos" title="ttnn.cos"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.cos</span></code></a></p></td>
@@ -1022,7 +1033,7 @@
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.remainder.html#ttnn.remainder" title="ttnn.remainder"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.remainder</span></code></a></p></td>
-<td><p>Performs an eltwise-modulus operation.</p></td>
+<td><p>a - a.div(b, rounding_mode=floor) * b.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.round.html#ttnn.round" title="ttnn.round"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.round</span></code></a></p></td>
@@ -1066,7 +1077,7 @@
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.softmax.html#ttnn.softmax" title="ttnn.softmax"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softmax</span></code></a></p></td>
-<td><p>Compute softmax over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p></td>
+<td><p>ttnn.Tensor, dim: int, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -&gt; ttnn.Tensor</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.softplus.html#ttnn.softplus" title="ttnn.softplus"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.softplus</span></code></a></p></td>
@@ -1506,11 +1517,11 @@
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.remainder.html#ttnn.remainder" title="ttnn.remainder"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.remainder</span></code></a></p></td>
-<td><p>Performs an eltwise-modulus operation.</p></td>
+<td><p>a - a.div(b, rounding_mode=floor) * b.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.fmod.html#ttnn.fmod" title="ttnn.fmod"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.fmod</span></code></a></p></td>
-<td><p>Performs an eltwise-fmod operation.</p></td>
+<td><p>a - a.div(b, rounding_mode=trunc) * b.</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.gcd.html#ttnn.gcd" title="ttnn.gcd"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.gcd</span></code></a></p></td>
@@ -1830,7 +1841,7 @@
 <tbody>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.experimental.cumprod.html#ttnn.experimental.cumprod" title="ttnn.experimental.cumprod"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.cumprod</span></code></a></p></td>
-<td><p>cumprod(input_tensor: ttnn.Tensor, dim: int) -&gt; ttnn.Tensor</p></td>
+<td><p>ttnn.Tensor, dim: int) -&gt; ttnn.Tensor</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.max.html#ttnn.max" title="ttnn.max"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.max</span></code></a></p></td>
@@ -1920,7 +1931,7 @@
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.topk.html#ttnn.topk" title="ttnn.topk"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.topk</span></code></a></p></td>
-<td><p>Returns the <code class="docutils literal notranslate"><span class="pre">k</span></code> largest or <code class="docutils literal notranslate"><span class="pre">k</span></code> smallest elements of the given input tensor along a given dimension.</p></td>
+<td><p>ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -&gt; Tuple[ttnn.Tensor, ttnn.Tensor]</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.experimental.sort.html#ttnn.experimental.sort" title="ttnn.experimental.sort"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.sort</span></code></a></p></td>
@@ -1957,11 +1968,11 @@
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.permute.html#ttnn.permute" title="ttnn.permute"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.permute</span></code></a></p></td>
-<td><p>Permutes the dimensions of the input tensor according to the specified permutation.</p></td>
+<td><p>ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -&gt; ttnn.Tensor</p></td>
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.reshape.html#ttnn.reshape" title="ttnn.reshape"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.reshape</span></code></a></p></td>
-<td><p>Note: for a 0 cost view, the following conditions must be met:</p></td>
+<td><p>for a 0 cost view, the following conditions must be met:</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.repeat.html#ttnn.repeat" title="ttnn.repeat"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.repeat</span></code></a></p></td>
@@ -2025,7 +2036,7 @@
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.batch_norm.html#ttnn.batch_norm" title="ttnn.batch_norm"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.batch_norm</span></code></a></p></td>
-<td><p>Applies Spatial Batch Normalization over each channel on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>. Inputs must be must be tilized and interleaved.</p></td>
+<td><p>Applies Spatial Batch Normalization over each channel on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p></td>
 </tr>
 </tbody>
 </table>
@@ -2106,6 +2117,55 @@
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.embedding.html#ttnn.embedding" title="ttnn.embedding"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.embedding</span></code></a></p></td>
 <td><p>Retrieves word embeddings using input_tensor.</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="convolution">
+<h3>Convolution<a class="headerlink" href="#convolution" title="Permalink to this heading"></a>
+</h3>
+<table class="autosummary longtable docutils align-default">
+<tbody>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.conv1d.html#ttnn.conv1d" title="ttnn.conv1d"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.conv1d</span></code></a></p></td>
+<td><p>Applies a 1D convolution over an input signal composed of several input planes.</p></td>
+</tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.conv2d.html#ttnn.conv2d" title="ttnn.conv2d"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.conv2d</span></code></a></p></td>
+<td><p>Applies a 2D convolution over an input signal composed of several input planes.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.experimental.conv3d.html#ttnn.experimental.conv3d" title="ttnn.experimental.conv3d"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.conv3d</span></code></a></p></td>
+<td><p>Applies a 3D convolution over an input signal composed of several input planes.</p></td>
+</tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.conv_transpose2d.html#ttnn.conv_transpose2d" title="ttnn.conv_transpose2d"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.conv_transpose2d</span></code></a></p></td>
+<td><p>Applies a 2D transposed convolution operator over an input image composed of several input planes, sometimes also called “deconvolution”.</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.prepare_conv_weights.html#ttnn.prepare_conv_weights" title="ttnn.prepare_conv_weights"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.prepare_conv_weights</span></code></a></p></td>
+<td><p>TTNN Conv2D applies preprocessing to the weights tensors before performing the convolution operation, to convert the weights into a format suitable for the operation.</p></td>
+</tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.prepare_conv_bias.html#ttnn.prepare_conv_bias" title="ttnn.prepare_conv_bias"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.prepare_conv_bias</span></code></a></p></td>
+<td><p>TTNN Conv2D applies preprocessing to the bias tensors before performing the convolution operation, to convert the bias into a format suitable for the operation.</p></td>
+</tr>
+</tbody>
+</table>
+<table class="autosummary longtable docutils align-default">
+<tbody>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.Conv2dConfig</span></code></a></p></td>
+<td><p>Conv2DConfig is a structure that contains all the Tenstorrent device specific &amp; implementation specific flags for the <a class="reference internal" href="api/ttnn.conv1d.html#ttnn.conv1d" title="ttnn.conv1d"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.conv1d()</span></code></a>, <a class="reference internal" href="api/ttnn.conv2d.html#ttnn.conv2d" title="ttnn.conv2d"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.conv2d()</span></code></a> and <a class="reference internal" href="api/ttnn.conv_transpose2d.html#ttnn.conv_transpose2d" title="ttnn.conv_transpose2d"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.conv_transpose2d()</span></code></a> ops</p></td>
+</tr>
+<tr class="row-even">
+<td><p><a class="reference internal" href="api/ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig" title="ttnn.Conv2dSliceConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.Conv2dSliceConfig</span></code></a></p></td>
+<td>
+<p></p>
+<div class="line-block">
+<div class="line">Conv2dSliceConfig is a structure that is used to configure how the input &amp; output tensors of Conv2D are sliced when they are placed in DRAM. </div>
+</div>
+</td>
 </tr>
 </tbody>
 </table>

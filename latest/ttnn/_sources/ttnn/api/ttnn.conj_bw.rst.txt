@@ -5,4 +5,4 @@
 
 .. _ttnn.conj_bw:
 
-.. autofastoperation:: ttnn.conj_bw
+.. autodata:: ttnn.conj_bw

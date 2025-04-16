@@ -5,4 +5,4 @@
 
 .. _ttnn.add_bw:
 
-.. autofastoperation:: ttnn.add_bw
+.. autodata:: ttnn.add_bw

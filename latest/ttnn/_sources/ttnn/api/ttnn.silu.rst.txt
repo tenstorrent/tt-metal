@@ -5,4 +5,4 @@
 
 .. _ttnn.silu:
 
-.. autofastoperation:: ttnn.silu
+.. autodata:: ttnn.silu

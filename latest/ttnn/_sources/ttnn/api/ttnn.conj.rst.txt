@@ -5,4 +5,4 @@
 
 .. _ttnn.conj:
 
-.. autofastoperation:: ttnn.conj
+.. autodata:: ttnn.conj

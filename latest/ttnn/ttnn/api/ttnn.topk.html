@@ -88,6 +88,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
@@ -145,11 +146,12 @@
   <section id="ttnn-topk">
 <h1>ttnn.topk<a class="headerlink" href="#ttnn-topk" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py function">
+<span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.topk">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">topk</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">largest</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sorted</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><span class="pre">ttnn.MemoryConfig</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">queue_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span> <span class="pre">of</span> <span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.topk" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">topk</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.topk',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.reduction.topk_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_create_golden_function_topk.&lt;locals&gt;.golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.topk" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p>ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -&gt; Tuple[ttnn.Tensor, ttnn.Tensor]</p>
 <p>Returns the <code class="docutils literal notranslate"><span class="pre">k</span></code> largest or <code class="docutils literal notranslate"><span class="pre">k</span></code> smallest elements of the given input tensor along a given dimension.</p>
 <p>If <code class="docutils literal notranslate"><span class="pre">dim</span></code> is not provided, the last dimension of the input tensor is used.</p>
 <p>If <code class="docutils literal notranslate"><span class="pre">largest</span></code> is True, the k largest elements are returned. Otherwise, the k smallest elements are returned.</p>
@@ -186,6 +188,11 @@
 </dt>
 <dd class="field-odd">
 <p><em>List of ttnn.Tensor</em> – the output tensor.</p>
+</dd>
+<dt class="field-even">Type<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<p>topk(input_tensor</p>
 </dd>
 </dl>
 </dd>

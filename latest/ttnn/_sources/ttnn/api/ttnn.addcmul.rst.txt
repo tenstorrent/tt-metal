@@ -5,4 +5,4 @@
 
 .. _ttnn.addcmul:
 
-.. autofastoperation:: ttnn.addcmul
+.. autodata:: ttnn.addcmul

@@ -5,4 +5,4 @@
 
 .. _ttnn.layer_norm:
 
-.. autofastoperation:: ttnn.layer_norm
+.. autodata:: ttnn.layer_norm

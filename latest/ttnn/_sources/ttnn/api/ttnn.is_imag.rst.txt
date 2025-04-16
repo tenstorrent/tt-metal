@@ -5,4 +5,4 @@
 
 .. _ttnn.is_imag:
 
-.. autofastoperation:: ttnn.is_imag
+.. autodata:: ttnn.is_imag

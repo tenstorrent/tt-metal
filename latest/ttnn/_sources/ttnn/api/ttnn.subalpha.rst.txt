@@ -5,4 +5,4 @@
 
 .. _ttnn.subalpha:
 
-.. autofastoperation:: ttnn.subalpha
+.. autodata:: ttnn.subalpha

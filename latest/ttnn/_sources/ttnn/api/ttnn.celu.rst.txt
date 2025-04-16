@@ -5,4 +5,4 @@
 
 .. _ttnn.celu:
 
-.. autofastoperation:: ttnn.celu
+.. autodata:: ttnn.celu

@@ -5,4 +5,4 @@
 
 .. _ttnn.selu:
 
-.. autofastoperation:: ttnn.selu
+.. autodata:: ttnn.selu

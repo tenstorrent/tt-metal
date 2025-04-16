@@ -5,4 +5,4 @@
 
 .. _ttnn.experimental.cumprod:
 
-.. autofastoperation:: ttnn.experimental.cumprod
+.. autodata:: ttnn.experimental.cumprod

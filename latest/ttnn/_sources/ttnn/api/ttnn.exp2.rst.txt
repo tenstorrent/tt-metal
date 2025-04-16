@@ -5,4 +5,4 @@
 
 .. _ttnn.exp2:
 
-.. autofastoperation:: ttnn.exp2
+.. autodata:: ttnn.exp2

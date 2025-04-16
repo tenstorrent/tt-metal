@@ -88,6 +88,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pooling">Pooling</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#vision">Vision</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#kv-cache">KV Cache</a></li>
@@ -145,43 +146,27 @@
   <section id="ttnn-from-device">
 <h1>ttnn.from_device<a class="headerlink" href="#ttnn-from-device" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py function">
+<span class="target" id="id1"></span><dl class="py data">
 <dt class="sig sig-object py" id="ttnn.from_device">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">from_device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">blocking</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cq_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></span><a class="headerlink" href="#ttnn.from_device" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">from_device</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.from_device',</span> <span class="pre">function=&lt;function</span> <span class="pre">PyCapsule.from_device&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=False,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.from_device" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Copy tensor from device to host.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<ul class="simple">
-<li><p><strong>tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the tensor to be copied from device to host.</p></li>
-<li><p><strong>blocking</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether the operation should be blocked until the copy is complete. Defaults to <cite>True</cite>.</p></li>
-</ul>
-</dd>
-<dt class="field-even">Keyword Arguments<span class="colon">:</span>
-</dt>
-<dd class="field-even">
-<p><strong>cq_id</strong> (<em>int</em><em>, </em><em>optional</em>) – the command queue ID to use. Defaults to <cite>0</cite>.</p>
-</dd>
-<dt class="field-odd">Returns<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the host tensor copy.</p>
-</dd>
-</dl>
-<div class="admonition-example admonition">
-<p class="admonition-title">Example</p>
+<p>Copies the <cite>ttnn.Tensor</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code> to the host.</p>
+<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">tensor</span></code>: the ttnn.Tensor</p>
+<dl>
+<dt>Example::</dt>
+<dd>
 <div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">))</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">device_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">tensor</span><span class="o">=</span><span class="n">tensor</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="c1"># non-blocking mode</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">host_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_device</span><span class="p">(</span><span class="n">tensor</span><span class="o">=</span><span class="n">device_tensor</span><span class="p">,</span> <span class="n">blocking</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor_on_device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor_on_host</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_device</span><span class="p">(</span><span class="n">tensor_on_device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">tensor_on_host</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,:</span><span class="mi">3</span><span class="p">])</span>
+<span class="go">Tensor([ 0.365234, 0.130859, 0.75], dtype=bfloat16 )</span>
 </pre></div>
 </div>
-</div>
+</dd>
+</dl>
 </dd>
 </dl>
 

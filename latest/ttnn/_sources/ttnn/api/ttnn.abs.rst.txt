@@ -5,4 +5,4 @@
 
 .. _ttnn.abs:
 
-.. autofastoperation:: ttnn.abs
+.. autodata:: ttnn.abs
