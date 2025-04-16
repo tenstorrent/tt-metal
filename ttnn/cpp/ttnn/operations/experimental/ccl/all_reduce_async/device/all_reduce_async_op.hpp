@@ -36,6 +36,7 @@ struct AllReduceAsync {
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    bool enable_persistent_fabric_mode;
 
     AllReduceAsync(
         std::optional<IDevice*> forward_device,
@@ -47,7 +48,8 @@ struct AllReduceAsync {
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         GlobalSemaphore semaphore,
-        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) :
+        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+        bool enable_persistent_fabric_mode) :
         forward_device(forward_device),
         backward_device(backward_device),
         num_links(num_links),
@@ -57,7 +59,8 @@ struct AllReduceAsync {
         output_mem_config(output_mem_config),
         topology(topology),
         semaphore(semaphore),
-        sub_device_id(sub_device_id) {}
+        sub_device_id(sub_device_id),
+        enable_persistent_fabric_mode(enable_persistent_fabric_mode) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -92,7 +95,8 @@ AllReduceAsync create_all_reduce_async_struct(
     const std::vector<IDevice*>& devices,
     const ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    bool enable_persistent_fabric_mode);
 
 }  // namespace all_reduce_async_detail
 }  // namespace ccl
@@ -112,7 +116,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool enable_persistent_fabric_mode);
 
 namespace operations {
 namespace experimental {
@@ -128,7 +133,8 @@ Tensor all_reduce_async(
     const std::optional<const DataType> dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool enable_persistent_fabric_mode = false);
 
 }  // namespace ccl
 }  // namespace experimental

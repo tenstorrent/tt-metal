@@ -12,6 +12,8 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import 
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows,
 )
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
+    create_and_load_sub_device_manager_with_fabric_interface,
+    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
 
@@ -109,6 +111,7 @@ def run_reduce_scatter_test(
     trace_mode=False,
 ):
     assert num_iters > 0
+    enable_persistent_fabric = True
     if len(mesh_device.get_device_ids()) < num_devices:
         pytest.skip(
             f"Not enough devices on machine to implement test case. Wanted {num_devices} but found {len(mesh_device.get_device_ids())}"
@@ -158,8 +161,11 @@ def run_reduce_scatter_test(
     worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+        mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+    )
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
     # create global semaphore handles
     from_remote_semaphore_handles = [
         create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
@@ -287,6 +293,7 @@ def run_reduce_scatter_test(
         else:
             logger.info(f"output match for tensor {i}")
     mesh_device.reset_sub_device_stall_group()
+    teardown_fabric_interface(mesh_device)
 
     assert not mismatch, f"{i} FAILED: {output}"
 
@@ -339,9 +346,7 @@ def run_reduce_scatter_test(
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("trace_mode", [False])
-@pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 27648, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
-)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 27648}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 def test_line_reduce_scatter_async_post_commit(
     mesh_device,
@@ -408,7 +413,6 @@ def test_line_reduce_scatter_async_post_commit(
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
     mesh_device,
     num_devices,
@@ -446,6 +450,9 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=0,
         use_reduce_scatter_async=True,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
     )
 
 
@@ -475,7 +482,6 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
 @pytest.mark.parametrize("replication_factor", [2])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     mesh_device,
     num_devices,
@@ -513,6 +519,9 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=1,
         use_reduce_scatter_async=True,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
     )
 
 
@@ -596,7 +605,6 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
 @pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("replication_factor", [1])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_post_commit(
     mesh_device,
     num_devices,
@@ -647,4 +655,7 @@ def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_po
         cluster_axis=1,
         trace_mode=trace_mode,
         use_reduce_scatter_async=True,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
     )
