@@ -126,7 +126,17 @@ class FinalLayer(LightweightModule):
         scale = mod[:, :, :, self.hidden_size :]
 
         # Apply layer norm with activation-dependent weights
-        x = ttnn.layer_norm(x, epsilon=1e-6, weight=(1 + scale), bias=shift)
+
+        layernorm_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        x = ttnn.layer_norm(
+            x, epsilon=1e-6, weight=(1 + scale), bias=shift, compute_kernel_config=layernorm_compute_kernel_config
+        )
 
         # Final linear projection
         x = ttnn.linear(

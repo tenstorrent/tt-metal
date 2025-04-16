@@ -44,7 +44,7 @@ def test_modulated_rmsnorm(mesh_device, use_program_cache, reset_seeds, S, D):
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
         dtype=dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -60,8 +60,8 @@ def test_modulated_rmsnorm(mesh_device, use_program_cache, reset_seeds, S, D):
     )
 
     # Run TT implementation
-    tt_output = modulated_rmsnorm(tt_input, tt_scale, high_fidelity=True)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).float()
+    tt_output = modulated_rmsnorm(tt_input, tt_scale)
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2)).float()
 
     # Reference implementation in PyTorch
     def reference_modulated_rmsnorm(x, scale, eps=1e-6):
@@ -168,3 +168,85 @@ def test_residual_tanh_gated_rmsnorm(mesh_device, use_program_cache, reset_seeds
         logger.warning("Residual Tanh Gated RMSNorm Failed!")
 
     assert passing, f"Output does not meet PCC requirement {pcc_required}: {pcc}, MSE: {mse}, MAE: {mae}."
+
+
+@torch.no_grad()
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "S, D",
+    [
+        (44544, 3072),
+    ],
+)
+def test_layernorm(mesh_device, use_program_cache, reset_seeds, S, D):
+    dtype = ttnn.bfloat16
+    mesh_device.enable_async(True)
+
+    # Create random input tensors
+    torch_x = torch.randn(1, 1, S, D)
+    torch_scale = torch.randn(1, 1, 1, D)
+    torch_shift = torch.randn(1, 1, 1, D)
+
+    # Convert to TT tensors
+    tt_x = ttnn.from_torch(
+        torch_x,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    tt_scale = ttnn.from_torch(
+        torch_scale,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    tt_shift = ttnn.from_torch(
+        torch_shift,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    # Run TT implementation
+    tt_output = ttnn.layer_norm(
+        tt_x, epsilon=1e-6, weight=tt_scale, bias=tt_shift, compute_kernel_config=compute_kernel_config
+    )
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2)).float()
+
+    # Run reference implementation
+    reference_output = torch.nn.functional.layer_norm(
+        torch_x, (D,), weight=torch_scale.squeeze(), bias=torch_shift.squeeze()
+    )
+
+    # Compute metrics
+    pcc, mse, mae = compute_metrics(reference_output, tt_output_torch)
+    logger.info(f"PCC: {pcc}, MSE: {mse}, MAE: {mae}")
+    print(comp_allclose(reference_output, tt_output_torch.view(reference_output.shape)))
+
+    # Check if model meets requirements
+    pcc_required = 0.99
+    passing = pcc >= pcc_required
