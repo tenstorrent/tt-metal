@@ -19,11 +19,11 @@ from models.utility_functions import skip_for_grayskull
         "/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db",
     ],
     ids=[
-        "llama3.2-1B",
-        "llama3.2-3B",
-        "llama3.1-8B",
-        "llama3.2-11B",
-        "mistral-7B-v0.3",
+        "ttt-llama3.2-1B",
+        "ttt-llama3.2-3B",
+        "ttt-llama3.1-8B",
+        "ttt-llama3.2-11B",
+        "ttt-mistral-7B-v0.3",
     ],
 )
 def test_ci_dispatch(model_weights):
