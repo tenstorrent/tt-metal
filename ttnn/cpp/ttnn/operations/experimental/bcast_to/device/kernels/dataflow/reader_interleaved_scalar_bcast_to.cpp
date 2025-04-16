@@ -7,23 +7,23 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_n = get_arg_val<uint32_t>(1);
-    uint32_t start_c = get_arg_val<uint32_t>(2);
-    uint32_t start_t = get_arg_val<uint32_t>(3);
-    uint32_t start_th = get_arg_val<uint32_t>(4);
-    uint32_t start_tw = get_arg_val<uint32_t>(5);
-    uint32_t num_tiles = get_arg_val<uint32_t>(6);
-    uint32_t n_stride = get_arg_val<uint32_t>(7);
-    uint32_t c_stride = get_arg_val<uint32_t>(8);
-    uint32_t N = get_arg_val<uint32_t>(9);
-    uint32_t C = get_arg_val<uint32_t>(10);
-    uint32_t Ht = get_arg_val<uint32_t>(11);
-    uint32_t Wt = get_arg_val<uint32_t>(12);
+    uint32_t arg_index = 0;
+    uint32_t src_addr = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_n = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_c = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_t = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_th = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_tw = get_arg_val<uint32_t>(arg_index++);
+    uint32_t num_tiles = get_arg_val<uint32_t>(arg_index++);
+    uint32_t n_stride = get_arg_val<uint32_t>(arg_index++);
+    uint32_t c_stride = get_arg_val<uint32_t>(arg_index++);
+    uint32_t N = get_arg_val<uint32_t>(arg_index++);
+    uint32_t C = get_arg_val<uint32_t>(arg_index++);
+    uint32_t Ht = get_arg_val<uint32_t>(arg_index++);
+    uint32_t Wt = get_arg_val<uint32_t>(arg_index++);
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-
-    constexpr auto cb_id_src = tt::CBIndex::c_0;
+    constexpr auto cb_id_src = get_compile_time_arg_val(1);
     constexpr uint32_t onetile = 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);

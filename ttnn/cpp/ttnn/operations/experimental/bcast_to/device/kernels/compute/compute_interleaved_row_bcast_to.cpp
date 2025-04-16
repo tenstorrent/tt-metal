@@ -9,20 +9,23 @@
 
 namespace NAMESPACE {
 void MAIN {
-    uint32_t start_n = get_arg_val<uint32_t>(0);
-    uint32_t start_c = get_arg_val<uint32_t>(1);
-    uint32_t start_t = get_arg_val<uint32_t>(2);
-    uint32_t start_th = get_arg_val<uint32_t>(3);
-    uint32_t start_tw = get_arg_val<uint32_t>(4);
-    uint32_t num_tiles = get_arg_val<uint32_t>(5);
-    uint32_t n_stride = get_arg_val<uint32_t>(6);
-    uint32_t c_stride = get_arg_val<uint32_t>(7);
-    uint32_t N = get_arg_val<uint32_t>(8);
-    uint32_t C = get_arg_val<uint32_t>(9);
-    uint32_t Ht = get_arg_val<uint32_t>(10);
-    uint32_t Wt = get_arg_val<uint32_t>(11);
+    uint32_t arg_index = 0;
+    uint32_t start_n = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_c = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_t = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_th = get_arg_val<uint32_t>(arg_index++);
+    uint32_t start_tw = get_arg_val<uint32_t>(arg_index++);
+    uint32_t num_tiles = get_arg_val<uint32_t>(arg_index++);
+    uint32_t n_stride = get_arg_val<uint32_t>(arg_index++);
+    uint32_t c_stride = get_arg_val<uint32_t>(arg_index++);
+    uint32_t N = get_arg_val<uint32_t>(arg_index++);
+    uint32_t C = get_arg_val<uint32_t>(arg_index++);
+    uint32_t Ht = get_arg_val<uint32_t>(arg_index++);
+    uint32_t Wt = get_arg_val<uint32_t>(arg_index++);
 
-    unary_bcast_init<BroadcastType::ROW>(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    constexpr auto cb_id_src = get_compile_time_arg_val(0);
+    constexpr auto cb_id_dst = get_compile_time_arg_val(1);
+    unary_bcast_init<BroadcastType::ROW>(cb_id_src, cb_id_dst);
 
     uint32_t HtWt = Ht * Wt;
     // this is the INPUT tile offset
@@ -37,15 +40,15 @@ void MAIN {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw) {
                     cb_wait_front(tt::CBIndex::c_0, 1);
                     tile_regs_acquire();
-                    unary_bcast<BroadcastType::ROW>(tt::CBIndex::c_0, 0, 0);
+                    unary_bcast<BroadcastType::ROW>(cb_id_src, 0, 0);
                     tile_regs_commit();
 
-                    cb_pop_front(tt::CBIndex::c_0, 1);
-                    cb_reserve_back(tt::CBIndex::c_16, 1);
+                    cb_pop_front(cb_id_src, 1);
+                    cb_reserve_back(cb_id_dst, 1);
                     tile_regs_wait();
-                    pack_tile(0, tt::CBIndex::c_16);
+                    pack_tile(0, cb_id_dst);
 
-                    cb_push_back(tt::CBIndex::c_16, 1);
+                    cb_push_back(cb_id_dst, 1);
                     tile_regs_release();
                     ++num_tiles_read;
                 }

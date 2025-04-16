@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,12 +11,7 @@
 #include "ttnn/operations/creation.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace experimental {
-namespace broadcast_to {
-namespace test {
-
+namespace ttnn::operations::experimental::broadcast_to::test {
 struct BroadcastParam {
     uint32_t n = 0;  // input tensor batch
     uint32_t c = 0;  // input tensor channel
@@ -103,8 +98,4 @@ INSTANTIATE_TEST_SUITE_P(
         BroadcastParam{2, 1, 33, 65, {2, 7, 33, 65}}   // odd-plus-32 dimensions
         ));
 
-}  // namespace test
-}  // namespace broadcast_to
-}  // namespace experimental
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental::broadcast_to::test
