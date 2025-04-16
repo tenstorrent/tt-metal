@@ -95,27 +95,27 @@ SortProgramFactory::cached_program_t SortProgramFactory::create(
 
     // Kernels
     const std::vector<uint32_t> reader_compile_time_args = {
-        input_tensor_cb_index, index_tensor_cb_index, static_cast<uint32_t>(input_tensor_is_dram), Ht, Wt};
+        input_tensor_cb_index,
+        index_tensor_output_cb_index,
+        static_cast<uint32_t>(input_tensor_is_dram),
+        static_cast<uint32_t>(index_tensor_is_dram),
+        Ht,
+        Wt};
     const std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/reader.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program, reader_kernel_path, core, tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
 
-    SetRuntimeArgs(program, reader_kernel_id, core, {input_buffer->address()});
+    SetRuntimeArgs(program, reader_kernel_id, core, {input_buffer->address(), index_buffer->address()});
 
     const std::vector<uint32_t> writer_compile_time_args = {
-        value_tensor_cb_index,
-        index_tensor_output_cb_index,
-        static_cast<uint32_t>(value_tensor_is_dram),
-        static_cast<uint32_t>(index_tensor_is_dram),
-        Ht,
-        Wt};
+        value_tensor_cb_index, index_tensor_cb_index, static_cast<uint32_t>(value_tensor_is_dram), Ht, Wt};
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/reduction/sort/device/kernels/dataflow/writer.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program, writer_kernel_path, core, tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
-    SetRuntimeArgs(program, writer_kernel_id, core, {value_buffer->address(), index_buffer->address()});
+    SetRuntimeArgs(program, writer_kernel_id, core, {value_buffer->address()});
 
     const std::vector<uint32_t> compute_compile_time_args = {
         input_tensor_cb_index,
@@ -151,11 +151,11 @@ void SortProgramFactory::override_runtime_arguments(
         auto& reader_runtime_args =
             GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id, core);
         reader_runtime_args[0] = input_tensor_buffer->address();
+        reader_runtime_args[1] = index_tensor_buffer->address();
 
         auto& writer_runtime_args =
             GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id, core);
         writer_runtime_args[0] = value_tensor_buffer->address();
-        writer_runtime_args[1] = index_tensor_buffer->address();
     }
 }
 
