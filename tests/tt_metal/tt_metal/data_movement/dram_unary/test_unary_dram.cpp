@@ -148,8 +148,8 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
 /* ========== Test case for varying transaction numbers and sizes; Test id = 0 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
     // Parameters
-    uint32_t max_transactions = 2;            // Bound for testing different number of transactions
-    uint32_t max_transaction_size_pages = 2;  // Bound for testing different transaction sizes
+    uint32_t max_transactions = 64;            // Bound for testing different number of transactions
+    uint32_t max_transaction_size_pages = 64;  // Bound for testing different transaction sizes
     uint32_t page_size_bytes = 32;            // Page size in bytes (=flit size): 32 bytes for WH, 64 for BH
     if (arch_ == tt::ARCH::BLACKHOLE) {
         page_size_bytes *= 2;
