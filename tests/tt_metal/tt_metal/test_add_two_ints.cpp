@@ -25,8 +25,8 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include "span.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 
 ////////////////////////////////////////////////////////////////////////////
 // Runs the add_two_ints kernel on BRISC to add two ints in L1

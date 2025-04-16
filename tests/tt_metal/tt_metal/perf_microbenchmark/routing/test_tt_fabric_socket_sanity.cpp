@@ -23,6 +23,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -33,10 +34,10 @@
 #include "llrt.hpp"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
 #include "rtoptions.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
@@ -329,7 +330,7 @@ int main(int argc, char** argv) {
         routing_plane_id_t routing_plane;
         CoreCoord gk_phys_core;
         uint32_t routing_table_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+            device_map[test_device_id_l]->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
         uint32_t gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
         uint32_t client_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
         uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_pull_client_interface_t);
@@ -580,7 +581,7 @@ int main(int argc, char** argv) {
         }
 
         // Wait for tx to return non-zero status.
-        while (1) {
+        while (true) {
             auto tx_status = tt::llrt::read_hex_vec_from_core(test_device_id_l, tx_phys_core[0], test_results_addr, 4);
             if ((tx_status[0] & 0xFFFF) != 0) {
                 break;

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
 #include <chrono>
 #include <cstddef>
@@ -30,7 +30,7 @@
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
-#include "program_impl.hpp"
+#include "tt-metalium/program.hpp"
 #include "system_memory_manager.hpp"
 #include "tracy/TracyTTDevice.hpp"
 

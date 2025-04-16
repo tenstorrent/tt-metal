@@ -4,6 +4,7 @@
 import pytest
 from loguru import logger
 import os
+import math
 import ttnn
 import pandas as pd
 from collections import defaultdict
@@ -19,41 +20,275 @@ from tt_metal.tools.profiler.process_model_log import (
 from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
-mapping_op_code_to_name = {
-    "LayerNorm_0": "PreAllGatherLN_0",
-    "LayerNorm_1": "PostAllGatherLN_0",
-    "LayerNorm_2": "PreAllGatherLN_1",
-    "LayerNorm_3": "PostAllGatherLN_1",
-    "AllGatherAsync_0": "AllGatherAsync_LN_0",
-    "AllGatherAsync_1": "AllGatherAsync_SDPA_0",
-    "AllGatherAsync_2": "AllGatherAsync_LN_1",
-    "ShardedToInterleavedDeviceOperation_0": "ShardedToInterleavedDeviceOperation_LN_0",
-    "ShardedToInterleavedDeviceOperation_1": "ShardedToInterleavedDeviceOperation_LN_1",
-    "InterleavedToShardedDeviceOperation_0": "InterleavedToShardedDeviceOperation_LN_0",
-    "InterleavedToShardedDeviceOperation_1": "InterleavedToShardedDeviceOperation_LN_1",
-    "ReshardDeviceOperation_0": "ReshardDeviceOperation_LN_0",
-    "ReshardDeviceOperation_1": "ReshardDeviceOperation_CreateHeads",
-    "ReshardDeviceOperation_2": "ReshardDeviceOperation_LN_1",
-    "ReshardDeviceOperation_3": "ReshardDeviceOperation_BinaryMultSilu",
-    "Matmul_0": "QKV_MM",
-    "Matmul_1": "DO_MM",
-    "Matmul_2": "FF1_MM",
-    "Matmul_3": "FF3_MM",
-    "Matmul_4": "FF2_MM",
-    "AllReduceAsync_0": "AllReduceAsync_QKV",
-    "AllReduceAsync_1": "AllReduceAsync_DO",
-    "AllReduceAsync_2": "AllReduceAsync_FF1",
-    "AllReduceAsync_3": "AllReduceAsync_FF3",
-    "AllReduceAsync_4": "AllReduceAsync_FF2",
-    "NLPCreateHeadsDecodeDeviceOperation_0": "CreateHeads",
-    "RotaryEmbeddingLlamaFusedQK_0": "RotaryEmbeddingLlamaFusedQK",
-    "PagedUpdateCacheDeviceOperation_0": "PagedUpdateCache",
-    "ScaledDotProductAttentionDecode_0": "SDPA",
-    "NLPConcatHeadsDecodeDeviceOperation_0": "ConcatHeads",
-    "BinaryDeviceOperation_0": "Binary_Residual_0",
-    "BinaryDeviceOperation_1": "Binary_Mult_Silu",
-    "BinaryDeviceOperation_2": "Binary_Residual_1",
+DECODE_OP_START_INDEX = 4
+DECODE_OP_END_INDEX = -12
+
+perf_targets = {
+    "RMSAllGather_0": {
+        "op_name": "PreRMS_0",
+        "kernel_duration": 10649.359953703704,
+        "op_to_op": 657.6666666666666,
+        "non-overlapped-dispatch-time": 7260,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "RMSAllGather_1": {
+        "op_name": "PostRMS_0",
+        "kernel_duration": 6327.008101851851,
+        "op_to_op": 634.3333333333334,
+        "non-overlapped-dispatch-time": 6190.6,
+        "kernel_duration_relative_margin": 0.02,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "RMSAllGather_2": {
+        "op_name": "PreRMS_1",
+        "kernel_duration": 10564.168981481482,
+        "op_to_op": 661.4444444444445,
+        "non-overlapped-dispatch-time": 7326,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "RMSAllGather_3": {
+        "op_name": "PostRMS_1",
+        "kernel_duration": 6091.445601851851,
+        "op_to_op": 641.0,
+        "non-overlapped-dispatch-time": 6431.2,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "AllGatherAsync_0": {
+        "op_name": "AllGatherAsync_SDPA_0",
+        "kernel_duration": 11153.511574074075,
+        "op_to_op": 676.4444444444445,
+        "non-overlapped-dispatch-time": 2273.2,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.5,
+    },
+    "AllGatherAsync_1": {
+        "op_name": "AllGatherAsync_Binary_Mult",
+        "kernel_duration": 9631.332175925925,
+        "op_to_op": 796.5555555555555,
+        "non-overlapped-dispatch-time": 4351.1,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "ShardedToInterleavedDeviceOperation_0": {
+        "op_name": "ShardedToInterleavedDeviceOperation_LN_0",
+        "kernel_duration": 4027.444444444445,
+        "op_to_op": 2211.6666666666665,
+        "non-overlapped-dispatch-time": 1919.0,
+        "kernel_duration_relative_margin": 0.03,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.3,
+    },
+    "ShardedToInterleavedDeviceOperation_1": {
+        "op_name": "ShardedToInterleavedDeviceOperation_LN_1",
+        "kernel_duration": 3443.111111111111,
+        "op_to_op": 2212.222222222222,
+        "non-overlapped-dispatch-time": 1910.2,
+        "kernel_duration_relative_margin": 0.03,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.3,
+    },
+    "InterleavedToShardedDeviceOperation_0": {
+        "op_name": "InterleavedToShardedDeviceOperation_LN_0",
+        "kernel_duration": 2509.555555555555,
+        "op_to_op": 631.8888888888889,
+        "non-overlapped-dispatch-time": 10347.3,
+        "kernel_duration_relative_margin": 0.02,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "InterleavedToShardedDeviceOperation_1": {
+        "op_name": "InterleavedToShardedDeviceOperation_LN_1",
+        "kernel_duration": 2077.8888888888887,
+        "op_to_op": 637.7777777777778,
+        "non-overlapped-dispatch-time": 10736.0,
+        "kernel_duration_relative_margin": 0.06,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "ReshardDeviceOperation_0": {
+        "op_name": "ReshardDeviceOperation_LN_0",
+        "kernel_duration": 2003.7777777777776,
+        "op_to_op": 655.2222222222222,
+        "non-overlapped-dispatch-time": 10074.9,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "Matmul_0": {
+        "op_name": "QKV_MM",
+        "kernel_duration": 11233.851851851852,
+        "op_to_op": 610.7777777777778,
+        "non-overlapped-dispatch-time": 6102.0,
+        "kernel_duration_relative_margin": 0.03,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "Matmul_1": {
+        "op_name": "DO_MM",
+        "kernel_duration": 9392.111111111111,
+        "op_to_op": 653.3333333333334,
+        "non-overlapped-dispatch-time": 5641.0,
+        "kernel_duration_relative_margin": 0.03,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "Matmul_2": {
+        "op_name": "FF1_MM",
+        "kernel_duration": 10572.666666666666,
+        "op_to_op": 630.4444444444445,
+        "non-overlapped-dispatch-time": 6109.0,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "Matmul_3": {
+        "op_name": "FF3_MM",
+        "kernel_duration": 10356.037037037036,
+        "op_to_op": 610.6666666666666,
+        "non-overlapped-dispatch-time": 6144.8,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "Matmul_4": {
+        "op_name": "FF2_MM",
+        "kernel_duration": 20528.0,
+        "op_to_op": 658.7777777777778,
+        "non-overlapped-dispatch-time": 6029.3,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "AllReduceAsync_0": {
+        "op_name": "AllReduceAsync_QKV",
+        "kernel_duration": 11112.310185185184,
+        "op_to_op": 609.0,
+        "non-overlapped-dispatch-time": 7349.4,
+        "kernel_duration_relative_margin": 0.03,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "AllReduceAsync_1": {
+        "op_name": "AllReduceAsync_DO",
+        "kernel_duration": 19827.862268518522,
+        "op_to_op": 626.5555555555555,
+        "non-overlapped-dispatch-time": 8510.2,
+        "kernel_duration_relative_margin": 0.03,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3,
+    },
+    "AllReduceAsync_2": {
+        "op_name": "AllReduceAsync_FF2",
+        "kernel_duration": 20396.775462962964,
+        "op_to_op": 637.1111111111111,
+        "non-overlapped-dispatch-time": 6475.9,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "LlamaReduceScatterDeviceOperation_0": {
+        "op_name": "ReduceScatter_FF1",
+        "kernel_duration": 9231.877314814816,
+        "op_to_op": 708.1111111111111,
+        "non-overlapped-dispatch-time": 8058.9,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3,
+    },
+    "LlamaReduceScatterDeviceOperation_1": {
+        "op_name": "ReduceScatter_FF3",
+        "kernel_duration": 8987.451388888889,
+        "op_to_op": 655.1111111111111,
+        "non-overlapped-dispatch-time": 7359.9,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.3,
+    },
+    "NLPCreateHeadsDecodeDeviceOperation_0": {
+        "op_name": "CreateHeads",
+        "kernel_duration": 8205.185185185184,
+        "op_to_op": 761.1111111111111,
+        "non-overlapped-dispatch-time": 8156.7,
+        "kernel_duration_relative_margin": 0.03,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "RotaryEmbeddingLlamaFusedQK_0": {
+        "op_name": "RotaryEmbeddingLlamaFusedQK",
+        "kernel_duration": 5030.0370370370365,
+        "op_to_op": 540.7777777777778,
+        "non-overlapped-dispatch-time": 2844.3,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "PagedUpdateCacheDeviceOperation_0": {
+        "op_name": "PagedUpdateCache",
+        "kernel_duration": 6939.111111111112,
+        "op_to_op": 773.8888888888889,
+        "non-overlapped-dispatch-time": 4670.5,
+        "kernel_duration_relative_margin": 0.06,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "ScaledDotProductAttentionDecode_0": {
+        "op_name": "SDPA",
+        "kernel_duration": 14709.481481481482,
+        "op_to_op": 585.5555555555555,
+        "non-overlapped-dispatch-time": 9741.5,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.3,
+    },
+    "NLPConcatHeadsDecodeDeviceOperation_0": {
+        "op_name": "ConcatHeads",
+        "kernel_duration": 6635.222222222223,
+        "op_to_op": 620.5555555555555,
+        "non-overlapped-dispatch-time": 3463.5,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "BinaryDeviceOperation_0": {
+        "op_name": "Binary_Residual_0",
+        "kernel_duration": 2405.0,
+        "op_to_op": 653.6666666666666,
+        "non-overlapped-dispatch-time": 5907.6,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "BinaryDeviceOperation_1": {
+        "op_name": "Binary_Mult_Silu",
+        "kernel_duration": 4106.222222222222,
+        "op_to_op": 661.0,
+        "non-overlapped-dispatch-time": 6111.2,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.1,
+    },
+    "BinaryDeviceOperation_2": {
+        "op_name": "Binary_Residual_1",
+        "kernel_duration": 2423.222222222222,
+        "op_to_op": 647.7777777777778,
+        "non-overlapped-dispatch-time": 6751.9,
+        "kernel_duration_relative_margin": 0.01,
+        "op_to_op_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.1,
+    },
 }
+
+DECODER_OP_START_IDX = 4
+DECODER_OP_END_IDX = -11
 
 
 @pytest.mark.parametrize(
@@ -68,7 +303,7 @@ mapping_op_code_to_name = {
             1024,  # max_seq_len
             32,  # batch_size
             1,  # max_generated_tokens
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
@@ -93,7 +328,9 @@ mapping_op_code_to_name = {
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}], indirect=True
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872, "worker_l1_size": 1344544}],
+    indirect=True,
 )
 def test_llama_demo(
     weights,
@@ -199,10 +436,21 @@ def merge_device_rows(df):
         if not blocks:
             break
 
-        if "AllGather" in op_name or "ReduceScatter" in op_name:
-            # For collective ops, take the row with minimum duration
-            min_duration_block = min(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
-            merged_blocks.append(min_duration_block[1])
+        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" in op_name:
+            # For collective ops, take the average duration over all rows within a block
+            device_kernel_durations = [
+                d["DEVICE KERNEL DURATION [ns]"]
+                for _, d in blocks
+                if "DEVICE KERNEL DURATION [ns]" in d and not math.isnan(d["DEVICE KERNEL DURATION [ns]"])
+            ]
+
+            average_duration = (
+                sum(device_kernel_durations) / len(device_kernel_durations) if device_kernel_durations else float("nan")
+            )
+            # Use the first block's data but update its duration with the average
+            base_block = blocks[0][1].copy()
+            base_block["DEVICE KERNEL DURATION [ns]"] = average_duration
+            merged_blocks.append(base_block)
         else:
             # For non-collective ops, take the row with maximum duration
             max_duration_block = max(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
@@ -216,6 +464,8 @@ def merge_device_rows(df):
 def build_duration_dict(raw_dict, column_name):
     op_code_dict = {}
     for entry in raw_dict:
+        if column_name not in entry:
+            print(f"Warning: {entry} does not have column {column_name}")
         op_code = entry["OP CODE"]
         duration = entry[column_name]
         if op_code not in op_code_dict:
@@ -229,7 +479,10 @@ def build_duration_per_instance_dict(input_dict, num_layers):
     for op_code in input_dict:
         num_ops_with_op_code = len(input_dict[op_code])
         num_instances = num_ops_with_op_code // num_layers
-        assert num_ops_with_op_code % num_layers == 0
+        if num_ops_with_op_code % num_layers != 0:
+            print(f"Warning: {op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers")
+            print_dict(input_dict, "input_dict")
+            assert num_ops_with_op_code % num_layers == 0
         for iteration_id in range(num_layers):
             for instance_id in range(num_instances):
                 op_code_with_id = f"{op_code}_{instance_id}"
@@ -248,29 +501,31 @@ def average_per_instance_dict(input_dict):
     return averaged_dict
 
 
-@pytest.mark.parametrize(
-    "abs_tolerance_ns",
-    (2000,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_all_reduce",
-    (3000,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_all_gather",
-    (1500,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_sdpa",
-    (3000,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_op_to_op",
-    (800,),
-)
+def min_per_instance_dict(input_dict):
+    min_dict = {}
+    for op_code_with_id in input_dict:
+        min_dict[op_code_with_id] = min(input_dict[op_code_with_id])
+    return min_dict
+
+
+def max_per_instance_dict(input_dict):
+    max_dict = {}
+    for op_code_with_id in input_dict:
+        max_dict[op_code_with_id] = max(input_dict[op_code_with_id])
+    return max_dict
+
+
+def print_dict(input_dict, dict_name):
+    # print dict as a readable python dict
+    print(f"\n{dict_name} = {{")
+    for op_code_with_id in input_dict:
+        print(f'"{op_code_with_id}": {input_dict[op_code_with_id]},')
+    print("}")
+
+
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG TT_METAL_WORKER_RINGBUFFER_SIZE=122880 TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
+# Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
 # Copy the printed kernel_duration_per_instance_averaged_dict and dispatch_duration_per_instance_averaged_dict dictionaries
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
@@ -279,17 +534,12 @@ def average_per_instance_dict(input_dict):
 # Run at least once again to verify the new expected values are correct and margins hold
 def test_llama_TG_perf_device(
     reset_seeds,
-    abs_tolerance_ns,
-    abs_tolerance_ns_all_reduce,
-    abs_tolerance_ns_all_gather,
-    abs_tolerance_ns_sdpa,
-    abs_tolerance_ns_op_to_op,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = "tg-llama-decoder"
+    step_name = "tg-llama-demo-device-perf-default"
     batch_size = 32
-    subdir = "tg-llama-decoder"
+    subdir = "tg-llama-demo-device-perf-default"
     num_iterations = 1
     num_layers = 10
 
@@ -310,7 +560,7 @@ def test_llama_TG_perf_device(
     df_model = df[int(len(df) / 3 * 2) :]
 
     # Excluding model embeddings and lmhead+sampling ops
-    df_layers = df_model[4:-12]
+    df_layers = df_model[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
     df_first_layer = df_layers[: int(len(df_layers) / num_layers)]
     df_mid_layers = df_layers[int(len(df_layers) / num_layers) :]
@@ -333,123 +583,121 @@ def test_llama_TG_perf_device(
     kernel_duration_per_instance_averaged_dict = average_per_instance_dict(kernel_duration_per_instance_dict)
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
 
-    print(kernel_duration_per_instance_averaged_dict)
-    print(dispatch_duration_per_instance_averaged_dict)
+    kernel_duration_per_instance_min_dict = min_per_instance_dict(kernel_duration_per_instance_dict)
+    dispatch_duration_per_instance_min_dict = min_per_instance_dict(dispatch_duration_per_instance_dict)
 
-    expected_kernel_times_dict = {
-        "LayerNorm_0": 6954.111111111111,
-        "LayerNorm_1": 6530.777777777777,
-        "LayerNorm_2": 6752.333333333333,
-        "LayerNorm_3": 6543.111111111111,
-        "AllGatherAsync_0": 4205.888888888889,
-        "AllGatherAsync_1": 9638.666666666666,
-        "AllGatherAsync_2": 4095.5555555555557,
-        "ShardedToInterleavedDeviceOperation_0": 3947.222222222222,
-        "ShardedToInterleavedDeviceOperation_1": 3388.5555555555557,
-        "InterleavedToShardedDeviceOperation_0": 2546.5555555555557,
-        "InterleavedToShardedDeviceOperation_1": 2036.111111111111,
-        "Matmul_0": 10696.555555555555,
-        "Matmul_1": 8584.111111111111,
-        "Matmul_2": 10554.555555555555,
-        "Matmul_3": 12118.888888888889,
-        "Matmul_4": 16474.222222222223,
-        "AllReduceAsync_0": 15395.555555555555,
-        "AllReduceAsync_1": 21078.333333333332,
-        "AllReduceAsync_2": 20948.777777777777,
-        "AllReduceAsync_3": 21195.444444444445,
-        "AllReduceAsync_4": 21145.777777777777,
-        "NLPCreateHeadsDecodeDeviceOperation_0": 8568.222222222223,
-        "RotaryEmbeddingLlamaFusedQK_0": 5023.888888888889,
-        "PagedUpdateCacheDeviceOperation_0": 5606.444444444444,
-        "ScaledDotProductAttentionDecode_0": 20472.11111111111,
-        "NLPConcatHeadsDecodeDeviceOperation_0": 6665.0,
-        "ReshardDeviceOperation_0": 1752.7777777777778,
-        "BinaryDeviceOperation_0": 2408.8888888888887,
-        "BinaryDeviceOperation_1": 11838.444444444445,
-        "BinaryDeviceOperation_2": 2435.5555555555557,
-    }
+    kernel_duration_per_instance_max_dict = max_per_instance_dict(kernel_duration_per_instance_dict)
+    dispatch_duration_per_instance_max_dict = max_per_instance_dict(dispatch_duration_per_instance_dict)
 
-    expected_dispatch_times_dict = {
-        "LayerNorm_0": 657.6666666666666,
-        "LayerNorm_1": 634.3333333333334,
-        "LayerNorm_2": 661.4444444444445,
-        "LayerNorm_3": 641.0,
-        "AllGatherAsync_0": 2417.5555555555557,
-        "AllGatherAsync_1": 676.4444444444445,
-        "AllGatherAsync_2": 2403.4444444444443,
-        "ShardedToInterleavedDeviceOperation_0": 2211.6666666666665,
-        "ShardedToInterleavedDeviceOperation_1": 2212.222222222222,
-        "InterleavedToShardedDeviceOperation_0": 631.8888888888889,
-        "InterleavedToShardedDeviceOperation_1": 637.7777777777778,
-        "Matmul_0": 610.7777777777778,
-        "Matmul_1": 653.3333333333334,
-        "Matmul_2": 630.4444444444445,
-        "Matmul_3": 737.5555555555555,
-        "Matmul_4": 658.7777777777778,
-        "AllReduceAsync_0": 609.0,
-        "AllReduceAsync_1": 626.5555555555555,
-        "AllReduceAsync_2": 641.2222222222222,
-        "AllReduceAsync_3": 629.7777777777778,
-        "AllReduceAsync_4": 637.1111111111111,
-        "NLPCreateHeadsDecodeDeviceOperation_0": 761.1111111111111,
-        "RotaryEmbeddingLlamaFusedQK_0": 540.7777777777778,
-        "PagedUpdateCacheDeviceOperation_0": 773.8888888888889,
-        "ScaledDotProductAttentionDecode_0": 585.5555555555555,
-        "NLPConcatHeadsDecodeDeviceOperation_0": 620.5555555555555,
-        "ReshardDeviceOperation_0": 655.2222222222222,
-        "BinaryDeviceOperation_0": 653.6666666666666,
-        "BinaryDeviceOperation_1": 717.4444444444445,
-        "BinaryDeviceOperation_2": 647.7777777777778,
-    }
+    if len(kernel_duration_per_instance_averaged_dict) != len(perf_targets):
+        print(f"perf_targets: {perf_targets}")
+
+    print_dict(kernel_duration_per_instance_averaged_dict, "kernel_duration_per_instance_averaged_dict")
+    print_dict(dispatch_duration_per_instance_averaged_dict, "dispatch_duration_per_instance_averaged_dict")
 
     assert len(kernel_duration_per_instance_averaged_dict) == len(
-        expected_kernel_times_dict
-    ), f"Expected {len(expected_kernel_times_dict)} operations, got {len(kernel_duration_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
+        perf_targets
+    ), f"Expected {len(perf_targets)} operations, got {len(kernel_duration_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
 
     passing = True
     for op_code_with_id, avg_kernel_duration in kernel_duration_per_instance_averaged_dict.items():
-        if op_code_with_id in expected_kernel_times_dict:
-            expected_time = expected_kernel_times_dict[op_code_with_id]
-            op_name = mapping_op_code_to_name[op_code_with_id]
+        if op_code_with_id in perf_targets:
+            op_name = perf_targets[op_code_with_id]["op_name"]
             avg_dispatch_duration = dispatch_duration_per_instance_averaged_dict[op_code_with_id]
+            # average
             benchmark_data.add_measurement(profiler, 0, step_name, op_name, avg_kernel_duration)
             benchmark_data.add_measurement(profiler, 0, step_name, op_name + "_op_to_op", avg_dispatch_duration)
 
+            # min
+            benchmark_data.add_measurement(
+                profiler, 0, step_name, op_name + "_min", kernel_duration_per_instance_min_dict[op_code_with_id]
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "_op_to_op_min",
+                dispatch_duration_per_instance_min_dict[op_code_with_id],
+            )
+
+            # max
+            benchmark_data.add_measurement(
+                profiler, 0, step_name, op_name + "_max", kernel_duration_per_instance_max_dict[op_code_with_id]
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "_op_to_op_max",
+                dispatch_duration_per_instance_max_dict[op_code_with_id],
+            )
+
             # Verify kernel duration is within tolerance
-            if "AllReduceAsync" in op_code_with_id:
-                tolerance = abs_tolerance_ns_all_reduce
-            elif "AllGatherAsync" in op_code_with_id:
-                tolerance = abs_tolerance_ns_all_gather
-            elif "ScaledDotProductAttentionDecode" in op_code_with_id:
-                tolerance = abs_tolerance_ns_sdpa
-            else:
-                tolerance = abs_tolerance_ns
-            if avg_kernel_duration > expected_time + tolerance:
+            upper_limit = (
+                perf_targets[op_code_with_id]["kernel_duration"]
+                + perf_targets[op_code_with_id]["kernel_duration_relative_margin"]
+                * perf_targets[op_code_with_id]["kernel_duration"]
+            )
+            lower_limit = (
+                perf_targets[op_code_with_id]["kernel_duration"]
+                - perf_targets[op_code_with_id]["kernel_duration_relative_margin"]
+                * perf_targets[op_code_with_id]["kernel_duration"]
+            )
+            if avg_kernel_duration > upper_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id} kernel: {avg_kernel_duration} ns larger than expected {expected_time} ns by {abs(avg_kernel_duration - expected_time)} ns (tolerance {tolerance} ns)"
+                    f"{op_code_with_id} kernel: {avg_kernel_duration} ns is larger than target "
+                    f"({perf_targets[op_code_with_id]['kernel_duration']}) ns, difference: "
+                    f"{abs(avg_kernel_duration - upper_limit)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']} ns, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['kernel_duration'] - avg_kernel_duration) / perf_targets[op_code_with_id]['kernel_duration']}"
                 )
-            elif avg_kernel_duration < expected_time - tolerance:
+            elif avg_kernel_duration < lower_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id} kernel: {avg_kernel_duration} ns smaller than expected {expected_time} ns by {abs(expected_time - avg_kernel_duration)} ns (tolerance {tolerance} ns)"
+                    f"{op_code_with_id} kernel: {avg_kernel_duration} ns is smaller than target "
+                    f"({perf_targets[op_code_with_id]['kernel_duration']}) ns, difference: "
+                    f"{abs(lower_limit - avg_kernel_duration)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']} ns, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['kernel_duration'] - avg_kernel_duration) / perf_targets[op_code_with_id]['kernel_duration']}"
                 )
             # Verify op_to_op latency is within tolerance
-            expected_time = expected_dispatch_times_dict[op_code_with_id]
-            if avg_dispatch_duration > expected_time + abs_tolerance_ns_op_to_op:
+            upper_limit = (
+                perf_targets[op_code_with_id]["op_to_op"]
+                + perf_targets[op_code_with_id]["op_to_op_duration_relative_margin"]
+                * perf_targets[op_code_with_id]["op_to_op"]
+            )
+            lower_limit = (
+                perf_targets[op_code_with_id]["op_to_op"]
+                - perf_targets[op_code_with_id]["op_to_op_duration_relative_margin"]
+                * perf_targets[op_code_with_id]["op_to_op"]
+            )
+            if avg_dispatch_duration > upper_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id} dispatch: {avg_dispatch_duration} ns larger than expected {expected_time} ns by {abs(avg_dispatch_duration - expected_time)} ns (tolerance {abs_tolerance_ns_op_to_op} ns)"
+                    f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is larger than target "
+                    f"({perf_targets[op_code_with_id]['op_to_op']}) ns, difference: "
+                    f"{abs(avg_dispatch_duration - upper_limit)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']} ns, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['op_to_op'] - avg_dispatch_duration) / perf_targets[op_code_with_id]['op_to_op']}"
                 )
-            elif avg_dispatch_duration < expected_time - abs_tolerance_ns_op_to_op:
+            elif avg_dispatch_duration < lower_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id} dispatch: {avg_dispatch_duration} ns smaller than expected {expected_time} ns by {abs(expected_time - avg_dispatch_duration)} ns (tolerance {abs_tolerance_ns_op_to_op} ns)"
+                    f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is smaller than target "
+                    f"({perf_targets[op_code_with_id]['op_to_op']}) ns, difference: "
+                    f"{abs(lower_limit - avg_dispatch_duration)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']} ns, "
+                    f"relative margin to pass would be: "
+                    f"{abs(perf_targets[op_code_with_id]['op_to_op'] - avg_dispatch_duration) / perf_targets[op_code_with_id]['op_to_op']}"
                 )
 
         else:
             passing = False
-            logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
+            logger.info(f"Warning: {op_code_with_id} not found in perf_targets")
 
     # Calculate e2e performance
     e2e_estimate_80l = 0
@@ -465,36 +713,22 @@ def test_llama_TG_perf_device(
 
     benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
     # Estimated T/s/u is 1000000 / (80L-duration + ~1240 lmhead+sampling+embeddings + ~300 python-overhead
-    benchmark_data.add_measurement(profiler, 0, step_name, "tsu_estimate", 1000000 / (e2e_estimate_80l + 1240 + 300))
+    benchmark_data.add_measurement(
+        profiler, 0, step_name, "tsu_estimate", 1000000 / (e2e_estimate_80l / 1000 + 1240 + 300)
+    )
 
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg-llama-decoder",
-        ml_model_name="llama70b-tg-decoder",
+        run_type=f"tg-llama-demo-device-perf-default",
+        ml_model_name="tg-llama",
     )
 
     assert passing
 
 
-@pytest.mark.parametrize(
-    "abs_tolerance_ns",
-    (1500,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_all_reduce",
-    (1500,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_all_gather",
-    (1500,),
-)
-@pytest.mark.parametrize(
-    "abs_tolerance_ns_sdpa",
-    (2000,),
-)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG TT_METAL_WORKER_RINGBUFFER_SIZE=122880 TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
+# Run FAKE_DEVICE=TG TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
 # Copy the printed dispatch_duration_per_instance_averaged_dict dictionary
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
@@ -502,13 +736,13 @@ def test_llama_TG_perf_device(
 # If the op list changed (new ops, less ops, fused ops), and not done for the above test, then update mapping_op_code_to_name and give the new ops meaningful names
 # Run at least once again to verify the new expected values are correct and margins hold
 def test_llama_TG_perf_device_non_overlapped_dispatch(
-    reset_seeds, abs_tolerance_ns, abs_tolerance_ns_all_reduce, abs_tolerance_ns_all_gather, abs_tolerance_ns_sdpa
+    reset_seeds,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = "tg-llama-decoder"
+    step_name = "tg-llama-demo-device-perf-non-overlapped-dispatch"
     batch_size = 32
-    subdir = "tg-llama-decoder"
+    subdir = "tg-llama-demo-device-perf-non-overlapped-dispatch"
     num_iterations = 1
     num_layers = 10
 
@@ -527,7 +761,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     df = merge_device_rows(df)
     # Exclude compilaton and capture trace runs
     df_model = df[int(len(df) / 3 * 2) :]
-    df_layers = df_model[4:-12]
+    df_layers = df_model[DECODE_OP_START_INDEX:DECODE_OP_END_INDEX]
     all_layers_raw_dict = df_layers[["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]"]].to_dict(
         orient="records"
     )
@@ -540,69 +774,62 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     # Average over all iterations of each op instance
     dispatch_duration_per_instance_averaged_dict = average_per_instance_dict(dispatch_duration_per_instance_dict)
+    dispatch_duration_per_instance_min_dict = min_per_instance_dict(dispatch_duration_per_instance_dict)
+    dispatch_duration_per_instance_max_dict = max_per_instance_dict(dispatch_duration_per_instance_dict)
 
-    print(dispatch_duration_per_instance_averaged_dict)
-
-    expected_non_overlapped_dispatch_times_dict = {
-        "LayerNorm_0": 6493.1,
-        "LayerNorm_1": 6190.6,
-        "LayerNorm_2": 6376.6,
-        "LayerNorm_3": 6431.2,
-        "AllGatherAsync_0": 2273.2,
-        "AllGatherAsync_1": 2983.2,
-        "AllGatherAsync_2": 2272.1,
-        "ShardedToInterleavedDeviceOperation_0": 1919.0,
-        "ShardedToInterleavedDeviceOperation_1": 1910.2,
-        "InterleavedToShardedDeviceOperation_0": 10347.3,
-        "InterleavedToShardedDeviceOperation_1": 10736.0,
-        "Matmul_0": 6102.0,
-        "Matmul_1": 5641.0,
-        "Matmul_2": 6109.0,
-        "Matmul_3": 6144.8,
-        "Matmul_4": 6029.3,
-        "AllReduceAsync_0": 7349.4,
-        "AllReduceAsync_1": 6484.7,
-        "AllReduceAsync_2": 11900.0,
-        "AllReduceAsync_3": 11874.1,
-        "AllReduceAsync_4": 6475.9,
-        "NLPCreateHeadsDecodeDeviceOperation_0": 8156.7,
-        "RotaryEmbeddingLlamaFusedQK_0": 2844.3,
-        "PagedUpdateCacheDeviceOperation_0": 4670.5,
-        "ScaledDotProductAttentionDecode_0": 9741.5,
-        "NLPConcatHeadsDecodeDeviceOperation_0": 3463.5,
-        "ReshardDeviceOperation_0": 10074.9,
-        "BinaryDeviceOperation_0": 5907.6,
-        "BinaryDeviceOperation_1": 6111.2,
-        "BinaryDeviceOperation_2": 6751.9,
-    }
+    print(f"dispatch_duration_per_instance_averaged_dict: {dispatch_duration_per_instance_averaged_dict}")
 
     assert len(dispatch_duration_per_instance_averaged_dict) == len(
-        expected_non_overlapped_dispatch_times_dict
-    ), f"Expected {len(expected_non_overlapped_dispatch_times_dict)} operations, got {len(dispatch_duration_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
+        perf_targets
+    ), f"Expected {len(perf_targets)} operations, got {len(dispatch_duration_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
 
     passing = True
     for op_code_with_id, avg_dispatch_duration in dispatch_duration_per_instance_averaged_dict.items():
-        if op_code_with_id in expected_non_overlapped_dispatch_times_dict:
-            expected_time = expected_non_overlapped_dispatch_times_dict[op_code_with_id]
-            op_name = mapping_op_code_to_name[op_code_with_id]
+        if op_code_with_id in perf_targets:
+            expected_time = perf_targets[op_code_with_id]["non-overlapped-dispatch-time"]
+            op_name = perf_targets[op_code_with_id]["op_name"]
+
             benchmark_data.add_measurement(profiler, 0, step_name, op_name + "_dispatch", avg_dispatch_duration)
-            if "AllReduceAsync" in op_code_with_id:
-                tolerance = abs_tolerance_ns_all_reduce
-            elif "AllGatherAsync" in op_code_with_id:
-                tolerance = abs_tolerance_ns_all_gather
-            elif "ScaledDotProductAttentionDecode" in op_code_with_id:
-                tolerance = abs_tolerance_ns_sdpa
-            else:
-                tolerance = abs_tolerance_ns
-            if avg_dispatch_duration > expected_time + tolerance:
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "_dispatch_min",
+                dispatch_duration_per_instance_min_dict[op_code_with_id],
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                step_name,
+                op_name + "_dispatch_max",
+                dispatch_duration_per_instance_max_dict[op_code_with_id],
+            )
+
+            upper_limit = (
+                expected_time + perf_targets[op_code_with_id]["dispatch_duration_relative_margin"] * expected_time
+            )
+            lower_limit = (
+                expected_time - perf_targets[op_code_with_id]["dispatch_duration_relative_margin"] * expected_time
+            )
+            if avg_dispatch_duration > upper_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id}: {avg_dispatch_duration} ns larger than expected {expected_time} ns by {abs(avg_dispatch_duration - expected_time)} ns (tolerance {tolerance} ns)"
+                    f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is larger than target "
+                    f"({expected_time}) ns, difference: "
+                    f"{abs(avg_dispatch_duration - upper_limit)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']} ns, "
+                    f"relative margin to pass would be: "
+                    f"{abs(expected_time - avg_dispatch_duration) / expected_time}"
                 )
-            elif avg_dispatch_duration < expected_time - tolerance:
+            elif avg_dispatch_duration < lower_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id}: {avg_dispatch_duration} ns smaller than expected {expected_time} ns by {abs(expected_time - avg_dispatch_duration)} ns (tolerance {tolerance} ns)"
+                    f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is smaller than target "
+                    f"({expected_time}) ns, difference: "
+                    f"{abs(lower_limit - avg_dispatch_duration)} ns, margin: "
+                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']} ns, "
+                    f"relative margin to pass would be: "
+                    f"{abs(expected_time - avg_dispatch_duration) / expected_time}"
                 )
         else:
             passing = False
@@ -610,8 +837,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg-llama-decoder",
-        ml_model_name="llama70b-tg-decoder",
+        run_type=f"tg-llama-demo-device-perf-non-overlapped-dispatch",
+        ml_model_name="tg-llama",
     )
 
     assert passing

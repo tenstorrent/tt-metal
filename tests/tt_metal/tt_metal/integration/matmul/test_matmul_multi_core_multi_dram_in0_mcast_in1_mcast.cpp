@@ -36,8 +36,8 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include "matmul_test_utils.hpp"
-#include <tt-metalium/program_impl.hpp>
-#include "span.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"

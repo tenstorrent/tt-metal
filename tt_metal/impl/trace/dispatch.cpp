@@ -15,12 +15,11 @@
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "launch_message_ring_buffer_state.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "trace_buffer.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "worker_config_buffer.hpp"
 

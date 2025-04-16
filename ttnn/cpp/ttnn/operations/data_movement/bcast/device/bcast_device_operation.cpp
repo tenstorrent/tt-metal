@@ -193,7 +193,7 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(
     }
 }
 
-const operation::Hash EltwiseBinaryBroadcast::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+operation::Hash EltwiseBinaryBroadcast::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
     bool bcast_scalar =
         (input_tensors.at(1).get_padded_shape()[-2] * input_tensors.at(1).get_padded_shape()[-1] == 1) &&

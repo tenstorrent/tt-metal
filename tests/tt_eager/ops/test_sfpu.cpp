@@ -35,8 +35,8 @@
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include "span.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"

@@ -374,7 +374,12 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     edm_status_ptr(config.edm_status_address),
     enable_persistent_mode(enable_persistent_mode),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
-    dateline_connection(dateline_connection) {}
+    dateline_connection(dateline_connection) {
+    std::fill(
+        sender_channel_connection_liveness_check_disable_array.begin(),
+        sender_channel_connection_liveness_check_disable_array.end(),
+        false);
+}
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const {
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
@@ -394,7 +399,13 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         log_trace(tt::LogTest, "Receiver {} channel address: {}", i, this->local_receiver_channels_buffer_address[i]);
     }
 
-    return std::vector<uint32_t>{
+    size_t num_sender_channels = config.num_used_sender_channels;
+    size_t num_receiver_channels = config.num_used_receiver_channels;
+    auto ct_args = std::vector<uint32_t>{
+        num_sender_channels,
+        num_receiver_channels,
+        this->wait_for_host_signal ? 1 : 0,
+
         this->firmware_context_switch_interval,
         this->enable_first_level_ack,
         this->fuse_receiver_flush_and_completion_ptr,
@@ -447,7 +458,56 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         config.senders_completed_packet_header_cb_address[1],
         FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
         config.senders_completed_packet_header_cb_address[2],
-        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers};
+        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
+
+        // Special marker to help with identifying misalignment bugs
+        0x00c0ffee};
+
+    for (size_t i = 0; i < num_sender_channels; i++) {
+        ct_args.push_back(this->sender_channel_connection_liveness_check_disable_array[i]);
+    }
+
+    // Sender channel args
+    constexpr size_t sender_ack_noc_id = 0;
+    // TODO: get from HAL (TODO before that - expose through HAL)
+    constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
+    constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
+    constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
+    constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
+    for (size_t i = 0; i < num_sender_channels; i++) {
+        ct_args.push_back(sender_ack_noc_id);
+    }
+
+    // Populate the sender ack cmd buf ids for each datapath
+    ct_args.push_back(WR_REG_CMD_BUF);
+    ct_args.push_back(WR_CMD_BUF);
+    if (num_sender_channels > 2) {
+        ct_args.push_back(WR_CMD_BUF);
+    }
+
+    // receiver channel args
+    constexpr size_t receiver_channel_write_noc_id = 1;
+    for (size_t i = 0; i < num_receiver_channels; i++) {
+        ct_args.push_back(receiver_channel_write_noc_id);
+    }
+    for (size_t i = 0; i < num_receiver_channels; i++) {
+        ct_args.push_back(WR_REG_CMD_BUF);  // maps to receiver_channel_forwarding_data_cmd_buf_ids
+    }
+    for (size_t i = 0; i < num_receiver_channels; i++) {
+        ct_args.push_back(RD_CMD_BUF);  // maps to receiver_channel_forwarding_sync_cmd_buf_ids
+    }
+    for (size_t i = 0; i < num_receiver_channels; i++) {
+        // TODO: pass this to the tranmission file
+        ct_args.push_back(receiver_channel_write_noc_id);  // maps to receiver_channel_local_write_noc_ids
+    }
+    for (size_t i = 0; i < num_receiver_channels; i++) {
+        ct_args.push_back(WR_CMD_BUF);  // maps to receiver_channel_local_write_cmd_buf_ids
+    }
+
+    // Special marker to help with identifying misalignment bugs
+    ct_args.push_back(0x10c0ffee);
+
+    return ct_args;
 }
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
@@ -617,7 +677,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
         this->enable_persistent_mode};
 }
 
-SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(uint32_t vc) const {
+SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(uint32_t vc) {
     uint32_t chan = 0;
     if (vc == 0) {
         chan = 1;
@@ -626,6 +686,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     } else {
         TT_THROW("Invalid VC");
     }
+    this->sender_channel_connection_liveness_check_disable_array[chan] = true;
     return SenderWorkerAdapterSpec{
         this->my_noc_x,
         this->my_noc_y,
@@ -639,7 +700,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         false};
 }
 
-void FabricEriscDatamoverBuilder::connect_to_downstream_edm(const FabricEriscDatamoverBuilder& downstream_edm) {
+void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamoverBuilder& downstream_edm) {
     TT_FATAL(
         !this->build_in_worker_connection_mode, "Tried to connect two EDMs to each other in worker connection mode");
     for (uint32_t i = 0; i < FabricEriscDatamoverBuilder::num_virtual_channels; i++) {
@@ -679,6 +740,10 @@ void FabricEriscDatamoverBuilder::teardown_from_host(
 
 void FabricEriscDatamoverBuilder::set_firmware_context_switch_interval(size_t interval) {
     this->firmware_context_switch_interval = interval;
+}
+
+void FabricEriscDatamoverBuilder::set_wait_for_host_signal(bool wait_for_host_signal) {
+    this->wait_for_host_signal = wait_for_host_signal;
 }
 
 }  // namespace tt::tt_fabric

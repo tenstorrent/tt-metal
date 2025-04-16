@@ -43,12 +43,11 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include "span.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "test_common.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"

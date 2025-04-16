@@ -212,6 +212,7 @@ from ttnn.device import (
     synchronize_mesh_device,
     dump_device_memory_state,
     get_memory_view,
+    get_max_worker_l1_unreserved_size,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -296,6 +297,7 @@ sub = ttnn.subtract
 sub_ = ttnn.subtract_
 mul = ttnn.multiply
 mul_ = ttnn.multiply_
+div_ = ttnn.divide_
 
 
 # TODO: pybind the overloaded operators below
@@ -353,9 +355,14 @@ from ttnn.operations.conv2d import (
     get_conv_output_dim,
     prepare_conv_weights,
     prepare_conv_bias,
+    Conv2dSliceConfig,
+    Conv2dSliceHeight,
+    Conv2dSliceWidth,
 )
+
 from ttnn._ttnn.operations.experimental import Conv3dConfig
-from ttnn.operations.conv1d import Conv1d, Conv1dConfig
+
+Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
 

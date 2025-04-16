@@ -7,6 +7,7 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
 
+#include "ttnn/old_infra_device_operation.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tt_metal.hpp>
@@ -88,130 +89,7 @@ auto& get_workers(auto& output_tensors) {
 }
 
 }  // namespace detail
-
-template <typename OutputTensors>
-struct OldInfraDeviceOperation {
-    using operation_attributes_t = operation::DeviceOperation<OutputTensors>;
-
-    struct tensor_args_t {
-        const operation::Tensors input_tensors;
-        const operation::OptionalConstTensors optional_input_tensors;
-        const operation::OptionalTensors optional_output_tensors;
-    };
-
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
-
-    using tensor_return_value_t = OutputTensors;
-
-    struct ProgramFactory {
-        struct shared_variables_t {
-            std::optional<operation::OverrideRuntimeArgumentsCallback<OutputTensors>>
-                override_runtime_arguments_callback;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value) {
-            auto program_with_callbacks = operation_attributes.create_program(
-                tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
-            return cached_program_t{
-                std::move(program_with_callbacks.program),
-                shared_variables_t{program_with_callbacks.override_runtime_arguments_callback}};
-        }
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value) {
-            auto& override_runtime_arguments_callback =
-                cached_program.shared_variables.override_runtime_arguments_callback;
-            auto& program = cached_program.program;
-
-            if (override_runtime_arguments_callback.has_value()) {
-                operation_attributes.override_runtime_arguments(
-                    override_runtime_arguments_callback.value(),
-                    program,
-                    tensor_args.input_tensors,
-                    tensor_args.optional_input_tensors,
-                    tensor_return_value);
-            }
-        }
-    };
-
-    using program_factory_t = std::variant<ProgramFactory>;
-
-    // Mandatory methods
-
-    // Select the program factory based on the operation attributes and tensor args
-    static program_factory_t select_program_factory(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-        return ProgramFactory{};
-    }
-
-    // Validate the operation when it creates a program. Usually will have more checks
-    static void validate_on_program_cache_miss(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-        attributes.validate(
-            tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_args.optional_output_tensors);
-    }
-
-    // Validate the operation when it reuses a program. Usually will have less checks
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-        validate_on_program_cache_miss(attributes, tensor_args);
-    }
-
-    // Compute the output specs based on the operation attributes and tensor args
-    static spec_return_value_t compute_output_specs(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-        return attributes.compute_output_specs(tensor_args.input_tensors);
-    }
-
-    // Create the output tensors based on the operation attributes and tensor args
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-        return attributes.create_output_tensors(tensor_args.input_tensors, tensor_args.optional_output_tensors);
-    }
-
-    static tt::stl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-        return attributes.compute_program_hash(tensor_args.input_tensors, tensor_args.optional_input_tensors);
-    }
-
-    static auto create_op_performance_model(
-        const operation_attributes_t& attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value) {
-        return attributes.create_op_performance_model(
-            tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
-    }
-
-    static std::string get_type_name(const operation_attributes_t& attributes) { return attributes.get_type_name(); }
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        operation_attributes_t&& operation_attributes,
-        const operation::Tensors& input_tensors,
-        const operation::OptionalConstTensors& optional_input_tensors,
-        const operation::OptionalTensors& optional_output_tensors) {
-        return std::make_tuple(
-            std::move(operation_attributes),
-            tensor_args_t{input_tensors, optional_input_tensors, optional_output_tensors});
-    }
-};
-
 }  // namespace tt::tt_metal::operation
-
-namespace ttnn::prim {
-constexpr auto old_infra_device_operation = ttnn::register_operation<
-    "ttnn::prim::old_infra_device_operation",
-    tt::tt_metal::operation::OldInfraDeviceOperation<tt::tt_metal::operation::Tensors>>();
-constexpr auto old_infra_device_operation_with_optional_output_tensors = ttnn::register_operation<
-    "ttnn::prim::old_infra_device_operation_with_optional_output_tensors",
-    tt::tt_metal::operation::OldInfraDeviceOperation<tt::tt_metal::operation::OptionalTensors>>();
-}  // namespace ttnn::prim
 
 namespace tt::tt_metal::operation {
 

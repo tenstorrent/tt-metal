@@ -21,7 +21,6 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
@@ -506,7 +505,7 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     if (min.value() == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
-        return ttnn::maximum(a_max, min.value(), output_memory_config);
+        return ttnn::maximum(ttnn::DefaultQueueId, a_max, min.value(), std::nullopt, output_memory_config);
     }
 }
 
@@ -528,7 +527,7 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     Tensor temp = ttnn::where(
         ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config),
         ttnn::relu(a_max, output_memory_config),
-        ttnn::maximum(a_max, min.value(), output_memory_config),
+        ttnn::maximum(ttnn::DefaultQueueId, a_max, min.value(), std::nullopt, output_memory_config),
         output_memory_config);
     return ttnn::where(
         ttnn::gt(min.value(), max.value(), std::nullopt, output_memory_config),
@@ -568,7 +567,7 @@ Tensor _selu(
     result_t2_.deallocate();
 
     // term 1
-    Tensor x_max = ttnn::maximum(x, 0.0f, output_mem_config);
+    Tensor x_max = ttnn::maximum(ttnn::DefaultQueueId, x, 0.0f, std::nullopt, output_mem_config);
     Tensor result_term1 = ttnn::multiply(x_max, scale, std::nullopt, output_mem_config);
     x_max.deallocate();
     Tensor result_selu = ttnn::add(result_term1, result_term2, std::nullopt, output_mem_config);
@@ -611,7 +610,8 @@ Tensor _glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig
         dim = 3;
     }
     std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor sigmoid_b = ttnn::sigmoid(ab[1], false, output_mem_config);
+    bool approximate_mode = false;
+    Tensor sigmoid_b = ttnn::sigmoid(ab[1], (int)VecMode::RC, approximate_mode, output_mem_config);
     Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b, std::nullopt, output_mem_config);
     return glu_result;
 }
@@ -769,7 +769,7 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
         ttnn::lt(input_a, eps, std::nullopt, output_mem_config),
         eps,
         ttnn::where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a));
-    Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, output_mem_config);
+    Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, std::nullopt, output_mem_config);
     Tensor log_input =
         ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();

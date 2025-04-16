@@ -11,7 +11,7 @@
 
 #include "assert.hpp"
 #include "constants.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 TensAddr::TensAddr(const std::vector<std::uint32_t>& shape) : sh(shape) {}
 
@@ -204,7 +204,7 @@ std::vector<T> convert_to_flat_layout(
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
-    const bool transpose_face_order) {
+    const bool /*transpose_face_order*/) {
     ZoneScoped;
     std::vector<T> result;
     if (data.size() == 0) {

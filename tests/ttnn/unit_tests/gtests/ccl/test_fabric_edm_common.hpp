@@ -43,8 +43,6 @@
 #include <limits>
 #include <unordered_set>
 
-#include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::test_utils;
@@ -1099,7 +1097,8 @@ void setup_test_with_persistent_fabric(
     bool enable_persistent_fabric,
     std::optional<size_t> num_links = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
-    size_t switch_interval = 0) {
+    size_t switch_interval = 0,
+    bool loopback_on_last_device = false) {
     if (enable_persistent_fabric) {
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
@@ -1116,6 +1115,17 @@ void setup_test_with_persistent_fabric(
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
         devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, topology);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
+    if (loopback_on_last_device) {
+        for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
+            log_trace(
+                tt::LogTest,
+                "Implementing loopback on device {} by connecting 1D fabric endpoint to itself at x={}, y={}",
+                devices.back()->id(),
+                edm_builder.my_noc_x,
+                edm_builder.my_noc_y);
+            edm_builder.connect_to_downstream_edm(edm_builder);
+        }
+    }
 
     if (enable_persistent_fabric) {
         TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
@@ -2323,7 +2333,8 @@ void Run1DFabricPacketSendTest(
             params.fabric_mode == FabricTestMode::RingAsLinear,
         "This test can only be run with disable_end_workers_in_backward_direction set to true or fabric_mode set to "
         "Linear");
-    bool use_tg = num_devices == 32;
+    bool use_galaxy = num_devices == 32;
+    bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
         return;
@@ -2371,23 +2382,31 @@ void Run1DFabricPacketSendTest(
 
     // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
     std::vector<IDevice*> devices_;
-    if (use_tg) {
+    if (use_galaxy) {
         if (line_size <= 4) {
-            if (topology == ttnn::ccl::Topology::Ring) {
-                devices_ = {
-                    view.get_device(MeshCoordinate(0, 0)),
-                    view.get_device(MeshCoordinate(1, 0)),
-                    view.get_device(MeshCoordinate(1, 1)),
-                    view.get_device(MeshCoordinate(0, 1))};
+            if (use_tg) {
+                if (topology == ttnn::ccl::Topology::Ring) {
+                    devices_ = {
+                        view.get_device(MeshCoordinate(0, 0)),
+                        view.get_device(MeshCoordinate(1, 0)),
+                        view.get_device(MeshCoordinate(1, 1)),
+                        view.get_device(MeshCoordinate(0, 1))};
+                } else {
+                    devices_ = {
+                        view.get_device(MeshCoordinate(0, 0)),
+                        view.get_device(MeshCoordinate(1, 0)),
+                        view.get_device(MeshCoordinate(2, 0)),
+                        view.get_device(MeshCoordinate(3, 0))};
+                }
             } else {
                 devices_ = {
                     view.get_device(MeshCoordinate(0, 0)),
-                    view.get_device(MeshCoordinate(1, 0)),
-                    view.get_device(MeshCoordinate(2, 0)),
-                    view.get_device(MeshCoordinate(3, 0))};
+                    view.get_device(MeshCoordinate(0, 1)),
+                    view.get_device(MeshCoordinate(0, 2)),
+                    view.get_device(MeshCoordinate(0, 3))};
             }
         } else {
-            if (topology == ttnn::ccl::Topology::Ring) {
+            if (topology == ttnn::ccl::Topology::Ring && use_tg) {
                 devices_ = {
                     view.get_device(MeshCoordinate(0, 0)),
                     view.get_device(MeshCoordinate(1, 0)),

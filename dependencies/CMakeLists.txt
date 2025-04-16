@@ -222,3 +222,14 @@ if(flatbuffers_ADDED)
     target_compile_options(flatc PRIVATE -Wno-restrict)
     target_compile_options(flatbuffers PRIVATE -Wno-restrict)
 endif()
+
+############################################################################################################################
+# simd-everywhere/simde : https://github.com/simd-everywhere/simde
+############################################################################################################################
+
+CPMAddPackage(NAME simd-everywhere GITHUB_REPOSITORY simd-everywhere/simde GIT_TAG v0.8.2)
+if(simd-everywhere_ADDED)
+    add_library(simde INTERFACE)
+    add_library(simde::simde ALIAS simde)
+    target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
+endif()
