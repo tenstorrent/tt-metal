@@ -24,6 +24,22 @@ class default_setup(metaclass=MergeMetaclass):
     ]
 
     timerAnalysis = {
+        "op2op": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_phase": "ZONE_END",
+                "zone_name": [f"{risc}-KERNEL" for risc in riscTypes],
+            },
+            "end": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_phase": "ZONE_START",
+                "zone_name": [f"{risc}-KERNEL" for risc in ["BRISC", "NCRISC"]],
+            },
+        },
         "device_kernel_first_to_last_start": {
             "across": "ops",
             "type": "op_first_last",
