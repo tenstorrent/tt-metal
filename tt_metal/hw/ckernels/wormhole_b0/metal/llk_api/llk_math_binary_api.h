@@ -14,8 +14,8 @@
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
-    int NUM_FIDELITY_PHASES = 0,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    int NUM_FIDELITY_PHASES,
+    EltwiseBinaryReuseDestType binary_reuse_dest>
 inline void llk_math_eltwise_binary_init(const std::uint32_t transpose = 0, const std::uint32_t acc_to_dest = 0) {
     const std::uint32_t num_faces = 4;
 
@@ -27,8 +27,8 @@ inline void llk_math_eltwise_binary_init(const std::uint32_t transpose = 0, cons
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
-    int NUM_FIDELITY_PHASES = 0,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
+    int NUM_FIDELITY_PHASES,
+    EltwiseBinaryReuseDestType binary_reuse_dest>
 inline void llk_math_eltwise_binary_init_with_operands(
     const std::uint32_t operand_A,
     const std::uint32_t operand_B,
@@ -45,9 +45,9 @@ inline void llk_math_eltwise_binary_init_with_operands(
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
-    int NUM_FIDELITY_PHASES = 0,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool is_fp32_dest_acc_en = false>
+    int NUM_FIDELITY_PHASES,
+    EltwiseBinaryReuseDestType binary_reuse_dest,
+    bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_acc = true) {
     const std::uint32_t num_faces = 4;
 
@@ -63,9 +63,9 @@ inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_ac
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
-    int NUM_FIDELITY_PHASES = 0,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool is_fp32_dest_acc_en = false>
+    int NUM_FIDELITY_PHASES,
+    EltwiseBinaryReuseDestType binary_reuse_dest,
+    bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_binary(
     const std::uint32_t operand_A,
     const std::uint32_t operand_B,
