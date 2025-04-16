@@ -220,9 +220,9 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     for (auto device : root_devices) {
         dynamic_cast<Device*>(device)->mesh_device = mesh_device;
     }
+    // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     DevicePool::instance().init_profiler();
-    DevicePool::instance().initialize_active_devices();
-    DevicePool::instance().wait_for_fabric_router_sync();
+    DevicePool::instance().initialize_fabric_and_dispatch_fw();
     return mesh_device;
 }
 
@@ -253,14 +253,11 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     std::map<int, std::shared_ptr<MeshDevice>> result;
     for (size_t i = 0; i < device_ids.size(); i++) {
         submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
-        for (auto device : submeshes[i]->get_devices()) {
-            dynamic_cast<Device*>(device)->mesh_device = submeshes[i];
-        }
         result[device_ids[i]] = submeshes[i];
     }
+    // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     DevicePool::instance().init_profiler();
-    DevicePool::instance().initialize_active_devices();
-    DevicePool::instance().wait_for_fabric_router_sync();
+    DevicePool::instance().initialize_fabric_and_dispatch_fw();
     return result;
 }
 

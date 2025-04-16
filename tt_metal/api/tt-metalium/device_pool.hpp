@@ -54,10 +54,6 @@ public:
         bool use_max_eth_core_count_on_all_devices = false,
         bool initialize_fabric_and_dispatch_fw = true) noexcept;
 
-    // Initialize state for activated devices
-    void initialize_active_devices() const;
-    void wait_for_fabric_router_sync() const;
-
     tt_metal::IDevice* get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
     bool close_device(chip_id_t device_id);
@@ -67,6 +63,7 @@ public:
     void unregister_worker_thread_for_device(tt_metal::IDevice* device);
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
     void init_profiler() const;
+    void initialize_fabric_and_dispatch_fw() const;
 
 private:
     ~DevicePool();
@@ -103,7 +100,9 @@ private:
     // Initialize state on the host for this device
     void initialize_host(tt_metal::IDevice* dev) const;
     // Initialize state for activated devices
+    void initialize_active_devices() const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
+    void wait_for_fabric_router_sync() const;
     tt_metal::IDevice* get_device(chip_id_t id) const;
 
     static DevicePool* _inst;

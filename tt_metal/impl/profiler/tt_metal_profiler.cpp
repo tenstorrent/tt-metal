@@ -146,28 +146,12 @@ void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
             // generic API to read from an address instead of a buffer. (#15015)
             CoreCoord logical_worker_core =
                 soc_d.translate_coord_to(curr_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-            if (auto mesh_device = device->get_mesh_device()) {
-                auto control_buffer_view = get_control_buffer_view(
-                    mesh_device.get(),
-                    reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                    logical_worker_core);
-
-                auto device_coord = mesh_device->get_view().find_device(device_id);
-                WriteShard(
-                    mesh_device->mesh_command_queue(),
-                    control_buffer_view.get_mesh_buffer(),
-                    control_buffer,
-                    device_coord,
-                    true);
-            } else {
-                auto control_buffer_view = get_control_buffer_view(
-                    device,
-                    reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                    logical_worker_core);
-                EnqueueWriteBuffer(device->command_queue(), *(control_buffer_view.get_buffer()), control_buffer, true);
-            }
+            auto control_buffer_view = get_control_buffer_view(
+                device,
+                reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+                logical_worker_core);
+            issue_fd_write_to_profiler_buffer(control_buffer_view, device, control_buffer);
         } else {
             tt::llrt::write_hex_vec_to_core(
                 device_id, curr_core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
@@ -746,18 +730,7 @@ void InitDeviceProfiler(IDevice* device) {
         std::vector<uint32_t> inputs_DRAM(output_dram_buffer_ptr->size() / sizeof(uint32_t), 0);
 
         if (device->dispatch_firmware_active()) {
-            if (auto mesh_device = device->get_mesh_device()) {
-                auto device_coord = mesh_device->get_view().find_device(device_id);
-                distributed::WriteShard(
-                    mesh_device->mesh_command_queue(),
-                    profiler.output_dram_buffer.get_mesh_buffer(),
-                    inputs_DRAM,
-                    device_coord,
-                    true);
-            } else {
-                EnqueueWriteBuffer(
-                    device->command_queue(), *(profiler.output_dram_buffer.get_buffer()), inputs_DRAM, true);
-            }
+            issue_fd_write_to_profiler_buffer(profiler.output_dram_buffer, device, inputs_DRAM);
         } else {
             tt_metal::detail::WriteToBuffer(*(profiler.output_dram_buffer.get_buffer()), inputs_DRAM);
         }

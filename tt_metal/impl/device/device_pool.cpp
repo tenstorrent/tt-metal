@@ -276,6 +276,11 @@ void DevicePool::initialize(
     _inst->init_firmware_on_active_devices();
 }
 
+void DevicePool::initialize_fabric_and_dispatch_fw() const {
+    this->initialize_active_devices();
+    this->wait_for_fabric_router_sync();
+}
+
 void DevicePool::initialize_host(IDevice* dev) const {
     detail::ClearProfilerControlBuffer(dev);
 
@@ -654,8 +659,7 @@ void DevicePool::init_firmware_on_active_devices() const {
         this->init_profiler();
     }
     if (initialize_fabric_and_dispatch_fw_) {
-        this->initialize_active_devices();
-        this->wait_for_fabric_router_sync();
+        this->initialize_fabric_and_dispatch_fw();
     }
 }
 
