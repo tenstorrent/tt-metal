@@ -49,7 +49,8 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links,
     bool build_in_worker_connection_mode,
-    Topology topology) :
+    Topology topology,
+    bool is_galaxy) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
@@ -200,11 +201,13 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 auto& edm_fwd = forward_direction_edm[l];
                 auto& edm_bwd = backward_direction_edm[l];
                 // optimize only on the same row and multi-link to not degrade other tests
-                bool enable_core_placement_opt;
-                if (topology == Topology::Ring) {
-                    enable_core_placement_opt = (num_links > 3) && (edm_fwd.my_noc_y != edm_bwd.my_noc_y);
-                } else {
-                    enable_core_placement_opt = (num_links > 2) && (edm_fwd.my_noc_y != edm_bwd.my_noc_y);
+                bool enable_core_placement_opt = false;
+                if (is_galaxy) {
+                    if (topology == Topology::Ring) {
+                        enable_core_placement_opt = (num_links > 3) && (edm_fwd.my_noc_y != edm_bwd.my_noc_y);
+                    } else {
+                        enable_core_placement_opt = (num_links > 2) && (edm_fwd.my_noc_y != edm_bwd.my_noc_y);
+                    }
                 }
                 if (enable_core_placement_opt) {
                     if (edm_fwd.my_noc_x < edm_bwd.my_noc_x) {
