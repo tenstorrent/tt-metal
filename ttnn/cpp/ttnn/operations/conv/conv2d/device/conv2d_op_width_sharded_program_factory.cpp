@@ -919,7 +919,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // Capture conv_reader_indices_buffer to cache this with the program
     auto override_runtime_arguments_callback =
-        [conv_reader_indices_buffer, cb_input, cb_output, has_bias, full_core_grid, total_num_cores, weights_kernel_id](
+        [conv_reader_indices_buffer,
+         cb_input,
+         cb_output,
+         has_bias,
+         full_core_grid,
+         total_num_cores,
+         weights_kernel_id,
+         total_num_active_cores](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -928,26 +935,19 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             bool src_a_is_sharded = input_tensors[0].is_sharded();
             bool out_sharded = output_tensors[0].is_sharded();
 
-            auto input_num_cores = input_tensors[0].memory_config().shard_spec.value().grid.num_cores();
-            auto output_num_cores = output_tensors[0].memory_config().shard_spec.value().grid.num_cores();
-            auto total_num_active_cores = std::max(input_num_cores, output_num_cores);
-
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();
             auto dst_buffer = output_tensors.at(0).buffer();
 
             auto weights_kernel_runtime_args = GetRuntimeArgs(program, weights_kernel_id);
-            for (uint32_t core_index = 0; core_index < total_num_cores; core_index++) {
+            for (uint32_t core_index = 0; core_index < total_num_active_cores; core_index++) {
                 uint32_t core_x = core_index % full_core_grid.x;
                 uint32_t core_y = core_index / full_core_grid.x;
 
-                if (core_index < total_num_active_cores) {
-                    auto this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
-                    this_core_weights_kernel_runtime_args[1] = src_buffer_b->address();
-                    if (has_bias) {
-                        this_core_weights_kernel_runtime_args[2] =
-                            optional_input_tensors.at(0).value().buffer()->address();
-                    }
+                auto this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
+                this_core_weights_kernel_runtime_args[1] = src_buffer_b->address();
+                if (has_bias) {
+                    this_core_weights_kernel_runtime_args[2] = optional_input_tensors.at(0).value().buffer()->address();
                 }
             }
 
