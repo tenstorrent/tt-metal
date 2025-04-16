@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import ttnn
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 from pathlib import Path
 
 from models.common.lightweightmodule import LightweightModule
@@ -389,6 +389,9 @@ class AsymmDiTJoint(LightweightModule):
             x, sigma, y_feat[0], y_mask[0]
         )
         # TODO: c shape should be broadcastable to x shape, with batch dim matching. It currently doesn't.
+        # Pre-applied SILU expected in block
+        # Note that on-device SILU is less accurate than on host
+        c_11BX = ttnn.silu(c_11BX)
 
         # Run blocks
         for block in self.blocks:

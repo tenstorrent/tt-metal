@@ -132,6 +132,9 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
     # Create transformation matrix for RoPE
     trans_mat = get_rot_transformation_mat(None)
 
+    # Pre-applied SILU expected in block
+    c_silu = torch.nn.functional.silu(c_input).view(batch_size, 1, 1, dim_x)
+
     # Create valid token indices
     total_seq_len = vision_seq_len + text_seq_len
     valid_token_indices = torch.arange(total_seq_len)
@@ -145,7 +148,7 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
     sin_padded = pad_vision_seq_parallel(rope_sin_stack, mesh_device.get_num_devices())
     tt_x = to_tt_tensor(x_padded, mesh_device, shard_dim=-2)
     tt_y = to_tt_tensor(y_input.view(1, batch_size, text_seq_len, dim_y), mesh_device)
-    tt_c = to_tt_tensor(c_input.view(batch_size, 1, 1, dim_x), mesh_device)
+    tt_c = to_tt_tensor(c_silu, mesh_device)
     tt_rope_cos = to_tt_tensor(cos_padded, mesh_device, shard_dim=-3)
     tt_rope_sin = to_tt_tensor(sin_padded, mesh_device, shard_dim=-3)
     tt_trans_mat = to_tt_tensor(trans_mat, mesh_device)
