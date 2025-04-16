@@ -43,7 +43,6 @@
 #include "lightmetal/lightmetal_capture.hpp"
 #include "lightmetal_binary.hpp"
 #include "llrt.hpp"
-#include "llrt/hal.hpp"
 #include "logger.hpp"
 #include "tt-metalium/program.hpp"
 #include "semaphore.hpp"
@@ -118,11 +117,12 @@ DataMovementConfigStatus CheckDataMovementConfig(
         programmable_core == HalProgrammableCoreType::TENSIX ? DISPATCH_CLASS_TENSIX_DM0 : DISPATCH_CLASS_ETH_DM0;
     uint32_t dm1_idx =
         programmable_core == HalProgrammableCoreType::TENSIX ? DISPATCH_CLASS_TENSIX_DM1 : DISPATCH_CLASS_ETH_DM1;
+    const auto& hal = MetalContext::instance().hal();
     for (const auto& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                const KernelGroup* kernel_group = program.kernels_on_core(
-                    CoreCoord(x, y), hal_ref.get_programmable_core_type_index(programmable_core));
+                const KernelGroup* kernel_group =
+                    program.kernels_on_core(CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
                 if (kernel_group != nullptr) {
                     bool local_noc0_in_use = false;
                     bool local_noc1_in_use = false;
@@ -158,7 +158,8 @@ void ConfigureKernelGroup(
     const KernelGroup* kernel_group,
     IDevice* device,
     const CoreCoord& logical_core) {
-    uint32_t kernel_config_base = hal_ref.get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
+    uint32_t kernel_config_base =
+        MetalContext::instance().hal().get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     for (auto& optional_id : kernel_group->kernel_ids) {
         if (optional_id) {
             // Need the individual offsets of each bin
@@ -696,28 +697,21 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
     }
 }
 
-void LaunchProgram(
-    IDevice* device, const std::shared_ptr<Program>& program, bool wait_until_cores_done, bool force_slow_dispatch) {
-    LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
+void LaunchProgram(IDevice* device, const std::shared_ptr<Program>& program, bool wait_until_cores_done) {
+    LaunchProgram(device, *program, wait_until_cores_done);
 }
 
-void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
+void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done) {
     {  // Profiler scope start
         ZoneScoped;
-        /// This function is shared between FD and SD.
-        // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
-        // sync information from the accelerators.
-        // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
-        if (!force_slow_dispatch) {
-            detail::DispatchStateCheck(false);
-        }
+        detail::DispatchStateCheck(false);
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
             program_dispatch::finalize_program_offsets(program, device);
         }
 
-        detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
-        detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
+        detail::WriteRuntimeArgsToDevice(device, program);
+        detail::ConfigureDeviceWithProgram(device, program);
 
         auto device_id = device->id();
 
@@ -729,10 +723,11 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 
         std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
         std::unordered_set<CoreCoord> not_done_cores;
+        const auto& hal = MetalContext::instance().hal();
         for (uint32_t programmable_core_type_index = 0;
              programmable_core_type_index < logical_cores_used_in_program.size();
              programmable_core_type_index++) {
-            CoreType core_type = hal_ref.get_core_type(programmable_core_type_index);
+            CoreType core_type = hal.get_core_type(programmable_core_type_index);
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                 launch_msg_t* msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
                 go_msg_t* go_msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
@@ -758,34 +753,32 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
     }
 }
 
-void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results) {
+void WaitProgramDone(IDevice* device, Program& program) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
     std::unordered_set<CoreCoord> not_done_cores;
-    for (uint32_t index = 0; index < hal_ref.get_programmable_core_type_count(); index++) {
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_cores = logical_cores_used_in_program[index];
-        CoreType core_type = hal_ref.get_core_type(index);
+        CoreType core_type = hal.get_core_type(index);
         for (const auto& logical_core : logical_cores) {
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             not_done_cores.insert(physical_core);
         }
     }
+    // Wait for all cores to be done
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
-    if (dump_device_profile_results) {
-        DumpDeviceProfileResults(device, program);
-    }
+    DumpDeviceProfileResults(device, program);
 }
 
-bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
+bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootloader_mode) {
     ZoneScoped;
     bool pass = true;
-    // This function is shared between FD and SD.
-    // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
-    // sync information from the accelerators.
-    // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
-    if (!force_slow_dispatch) {
-        detail::DispatchStateCheck(false);
-    }
+    // This is function is shared between FD and SD.
+    // We call this function when initializing HW Command Queues (tracked as fd_bootloader_mode) for Fast Dispatch.
+    // Used to Launch programs for Slow dispatch.
+    bool using_fast_dispatch = fd_bootloader_mode;
+    detail::DispatchStateCheck(using_fast_dispatch);
 
     auto device_id = device->id();
 
@@ -793,9 +786,10 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     detail::ValidateCircularBufferRegion(program, device);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
-    for (uint32_t index = 0; index < hal_ref.get_programmable_core_type_count(); index++) {
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_cores = logical_cores_used_in_program[index];
-        CoreType core_type = hal_ref.get_core_type(index);
+        CoreType core_type = hal.get_core_type(index);
         for (const auto& logical_core : logical_cores) {
             KernelGroup* kernel_group = program.kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
@@ -830,7 +824,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                             circular_buffer_config_vec[base_index + 1] = circular_buffer->page_size(buffer_index);
                         }
                     }  // PROF_END("CBS")
-                    uint64_t kernel_config_base = hal_ref.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
+                    uint64_t kernel_config_base = hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
                     uint64_t addr = kernel_config_base + program.get_program_config(index).cb_offset;
                     llrt::write_hex_vec_to_core(device_id, physical_core, circular_buffer_config_vec, addr);
                 }
@@ -842,20 +836,15 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     return pass;
 }
 
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch) {
+void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool fd_bootloader_mode) {
     ZoneScoped;
     auto device_id = device->id();
-    // This function is shared between FD and SD.
-    // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
-    // sync information from the accelerators.
-    // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
-    if (!force_slow_dispatch) {
-        detail::DispatchStateCheck(false);
-    }
+    detail::DispatchStateCheck(fd_bootloader_mode);
 
-    for (uint32_t index = 0; index < hal_ref.get_programmable_core_type_count(); index++) {
-        CoreType core_type = hal_ref.get_core_type(index);
-        uint32_t processor_classes = hal_ref.get_processor_classes_count(index);
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        CoreType core_type = hal.get_core_type(index);
+        uint32_t processor_classes = hal.get_processor_classes_count(index);
         for (const auto& kg : program.get_kernel_groups(index)) {
             uint32_t kernel_config_base = kg->launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange& core_range : kg->core_ranges.ranges()) {
@@ -913,9 +902,9 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
     }
 }
 
-void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
+void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode) {
     ZoneScoped;
-    program.compile(device, force_slow_dispatch);
+    program.compile(device, fd_bootloader_mode);
 }
 
 void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers) {
@@ -1040,13 +1029,13 @@ KernelHandle CreateEthernetKernel(
 
     TT_FATAL(
         utils::underlying_type<DataMovementProcessor>(config.processor) <
-            hal_ref.get_processor_classes_count(eth_core_type),
+            MetalContext::instance().hal().get_processor_classes_count(eth_core_type),
         "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} "
         "processors. "
         "Update DataMovementProcessor in the config.",
         kernel->name(),
         magic_enum::enum_name(config.processor),
-        hal_ref.get_processor_classes_count(eth_core_type));
+        MetalContext::instance().hal().get_processor_classes_count(eth_core_type));
     TT_FATAL(
         !(are_both_riscv_in_use),
         "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
