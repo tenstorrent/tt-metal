@@ -102,24 +102,24 @@ class Conv:
             "conv_config": self.conv_config,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.weight):
-            self.weight = ttnn.prepare_conv_weights(
-                weight_tensor=self.weight,
-                weights_format="OIHW",
-                input_memory_config=self.input_memory_config,
-                input_layout=ttnn.TILE_LAYOUT,
-                has_bias=True,
-                **self.conv_kwargs,
-            )
+        # if not ttnn.is_tensor_storage_on_device(self.weight):
+        #     self.weight = ttnn.prepare_conv_weights(
+        #         weight_tensor=self.weight,
+        #         weights_format="OIHW",
+        #         input_memory_config=self.input_memory_config,
+        #         input_layout=ttnn.TILE_LAYOUT,
+        #         has_bias=True,
+        #         **self.conv_kwargs,
+        #     )
 
-            self.bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.bias,
-                input_memory_config=self.input_memory_config,
-                input_layout=ttnn.TILE_LAYOUT,
-                **self.conv_kwargs,
-            )
-            self.weight = ttnn.to_device(self.weight, device)
-            self.bias = ttnn.to_device(self.bias, device)
+        #     self.bias = ttnn.prepare_conv_bias(
+        #         bias_tensor=self.bias,
+        #         input_memory_config=self.input_memory_config,
+        #         input_layout=ttnn.TILE_LAYOUT,
+        #         **self.conv_kwargs,
+        #     )
+        #     self.weight = ttnn.to_device(self.weight, device)
+        #     self.bias = ttnn.to_device(self.bias, device)
 
     def __str__(self) -> str:
         return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"

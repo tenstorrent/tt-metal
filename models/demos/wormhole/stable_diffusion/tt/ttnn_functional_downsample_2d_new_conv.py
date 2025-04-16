@@ -147,23 +147,23 @@ class downsample_2d:
             "conv_config": conv_config,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.conv_weights):
-            self.conv_weights = ttnn.prepare_conv_weights(
-                weight_tensor=self.conv_weights,
-                weights_format="OIHW",
-                input_memory_config=hidden_states.memory_config(),
-                input_layout=hidden_states.get_layout(),
-                has_bias=True,
-                **conv_kwargs,
-            )
-            self.conv_bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.conv_bias,
-                input_memory_config=hidden_states.memory_config(),
-                input_layout=hidden_states.get_layout(),
-                **conv_kwargs,
-            )
-            self.conv_weights = ttnn.to_device(self.conv_weights, self.device)
-            self.conv_bias = ttnn.to_device(self.conv_bias, self.device)
+        # if not ttnn.is_tensor_storage_on_device(self.conv_weights):
+        #     self.conv_weights = ttnn.prepare_conv_weights(
+        #         weight_tensor=self.conv_weights,
+        #         weights_format="OIHW",
+        #         input_memory_config=hidden_states.memory_config(),
+        #         input_layout=hidden_states.get_layout(),
+        #         has_bias=True,
+        #         **conv_kwargs,
+        #     )
+        #     self.conv_bias = ttnn.prepare_conv_bias(
+        #         bias_tensor=self.conv_bias,
+        #         input_memory_config=hidden_states.memory_config(),
+        #         input_layout=hidden_states.get_layout(),
+        #         **conv_kwargs,
+        #     )
+        #     self.conv_weights = ttnn.to_device(self.conv_weights, self.device)
+        #     self.conv_bias = ttnn.to_device(self.conv_bias, self.device)
 
         hidden_states = ttnn.conv2d(
             input_tensor=hidden_states,
