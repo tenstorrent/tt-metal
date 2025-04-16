@@ -59,7 +59,7 @@ class Conv:
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
-        output_tensor, [_out_height, _out_width], [self.weights, self.bias] = ttnn.conv2d(
+        output_tensor, [_out_height, _out_width] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
@@ -76,7 +76,6 @@ class Conv:
             compute_config=compute_config,
             groups=self.groups,
             return_output_dim=True,
-            return_weights_and_bias=True,
         )
 
         output_tensor = ttnn.reshape(
@@ -155,7 +154,6 @@ class ConvTranspose:
             compute_config=compute_config,
             groups=self.groups,
             return_output_dim=True,
-            return_weights_and_bias=True,
             output_padding=(0, 0),
             dilation=(1, 1),
             mirror_kernel=True,
@@ -252,7 +250,6 @@ class ConvSplit:
                 compute_config=compute_config,
                 groups=self.groups,
                 return_output_dim=True,
-                return_weights_and_bias=True,
             )
 
             conv_output_tensor = ttnn.reshape(

@@ -203,14 +203,11 @@ def split_conv2d(
         hidden_states_split = [hidden_states]
 
     outputs = []
-    device_weights = []
-    device_bias = []
 
     for idx_out in range(split_out):
-        device_weights.append([])
 
         for idx_in in range(split_in):
-            [intermediate, [Hout, Wout], [d_w, d_b]] = ttnn.conv2d(
+            [intermediate, [Hout, Wout]] = ttnn.conv2d(
                 input_tensor=hidden_states_split[idx_in],
                 weight_tensor=conv_weights[idx_out][idx_in],
                 in_channels=conv_params[idx_out][idx_in]["input_channels"],
@@ -229,12 +226,7 @@ def split_conv2d(
                 groups=groups,
                 memory_config=None,
                 return_output_dim=True,
-                return_weights_and_bias=True,
             )
-
-            device_weights[idx_out].append(d_w)
-            if idx_in == 0:
-                device_bias.append(d_b)
 
             if idx_in == 0:
                 dram_intermediate = ttnn.to_memory_config(intermediate, ttnn.DRAM_MEMORY_CONFIG)
@@ -256,4 +248,4 @@ def split_conv2d(
     else:
         output = outputs[0]
 
-    return output, [C, H, W], [device_weights, device_bias]
+    return output, [C, H, W] 

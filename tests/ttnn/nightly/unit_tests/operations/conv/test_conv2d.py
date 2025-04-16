@@ -244,7 +244,7 @@ def run_conv(
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
 
-    [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
+    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -264,11 +264,10 @@ def run_conv(
         memory_config=memory_config,
         slice_config=slice_config,
         return_output_dim=True,
-        return_weights_and_bias=True,
     )
 
     if run_twice:
-        [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
+        [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
             weight_tensor=tt_weight_tensor,
             in_channels=input_channels,
@@ -288,7 +287,6 @@ def run_conv(
             memory_config=memory_config,
             slice_config=slice_config,
             return_output_dim=True,
-            return_weights_and_bias=True,
         )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)

@@ -47,7 +47,7 @@ class TtUpsample2D(nn.Module):
         hidden_states, input_shape = self.interpolate(hidden_states)
         B, C, H, W = input_shape
 
-        [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [hidden_states, [H, W]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_weights,
             in_channels=self.conv_params["input_channels"],
@@ -66,11 +66,8 @@ class TtUpsample2D(nn.Module):
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
-            return_weights_and_bias=True,
         )
         C = self.conv_params["output_channels"]
-        self.tt_weights = d_w
-        self.tt_bias = d_b
 
         self.conv_config.preprocess_weights_on_device = False
         self.conv_config.always_preprocess_weights = False

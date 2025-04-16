@@ -94,7 +94,7 @@ class TtYOLOv9cConv2D:
             input_height = self.conv.input_height
             input_width = self.conv.input_width
 
-        [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
+        [x, [output_height, output_width]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -111,7 +111,6 @@ class TtYOLOv9cConv2D:
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,
-            return_weights_and_bias=True,
         )
         hw = output_height * output_width
         if x.shape[2] != hw:

@@ -97,7 +97,7 @@ class TtMobileNetV2Conv2D:
         else:
             input_height = int(math.sqrt((x.shape[2] // self.batch_size)))
             input_width = int(math.sqrt((x.shape[2] // self.batch_size)))
-        [x, [h, w], [self.weights, self.bias]] = ttnn.conv2d(
+        [x, [h, w]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weights,
             in_channels=x.shape[3],
@@ -114,7 +114,6 @@ class TtMobileNetV2Conv2D:
             conv_config=self.conv_config,
             compute_config=self.compute_config,
             groups=self.groups,
-            return_weights_and_bias=True,
             return_output_dim=True,
         )
 

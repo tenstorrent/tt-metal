@@ -29,7 +29,7 @@ class TtDownsample2D(nn.Module):
     def forward(self, hidden_states, input_shape):
         B, C, H, W = input_shape
 
-        [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [hidden_states, [H, W]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_weights,
             in_channels=self.conv_params["input_channels"],
@@ -48,7 +48,6 @@ class TtDownsample2D(nn.Module):
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
-            return_weights_and_bias=True,
         )
         C = self.conv_params["output_channels"]
 

@@ -166,7 +166,7 @@ class TtResnetBlock2D(nn.Module):
 
         if self.split_conv:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states, [C, H, W], [d_w, d_b] = split_conv2d(
+            hidden_states, [C, H, W] = split_conv2d(
                 device=self.device,
                 hidden_states=hidden_states,
                 input_shape=[B, C, H, W],
@@ -183,7 +183,7 @@ class TtResnetBlock2D(nn.Module):
                 groups=self.groups,
             )
         else:
-            [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+            [hidden_states, [H, W] ] = ttnn.conv2d(
                 input_tensor=hidden_states,
                 weight_tensor=self.tt_conv1_weights,
                 in_channels=self.conv1_params["input_channels"],
@@ -202,12 +202,8 @@ class TtResnetBlock2D(nn.Module):
                 groups=self.groups,
                 memory_config=None,
                 return_output_dim=True,
-                return_weights_and_bias=True,
             )
             C = self.conv1_params["output_channels"]
-
-        self.tt_conv1_weights = d_w
-        self.tt_conv1_bias = d_b
 
         temb = ttnn.silu(temb)
         temb = ttnn.linear(
@@ -246,7 +242,7 @@ class TtResnetBlock2D(nn.Module):
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         self.conv_config.shard_layout = None
-        [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [hidden_states, [H, W]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,
             in_channels=self.conv2_params["input_channels"],
@@ -265,7 +261,6 @@ class TtResnetBlock2D(nn.Module):
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
-            return_weights_and_bias=True,
         )
         C = self.conv2_params["output_channels"]
         self.tt_conv2_weights = d_w
@@ -296,7 +291,6 @@ class TtResnetBlock2D(nn.Module):
                 groups=self.groups,
                 memory_config=None,
                 return_output_dim=True,
-                return_weights_and_bias=True,
             )
             C = self.conv3_params["output_channels"]
             self.tt_conv3_weights = d_w

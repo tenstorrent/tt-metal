@@ -364,17 +364,12 @@ class transformer_2d_model:
                     self.proj_out_conv_weights = ttnn.to_device(self.proj_out_conv_weights, self.device)
                     self.proj_out_conv_bias = ttnn.to_device(self.proj_out_conv_bias, self.device)
                 # hidden_states = ttnn.to_memory_config(hidden_states, self.proj_out.conv.input_sharded_memory_config)
-                [
-                    hidden_states,
-                    [_out_height, _out_width],
-                    [self.proj_out_conv_weights, self.proj_out_conv_bias],
-                ] = ttnn.conv2d(
+                [hidden_states, [_out_height, _out_width]] = ttnn.conv2d(
                     input_tensor=hidden_states,
                     **conv_kwargs_1,
                     weight_tensor=self.proj_out_conv_weights,
                     bias_tensor=self.proj_out_conv_bias,
                     return_output_dim=True,
-                    return_weights_and_bias=True,
                 )
 
                 if output_bfloat16:
