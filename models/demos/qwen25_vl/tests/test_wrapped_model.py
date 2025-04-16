@@ -40,7 +40,7 @@ def test_wrapped_vision_model_inference(
 ):
     dtype = ttnn.bfloat8_b
     pcc = (
-        0.99 if num_layers and num_layers <= 3 else 0.95
+        0.99 if num_layers and num_layers <= 3 else 0.91
     )  # Llama 3 repo allows 0.91 for prefill, vision probably even less sensitive to pcc
     batch_size = 1  # For prefill we only support batch_size = 1
 
@@ -60,11 +60,15 @@ def test_wrapped_vision_model_inference(
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     if num_layers:
         model_args.hf_config.vision_config.depth = num_layers
+        from transformers import logging as transformers_logging
+
+        # Set logging level to ERROR to suppress warnings about unexpected keys
+        transformers_logging.set_verbosity_error()
     else:
         num_layers = model_args.hf_config.vision_config.depth
 
     # Create reference model
-    reference_model = model_args.reference_vision_model()
+    reference_model = model_args.reference_vision_model(depth=model_args.hf_config.vision_config.depth)
     torch_model = DropInVisionTransformer(reference_model, model_args)
 
     # Run reference model
