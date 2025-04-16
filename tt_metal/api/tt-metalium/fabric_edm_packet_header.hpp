@@ -522,37 +522,38 @@ static_assert(
 
 static constexpr size_t header_size_bytes = sizeof(PacketHeader);
 
+#define STRINGIFY(x) #x
+#define TOSTRING(x) STRINGIFY(x)
+
 #ifndef ROUTING_MODE
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
-#if ((ROUTING_MODE & ROUTING_MODE_DYNAMIC) == ROUTING_MODE_DYNAMIC)
+#if ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
 static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
-#elif (                                                        \
-    (ROUTING_MODE == (ROUTING_MODE_1D | ROUTING_MODE_LINE)) || \
-    (ROUTING_MODE == (ROUTING_MODE_1D | ROUTING_MODE_RING)))
-#define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields
-#elif (                                                                                   \
-    (ROUTING_MODE == (ROUTING_MODE_1D | ROUTING_MODE_LINE | ROUTING_MODE_LOW_LATENCY)) || \
-    (ROUTING_MODE == (ROUTING_MODE_1D | ROUTING_MODE_RING | ROUTING_MODE_LOW_LATENCY)))
+#elif (                                                              \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
+#if ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
-#elif (                                                            \
-    (ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH) != 0) || \
-    (ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS) != 0))
-#if ROUTING_MODE & ROUTING_MODE_PULL != 0
+#else
+#define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields
+#endif
+#elif (                                                              \
+    ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
+    ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
+#if (ROUTING_MODE & ROUTING_MODE_PULL) != 0
 #define PACKET_HEADER_TYPE packet_header_t
+#else  // ROUTING_MODE_PUSH as default
+#if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
+#define PACKET_HEADER_TYPE low_latency_packet_header_t
 #else
 #define PACKET_HEADER_TYPE packet_header_t
 #endif
-#elif (                                                                                       \
-    (ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH | ROUTING_MODE_LOW_LATENCY) != 0) || \
-    (ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS | ROUTING_MODE_LOW_LATENCY) != 0))
-#define PACKET_HEADER_TYPE low_latency_packet_header_t
+#endif
 #else
-#define STRINGIFY(x) #x
-#define TOSTRING(x) STRINGIFY(x)
 static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));
 #endif
 #endif  // ROUTING_MODE
