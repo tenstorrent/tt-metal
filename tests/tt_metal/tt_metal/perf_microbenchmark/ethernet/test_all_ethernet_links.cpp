@@ -216,32 +216,46 @@ private:
         std::queue<chip_id_t> chip_q;
         chip_q.push(this->devices.at(0)->id());
         sender_chips.insert(this->devices.at(0)->id());
+        std::unordered_set<chip_id_t> visited_chips;
 
         // Need sender and receiver chips to be disjoint because we profile wrt. sender and don't want devices to be out
         // of sync
-        while (!chip_q.empty()) {
-            chip_id_t chip_id = chip_q.front();
-            chip_q.pop();
+        while (visited_chips.size() != this->devices.size()) {
+            while (!chip_q.empty()) {
+                chip_id_t chip_id = chip_q.front();
+                chip_q.pop();
+                visited_chips.insert(chip_id);
 
-            bool is_sender = sender_chips.find(chip_id) != sender_chips.end();
-            bool is_receiver = receiver_chips.find(chip_id) != receiver_chips.end();
+                bool is_sender = sender_chips.find(chip_id) != sender_chips.end();
+                bool is_receiver = receiver_chips.find(chip_id) != receiver_chips.end();
 
-            for (chip_id_t connected_chip :
-                 tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(chip_id)) {
-                bool connected_chip_is_sender = sender_chips.find(connected_chip) != sender_chips.end();
-                bool connected_chip_is_receiver = receiver_chips.find(connected_chip) != receiver_chips.end();
-                if (!connected_chip_is_sender and !connected_chip_is_receiver) {
-                    if (is_sender) {
-                        receiver_chips.insert(connected_chip);
-                    } else {
-                        TT_FATAL(is_receiver, "Chip {} should be marked as a receiver", chip_id);
-                        sender_chips.insert(connected_chip);
+                for (chip_id_t connected_chip :
+                     tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(chip_id)) {
+                    bool connected_chip_is_sender = sender_chips.find(connected_chip) != sender_chips.end();
+                    bool connected_chip_is_receiver = receiver_chips.find(connected_chip) != receiver_chips.end();
+                    if (!connected_chip_is_sender and !connected_chip_is_receiver) {
+                        if (is_sender) {
+                            receiver_chips.insert(connected_chip);
+                        } else {
+                            TT_FATAL(is_receiver, "Chip {} should be marked as a receiver", chip_id);
+                            sender_chips.insert(connected_chip);
+                        }
+                        chip_q.push(connected_chip);
+                    } else if (is_sender && connected_chip_is_sender) {
+                        TT_FATAL(false, "Chip {} and connected chip {} are both senders!", chip_id, connected_chip);
+                    } else if (is_receiver && connected_chip_is_receiver) {
+                        TT_FATAL(false, "Chip {} and connected chip {} are both receivers!", chip_id, connected_chip);
                     }
-                    chip_q.push(connected_chip);
-                } else if (is_sender && connected_chip_is_sender) {
-                    TT_FATAL(false, "Chip {} and connected chip {} are both senders!", chip_id, connected_chip);
-                } else if (is_receiver && connected_chip_is_receiver) {
-                    TT_FATAL(false, "Chip {} and connected chip {} are both receivers!", chip_id, connected_chip);
+                }
+            }
+
+            // Handle other unconnected device clusters
+            for (auto device : this->devices) {
+                if (visited_chips.find(device->id()) == visited_chips.end()) {
+                    // This device is not connected others visited above, mark it as a sender for its connected cluster
+                    chip_q.push(device->id());
+                    sender_chips.insert(device->id());
+                    break;
                 }
             }
         }
@@ -371,14 +385,40 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
     return programs;
 }
 
-void validation(const std::shared_ptr<tt::tt_metal::Buffer>& worker_buffer_0) {
-    std::vector<uint8_t> golden_vec(worker_buffer_0->size(), 0);
-    std::vector<uint8_t> result_vec(worker_buffer_0->size(), 0);
+void validation(
+    const ConnectedDevicesHelper& device_helper,
+    const SenderReceiverPair& link,
+    uint32_t bytes_to_read,
+    bool validate_receiver,
+    bool read_buffer = false) {
+    static const uint32_t eth_read_addr =
+        tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+            tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED) +
+        sizeof(eth_buffer_slot_sync_t);
+    std::vector<uint8_t> golden_vec(bytes_to_read);
+    std::iota(std::begin(golden_vec), std::end(golden_vec), 0);
+    std::vector<uint8_t> result_vec(bytes_to_read, 0);
 
-    for (int i = 0; i < worker_buffer_0->size(); ++i) {
-        golden_vec[i] = i;
+    auto sender_device = device_helper.devices.at(link.sender.chip);
+    auto receiver_device = device_helper.devices.at(link.receiver.chip);
+    TT_FATAL(
+        sender_device->id() == link.sender.chip and receiver_device->id() == link.receiver.chip,
+        "Mismatch between chips");
+
+    auto sender_virtual =
+        sender_device->virtual_core_from_logical_core(CoreCoord(link.sender.x, link.sender.y), CoreType::ETH);
+    auto receiver_virtual =
+        receiver_device->virtual_core_from_logical_core(CoreCoord(link.receiver.x, link.receiver.y), CoreType::ETH);
+
+    if (read_buffer) {
+        auto buffer_to_validate = validate_receiver ? link.receiver_buffer : link.sender_buffer;
+        tt::tt_metal::detail::ReadFromBuffer(buffer_to_validate, result_vec);
+    } else {
+        auto core_to_read = validate_receiver ? tt_cxy_pair(link.receiver.chip, receiver_virtual)
+                                              : tt_cxy_pair(link.sender.chip, sender_virtual);
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            result_vec.data(), bytes_to_read, core_to_read, eth_read_addr);
     }
-    tt::tt_metal::detail::ReadFromBuffer(worker_buffer_0, result_vec);
 
     bool pass = golden_vec == result_vec;
     TT_FATAL(pass, "validation failed");
@@ -546,20 +586,30 @@ void run(
         // Only dump profile results from sender
         tt_metal::detail::DumpDeviceProfileResults(device_helper.devices.at(link.sender.chip));
 
-        if (params.benchmark_type == BenchmarkType::EthEthTensixUniDir or
-            params.benchmark_type == BenchmarkType::EthEthTensixBiDir) {
-            TT_FATAL(
-                link.receiver_buffer != nullptr,
-                "Expected receiver eth {} to write to allocated buffer",
-                link.receiver.str());
-            validation(link.receiver_buffer);
-            if (params.benchmark_type == BenchmarkType::EthEthTensixBiDir) {
+        switch (params.benchmark_type) {
+            case BenchmarkType::EthOnlyUniDir:
+            case BenchmarkType::EthOnlyBiDir: {
+                validation(device_helper, link, params.packet_size, true);
+                if (params.benchmark_type == BenchmarkType::EthOnlyBiDir) {
+                    validation(device_helper, link, params.packet_size, false);
+                }
+            } break;
+            case BenchmarkType::EthEthTensixUniDir:
+            case BenchmarkType::EthEthTensixBiDir: {
                 TT_FATAL(
-                    link.sender_buffer != nullptr,
-                    "Expected sender eth {} in bidir mode to write to allocated buffer",
-                    link.sender.str());
-                validation(link.sender_buffer);
-            }
+                    link.receiver_buffer != nullptr,
+                    "Expected receiver eth {} to write to allocated buffer",
+                    link.receiver.str());
+                validation(device_helper, link, params.packet_size, true, true);
+                if (params.benchmark_type == BenchmarkType::EthEthTensixBiDir) {
+                    TT_FATAL(
+                        link.sender_buffer != nullptr,
+                        "Expected sender eth {} in bidir mode to write to allocated buffer",
+                        link.sender.str());
+                    validation(device_helper, link, params.packet_size, false, true);
+                }
+            } break;
+            default: break;
         }
     }
 }

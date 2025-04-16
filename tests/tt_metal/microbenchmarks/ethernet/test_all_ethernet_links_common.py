@@ -219,9 +219,11 @@ def write_results_to_csv(file_name, test_latency):
             "Sender eth core sends multiple sample size byte packets to receiver. Receiver only sends acks back on packet receipt. Measurement taken on sender and start on first packet sent and stop after last ack from receiver."
         ]
 
-    append_to_csv(file_name, ["AICLK (MHz):", get_device_freq()], test_description, (not os.path.exists(file_name)))
-    append_to_csv(file_name, add_newline=True)
-    append_to_csv(file_name, header)
+    write_header = not os.path.exists(file_name)
+    if write_header:
+        append_to_csv(file_name, ["AICLK (MHz):", get_device_freq()], test_description, write_header)
+        append_to_csv(file_name, add_newline=True)
+        append_to_csv(file_name, header)
 
     for sender_info, data_to_write in results_per_sender_link.items():
         receiver_info, benchmark_type, num_packets, packet_size, measurements, link_stats = data_to_write
