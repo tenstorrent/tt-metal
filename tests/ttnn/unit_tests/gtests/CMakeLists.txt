@@ -55,7 +55,6 @@ add_executable(unit_tests_ttnn_ccl_multi_tensor ${TTNN_CCL_MULTI_TENSOR_UNIT_TES
 add_executable(unit_tests_ttnn_1d_fabric_latency ${TTNN_1D_FABRIC_LATENCY_TEST_SRC})
 add_executable(unit_tests_ttnn_tensor ${TTNN_TENSOR_UNIT_TESTS_SRC})
 add_executable(test_multi_device ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_device.cpp)
-add_executable(galaxy_unit_tests_ttnn ${CMAKE_CURRENT_SOURCE_DIR}/test_ccl_on_galaxy.cpp)
 add_executable(
     test_ccl_multi_cq_multi_device
     ${CMAKE_CURRENT_SOURCE_DIR}/multi_thread/test_ccl_multi_cq_multi_device.cpp
@@ -77,5 +76,4 @@ setup_ttnn_test_target(unit_tests_ttnn_ccl_multi_tensor)
 setup_ttnn_test_target(unit_tests_ttnn_1d_fabric_latency)
 setup_ttnn_test_target(unit_tests_ttnn_tensor)
 setup_ttnn_test_target(test_multi_device)
-setup_ttnn_test_target(galaxy_unit_tests_ttnn)
 setup_ttnn_test_target(test_ccl_multi_cq_multi_device)

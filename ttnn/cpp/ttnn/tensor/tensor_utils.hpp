@@ -79,7 +79,10 @@ Tensor copy_borrowed_tensor_in_async_mode(IDevice* worker, const Tensor& tensor)
 
 inline bool is_tensor_on_device(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
-inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) { return is_tensor_on_device(tensor); }
+[[deprecated("Use is_tensor_on_device instead")]] inline bool is_tensor_on_device_or_multidevice(
+    const ttnn::Tensor& tensor) {
+    return is_tensor_on_device(tensor);
+}
 
 template <class T>
 inline uint32_t get_batch_size(const T& shape) {
