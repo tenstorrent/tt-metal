@@ -192,4 +192,6 @@ void kernel_main() {
     }
 
     sender.close();
+
+    noc_async_atomic_barrier();
 }
