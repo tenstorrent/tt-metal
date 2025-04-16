@@ -130,4 +130,21 @@ enum struct StochRndType
     All  = 0xf,
 };
 
+// This is populated per Wormhole ISA for SFPLOAD/SFPSTORE instructions.
+enum InstrModLoadStore
+{
+    DEFAULT       = 0,
+    FP16A         = 1,
+    FP16B         = 2,
+    FP32          = 3,
+    INT32         = 4,
+    INT8          = 5,
+    LO16          = 6,
+    HI16          = 7,
+    INT32_2S_COMP = 12,
+    INT8_2S_COMP  = 13,
+    LO16_ONLY     = 14,
+    HI16_ONLY     = 15
+};
+
 } // namespace ckernel

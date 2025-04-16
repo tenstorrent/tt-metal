@@ -96,29 +96,32 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
     {
         if constexpr (src_b_bcast_type == BroadcastType::COL)
         {
-            // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
+            // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice for full tile size
             constexpr uint32_t outerloop = (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) ? 2 : 1;
 #pragma GCC unroll 0
             for (std::uint32_t n = 0; n < outerloop; n++)
-            { // N-num faces
+            {
                 eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
                 ckernel_template::run(instrn_buffer);
             }
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
+            if (num_faces == 4)
+            {
 #pragma GCC unroll 0
-            for (std::uint32_t n = 0; n < outerloop; n++)
-            { // N-num faces
-                eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
-                ckernel_template::run(instrn_buffer);
+                for (std::uint32_t n = 0; n < outerloop; n++)
+                {
+                    eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                    ckernel_template::run(instrn_buffer);
+                }
+                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
             }
-            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
         }
         else
         {
             constexpr uint32_t outerloop = (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) ? 4 : 1;
 #pragma GCC unroll 0
             for (std::uint32_t n = 0; n < outerloop; n++)
-            { // N-num faces
+            {
                 eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
                 ckernel_template::run(instrn_buffer);
             }
@@ -133,29 +136,24 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
     {
         if constexpr (src_b_bcast_type == BroadcastType::COL)
         {
-            // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
+            // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice for full tile size
             constexpr uint32_t outerloop = (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) ? 2 : 1;
             if constexpr (high_fidelity)
             {
 #pragma GCC unroll 0
                 for (std::uint32_t n = 0; n < 2; n++)
-                { // N-num faces
+                {
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                    auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << (is_fp32_dest_acc_en && clear_fp32_dst_acc ? 3 : 2));
                     // fp32 zeroacc can only clear 8x16 datums at a time, need to call twice per 16x16 face
                     if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
                     {
-                        TT_ZEROACC(
-                            ZERO_ACC_MODE,
-                            ADDR_MOD_1,
-                            ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (0 + n * 2)); // Clear lower half of faces 0 & 1 (offsets 0, 2)
-                        TT_ZEROACC(
-                            ZERO_ACC_MODE,
-                            ADDR_MOD_1,
-                            ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (0 + ((n * 2) + 1))); // Clear upper half of faces 0 & 1 (offsets: 1, 3)
+                        TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (0 + n * 2));         // Clear lower half of faces 0 & 1 (offsets 0, 2)
+                        TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (0 + ((n * 2) + 1))); // Clear upper half of faces 0 & 1 (offsets: 1, 3)
                     }
                     else
                     {
-                        TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + (0 + n)); // Clear faces 0 & 1
+                        TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (0 + n)); // Clear faces 0 & 1
                     }
                     ckernel_template::run(instrn_buffer);
                 }
@@ -164,83 +162,76 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
             {
 #pragma GCC unroll 0
                 for (std::uint32_t n = 0; n < outerloop; n++)
-                { // N-num faces
+                {
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
                     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)
                     {
+                        auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << (is_fp32_dest_acc_en && clear_fp32_dst_acc ? 3 : 2));
+                        // fp32 zeroacc can only clear 8x16 datums at a time, need to call twice per 16x16 face
                         if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
                         {
-                            TT_ZEROACC(
-                                ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (0 + n * 2)); // Clear lower half of faces 0 & 1
-                            TT_ZEROACC(
-                                ZERO_ACC_MODE,
-                                ADDR_MOD_1,
-                                ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (0 + ((n * 2) + 1))); // Clear upper half of faces 0 & 1
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (0 + n * 2));         // Clear lower half of faces 0 & 1 (offsets 0, 2)
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (0 + ((n * 2) + 1))); // Clear upper half of faces 0 & 1 (offsets: 1, 3)
                         }
                         else
                         {
-                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + (0 + n)); // Clear faces 0 & 1
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (0 + n)); // Clear faces 0 & 1
                         }
                     }
                     ckernel_template::run(instrn_buffer);
                 }
             }
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
-            if constexpr (high_fidelity)
+            if (num_faces == 4)
             {
+                if constexpr (high_fidelity)
+                {
 #pragma GCC unroll 0
-                for (std::uint32_t n = 0; n < 2; n++)
-                { // N-num faces
-                    eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
-                    if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)
+                    for (std::uint32_t n = 0; n < 2; n++)
                     {
-                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
+                        eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                        if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)
                         {
-                            TT_ZEROACC(
-                                ZERO_ACC_MODE,
-                                ADDR_MOD_1,
-                                ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (4 + n * 2)); // Clear lower half of faces 2 & 3  (offsets: 4, 6)
-                            TT_ZEROACC(
-                                ZERO_ACC_MODE,
-                                ADDR_MOD_1,
-                                ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (4 + ((n * 2) + 1))); // Clear upper half of faces 2 & 3 (offsets: 5, 7)
+                            auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << (is_fp32_dest_acc_en && clear_fp32_dst_acc ? 3 : 2));
+                            // fp32 zeroacc can only clear 8x16 datums at a time, need to call twice per 16x16 face
+                            if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
+                            {
+                                TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (4 + n * 2));         // Clear lower half of faces 2 & 3  (offsets: 4, 6)
+                                TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (4 + ((n * 2) + 1))); // Clear upper half of faces 2 & 3 (offsets: 5, 7)
+                            }
+                            else
+                            {
+                                TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (2 + n)); // Clear faces 2 & 3
+                            }
                         }
-                        else
-                        {
-                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + (2 + n)); // Clear faces 2 & 3
-                        }
+                        ckernel_template::run(instrn_buffer);
                     }
-                    ckernel_template::run(instrn_buffer);
                 }
-            }
-            else
-            {
+                else
+                {
 #pragma GCC unroll 0
-                for (std::uint32_t n = 0; n < outerloop; n++)
-                { // N-num faces
-                    eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
-                    if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)
+                    for (std::uint32_t n = 0; n < outerloop; n++)
                     {
-                        if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
+                        eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
+                        if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)
                         {
-                            TT_ZEROACC(
-                                ZERO_ACC_MODE,
-                                ADDR_MOD_1,
-                                ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (4 + n * 2)); // Clear lower half of faces 2 & 3  (offsets: 4, 6)
-                            TT_ZEROACC(
-                                ZERO_ACC_MODE,
-                                ADDR_MOD_1,
-                                ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + (4 + ((n * 2) + 1))); // Clear upper half of faces 2 & 3 (offsets: 5, 7)
+                            auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << (is_fp32_dest_acc_en && clear_fp32_dst_acc ? 3 : 2));
+                            // fp32 zeroacc can only clear 8x16 datums at a time, need to call twice per 16x16 face
+                            if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
+                            {
+                                TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (4 + n * 2));         // Clear lower half of faces 2 & 3  (offsets: 4, 6)
+                                TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (4 + ((n * 2) + 1))); // Clear upper half of faces 2 & 3 (offsets: 5, 7)
+                            }
+                            else
+                            {
+                                TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (2 + n)); // Clear faces 2 & 3
+                            }
                         }
-                        else
-                        {
-                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + (2 + n)); // Clear faces 2 & 3
-                        }
+                        ckernel_template::run(instrn_buffer);
                     }
-                    ckernel_template::run(instrn_buffer);
                 }
+                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
             }
-            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
         }
         else
         {
@@ -250,18 +241,20 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
             {
 #pragma GCC unroll 0
                 for (std::uint32_t n = 0; n < num_faces; n++)
-                { // N-num faces
+                {
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
                     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)
                     {
+                        auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << (is_fp32_dest_acc_en && clear_fp32_dst_acc ? 3 : 2));
+                        // fp32 zeroacc can only clear 8x16 datums at a time, need to call twice per 16x16 face
                         if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
                         {
-                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + n * 2);
-                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + ((n * 2) + 1));
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (n * 2));
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + ((n * 2) + 1));
                         }
                         else
                         {
-                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + n);
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + n);
                         }
                     }
                     ckernel_template::run(instrn_buffer);
@@ -271,18 +264,20 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
             {
 #pragma GCC unroll 0
                 for (std::uint32_t n = 0; n < outerloop; n++)
-                { // N-num faces
+                {
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
                     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)
                     {
+                        auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << (is_fp32_dest_acc_en && clear_fp32_dst_acc ? 3 : 2));
+                        // fp32 zeroacc can only clear 8x16 datums at a time, need to call twice per 16x16 face
                         if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
                         {
-                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + n * 2);
-                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 3)) + ((n * 2) + 1));
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (n * 2));
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + ((n * 2) + 1));
                         }
                         else
                         {
-                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, ((get_dest_buffer_base() >> 4) + (dst_index << 2)) + n);
+                            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + n);
                         }
                     }
                     ckernel_template::run(instrn_buffer);

@@ -35,43 +35,40 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
         {
             TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         }
+        else if constexpr (HIGH_FIDELITY)
+        {
+            ckernel_template::run(instrn_buffer);
+            TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
+        }
         else
         {
-            if constexpr (HIGH_FIDELITY)
-            {
-                ckernel_template::run(instrn_buffer);
-                TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
-            }
-            else
-            {
-                TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-            }
+            TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         }
 
         if constexpr (type == PoolType::MAX)
         {
             TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         }
+        else if constexpr (HIGH_FIDELITY)
+        {
+            ckernel_template::run(instrn_buffer);
+        }
         else
         {
-            if constexpr (HIGH_FIDELITY)
-            {
-                ckernel_template::run(instrn_buffer);
-            }
-            else
-            {
-                TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-            }
+            TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
         }
 
-        // Workaround for tenstorrent/budabackend#1948
+        // Datums stored in int32 dest cannot be moved to SrcB which is configured for int8 inputs
+        // Cast int32 datums to int8 using SFPU instructions (load int32, store int8) before moving data to srcB
+        // Besides SFPU instructions to do cast we also need to set chicken bit FP16A_FORCE_Enable to force dest
+        // view to be fp16a as int8 datums are stored in src registers as fp16a
         if constexpr (is_int_fpu_en)
         {
             TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 0);
-            TTI_SFPSTORE(0, 5, ADDR_MOD_0, 0);
-            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 2);
-            TTI_SFPSTORE(0, 5, ADDR_MOD_0, 2);
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0 /*DEST offset*/);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0 /*DEST offset*/);
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2 /*DEST offset*/);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2 /*DEST offset*/);
             TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
             TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
         }
@@ -104,27 +101,31 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
         TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
         TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
 
-        // Increment dest by 32 or 16 if narrow tile for the next accumulation
-        if (!narrow_tile)
+        if (num_faces == 2 && !narrow_tile)
         {
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-        }
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-        TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
-
-        /////////////////////
-        // Second Tile Row //
-        /////////////////////
-
-        // Transpose at unpacker and pool
-        if constexpr (type == PoolType::MAX)
-        {
-            TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
         }
         else
         {
-            if constexpr (HIGH_FIDELITY)
+            // Increment dest by 32 or 16 if narrow tile for the next accumulation
+            if (!narrow_tile)
+            {
+                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            }
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
+
+            /////////////////////
+            // Second Tile Row //
+            /////////////////////
+
+            // Transpose for each face in src A done at unpacker, and pool
+            if constexpr (type == PoolType::MAX)
+            {
+                TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            }
+            else if constexpr (HIGH_FIDELITY)
             {
                 ckernel_template::run(instrn_buffer);
                 TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
@@ -133,15 +134,12 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
             {
                 TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
-        }
 
-        if constexpr (type == PoolType::MAX)
-        {
-            TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-        }
-        else
-        {
-            if constexpr (HIGH_FIDELITY)
+            if constexpr (type == PoolType::MAX)
+            {
+                TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            }
+            else if constexpr (HIGH_FIDELITY)
             {
                 ckernel_template::run(instrn_buffer);
             }
@@ -149,48 +147,51 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
             {
                 TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
-        }
-        // Workaround for tenstorrent/budabackend#1948
-        if constexpr (is_int_fpu_en)
-        {
-            TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 0);
-            TTI_SFPSTORE(0, 5, ADDR_MOD_0, 0);
-            TTI_SFPLOAD(0, 4, ADDR_MOD_0, 2);
-            TTI_SFPSTORE(0, 5, ADDR_MOD_0, 2);
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
-        }
-
-        // Move back to B and transpose
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
-        /*
-        if constexpr (is_fp32_dest_acc_en) {
-            if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+            // Datums stored in int32 dest cannot be moved to SrcB which is configured for int8 inputs
+            // Cast int32 datums to int8 using SFPU instructions (load int32, store int8) before moving data to srcB
+            // Besides SFPU instructions to do cast we also need to set chicken bit FP16A_FORCE_Enable to force dest
+            // view to be fp16a as int8 datums are stored in src registers as fp16a
+            if constexpr (is_int_fpu_en)
+            {
                 TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-                TTI_SFPLOAD(0, 0, 3, 0);
-                TTI_SFP_STOCH_RND(0,0,0,0,0,8);
-                TTI_SFPSTORE(0,1,3,0);
+                TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0 /*DEST offset*/);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0 /*DEST offset*/);
+                TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2 /*DEST offset*/);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2 /*DEST offset*/);
+                TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+                TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
             }
-        }
-        */
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // Note: transpose on src B on works on rows 16 - 31
-        TTI_TRNSPSRCB;
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        if constexpr (is_int_fpu_en)
-        {
-            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
-        }
 
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-        TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
-        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
-        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+            // Move back to B and transpose
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
+            /*
+            if constexpr (is_fp32_dest_acc_en) {
+                if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+                    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+                    TTI_SFPLOAD(0, 0, 3, 0);
+                    TTI_SFP_STOCH_RND(0,0,0,0,0,8);
+                    TTI_SFPSTORE(0,1,3,0);
+                }
+            }
+            */
+            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+            // Note: transpose on src B on works on rows 16 - 31
+            TTI_TRNSPSRCB;
+            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+            if constexpr (is_int_fpu_en)
+            {
+                TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
+            }
 
-        // Increment dest by 32 for next accumulation
-        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+            TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
+            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+            TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+
+            // Increment dest by 32 for next accumulation
+            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
+        }
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
     {
