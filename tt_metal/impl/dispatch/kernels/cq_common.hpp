@@ -211,8 +211,21 @@ FORCE_INLINE void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_
     cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size);
 }
 
+//
+// Execute NoC Inline DW Write with preset register state
+//
+// NOTE: This function calls "cq_noc_async_write_with_state" for BH. See "noc_async_write" for more details.
+//
 template <enum CQNocInlineFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
 FORCE_INLINE void cq_noc_inline_dw_write_with_state(uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF) {
+#if defined(ARCH_BLACKHOLE)
+    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc_index, dst_addr);
+    volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
+    *inline_l1_src_addr_ptr = val;
+    cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_REG_CMD_BUF>(
+        inline_l1_src_addr, dst_addr, 4);
+#else
     if constexpr (wait) {
         WAYPOINT("NISW");
         while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_REG_CMD_BUF));
@@ -246,11 +259,16 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(uint64_t dst_addr, uint32_t 
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_index, NCRISC_WR_REG_CMD_BUF);
         NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
+#endif
 }
 
+// Initialize NoC register state for inline dw write
+//
+// NOTE: This function calls "cq_noc_async_write_init_state" for BH. See "noc_inline_dw_write" for more details.
+//
 // TODO: noc_inline_dw_write currently hardcodes most of these parameters, which we copied here
 // If needed, add templates for setting these
-// TODO: uplift for BH to not do inline write
+//
 template <enum CQNocInlineFlags flags>
 FORCE_INLINE void cq_noc_inline_dw_write_init_state(uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF) {
     WAYPOINT("NIIW");
@@ -270,9 +288,13 @@ FORCE_INLINE void cq_noc_inline_dw_write_init_state(uint64_t dst_addr, uint32_t 
                                        (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) |
                                        (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
+#if defined(ARCH_BLACKHOLE)
+    cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, NCRISC_WR_REG_CMD_BUF>(0, dst_addr, 0);
+#else
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_CTRL, noc_cmd_field);
 
     cq_noc_inline_dw_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send>(dst_addr, val, be);
+#endif
 }
 
 template <uint32_t sem_id>

@@ -1450,20 +1450,32 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
         stall_state = NOT_STALLED;
     }
 
+    // Initialize NoC state
+    cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0);
+
     uint32_t downstream_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
     if (downstream_pages_left >= npages) {
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
+        cq_noc_async_write_with_state<CQ_NOC_SnDL>(
+            data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
+        noc_nonposted_writes_num_issued[noc_index]++;
+        noc_nonposted_writes_acked[noc_index]++;
         downstream_data_ptr += npages * downstream_cb_page_size;
     } else {
         uint32_t tail_pages = npages - downstream_pages_left;
         uint32_t available = downstream_pages_left * downstream_cb_page_size;
         if (available > 0) {
-            noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
+            cq_noc_async_write_with_state<CQ_NOC_SnDL>(
+                data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
+            noc_nonposted_writes_num_issued[noc_index]++;
+            noc_nonposted_writes_acked[noc_index]++;
             data_ptr += available;
             length -= available;
         }
 
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
+        cq_noc_async_write_with_state<CQ_NOC_SnDL>(
+            data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
+        noc_nonposted_writes_num_issued[noc_index]++;
+        noc_nonposted_writes_acked[noc_index]++;
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
 
@@ -1634,8 +1646,11 @@ void kernel_main() {
     }
     IDLE_ERISC_RETURN();
 
+    DPRINT << "Prefetch wait all pages" << ENDL();
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_downstream_cb_sem_id>(downstream_cb_pages);
+
+    DPRINT << "Prefetch wait full barrier pages" << ENDL();
 
     noc_async_full_barrier();
 
