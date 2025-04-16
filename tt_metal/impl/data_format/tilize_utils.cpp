@@ -127,7 +127,7 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
-    const bool transpose_face_order) {
+    bool transpose_face_order) {
     ZoneScoped;
     std::vector<T> result;
     if (in_tile_swizzled.size() == 0) {
@@ -140,6 +140,11 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
     auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
+    uint32_t row_faces = tile_H / face_H;
+    uint32_t col_faces = tile_W / face_W;
+
+    // We don't transpose face order if we have only one face in the row or column
+    transpose_face_order = transpose_face_order && row_faces > 1 && col_faces > 1;
 
     TT_FATAL(in_tile_swizzled.size() % tile_HW == 0, "Input size must be divisible by tile size");
     result.resize(in_tile_swizzled.size());
@@ -185,7 +190,7 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
-    const bool transpose_face_order) {
+    bool transpose_face_order) {
     ZoneScoped;
     std::vector<T> result(in_tile_nfaces.size());
     if (in_tile_nfaces.size() == 0) {
@@ -197,8 +202,15 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
     auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
+
+    uint32_t row_faces = tile_H / face_H;
+    uint32_t col_faces = tile_W / face_W;
     auto num_faces_col = tile_W / face_W;
     auto num_faces_row = tile_H / face_H;
+
+    // We don't transpose face order if we have only one face in the row or column
+    transpose_face_order = transpose_face_order && row_faces > 1 && col_faces > 1;
+
     TT_FATAL(in_tile_nfaces.size() % tile_HW == 0, "Input size must be divisible by tile size");
     int num_tiles = in_tile_nfaces.size() / tile_HW;
     size_t dest_idx = 0;
@@ -336,7 +348,7 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     std::optional<PhysicalSize> tile_shape,
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
-    const bool transpose_face_order) {
+    bool transpose_face_order) {
     ZoneScoped;
 
     uint32_t H = shape[0];
@@ -350,9 +362,15 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
     auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
     auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
+
+    uint32_t row_faces = tile_H / face_H;
+    uint32_t col_faces = tile_W / face_W;
     uint32_t row_tiles = H / tile_H;
     uint32_t col_tiles = W / tile_W;
     uint32_t row_of_tiles_num_elements = tile_H * W;
+
+    // We don't transpose face order if we have only one face in the row or column
+    transpose_face_order = transpose_face_order && row_faces > 1 && col_faces > 1;
 
     TT_FATAL(in_nfaces.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
     TT_FATAL((in_nfaces.size() % (H * W)) == 0, "Input size must be divisible by H and W");
@@ -364,12 +382,8 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
                           uint32_t face_h_index_src,
                           uint32_t face_w_index_src,
                           uint32_t col_tile) {
-        uint32_t face_h_index_dst = face_h_index_src;
-        uint32_t face_w_index_dst = face_w_index_src;
-        if (transpose_face_order) {
-            face_h_index_dst = face_w_index_src;
-            face_w_index_dst = face_h_index_src;
-        }
+        uint32_t face_h_index_dst = transpose_face_order ? face_w_index_src : face_h_index_src;
+        uint32_t face_w_index_dst = transpose_face_order ? face_h_index_src : face_w_index_src;
         if (!transpose_face) {
             for (uint32_t row = 0; row < face_H; row++) {
                 size_t src_idx = row_tile_start + col_tile * tile_H * tile_W + face_h_index_src * face_H * tile_W +
@@ -397,9 +411,9 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     for (size_t i = 0; i < B; i++) {
         uint32_t row_tile_start = batch_start;
         for (uint32_t row_tile = 0; row_tile < row_tiles; row_tile++) {
-            for (uint32_t col_tile = 0; col_tile < W / tile_W; col_tile++) {
-                for (uint32_t face_h_idx = 0; face_h_idx < tile_H / face_H; face_h_idx++) {
-                    for (uint32_t face_w_idx = 0; face_w_idx < tile_W / face_W; face_w_idx++) {
+            for (uint32_t col_tile = 0; col_tile < col_tiles; col_tile++) {
+                for (uint32_t face_h_idx = 0; face_h_idx < row_faces; face_h_idx++) {
+                    for (uint32_t face_w_idx = 0; face_w_idx < col_faces; face_w_idx++) {
                         write_face(output, in_nfaces, row_tile_start, face_h_idx, face_w_idx, col_tile);
                     }
                 }

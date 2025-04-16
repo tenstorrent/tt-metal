@@ -11,7 +11,7 @@
 
 #include "assert.hpp"
 #include "gtest/gtest.h"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace reference {
 template <typename T>
@@ -306,9 +306,9 @@ std::vector<T> convert_layout(
 
 template <typename T>
 std::vector<T>& get_test_data() {
-    constexpr size_t MAX_BATCH = 10;
-    constexpr size_t MAX_ROWS = 512;
-    constexpr size_t MAX_COLS = 512;
+    constexpr size_t MAX_BATCH = 1;
+    constexpr size_t MAX_ROWS = 1024;
+    constexpr size_t MAX_COLS = 1024;
 
     static std::vector<T> data;
     if (!data.empty()) {
@@ -456,11 +456,10 @@ INSTANTIATE_TEST_SUITE_P(
             TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
         ::testing::Values(
             TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
-        ::testing::Values(
-            std::nullopt, PhysicalSize{16, 16}),  // tile_shape. Sometimes tile shape == face shape in real scenarios
-        ::testing::Values(std::nullopt),          // face_shape
-        ::testing::Bool(),                        // transpose_within_face  true doesn't work even in reference
-        ::testing::Bool()                         // transpose_of_faces     true doesn't work even in reference
+        ::testing::Values(std::nullopt, PhysicalSize{16, 16}),  // tile_shape.
+        ::testing::Values(std::nullopt),                        // face_shape
+        ::testing::Bool(),  // transpose_within_face  true doesn't work even in reference
+        ::testing::Bool()   // transpose_of_faces     true doesn't work even in reference
         ));
 
 // Test that tilize and then untilize give the same result as the original data
@@ -518,3 +517,58 @@ INSTANTIATE_TEST_SUITE_P(
             TensorLayoutType::LIN_ROW_MAJOR,
             TensorLayoutType::TILED_NFACES,
             1024)));
+
+using NonSquareTilesParams =
+    std::tuple<PhysicalSize, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, bool>;
+
+class NonSquareTilesTestFixture : public ::testing::TestWithParam<NonSquareTilesParams> {};
+
+TEST_P(NonSquareTilesTestFixture, ConvertLayout) {
+    auto params = GetParam();
+    PhysicalSize shape = std::get<0>(params);
+    auto from_layout = std::get<1>(params);
+    auto to_layout = std::get<2>(params);
+    auto tile_shape = std::get<3>(params);
+    auto transpose = std::get<4>(params);
+
+    if (from_layout == to_layout) {
+        return;
+    }
+
+    uint32_t n_rows = shape[0];
+    uint32_t n_cols = shape[1];
+    size_t n_elements = n_rows * n_cols;
+
+    auto run_for_type = [&](auto type) {
+        using Type = decltype(type);
+        const auto& data = get_test_data<Type>();
+        tt::stl::Span<const Type> input(data.data(), n_elements);
+
+        auto output =
+            convert_layout(input, shape, from_layout, to_layout, tile_shape, std::nullopt, transpose, transpose);
+
+        auto output_ref = reference::convert_layout(
+            input, shape, from_layout, to_layout, tile_shape, std::nullopt, transpose, transpose);
+
+        ASSERT_EQ(output.size(), output_ref.size());
+        ASSERT_EQ(output, output_ref);
+    };
+
+    run_for_type(bfloat16{});
+    run_for_type(float{});
+    run_for_type(int32_t{});
+    run_for_type(uint32_t{});
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    NonSquareTilesTest,
+    NonSquareTilesTestFixture,
+    ::testing::Combine(
+        ::testing::Values(PhysicalSize{0, 0}, PhysicalSize{32, 32}, PhysicalSize{384, 768}),  // shape
+        ::testing::Values(
+            TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
+        ::testing::Values(
+            TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
+        ::testing::Values(PhysicalSize{32, 16}, PhysicalSize{16, 32}),  // tile_shape.
+        ::testing::Bool()                                               // transpose
+        ));
