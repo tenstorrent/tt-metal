@@ -319,7 +319,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
         this->head_dim);
 }
 
-const tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
+tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
     const std::vector<Tensor>& input_tensors) const {
     auto input_shape = input_tensors[0].get_padded_shape();
     auto input_memory_layout = input_tensors[0].get_layout();
