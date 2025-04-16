@@ -32,6 +32,7 @@
 #include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -263,12 +264,10 @@ void DevicePool::initialize(
     _inst->skip_remote_devices = skip;
 
     _inst->add_devices_to_pool(device_ids);
-    _inst->init_firmware_on_active_devices();
-
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(
         true, target_mmio_ids);
+    _inst->init_firmware_on_active_devices();
     _inst->wait_for_fabric_router_sync();
-    _inst->init_profiler_devices();
 }
 
 void DevicePool::initialize_host(IDevice* dev) const {
@@ -623,7 +622,7 @@ void DevicePool::init_firmware_on_active_devices() const {
             }
         }
     }
-
+    this->init_profiler_devices();
     this->initialize_active_devices();
 }
 
@@ -670,7 +669,6 @@ bool DevicePool::close_device(chip_id_t device_id) {
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
     ZoneScoped;
-    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
     bool pass = true;
     const auto& mmio_device_id =
@@ -691,7 +689,6 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     std::vector<chip_id_t> devices_to_close;
 
     ZoneScoped;
-    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;
@@ -787,6 +784,8 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
                 dev, fabric_master_router_core, fabric_router_sync_sem_addr, master_router_terminate, CoreType::ETH);
         }
     }
+
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
 
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
     for (const auto& dev_id : devices_to_close) {
