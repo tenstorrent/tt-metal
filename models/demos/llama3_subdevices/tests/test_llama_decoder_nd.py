@@ -39,6 +39,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 165136000,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
