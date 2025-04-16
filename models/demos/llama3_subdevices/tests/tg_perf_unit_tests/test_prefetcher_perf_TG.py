@@ -67,7 +67,7 @@ def test_dram_prefetcher_perf(
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=f"dram_prefetcher",
-        ml_model_name="llama70b-tg-unit",
+        ml_model_name="llama70b-tg",
     )
 
     assert (
