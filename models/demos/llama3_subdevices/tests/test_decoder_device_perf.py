@@ -61,7 +61,7 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.1,
     },
     "AllGatherAsync_0": {
-        "op_name": "AllGatherAsync_SDPA_0",
+        "op_name": "AllGatherAsync_SDPA",
         "kernel_duration": 11153.511574074075,
         "op_to_op": 676.4444444444445,
         "non-overlapped-dispatch-time": 2273.2,
@@ -612,30 +612,40 @@ def test_llama_TG_perf_device(
             op_name = perf_targets[op_code_with_id]["op_name"]
             avg_dispatch_duration = dispatch_duration_per_instance_averaged_dict[op_code_with_id]
             # average
-            benchmark_data.add_measurement(profiler, 0, step_name, op_name, avg_kernel_duration)
-            benchmark_data.add_measurement(profiler, 0, step_name, op_name + "_op_to_op", avg_dispatch_duration)
+            benchmark_data.add_measurement(profiler, 0, step_name, op_name + "-model-kernel-avg", avg_kernel_duration)
+            benchmark_data.add_measurement(
+                profiler, 0, step_name, op_name + "-model-op_to_op-avg", avg_dispatch_duration
+            )
 
             # min
             benchmark_data.add_measurement(
-                profiler, 0, step_name, op_name + "_min", kernel_duration_per_instance_min_dict[op_code_with_id]
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-kernel-min",
+                kernel_duration_per_instance_min_dict[op_code_with_id],
             )
             benchmark_data.add_measurement(
                 profiler,
                 0,
                 step_name,
-                op_name + "_op_to_op_min",
+                op_name + "-model-op_to_op-min",
                 dispatch_duration_per_instance_min_dict[op_code_with_id],
             )
 
             # max
             benchmark_data.add_measurement(
-                profiler, 0, step_name, op_name + "_max", kernel_duration_per_instance_max_dict[op_code_with_id]
+                profiler,
+                0,
+                step_name,
+                op_name + "-model-kernel-max",
+                kernel_duration_per_instance_max_dict[op_code_with_id],
             )
             benchmark_data.add_measurement(
                 profiler,
                 0,
                 step_name,
-                op_name + "_op_to_op_max",
+                op_name + "-model-op_to_op-max",
                 dispatch_duration_per_instance_max_dict[op_code_with_id],
             )
 
@@ -719,15 +729,15 @@ def test_llama_TG_perf_device(
     print(f"e2e estimate: {e2e_estimate_80l}")
 
     benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
-    # Estimated T/s/u is 1000000 / (80L-duration + ~1240 lmhead+sampling+embeddings + ~300 python-overhead
+    # Estimated T/s/u is 1000000 / (80L-duration + ~2100 lmhead+sampling+embeddings + ~300 python-overhead
     benchmark_data.add_measurement(
-        profiler, 0, step_name, "tsu_estimate", 1000000 / (e2e_estimate_80l / 1000 + 1240 + 300)
+        profiler, 0, step_name, "tsu_estimate", 1000000 / (e2e_estimate_80l / 1000 + 2100 + 300)
     )
 
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg-llama-demo-device-perf-default",
-        ml_model_name="tg-llama",
+        run_type=f"tg_llama_demo_decode",
+        ml_model_name="llama70b-tg",
     )
 
     assert passing
@@ -796,19 +806,21 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             expected_time = perf_targets[op_code_with_id]["non-overlapped-dispatch-time"]
             op_name = perf_targets[op_code_with_id]["op_name"]
 
-            benchmark_data.add_measurement(profiler, 0, step_name, op_name + "_dispatch", avg_dispatch_duration)
+            benchmark_data.add_measurement(
+                profiler, 0, step_name, op_name + "-model-dispatch-avg", avg_dispatch_duration
+            )
             benchmark_data.add_measurement(
                 profiler,
                 0,
                 step_name,
-                op_name + "_dispatch_min",
+                op_name + "-model-dispatch-min",
                 dispatch_duration_per_instance_min_dict[op_code_with_id],
             )
             benchmark_data.add_measurement(
                 profiler,
                 0,
                 step_name,
-                op_name + "_dispatch_max",
+                op_name + "-model-dispatch-max",
                 dispatch_duration_per_instance_max_dict[op_code_with_id],
             )
 
@@ -844,8 +856,8 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
 
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg-llama-demo-device-perf-non-overlapped-dispatch",
-        ml_model_name="tg-llama",
+        run_type=f"tg_llama_demo_decode",
+        ml_model_name="llama70b-tg",
     )
 
     assert passing
