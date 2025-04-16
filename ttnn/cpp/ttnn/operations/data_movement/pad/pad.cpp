@@ -208,7 +208,6 @@ static ttnn::Tensor pad_impl(
                 remove_prefix(output_shape, rank_diff);
                 remove_prefix(padded_shape, rank_diff);
                 output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(output_shape), ttnn::Shape(padded_shape));
-                output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
             }
         } else {
             output_tensor = ttnn::reshape(
