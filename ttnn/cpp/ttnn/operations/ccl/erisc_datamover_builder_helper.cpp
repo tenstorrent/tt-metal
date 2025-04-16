@@ -199,20 +199,24 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             for (size_t l = 0; l < num_links; l++) {
                 auto& edm_fwd = forward_direction_edm[l];
                 auto& edm_bwd = backward_direction_edm[l];
-                bool enable_core_placement_opt =
-                    (num_links > 2) &&
-                    (edm_fwd.my_noc_y !=
-                     edm_bwd.my_noc_y);  // optimize only on the same row and multi-link to not degrade other tests
+                // optimize only on the same row and multi-link to not degrade other tests
+                bool enable_core_placement_opt;
+                if (topology == Topology::Ring) {
+                    enable_core_placement_opt = (num_links > 3) && (edm_fwd.my_noc_y != edm_bwd.my_noc_y);
+                } else {
+                    enable_core_placement_opt = (num_links > 2) && (edm_fwd.my_noc_y != edm_bwd.my_noc_y);
+                }
                 if (enable_core_placement_opt) {
                     if (edm_fwd.my_noc_x < edm_bwd.my_noc_x) {
-                        tt::log_info(
-                            "smaller edm_fwd {} {} {} edm_bwd {} {} {}",
+                        log_info(
+                            tt::LogTest,
+                            "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
                             edm_fwd.my_chip_id,
                             edm_fwd.my_noc_x,
                             edm_fwd.my_noc_y,
-                            edm_bwd.my_chip_id,
                             edm_bwd.my_noc_x,
-                            edm_bwd.my_noc_y);
+                            edm_bwd.my_noc_y,
+                            l);
                         for (uint32_t i = 0; i < edm_fwd.config.num_receiver_channels; i++) {
                             edm_fwd.config.receiver_channel_forwarding_noc_ids[i] = 0;
                             edm_bwd.config.receiver_channel_forwarding_noc_ids[i] = 1;
@@ -226,14 +230,15 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                             edm_bwd.config.sender_channel_ack_noc_ids[i] = 0;
                         }
                     } else if (edm_fwd.my_noc_x > edm_bwd.my_noc_x) {
-                        tt::log_info(
-                            "larger edm_fwd {} {} {} edm_bwd {} {} {}",
+                        log_info(
+                            tt::LogTest,
+                            "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
                             edm_fwd.my_chip_id,
                             edm_fwd.my_noc_x,
                             edm_fwd.my_noc_y,
-                            edm_bwd.my_chip_id,
                             edm_bwd.my_noc_x,
-                            edm_bwd.my_noc_y);
+                            edm_bwd.my_noc_y,
+                            l);
                         for (uint32_t i = 0; i < edm_fwd.config.num_receiver_channels; i++) {
                             edm_fwd.config.receiver_channel_forwarding_noc_ids[i] = 1;
                             edm_bwd.config.receiver_channel_forwarding_noc_ids[i] = 0;
