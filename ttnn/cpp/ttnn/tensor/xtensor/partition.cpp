@@ -9,11 +9,11 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 #include <type_traits>
-#include <xtensor/xadapt.hpp>
-#include <xtensor/xdynamic_view.hpp>
-#include <xtensor/xstorage.hpp>
-#include <xtensor/xtensor_forward.hpp>
-#include <xtensor/xview.hpp>
+#include <xtensor/containers/xadapt.hpp>
+#include <xtensor/views/xdynamic_view.hpp>
+#include <xtensor/containers/xstorage.hpp>
+#include <xtensor/core/xtensor_forward.hpp>
+#include <xtensor/views/xview.hpp>
 
 namespace ttnn::experimental::xtensor {
 namespace {
