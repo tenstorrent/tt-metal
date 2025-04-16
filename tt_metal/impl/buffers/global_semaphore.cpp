@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "mesh_device.hpp"
-#include "reflection.hpp"
+#include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {

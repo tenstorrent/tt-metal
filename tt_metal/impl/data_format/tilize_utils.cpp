@@ -11,7 +11,7 @@
 
 #include "assert.hpp"
 #include "constants.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 TensAddr::TensAddr(const std::vector<std::uint32_t>& shape) : sh(shape) {}
 
