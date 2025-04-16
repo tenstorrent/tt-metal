@@ -60,6 +60,7 @@ jobs:
         if: ${{ contains(matrix.test-group.name, 'performance') }}
         run: |
           sudo cpupower frequency-set -g performance
+      - uses: ./.github/actions/ensure-active-weka-mount
       - name: Run demo regression tests
         uses: ./.github/actions/docker-run
         timeout-minutes: 70
