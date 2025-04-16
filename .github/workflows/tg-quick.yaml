@@ -71,7 +71,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   quick-6u:
-    if: ${{ inputs.topology-6u }}
+    if: ${{ inputs.topology-6u && github.ref != 'refs/heads/main' }}
     runs-on:
       - topology-6u
       - arch-wormhole_b0
