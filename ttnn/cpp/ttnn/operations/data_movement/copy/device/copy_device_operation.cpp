@@ -100,7 +100,12 @@ operation::ProgramWithCallbacks CopyDeviceOperation::create_program(
 
     switch (CopyDeviceOperation::get_parallelization_strategy(input_tensors)) {
         case CopyOpParallelizationStrategy::MULTI_CORE:
-        default: return copy_multi_core(input_tensor, output_tensor);
+        default: {
+            if (sub_core_grids.has_value()) {
+                return copy_multi_core_with_sub_core_grids(input_tensor, output_tensor, sub_core_grids.value());
+            }
+            return copy_multi_core(input_tensor, output_tensor);
+        }
     }
 }
 
