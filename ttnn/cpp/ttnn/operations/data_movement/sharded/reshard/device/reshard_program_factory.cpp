@@ -565,7 +565,7 @@ compute_width_sharded_reshard_runtime_args(
 
     std::vector<WidthShardedRuntimeArgsForSingleCore> runtime_args_for_each_core;
 
-    bool is_final_local_core = false;
+    bool is_final_transfer = false;
     uint32_t local_shard_offset = 0;
     uint32_t remote_shard_offset = 0;
     uint32_t current_remote_core_idx = 0;
@@ -577,9 +577,10 @@ compute_width_sharded_reshard_runtime_args(
             const uint32_t remaining_output = remote_shard_width - remote_shard_offset;
 
             // The last core might have some garbage in it because of uneven shards
-            is_final_local_core = current_local_core_idx >= local_cores.size() - 1;
+            is_final_transfer = (current_local_core_idx >= local_cores.size() - 1) &&
+                                (current_remote_core_idx >= remote_cores.size() - 1);
             const uint32_t transfer_size =
-                is_final_local_core ? remaining_output : std::min(remaining_input, remaining_output);
+                is_final_transfer ? remaining_output : std::min(remaining_input, remaining_output);
 
             const auto bank_id = device->allocator()->get_bank_ids_from_logical_core(
                 remote_buffer_type, remote_cores[current_remote_core_idx])[0];
@@ -593,12 +594,12 @@ compute_width_sharded_reshard_runtime_args(
             local_shard_offset += transfer_size;
             remote_shard_offset += transfer_size;
 
-            // If the current output shard is full, move to the next one or we're done
+            // If the current output shard is full, move to the next one
             if (remote_shard_offset == remote_shard_width) {
                 ++current_remote_core_idx;
                 remote_shard_offset = 0;
             }
-            if (is_final_local_core) {
+            if (is_final_transfer) {
                 break;
             }
         }
@@ -618,8 +619,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
     auto device = input.device();
 
     tt::tt_metal::Program program{};
-
-    tt::log_info("input shape = {}, output shape = {}", input.get_logical_shape(), output.get_logical_shape());
 
     const auto& local_tensor = is_reader ? output : input;
     const auto& remote_tensor = is_reader ? input : output;
