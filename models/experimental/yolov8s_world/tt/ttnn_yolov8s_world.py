@@ -580,56 +580,52 @@ class TtImagePoolingAttn:
         x = [
             ttnn.to_layout(
                 ttnn.reshape(
-                    ttnn.permute(
-                        pool(
-                            input_tensor=ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT),
-                            batch_size=1,
-                            input_h=int(math.sqrt(x.shape[2])),
-                            input_w=int(math.sqrt(x.shape[2])),
-                            channels=x.shape[-1],
-                            kernel_size=[
-                                tt_adaptive_to_max_pool2d(
-                                    torch.randn(
-                                        x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
-                                    ),
-                                    (3, 3),
-                                )[0],
-                                tt_adaptive_to_max_pool2d(
-                                    torch.randn(
-                                        x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
-                                    ),
-                                    (3, 3),
-                                )[0],
-                            ],
-                            stride=[
-                                tt_adaptive_to_max_pool2d(
-                                    torch.randn(
-                                        x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
-                                    ),
-                                    (3, 3),
-                                )[1],
-                                tt_adaptive_to_max_pool2d(
-                                    torch.randn(
-                                        x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
-                                    ),
-                                    (3, 3),
-                                )[1],
-                            ],
-                            padding=[0, 0],
-                            dilation=[1, 1],
-                            memory_config=ttnn.L1_MEMORY_CONFIG,
-                            applied_shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                        ),
-                        (0, 3, 1, 2),
+                    pool(
+                        input_tensor=ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT),
+                        batch_size=1,
+                        input_h=int(math.sqrt(x.shape[2])),
+                        input_w=int(math.sqrt(x.shape[2])),
+                        channels=x.shape[-1],
+                        kernel_size=[
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[0],
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[0],
+                        ],
+                        stride=[
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[1],
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[1],
+                        ],
+                        padding=[0, 0],
+                        dilation=[1, 1],
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                        applied_shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                     ),
-                    (bs, -1, num_patches),
+                    (bs, num_patches, -1),
                 ),
                 layout=ttnn.TILE_LAYOUT,
             )
             for (x, pool) in zip(x, self.im_pools)
         ]
-        x = ttnn.concat(x, dim=-1)
-        x = ttnn.permute(x, (0, 2, 1))
+        x = ttnn.concat(x, dim=1)
         q = ttnn.clone(text)
         for index, module in enumerate(self.query):
             if module == ttnn.linear:
