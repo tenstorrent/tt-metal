@@ -63,7 +63,9 @@ std::map<std::string, std::string> get_defines(
         case BinaryOpType::LT: defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst)); break;
         case BinaryOpType::GTE: defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst)); break;
         case BinaryOpType::LTE: defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst)); break;
-        case BinaryOpType::EQ: defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::EQ:
+            defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst, input_dtype));
+            break;
         case BinaryOpType::NE: defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst)); break;
         case BinaryOpType::SQUARED_DIFFERENCE:
             defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "0", idst));
@@ -295,7 +297,7 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         case BinaryOpType::EQ:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst1));
+            new_defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::NE:
             op_name = "sub_binary_tile";
