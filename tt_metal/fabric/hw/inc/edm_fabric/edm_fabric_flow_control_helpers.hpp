@@ -44,6 +44,13 @@ FORCE_INLINE auto wrap_increment(T val) -> T {
         return (val == static_cast<T>(LIMIT - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
     }
 }
+
+// Increments val and wraps to 0 if it reaches limit
+template <typename T>
+FORCE_INLINE auto wrap_increment(T val, T limit) -> T {
+    return (val == static_cast<T>(limit - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
+}
+
 template <size_t LIMIT, typename T>
 FORCE_INLINE auto wrap_increment_n(T val, uint8_t increment) -> T {
     constexpr bool is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
@@ -102,7 +109,6 @@ FORCE_INLINE uint8_t distance_behind(const BufferPtr& trailing_ptr, const Buffer
     constexpr bool is_size_pow2 = is_power_of_2(NUM_BUFFERS);
     constexpr uint8_t ptr_wrap_mask = (2 * NUM_BUFFERS) - 1;
     constexpr uint8_t ptr_wrap_size = 2 * NUM_BUFFERS;
-    bool leading_gte_trailing_ptr = leading_ptr >= trailing_ptr;
     if constexpr (is_size_pow2) {
         return (leading_ptr - trailing_ptr) & ptr_wrap_mask;
     } else {
