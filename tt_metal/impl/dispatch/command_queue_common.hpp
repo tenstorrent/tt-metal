@@ -25,7 +25,9 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     DISPATCH_S_SYNC_SEM = 6,
     FABRIC_HEADER_RB = 7,
     FABRIC_SYNC_STATUS = 8,
-    UNRESERVED = 9,
+    // Region shared between dispatch_s and dispatch_d if they're on the same core.
+    DISPATCH_SHARED_REGION = 9,
+    UNRESERVED = 10,
 };
 
 // likely only used in impl

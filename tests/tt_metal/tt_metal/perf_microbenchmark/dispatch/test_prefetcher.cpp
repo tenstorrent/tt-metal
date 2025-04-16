@@ -2245,6 +2245,10 @@ void configure_for_single_chip(
         {"FABRIC_2D", "0"},
         {"WORKER_MCAST_GRID", "0"},
         {"NUM_WORKER_CORES_TO_MCAST", "0"},
+        {"DISPATCH_SHARED_REGION",
+         std::to_string(MetalContext::instance()
+                            .dispatch_mem_map(CoreType::WORKER)
+                            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_SHARED_REGION))},
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
