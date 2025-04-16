@@ -26,7 +26,7 @@
 #include "llrt.hpp"
 #include "logger.hpp"
 #include "rtoptions.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "tt_memory.h"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"

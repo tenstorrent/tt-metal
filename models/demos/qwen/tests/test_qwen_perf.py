@@ -176,7 +176,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
         tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
         ttnn.deallocate(tt_out)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok)
         ttnn.deallocate(tt_out_rm)
 
         # Update the rotation matrix for the next iteration
