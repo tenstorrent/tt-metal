@@ -44,4 +44,11 @@ struct TensorInfo {
 
 std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace);
 
+// Returns the graphviz representation of the trace to be used for debug from c++ code
+//
+// To visualize the graph, dump the string to file, and use the following command to generate the image:
+// dot -Tpng yourfile.gv -o yourfile.png
+// or paste it to the online tools like https://dreampuf.github.io/GraphvizOnline
+std::string to_graphviz(const nlohmann::json& trace);
+
 }  // namespace ttnn::graph

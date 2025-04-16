@@ -328,4 +328,62 @@ uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace
     return peak_size_per_core;
 }
 
+std::string to_graphviz(const nlohmann::json& trace) {
+    std::ostringstream output;
+    output << "digraph G {\n";
+
+    std::unordered_map<std::string, std::string> nodeColors = {
+        {ttnn::graph::kNodeBuffer, "lightcyan"},
+        {ttnn::graph::kNodeBufferAllocate, "lightblue"},
+        {ttnn::graph::kNodeBufferDeallocate, "lightblue3"},
+        {ttnn::graph::kNodeTensor, "lightyellow"},
+        {ttnn::graph::kNodeCBAllocate, "hotpink"},
+        {ttnn::graph::kNodeCBDeallocateAll, "hotpink3"},
+        {ttnn::graph::kNodeFunctionStart, "grey62"},
+        {ttnn::graph::kNodeFunctionEnd, "grey44"},
+        {ttnn::graph::kNodeCaptureStart, "lightgoldenrod"},
+        {ttnn::graph::kNodeCaptureEnd, "lightgoldenrod4"}};
+
+    // Create nodes with labels
+    for (const auto& item : trace) {
+        int counter = item["counter"];
+        std::string node_type = item["node_type"];
+
+        // Start label with node type and counter
+        std::ostringstream label;
+        label << node_type << " (" << counter << ")\\n";
+
+        // Add params to label if available
+        if (item.contains("params") && item["params"].is_object()) {
+            for (const auto& [key, value] : item["params"].items()) {
+                label << key << ": " << value << "\\n";
+            }
+        }
+        std::string label_str = label.str();
+        std::replace(label_str.begin(), label_str.end(), '\"', '\'');
+
+        // Set node color based on node type
+        std::string color = nodeColors.count(node_type) ? nodeColors[node_type] : "white";
+
+        // Add the node with its label
+        output << "  \"" << counter << "\" [label=\"" << label_str << "\", style=filled, fillcolor=\"" << color
+               << "\"];\n";
+    }
+
+    // Create edges with labels based on connections
+    for (const auto& item : trace) {
+        int counter = item["counter"];
+        if (item.contains("connections") && item["connections"].is_array()) {
+            int connection_label = 1;  // Start label count from 1 for each node
+            for (const auto& connection : item["connections"]) {
+                output << "  \"" << counter << "\" -> \"" << connection << "\" [label=\"" << connection_label++
+                       << "\"];\n";
+            }
+        }
+    }
+
+    output << "}\n";
+    return output.str();
+}
+
 }  // namespace ttnn::graph
