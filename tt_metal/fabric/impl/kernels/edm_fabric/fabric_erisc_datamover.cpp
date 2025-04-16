@@ -348,10 +348,10 @@ bool did_something;
 
 template <uint8_t SENDER_NUM_BUFFERS, uint8_t RECEIVER_NUM_BUFFERS, uint8_t to_receiver_pkts_sent_id>
 FORCE_INLINE void send_next_data(
-    tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& sender_buffer_channel,
+    const tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& sender_buffer_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& sender_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& receiver_buffer_channel,
+    const tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& receiver_buffer_channel,
     uint8_t sender_channel_index) {
     auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
@@ -364,13 +364,20 @@ FORCE_INLINE void send_next_data(
     //       compare
     //       NOTE: if we always send full packet, then we don't need the second branch below dedicated for
     //             channel sync
-    volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
-        sender_buffer_channel.get_buffer_address(local_sender_write_buffer_index));
+
+    uint32_t src_addr;
+    if constexpr (is_power_of_2(SENDER_NUM_BUFFERS)) {
+        src_addr = sender_buffer_channel.get_buffer_address(BufferIndex{static_cast<uint8_t>(
+            static_cast<uint8_t>(local_sender_write_counter) & static_cast<uint8_t>(SENDER_NUM_BUFFERS - 1))});
+    } else {
+        src_addr = sender_buffer_channel.get_buffer_address(local_sender_write_buffer_index);
+    }
+
+    volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     ASSERT(tt::tt_fabric::is_valid(*const_cast<PACKET_HEADER_TYPE*>(pkt_header)));
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
     pkt_header->src_ch_id = sender_channel_index;
 
-    auto src_addr = (uint32_t)pkt_header;
     auto dest_addr = receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index);
     while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
     };
@@ -378,9 +385,11 @@ FORCE_INLINE void send_next_data(
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
-    local_sender_write_buffer_index =
-        BufferIndex{wrap_increment<SENDER_NUM_BUFFERS>(local_sender_write_buffer_index.get())};
     local_sender_write_counter++;
+    if constexpr (!is_power_of_2(SENDER_NUM_BUFFERS)) {
+        local_sender_write_buffer_index =
+            BufferIndex{wrap_increment<SENDER_NUM_BUFFERS>(local_sender_write_buffer_index.get())};
+    }
     // TODO: Put in fn
     remote_receiver_buffer_index =
         BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
