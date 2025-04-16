@@ -38,7 +38,6 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               bool enable_persistent_fabric_mode,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
@@ -52,8 +51,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                     num_links,
                     memory_config,
                     topology,
-                    subdevice_id,
-                    enable_persistent_fabric_mode);
+                    subdevice_id);
             },
             py::arg("input_tensor"),
             py::arg("buffer_tensor"),
@@ -67,7 +65,6 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("enable_persistent_fabric_mode") = false,
             py::arg("queue_id") = DefaultQueueId});
 }
 

@@ -19,9 +19,9 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
     TT_FATAL(
-        input_tensor_a.get_dtype() == DataType::BFLOAT16 or input_tensor_a.get_dtype() == DataType::UINT32 or
-            input_tensor_a.get_dtype() == DataType::FLOAT32,
-        "Can only tilize bfloat16/float32 or uint32 tensors");
+        input_tensor_a.get_dtype() == DataType::BFLOAT16 or input_tensor_a.get_dtype() == DataType::INT32 or
+            input_tensor_a.get_dtype() == DataType::UINT32 or input_tensor_a.get_dtype() == DataType::FLOAT32,
+        "Can only tilize bfloat16/float32 or int32/uint32 tensors");
 
     TT_FATAL(input_shape.rank() >= 1, "Input tensor must be of rank >= 1, but its shape is {}", input_shape);
 

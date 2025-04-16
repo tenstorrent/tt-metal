@@ -26,8 +26,7 @@ struct ReduceScatterAsync {
         std::optional<size_t> num_links_preferred,
         const GlobalSemaphore& from_remote_sem,
         const GlobalSemaphore& to_remote_sem,
-        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) :
+        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) :
         binary_op_type(binary_op_type),
         scatter_dim(scatter_dim),
         ring_size(ring_size),
@@ -41,7 +40,6 @@ struct ReduceScatterAsync {
         num_links_preferred(num_links_preferred),
         from_remote_sem(from_remote_sem),
         to_remote_sem(to_remote_sem),
-        fabric_handle(fabric_handle),
         sub_device_id(sub_device_id) {}
 
     const ttnn::operations::binary::BinaryOpType binary_op_type;
@@ -58,7 +56,6 @@ struct ReduceScatterAsync {
     std::optional<size_t> num_links_preferred;
     const GlobalSemaphore from_remote_sem;
     const GlobalSemaphore to_remote_sem;
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
     auto attributes() const {
@@ -107,8 +104,7 @@ tt::tt_metal::operation::ProgramWithCallbacks build_reduce_scatter_async_program
     std::optional<size_t> num_links_preferred,
     const GlobalSemaphore& from_remote_sem,
     const GlobalSemaphore& to_remote_sem,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 }
 };  // namespace ccl
 
@@ -126,8 +122,7 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::optional<size_t> num_links_preferred,
     const std::vector<GlobalSemaphore>& from_remote_sems,
     const std::vector<GlobalSemaphore>& to_remote_sems,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 }  // namespace reduce_scatter_detail
 }  // namespace ccl
 
@@ -143,8 +138,7 @@ Tensor reduce_scatter(
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt,   // TODO make reference
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);  // TODO make reference
 Tensor reduce_scatter(
     const Tensor& input_tensor,
     const int32_t dim,
@@ -157,8 +151,7 @@ Tensor reduce_scatter(
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt,   // TODO make reference
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt);  // TODO make reference
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);  // TODO make reference
 
 }  // namespace ccl
 }  // namespace experimental

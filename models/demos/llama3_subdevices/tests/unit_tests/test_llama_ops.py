@@ -29,7 +29,11 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
 )
 
 
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 @pytest.mark.parametrize("is_rmsnorm", [True])
 @pytest.mark.parametrize("seed", [0])
 @pytest.mark.parametrize("eps", [1e-6])

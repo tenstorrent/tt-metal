@@ -248,7 +248,7 @@ def run_grok_demo(user_input, batch_size, mesh_device, instruct_mode):
             pt_decode_input = embd(tt_token_batch).view(batch_size, seqlen, -1)
         else:  # Embedding/argmax on device
             # TODO Update argmax to ttnn when OP becomes available
-            tt_out_B11B = ttnn.argmax(tt_out_11BH, dim=-1)
+            tt_out_B11B = ttnn.argmax(tt_out_11BH, keepdim=True, dim=-1)
             tt_out_1B = ttnn.reshape(tt_out_B11B[:1, :, :, :], ttnn.Shape([1, batch_size]))  # [1, 32] Bfloat16
             # Update the users that are still in prefill and the ones generating new tokens
             if iteration < max_prompt_len:

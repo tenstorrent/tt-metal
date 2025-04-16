@@ -20,11 +20,11 @@ Note the current compatibility matrix:
 
 | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-| Wormhole             | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 to v3.0.5      | N/A                            |
-| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 to v3.0.5      | v1.1.3 or above, `mesh` config |
-| TG (Wormhole 4U)     | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.10.1.0                          | v2.2.0 to v3.0.5      | v1.1.3 or above, `mesh` config |
-| Galaxy (Wormhole 6u) | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
-| Blackhole            | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.15.0.0 (v80.15.0.0)             | v3.0.5 or above       | v1.1.3 or above, `mesh` config |
+| Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | 1.31 or above      | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.1.3 or above, `mesh` config |
+| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | 1.31 or above      | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.1.3 or above, `mesh` config |
+| Wormhole             | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
+| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.1.3 or above, `mesh` config |
+| Blackhole            | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.15.0.0 (v80.15.0.0)             | v3.0.5 or above       | N/A                            |
 
 #### Install System-level Dependencies
 ```
@@ -59,6 +59,10 @@ cd ..
 ---
 
 #### Update Device TT-Firmware with TT-Flash
+
+> [!CAUTION]
+> Be sure to align the FW version with the compatible version in the table above for your particular configuration.
+
 - Install TT-Flash:
 
 ```
@@ -111,6 +115,10 @@ Once hardware and system software are installed, verify that the system has been
 ---
 
 #### (Optional) Multi-Card Configuration (TT-Topology)
+
+> [!CAUTION]
+> Be sure to align the topology version with the compatible version in the table above for your particular configuration.
+
 - For TT-Loudbox or TT-QuietBox systems, visit Tenstorrent's [TT-Topology README](https://github.com/tenstorrent/tt-topology/blob/main/README.md).
 
 ---

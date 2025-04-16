@@ -139,7 +139,12 @@ std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord e
 }
 
 std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_sockets(this->id_, connected_chip_id);
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config() !=
+        tt::tt_metal::FabricConfig::DISABLED) {
+        return tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_routers_between_src_and_dest(this->id_, connected_chip_id);
+    } else {
+        return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_sockets(this->id_, connected_chip_id);
+    }
 }
 
 bool Device::is_mmio_capable() const {
@@ -1079,6 +1084,7 @@ void Device::init_command_queue_device() {
             sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices(),
             sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data());
     }
+    dispatch_firmware_active_ = true;
 }
 
 void Device::init_fabric() {
@@ -1190,7 +1196,9 @@ bool Device::close() {
         hw_command_queue->terminate();
     }
 
+    dispatch_firmware_active_ = false;
     this->work_executor_->reset();
+
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     sub_device_manager_tracker_.reset(nullptr);

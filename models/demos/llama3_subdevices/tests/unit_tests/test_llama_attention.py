@@ -25,7 +25,11 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [

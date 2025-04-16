@@ -52,7 +52,7 @@ sentencepiece==0.2.0
 numba>=0.58.1
 librosa==0.10.0
 timm==0.6.13
-ultralytics==8.2
+ultralytics==8.3.107
 opencv-python-headless==4.8.1.78
 diffusers==0.32.2
 accelerate==0.27.2

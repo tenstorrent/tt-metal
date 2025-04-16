@@ -19,6 +19,7 @@ void bind_reduction_argmax_operation(py::module& module) {
 
             Returns the indices of the maximum value of elements in the ``input`` tensor
             If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
+            If no ``keepdim`` is provided, it will default to `False`.
 
             Currenly this op only support dimension-specific reduction on last dimension.
 
@@ -30,13 +31,14 @@ void bind_reduction_argmax_operation(py::module& module) {
 
             .. code-block:: python
 
-                return torch.argmax(input_tensor, dim=dim)
+                return torch.argmax(input_tensor, dim=dim, keepdim=keepdim)
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
 
             Keyword args:
                 dim (int, optional): dimension to reduce. Defaults to `None`.
+                keepdim (bool, optional): whether to keep the reduced dimension. Defaults to `False`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 queue_id (int, optional): command queue id. Defaults to `0`.
@@ -55,17 +57,26 @@ void bind_reduction_argmax_operation(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const std::optional<int> dim,
+               const bool keepdim,
                const std::optional<CoreRangeSet>& sub_core_grids,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor> optional_output_tensor,
                QueueId queue_id) {
                 return self(
-                    queue_id, input_tensor, dim, sub_core_grids, use_multicore, memory_config, optional_output_tensor);
+                    queue_id,
+                    input_tensor,
+                    dim,
+                    keepdim,
+                    sub_core_grids,
+                    use_multicore,
+                    memory_config,
+                    optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
-            py::kw_only(),
             py::arg("dim") = std::nullopt,
+            py::arg("keepdim") = false,
+            py::kw_only(),
             py::arg("sub_core_grids") = std::nullopt,
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
