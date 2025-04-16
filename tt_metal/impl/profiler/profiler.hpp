@@ -171,9 +171,6 @@ private:
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log);
 
-    // Push device results to tracy
-    void pushTracyDeviceResults();
-
     // Track the smallest timestamp dumped to file
     void firstTimestamp(uint64_t timestamp);
 
@@ -222,6 +219,9 @@ public:
         const std::vector<CoreCoord>& worker_cores,
         ProfilerDumpState state = ProfilerDumpState::NORMAL,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
+
+    // Push device results to tracy
+    void pushTracyDeviceResults();
 };
 
 std::shared_ptr<Buffer> get_control_buffer_view(
