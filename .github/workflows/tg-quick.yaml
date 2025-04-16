@@ -43,7 +43,6 @@ jobs:
         TT_METAL_ENABLE_ERISC_IRAM: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: --device /dev/tenstorrent
@@ -63,6 +62,7 @@ jobs:
         run: |
           pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick";
           pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "quick";
+          pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py;
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
@@ -84,9 +84,9 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+        TT_METAL_ENABLE_ERISC_IRAM: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: --device /dev/tenstorrent
