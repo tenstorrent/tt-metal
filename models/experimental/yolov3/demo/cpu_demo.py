@@ -2,24 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import cv2
-
-from loguru import logger
 from pathlib import Path
 
-from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
+import cv2
+import torch
+from loguru import logger
+
 from models.experimental.yolov3.reference.models.common import DetectMultiBackend
+from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
 from models.experimental.yolov3.reference.utils.general import (
+    check_img_size,
     non_max_suppression,
     scale_boxes,
     xyxy2xywh,
-    check_img_size,
 )
-from models.experimental.yolov3.reference.utils.plots import (
-    Annotator,
-    colors,
-)
+from models.experimental.yolov3.reference.utils.plots import Annotator, colors
 
 f = f"{Path(__file__).parent}"
 

@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from loguru import logger
-import ttnn
-from models.utility_functions import torch_to_tt_tensor_rm
-
-from models.experimental.ssd.tt.ssd_lite import *
 import torchvision.transforms as transforms
-from torchvision.utils import save_image
+from loguru import logger
 from PIL import Image
+from torchvision.utils import save_image
+
+import ttnn
+from models.experimental.ssd.tt.ssd_lite import *
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 def test_gs_demo():

@@ -2,22 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import bz2
-import torch
-import pytest
-from loguru import logger
 import os
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.tt_transformers.tt.common import (
-    get_prefill_rot_mat,
-    PagedAttentionConfig,
-)
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()

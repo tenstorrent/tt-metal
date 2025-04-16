@@ -2,18 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from typing import List, Optional, Tuple
+
+import torch
+
 import ttnn
-from models.experimental.llama.llama_utils import _make_causal_mask, _expand_mask, linear
-
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
-
+from models.experimental.llama.llama_utils import _expand_mask, _make_causal_mask, linear
 from models.experimental.llama.tt.llama_decoder import TtLlamaDecoderLayer
 from models.experimental.llama.tt.llama_layer_norm import TtLlamaRMSNorm
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 def build_decoders(

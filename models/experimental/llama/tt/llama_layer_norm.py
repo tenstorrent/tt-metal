@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from torch import nn
-from models.utility_functions import pad_by_zero
 
 import ttnn
+from models.utility_functions import pad_by_zero
 
 
 class TtLlamaRMSNorm(nn.Module):

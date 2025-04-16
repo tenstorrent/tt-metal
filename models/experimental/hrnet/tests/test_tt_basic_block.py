@@ -2,21 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import timm
+import torch
 from loguru import logger
 
-import timm
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-    comp_allclose,
-    comp_pcc,
-)
-
-from models.experimental.hrnet.tt.basicblock import (
-    TtBasicBlock,
-)
+from models.experimental.hrnet.tt.basicblock import TtBasicBlock
+from models.utility_functions import comp_allclose, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(
@@ -29,9 +21,7 @@ def test_hrnet_basic_block_inference(device, model_name, pcc, reset_seeds):
     model = timm.create_model(model_name, pretrained=True)
 
     # Torch BasicBlock
-    torch_model = model.stage2[BASIC_BLOCK_LAYER_INDEX].branches[
-        BASIC_BLOCK_LAYER_INDEX
-    ][BASIC_BLOCK_LAYER_INDEX]
+    torch_model = model.stage2[BASIC_BLOCK_LAYER_INDEX].branches[BASIC_BLOCK_LAYER_INDEX][BASIC_BLOCK_LAYER_INDEX]
 
     # Tt BasicBlock
     tt_model = TtBasicBlock(

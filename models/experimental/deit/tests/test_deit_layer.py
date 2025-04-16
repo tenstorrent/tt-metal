@@ -6,16 +6,9 @@ import torch
 from loguru import logger
 from transformers import DeiTModel
 
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
-    comp_pcc,
-    comp_allclose_and_pcc,
-)
-
-
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_layer import TtDeiTLayer
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 def test_deit_layer_inference(device, pcc=0.99):

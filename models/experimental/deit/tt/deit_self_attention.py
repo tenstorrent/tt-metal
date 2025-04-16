@@ -2,15 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import nn
-
 from typing import Optional
 
-import ttnn
+from torch import nn
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import torch_to_tt_tensor_rm
-from models.helper_funcs import Linear as TtLinear
+
+import ttnn
 from models.experimental.deit.tt.deit_config import DeiTConfig
+from models.helper_funcs import Linear as TtLinear
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtDeiTSelfAttention(nn.Module):

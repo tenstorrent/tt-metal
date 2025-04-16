@@ -4,16 +4,10 @@
 
 import torch
 from torch import nn
+from tt_lib.utils import pad_activation, pad_weight
 
 import ttnn
-from models.utility_functions import (
-    tilize_to_list,
-    untilize,
-    comp_allclose_and_pcc,
-    comp_pcc,
-)
-
-from tt_lib.utils import pad_activation, pad_weight
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc, tilize_to_list, untilize
 
 
 # tt_metal

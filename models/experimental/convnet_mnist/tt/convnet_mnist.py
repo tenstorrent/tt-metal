@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
-
-from models.experimental.convnet_mnist.reference.convnet import ConvNet
 from tt_lib.fallback_ops import fallback_ops
+
+import ttnn
+from models.experimental.convnet_mnist.reference.convnet import ConvNet
 from models.utility_functions import torch2tt_tensor
 
 

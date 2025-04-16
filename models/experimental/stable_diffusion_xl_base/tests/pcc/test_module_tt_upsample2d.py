@@ -1,17 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
-import ttnn
-from models.experimental.stable_diffusion_xl_base.tt.tt_upsample2d import TtUpsample2D
+import torch
 from diffusers import DiffusionPipeline
-from tests.ttnn.utils_for_testing import assert_with_pcc
+
+import ttnn
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import from_channel_last_ttnn, to_channel_last_ttnn
+from models.experimental.stable_diffusion_xl_base.tt.tt_upsample2d import TtUpsample2D
 from models.utility_functions import torch_random
-from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
-    to_channel_last_ttnn,
-    from_channel_last_ttnn,
-)
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("input_shape, up_block_id", [((1, 1280, 32, 32), 0), ((1, 640, 64, 64), 1)])

@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from typing import Callable, List, Optional
+
 import torch
 import torch.nn as nn
-from typing import Optional, Callable, List
 
 
 def _make_divisible(v: float, divisor: int, min_value: Optional[int] = None) -> int:

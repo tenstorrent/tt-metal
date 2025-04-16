@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import List, Set, Tuple
+
 import torch
 from torch import nn
-from typing import Set, List, Tuple
 
 
 def find_pruneable_heads_and_indices(

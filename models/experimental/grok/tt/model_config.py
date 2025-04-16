@@ -2,14 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import json
+import os
 from pathlib import Path
-from loguru import logger
+
 import torch
+from loguru import logger
+
 import ttnn
-from models.experimental.grok.reference.model import Grok1Model
 from models.experimental.grok.reference.configuration_grok1 import Grok1Config
+from models.experimental.grok.reference.model import Grok1Model
 
 
 class TtModelArgs:

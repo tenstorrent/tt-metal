@@ -3,16 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import torch
-import pytest
-import ttnn
-
-from loguru import logger
 from pathlib import Path
 
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
 from models.experimental.vgg.tt.vgg import *
+from models.experimental.vgg.vgg_utils import get_tt_cache_path, store_weights
 from models.utility_functions import torch_to_tt_tensor, unpad_from_zero
-from models.experimental.vgg.vgg_utils import store_weights, get_tt_cache_path
 
 
 @pytest.mark.parametrize(

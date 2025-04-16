@@ -2,21 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
-from loguru import logger
 import torchvision
+from loguru import logger
 
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    comp_pcc,
-)
+import ttnn
 from models.experimental.efficientnet.tt.efficientnet_conv import (
     TtEfficientnetConv2d,
     TtEfficientnetConv2dNormActivation,
 )
 from models.experimental.efficientnet.tt.efficientnet_model import reference_efficientnet_lite0
+from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor
 
 
 def run_efficientnet_conv2d(state_dict, base_address, reference_module, device):

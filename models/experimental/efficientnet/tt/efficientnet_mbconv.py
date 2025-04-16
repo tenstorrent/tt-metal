@@ -2,17 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
 import math
-
 from dataclasses import dataclass
-from typing import List, Callable, Optional
+from typing import Callable, List, Optional
 
+import torch
+
+import ttnn
 from models.experimental.efficientnet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation
-from models.experimental.efficientnet.tt.efficientnet_squeeze_excitation import (
-    TtEfficientnetSqueezeExcitation,
-)
+from models.experimental.efficientnet.tt.efficientnet_squeeze_excitation import TtEfficientnetSqueezeExcitation
 
 
 def _make_divisible(v: float, divisor: int, min_value=None) -> int:

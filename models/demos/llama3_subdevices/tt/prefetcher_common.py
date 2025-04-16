@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import ttnn
 import torch
 from loguru import logger
+
+import ttnn
 from models.common.lightweightmodule import LightweightModule
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,

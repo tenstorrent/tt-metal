@@ -2,10 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional
+
 import torch
+
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.bloom_model as bloom_model
-from typing import Optional
 
 
 class TtBloomForQuestionAnswering:

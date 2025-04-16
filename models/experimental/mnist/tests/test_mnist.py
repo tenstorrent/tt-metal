@@ -3,19 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torch.utils.data import DataLoader
-from torchvision import transforms, datasets
 from loguru import logger
 from numpy import argmax
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
 
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    comp_pcc,
-    is_wormhole_b0,
-    is_blackhole,
-)
 from models.experimental.mnist.tt.mnist_model import mnist_model
+from models.utility_functions import comp_pcc, is_blackhole, is_wormhole_b0, torch2tt_tensor, tt2torch_tensor
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")

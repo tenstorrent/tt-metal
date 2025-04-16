@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from models.utility_functions import pad_by_zero
 
 import ttnn
+from models.utility_functions import pad_by_zero
 
 
 class TtT5LayerNorm(torch.nn.Module):

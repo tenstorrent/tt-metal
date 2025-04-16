@@ -3,17 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Union
+
 from torch import nn
 from transformers import DeiTForImageClassification
 
 import ttnn
-
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_model import TtDeiTModel
 from models.helper_funcs import Linear as TtLinear
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-)
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtDeiTForImageClassification(nn.Module):

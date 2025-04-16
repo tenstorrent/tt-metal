@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 from typing import Optional
+
 import torch
-from ttnn.model_preprocessing import (
-    preprocess_linear_bias,
-    preprocess_linear_weight,
-)
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
+
+import ttnn
 
 
 def get_head_mask(

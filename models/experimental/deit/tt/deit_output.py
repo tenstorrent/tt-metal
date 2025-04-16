@@ -5,10 +5,9 @@
 from torch import nn
 
 import ttnn
-
-from models.utility_functions import torch_to_tt_tensor_rm
-from models.helper_funcs import Linear as TtLinear
 from models.experimental.deit.tt.deit_config import DeiTConfig
+from models.helper_funcs import Linear as TtLinear
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtDeiTOutput(nn.Module):

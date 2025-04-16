@@ -3,10 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from models.experimental.swin.tt.swin_for_image_classification import (
-    TtSwinForImageClassification,
-)
 from transformers import SwinForImageClassification as HF_SwinForImageClassification
+
+from models.experimental.swin.tt.swin_for_image_classification import TtSwinForImageClassification
 
 
 def _swin(config, state_dict, base_address, device):

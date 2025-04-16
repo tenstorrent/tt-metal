@@ -2,15 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
-import ttnn
 import math
-from models.helper_funcs import Linear
 
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
+import torch.nn as nn
+
+import ttnn
+from models.helper_funcs import Linear
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 class TtCausalSelfAttention(nn.Module):

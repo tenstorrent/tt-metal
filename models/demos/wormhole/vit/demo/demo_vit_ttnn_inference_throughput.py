@@ -2,26 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-
-import torch
-import transformers
-from transformers import AutoImageProcessor
-from loguru import logger
 import time
 
-import ttnn
+import pytest
+import torch
+import transformers
+from loguru import logger
+from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
+import ttnn
 from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
-from models.utility_functions import torch2tt_tensor, is_blackhole
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_data_loader, get_batch
-
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-)
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_blackhole,
+    torch2tt_tensor,
+)
 
 
 def get_expected_times(functional_vit):

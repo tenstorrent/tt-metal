@@ -3,22 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import ttnn
-import torch
+
 import pytest
+import torch
 from loguru import logger
 from ultralytics import YOLO
-from models.utility_functions import run_for_wormhole_b0
-from models.experimental.functional_yolov9c.tt import ttnn_yolov9c
+
+import ttnn
+from models.experimental.functional_yolov9c.demo.demo_utils import load_coco_class_names
 from models.experimental.functional_yolov9c.reference import yolov9c
-from models.utility_functions import disable_persistent_kernel_cache
+from models.experimental.functional_yolov9c.tt import ttnn_yolov9c
 from models.experimental.functional_yolov9c.tt.model_preprocessing import (
     create_yolov9c_input_tensors,
     create_yolov9c_model_parameters,
 )
-from models.experimental.functional_yolov9c.demo.demo_utils import load_coco_class_names
 from models.experimental.yolo_evaluation.yolo_common_evaluation import save_yolo_predictions_by_model
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import LoadImages, preprocess, postprocess
+from models.experimental.yolo_evaluation.yolo_evaluation_utils import LoadImages, postprocess, preprocess
+from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()

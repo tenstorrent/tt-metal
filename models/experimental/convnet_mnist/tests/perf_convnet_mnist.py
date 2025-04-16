@@ -2,20 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
 import pytest
+import torch
 from loguru import logger
 
+import ttnn
+from models.experimental.convnet_mnist.convnet_mnist_utils import get_test_data
+from models.experimental.convnet_mnist.tt.convnet_mnist import convnet_mnist
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
-    profiler,
-    enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    profiler,
     torch2tt_tensor,
 )
-from models.perf.perf_utils import prep_perf_report
-from models.experimental.convnet_mnist.tt.convnet_mnist import convnet_mnist
-from models.experimental.convnet_mnist.convnet_mnist_utils import get_test_data
 
 
 @pytest.mark.parametrize(

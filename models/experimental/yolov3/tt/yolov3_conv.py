@@ -4,8 +4,8 @@
 
 import torch.nn as nn
 from loguru import logger
-import ttnn
 
+import ttnn
 from models.experimental.yolov3.tt.yolov3_conv2d import TtConv2D
 
 

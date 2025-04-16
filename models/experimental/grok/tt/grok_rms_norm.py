@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
-from ttnn import ReplicateTensorToMesh
 from models.experimental.grok.tt.grok_common import LightweightModule
+from ttnn import ReplicateTensorToMesh
 
 
 class TtRMSNorm(LightweightModule):

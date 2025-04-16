@@ -2,21 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-from loguru import logger
 import math
 
+import pytest
 import torch
+from loguru import logger
 from transformers import BertForQuestionAnswering
+from tt_lib.fused_ops.softmax import softmax
+from tt_lib.utils import pad_activation, pad_weight
 
 import ttnn
-from tt_lib.utils import pad_activation, pad_weight
 from models.experimental.bert.fused_ops.linear import Linear as TtLinear
-from tt_lib.fused_ops.softmax import softmax
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):

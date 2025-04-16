@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import torch
+
 import ttnn
-from ttnn import ShardTensorToMesh
 from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config_from_tensor_shapes
+from ttnn import ShardTensorToMesh
 
 
 class TtLlamaAttention_optimized:

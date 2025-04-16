@@ -3,15 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import torch
 from torch import nn
 
 import ttnn
-
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 def t5_shape_tt(states, batch_size, n_heads, key_value_proj_dim, device):

@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-import torch
 import json
-import pytest
-from loguru import logger
+import os
 from time import time
+
+import pytest
+import torch
+from loguru import logger
 
 # Set Grok flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
@@ -17,19 +18,17 @@ if os.getenv("CI") == "true":
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from models.experimental.grok.reference.tokenizer import Tokenizer
 from models.experimental.grok.tt.grok_common import (
+    cache_attention,
     prepare_inputs_ttnn,
     prepare_rotation_mat_ttnn,
     sample,
-    cache_attention,
 )
-from models.experimental.grok.tt.grok_model import TtTransformer
 from models.experimental.grok.tt.grok_embedding import TtGrokEmbedding
-from models.experimental.grok.reference.tokenizer import Tokenizer
-
-
+from models.experimental.grok.tt.grok_model import TtTransformer
 from models.experimental.grok.tt.model_config import TtModelArgs
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 class Emb(torch.nn.Module):

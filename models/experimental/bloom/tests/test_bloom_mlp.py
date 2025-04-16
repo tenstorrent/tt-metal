@@ -3,15 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
-from transformers import BloomForCausalLM
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
-
 from loguru import logger
+from transformers import BloomForCausalLM
+
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_mlp as bloom_mlp
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 def run_bloom_mlp_test(device):

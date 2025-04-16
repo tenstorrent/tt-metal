@@ -2,23 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
+import pytest
 import torch
 from loguru import logger
-import pytest
-import ttnn
+from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
 
+import ttnn
 from models.experimental.deit.tt.deit_for_image_classification_with_teacher import (
     deit_for_image_classification_with_teacher,
 )
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    torch_to_tt_tensor_rm,
     profiler,
+    torch_to_tt_tensor_rm,
 )
-from models.perf.perf_utils import prep_perf_report
-
 
 BATCH_SIZE = 1
 

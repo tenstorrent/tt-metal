@@ -3,19 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Tuple
-from tqdm import tqdm
 
 import torch
-
+from lm_eval.__main__ import cli_evaluate
+from lm_eval.api.instance import Instance
+from lm_eval.api.model import LM
+from lm_eval.api.registry import register_model
+from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from models.demos.wormhole.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
 from models.demos.wormhole.mamba.benchmarks.loglikelihood import compute_loglikelihood_given_prompt_and_target
-
-from lm_eval.api.model import LM
-from lm_eval.api.instance import Instance
-from lm_eval.api.registry import register_model
-from lm_eval.__main__ import cli_evaluate
+from models.demos.wormhole.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
 
 
 @register_model("mamba-cpu-reference")

@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import pytest
+import torch
+from loguru import logger
 
 import ttnn
-from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor
-import torch
+from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor
 
 
 # Used to reproduce issue #7066 with matmul 1D (Falcon 7b matmuls)

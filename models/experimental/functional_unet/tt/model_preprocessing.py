@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-
 from typing import Literal
 
+import torch
 from ttnn.model_preprocessing import infer_ttnn_module_args
 
+import ttnn
 from models.experimental.functional_unet.tt import unet_shallow_torch
 
 

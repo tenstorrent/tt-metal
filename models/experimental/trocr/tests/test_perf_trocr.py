@@ -2,20 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-
+import torch
 from loguru import logger
 from PIL import Image
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    Profiler,
-)
-from models.perf.perf_utils import prep_perf_report
 from models.experimental.trocr.tt.trocr import trocr_causal_llm
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import Profiler, disable_persistent_kernel_cache, enable_persistent_kernel_cache
 
 BATCH_SIZE = 1
 

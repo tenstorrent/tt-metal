@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import torch.nn as nn
 import math
 from typing import Optional, Tuple
 
-import ttnn
+import torch
+import torch.nn as nn
 from tt_lib import fallback_ops
 
+import ttnn
 from models.helper_funcs import Linear
 from models.utility_functions import torch_to_tt_tensor_rm
 

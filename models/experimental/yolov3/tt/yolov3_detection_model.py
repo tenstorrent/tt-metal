@@ -2,28 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-from torch import nn
-from copy import deepcopy
-from loguru import logger
-from pathlib import Path
 import contextlib
 import math
+from copy import deepcopy
+from pathlib import Path
+
+import torch
+from loguru import logger
+from torch import nn
+
 from models.experimental.yolov3.reference.models.common import DetectMultiBackend
-from models.experimental.yolov3.tt.yolov3_upsample import TtUpsample
+from models.experimental.yolov3.reference.models.yolo import Segment
+from models.experimental.yolov3.reference.utils.autoanchor import check_anchor_order
+from models.experimental.yolov3.reference.utils.general import make_divisible
+from models.experimental.yolov3.reference.utils.torch_utils import fuse_conv_and_bn, model_info, scale_img, time_sync
 from models.experimental.yolov3.tt.yolov3_concat import TtConcat
 from models.experimental.yolov3.tt.yolov3_detect import TtDetect
-from models.experimental.yolov3.reference.models.yolo import Segment
-from models.experimental.yolov3.reference.utils.general import make_divisible
-from models.experimental.yolov3.reference.utils.autoanchor import (
-    check_anchor_order,
-)
-from models.experimental.yolov3.reference.utils.torch_utils import (
-    fuse_conv_and_bn,
-    model_info,
-    scale_img,
-    time_sync,
-)
+from models.experimental.yolov3.tt.yolov3_upsample import TtUpsample
 from models.utility_functions import torch2tt_tensor
 
 

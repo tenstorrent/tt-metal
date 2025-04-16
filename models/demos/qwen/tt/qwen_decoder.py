@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
+from models.demos.qwen.tt.distributed_norm import DistributedNorm
 from models.demos.qwen.tt.qwen_attention import TtQwenAttention
 from models.demos.qwen.tt.qwen_mlp import TtQwenMLP
-from models.common.rmsnorm import RMSNorm
-from models.common.lightweightmodule import LightweightModule
-from models.demos.qwen.tt.distributed_norm import DistributedNorm
 
 
 class TtTransformerBlock(LightweightModule):

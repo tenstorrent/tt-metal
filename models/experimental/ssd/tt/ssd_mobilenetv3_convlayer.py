@@ -3,14 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Union
-import torch.nn as nn
-import ttnn
 
+import torch.nn as nn
 import tt_lib.fallback_ops as fallback_ops
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-)
+
+import ttnn
 from models.experimental.ssd.ssd_utils import create_batchnorm
+from models.utility_functions import torch_to_tt_tensor_rm
 
 ACT_FN_1 = ttnn.relu
 ACT_FN_2 = ttnn.hardswish

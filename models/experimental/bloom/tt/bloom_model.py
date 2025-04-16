@@ -2,15 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import math
 from functools import partial
+from typing import Optional, Tuple
 
-import ttnn
+import torch
 
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_block as bloom_block
-from typing import Optional, Tuple
+import ttnn
 from models.utility_functions import pad_by_zero
 
 

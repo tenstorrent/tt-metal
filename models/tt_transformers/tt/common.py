@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+
 import torch
-import ttnn
 from loguru import logger
+
+import ttnn
 
 
 class HostEmbedding(torch.nn.Module):

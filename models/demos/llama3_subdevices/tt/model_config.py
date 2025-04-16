@@ -2,41 +2,38 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
 import os
-import json
-import ttnn
+from dataclasses import dataclass
+from enum import Enum, auto
 from pathlib import Path
-from loguru import logger
+from typing import Tuple
+
 import torch
+from loguru import logger
+from tqdm import tqdm
+
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
-    precompute_freqs,
-    freqs_to_rotation_matrix,
-    num_to_core_range_set,
     calculate_hidden_dim,
-    get_out_subblock_w,
-    encode_prompt_instruct,
     encode_prompt_hf,
+    encode_prompt_instruct,
+    freqs_to_rotation_matrix,
+    get_out_subblock_w,
     nearest_multiple,
+    num_to_core_range_set,
+    precompute_freqs,
 )
-from typing import Tuple
-from models.utility_functions import nearest_32
-from pathlib import Path
-from enum import Enum, auto
-from tqdm import tqdm
-from dataclasses import dataclass
 from models.tt_transformers.tt.load_checkpoints import (
-    load_meta_state_dict,
-    load_hf_state_dict,
     convert_hf_to_meta,
+    load_hf_state_dict,
+    load_meta_state_dict,
     standardize_hf_keys,
 )
-
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
-    PREFETCHER_NOC1_GRID,
-)
-
+from models.utility_functions import nearest_32
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import PREFETCHER_NOC1_GRID
 from tests.ttnn.unit_tests.operations.prefetcher_common import get_core_ranges
 
 LM_HEAD_16_GRID = [

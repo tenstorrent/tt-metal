@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch.nn as nn
 from typing import Optional
+
+import torch.nn as nn
+
+import ttnn
 from models.experimental.bert_tiny.bert_tiny_helper_funcs import Linear as TtLinear
 
 

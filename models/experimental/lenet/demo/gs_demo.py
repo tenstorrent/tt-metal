@@ -4,10 +4,10 @@
 
 import torch
 from loguru import logger
-import ttnn
 
-from models.experimental.lenet.tt.lenet import lenet5
+import ttnn
 from models.experimental.lenet.lenet_utils import prepare_image
+from models.experimental.lenet.tt.lenet import lenet5
 
 
 def test_gs_demo(device, mnist_sample_input, model_location_generator):

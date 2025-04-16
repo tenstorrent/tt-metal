@@ -2,23 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import torch
+from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
-
+from tt_lib.utils import pad_activation, pad_weight
 
 import ttnn
-from models.experimental.bert.tt.embeddings import PytorchEmbeddings
-from models.experimental.bert.tt.bert_encoder import TtBertEncoder
 from models.experimental.bert.fused_ops.linear import Linear
-from tt_lib.utils import pad_activation, pad_weight
+from models.experimental.bert.tt.bert_encoder import TtBertEncoder
+from models.experimental.bert.tt.embeddings import PytorchEmbeddings
 from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    comp_pcc,
     comp_allclose,
+    comp_pcc,
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    profiler,
 )
-from models.utility_functions import profiler
-from models.utility_functions import disable_persistent_kernel_cache
 
 
 class TtBertForQuestionAnswering(torch.nn.Module):

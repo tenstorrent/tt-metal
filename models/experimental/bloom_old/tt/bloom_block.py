@@ -2,16 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional, Tuple
+
 import torch
+from fused_ops.layernorm import Layernorm as TtLayernorm
 
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.bloom_attention as bloom_attention
 import models.experimental.bloom_old.tt.bloom_mlp as bloom_mlp
-
-from fused_ops.layernorm import Layernorm as TtLayernorm
-
-
-from typing import Optional, Tuple
 
 
 class TtBloomBlock(torch.nn.Module):

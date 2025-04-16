@@ -2,20 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from transformers import AutoTokenizer, T5Model
-import torch
 import json
-import pytest
-import ttnn
-from loguru import logger
 
-from models.utility_functions import (
-    Profiler,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-)
-from models.perf.perf_utils import prep_perf_report
+import pytest
+import torch
+from loguru import logger
+from transformers import AutoTokenizer, T5Model
+
+import ttnn
 from models.experimental.t5.tt.t5_model import TtT5Model
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import Profiler, disable_persistent_kernel_cache, enable_persistent_kernel_cache
 
 BATCH_SIZE = 1
 

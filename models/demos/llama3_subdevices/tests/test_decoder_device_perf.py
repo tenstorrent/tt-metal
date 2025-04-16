@@ -1,24 +1,20 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import math
+import os
+from collections import defaultdict
+
+import pandas as pd
 import pytest
 from loguru import logger
-import os
-import math
+
 import ttnn
-import pandas as pd
-from collections import defaultdict
-from models.demos.llama3_subdevices.tt.llama_common import (
-    PagedAttentionConfig,
-)
+from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations, run_llama3_demo
+from models.demos.llama3_subdevices.tt.llama_common import PagedAttentionConfig
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
-from tt_metal.tools.profiler.process_model_log import (
-    get_latest_ops_log_filename,
-)
-
-from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
-from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
+from tt_metal.tools.profiler.process_model_log import get_latest_ops_log_filename
 
 DECODE_OP_START_INDEX = 4
 DECODE_OP_END_INDEX = -12

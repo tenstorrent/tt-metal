@@ -2,20 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from typing import Dict, List, Union, cast
 
+import torch.nn as nn
 from torchvision import models
-from typing import List, Union, Dict, cast
+from tt_lib.fallback_ops import fallback_ops
 
 import ttnn
-
-from tt_lib.fallback_ops import fallback_ops
-from models.helper_funcs import Linear as TtLinear
-from models.utility_functions import (
-    is_conv_supported_on_device,
-    run_conv_on_device_wrapper,
-)
 from models.experimental.vgg.vgg_utils import format_tensor
+from models.helper_funcs import Linear as TtLinear
+from models.utility_functions import is_conv_supported_on_device, run_conv_on_device_wrapper
 
 
 class TtVGG(nn.Module):

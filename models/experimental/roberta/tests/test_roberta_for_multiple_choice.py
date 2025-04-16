@@ -4,20 +4,12 @@
 
 import pytest
 import torch
-
 from loguru import logger
 from transformers import AutoTokenizer, RobertaForMultipleChoice
 
-
-from models.experimental.roberta.tt.roberta_for_multiple_choice import TtRobertaForMultipleChoice
-from models.utility_functions import (
-    tt2torch_tensor,
-    comp_allclose,
-    comp_pcc,
-    is_wormhole_b0,
-    is_blackhole,
-)
 from models.experimental.roberta.roberta_common import torch2tt_tensor
+from models.experimental.roberta.tt.roberta_for_multiple_choice import TtRobertaForMultipleChoice
+from models.utility_functions import comp_allclose, comp_pcc, is_blackhole, is_wormhole_b0, tt2torch_tensor
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")

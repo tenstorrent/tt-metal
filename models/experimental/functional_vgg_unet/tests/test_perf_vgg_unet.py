@@ -2,19 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
 import pytest
+import torch
 from loguru import logger
-from models.perf.perf_utils import prep_perf_report
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import (
-    profiler,
-)
-from models.utility_functions import run_for_wormhole_b0
+
+import ttnn
 from models.experimental.functional_vgg_unet.reference.vgg_unet import UNetVGG19
 from models.experimental.functional_vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters
 from models.experimental.functional_vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import profiler, run_for_wormhole_b0
 
 
 def get_expected_times(name):

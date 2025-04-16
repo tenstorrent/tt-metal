@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import ttnn
-
 from tt_lib.fallback_ops import fallback_ops
+
+import ttnn
 from models.experimental.efficientnet.tt.efficientnet_conv import TtEfficientnetConv2d
 
 

@@ -2,16 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from transformers import AutoImageProcessor, DeiTModel
 from loguru import logger
-
+from transformers import AutoImageProcessor, DeiTModel
 
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_embeddings import DeiTEmbeddings
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose_and_pcc,
-)
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 
 
 def test_deit_embeddings_inference(device, hf_cat_image_sample_input, pcc=0.99):

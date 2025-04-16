@@ -3,18 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from transformers import DeiTModel
 from loguru import logger
-
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
-    comp_pcc,
-    comp_allclose_and_pcc,
-)
+from transformers import DeiTModel
 
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_encoder import TtDeiTEncoder
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 def test_deit_encoder_inference(device, pcc=0.97):

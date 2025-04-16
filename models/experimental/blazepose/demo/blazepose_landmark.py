@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.experimental.blazepose.demo.blazebase import BlazeLandmark, BlazeBlock
+from models.experimental.blazepose.demo.blazebase import BlazeBlock, BlazeLandmark
 
 
 class BlazePoseLandmark(BlazeLandmark):

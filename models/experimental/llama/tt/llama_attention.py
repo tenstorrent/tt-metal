@@ -3,19 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from typing import Optional, Tuple
+
 import torch
+from loguru import logger
 from torch import nn
 
 import ttnn
-from typing import Optional, Tuple
-from loguru import logger
-
 from models.helper_funcs import Linear as TTLinear
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-    pad_by_zero,
-)
+from models.utility_functions import pad_by_zero, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 def shape_tt(

@@ -2,18 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import pytest
-
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from models.experimental.nanogpt.nanogpt_utils import get_tt_cache_path, store_weights
-from pathlib import Path
 import os
+from pathlib import Path
 
+import pytest
 from loguru import logger
-import models.experimental.nanogpt.tt.nanogpt_model as nanogpt_model
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
-from models.utility_functions import tt_to_torch_tensor, comp_allclose, comp_pcc, is_wormhole_b0, is_blackhole
+import models.experimental.nanogpt.tt.nanogpt_model as nanogpt_model
+import ttnn
+from models.experimental.nanogpt.nanogpt_utils import get_tt_cache_path, store_weights
+from models.utility_functions import comp_allclose, comp_pcc, is_blackhole, is_wormhole_b0, tt_to_torch_tensor
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")

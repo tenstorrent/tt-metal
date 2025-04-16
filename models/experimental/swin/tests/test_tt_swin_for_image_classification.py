@@ -2,22 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
-
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
-    comp_allclose,
-    comp_pcc,
-)
-
-from models.experimental.swin.tt.swin_for_image_classification import (
-    TtSwinForImageClassification,
-)
-from transformers import SwinForImageClassification as HF_SwinForImageClassification
 from transformers import AutoFeatureExtractor
+from transformers import SwinForImageClassification as HF_SwinForImageClassification
+
+from models.experimental.swin.tt.swin_for_image_classification import TtSwinForImageClassification
+from models.utility_functions import comp_allclose, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(

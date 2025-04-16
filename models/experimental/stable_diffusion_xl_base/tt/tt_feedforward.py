@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import ttnn
 
-from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
+import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
+from models.experimental.stable_diffusion_xl_base.tt.tt_geglu import TtGEGLU
 
 
 class TtFeedForward(nn.Module):

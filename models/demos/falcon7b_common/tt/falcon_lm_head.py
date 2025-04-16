@@ -5,7 +5,6 @@
 from typing import List
 
 import ttnn
-
 from models.utility_functions import nearest_y
 
 

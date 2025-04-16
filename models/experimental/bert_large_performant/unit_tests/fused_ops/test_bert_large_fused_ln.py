@@ -2,16 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-
 import torch
-
-
-from tt_lib.utils import (
-    tilize_to_list,
-    untilize,
-    is_close,
-)
+from loguru import logger
+from tt_lib.utils import is_close, tilize_to_list, untilize
 
 import ttnn
 

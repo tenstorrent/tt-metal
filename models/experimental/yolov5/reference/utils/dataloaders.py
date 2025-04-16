@@ -13,9 +13,8 @@ from pathlib import Path
 
 import numpy as np
 
-from models.experimental.yolov5.reference.utils.general import cv2
 from models.experimental.yolov5.reference.utils.augmentations import letterbox
-
+from models.experimental.yolov5.reference.utils.general import cv2
 
 # Parameters
 IMG_FORMATS = (

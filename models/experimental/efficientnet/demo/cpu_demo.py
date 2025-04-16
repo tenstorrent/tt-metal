@@ -16,11 +16,8 @@ import cv2
 import torch
 import torchvision
 from loguru import logger
-from models.experimental.efficientnet.demo.demo_utils import (
-    load_imagenet_labels,
-    download_images,
-    preprocess,
-)
+
+from models.experimental.efficientnet.demo.demo_utils import download_images, load_imagenet_labels, preprocess
 
 
 def load_efficientnet_model():

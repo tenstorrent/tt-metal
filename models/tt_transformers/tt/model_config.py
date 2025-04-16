@@ -2,36 +2,37 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
 import os
-import json
-import ttnn
+from enum import Enum, auto
 from pathlib import Path
-from loguru import logger
+from typing import Tuple
+
 import torch
+from loguru import logger
+
+import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
-    precompute_freqs,
-    freqs_to_rotation_matrix,
-    num_to_core_range_set,
     calculate_hidden_dim,
-    get_out_subblock_w,
-    encode_prompt_instruct,
     encode_prompt_hf,
+    encode_prompt_instruct,
+    freqs_to_rotation_matrix,
+    get_out_subblock_w,
     nearest_multiple,
+    num_to_core_range_set,
+    precompute_freqs,
 )
-from typing import Tuple
-from models.utility_functions import nearest_32
-from pathlib import Path
-from enum import Enum, auto
 from models.tt_transformers.tt.load_checkpoints import (
-    load_meta_state_dict,
-    load_hf_state_dict,
     convert_hf_to_meta,
     convert_meta_to_hf,
+    load_hf_state_dict,
+    load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
 )
+from models.utility_functions import nearest_32
 
 
 class TensorGroup(Enum):

@@ -27,9 +27,7 @@ def attempt_download(file, repo="WongKinYiu/yolov7"):
 
     if not file.exists():
         try:
-            response = requests.get(
-                f"https://api.github.com/repos/{repo}/releases/latest"
-            ).json()  # github api
+            response = requests.get(f"https://api.github.com/repos/{repo}/releases/latest").json()  # github api
             assets = [x["name"] for x in response["assets"]]  # release assets
             tag = response["tag_name"]  # i.e. 'v1.0'
         except:  # fallback plan
@@ -58,9 +56,7 @@ def attempt_download(file, repo="WongKinYiu/yolov7"):
                 assert redundant, "No secondary mirror"
                 url = f"https://storage.googleapis.com/{repo}/ckpt/{name}"
                 logger.info(f"Downloading {url} to {file}...")
-                os.system(
-                    f"curl -L {url} -o {file}"
-                )  # torch.hub.download_url_to_file(url, weights)
+                os.system(f"curl -L {url} -o {file}")  # torch.hub.download_url_to_file(url, weights)
             finally:
                 if not file.exists() or file.stat().st_size < 1e6:  # check
                     file.unlink(missing_ok=True)  # remove partial downloads
@@ -83,9 +79,7 @@ def gdrive_download(id="", file="tmp.zip"):
 
     # Attempt file download
     out = "NUL" if platform.system() == "Windows" else "/dev/null"
-    os.system(
-        f'curl -c ./cookie -s -L "drive.google.com/uc?export=download&id={id}" > {out}'
-    )
+    os.system(f'curl -c ./cookie -s -L "drive.google.com/uc?export=download&id={id}" > {out}')
     if os.path.exists("cookie"):  # large file
         s = f'curl -Lb ./cookie "drive.google.com/uc?export=download&confirm={get_token()}&id={id}" -o {file}'
     else:  # small file

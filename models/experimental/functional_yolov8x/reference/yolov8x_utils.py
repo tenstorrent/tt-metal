@@ -5,6 +5,7 @@
 # This file fixes ultralytics dependency for loading yolov8x model weights at ckpt = torch.load(w, map_location=map_location) as pip install ultralytics causes error in tt device.
 
 import math
+
 import torch
 import torch.nn as nn
 

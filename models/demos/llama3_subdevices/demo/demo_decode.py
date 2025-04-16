@@ -2,29 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+import hashlib
 import json
-from time import time
-from datetime import datetime
-from loguru import logger
 import os
-import ttnn
+from datetime import datetime
+from pathlib import Path
+from time import time
+
 import pytest
 import requests
-from pathlib import Path
-import hashlib
+import torch
+from loguru import logger
 
-from models.demos.llama3_subdevices.tt.llama_common import (
-    PagedAttentionConfig,
-)
-from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
+import ttnn
+from models.demos.llama3_subdevices.tt.llama_common import PagedAttentionConfig
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
+from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
+from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations, TtModelArgs
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
-
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 # Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
 # before triggering an assertion failure. Allows occasional dips while ensuring

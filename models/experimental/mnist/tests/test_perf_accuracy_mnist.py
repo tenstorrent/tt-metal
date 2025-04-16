@@ -2,24 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-from torch.utils.data import DataLoader
-from torchvision import transforms, datasets
-from loguru import logger
-import ttnn
-import pytest
 import evaluate
+import pytest
+import torch
+from loguru import logger
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
 
+import ttnn
 from models.experimental.mnist.tt.mnist_model import mnist_model
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
+    profiler,
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
 )
-
-from models.utility_functions import profiler
-from models.perf.perf_utils import prep_perf_report
 
 
 @pytest.mark.parametrize(

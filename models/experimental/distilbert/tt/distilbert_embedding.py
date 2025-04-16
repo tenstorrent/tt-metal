@@ -3,14 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional
+
 import torch
 import torch.nn as nn
 
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-)
-
 import ttnn
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtDistilBert_Embeddings(nn.Module):

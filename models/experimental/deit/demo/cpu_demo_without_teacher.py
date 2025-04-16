@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from transformers import AutoImageProcessor, DeiTForImageClassification
 from loguru import logger
+from transformers import AutoImageProcessor, DeiTForImageClassification
 
 
 def test_cpu_demo(hf_cat_image_sample_input):

@@ -2,11 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import collections.abc
 
-
+import torch
 from torch import nn
+
 from models.experimental.deit.tt.deit_config import DeiTConfig
 
 

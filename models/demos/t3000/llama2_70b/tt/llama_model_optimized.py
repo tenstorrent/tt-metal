@@ -2,23 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 from typing import List
-from tqdm import tqdm
+
 import torch
+from loguru import logger
+from tqdm import tqdm
+
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
-
-
+from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config
+from models.demos.t3000.llama2_70b.tt.llama_common import gather_cos_sin, get_rot_transformation_mat, precompute_freqs
 from models.demos.t3000.llama2_70b.tt.llama_decoder_optimized import TtLlamaDecoder_optimized
 from models.demos.t3000.llama2_70b.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    precompute_freqs,
-    gather_cos_sin,
-    get_rot_transformation_mat,
-)
-from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config
 from models.demos.t3000.llama2_70b.tt.llama_rope import TtLlamaRotarySetup
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 class TtLlamaModel_optimized:

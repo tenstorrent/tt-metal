@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import ttnn
-import models.experimental.nanogpt.tt.nanogpt_mlp as nanogpt_mlp
+
 import models.experimental.nanogpt.tt.nanogpt_attention as nanogpt_attention
+import models.experimental.nanogpt.tt.nanogpt_mlp as nanogpt_mlp
+import ttnn
 
 
 class TtBlock(nn.Module):

@@ -3,19 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-import torch
-import warnings
-from torch import nn
-import ttnn
 import json
+import warnings
 
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
-from models.experimental.t5.tt.t5_stack import TtT5Stack
+import torch
 from loguru import logger
+from torch import nn
 from transformers import T5ForConditionalGeneration
+
+import ttnn
+from models.experimental.t5.tt.t5_stack import TtT5Stack
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 class Seq2SeqLMOutput:

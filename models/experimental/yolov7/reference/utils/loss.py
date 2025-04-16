@@ -7,11 +7,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.experimental.yolov7.reference.utils.general import (
-    bbox_iou,
-    box_iou,
-    xywh2xyxy,
-)
+
+from models.experimental.yolov7.reference.utils.general import bbox_iou, box_iou, xywh2xyxy
 from models.experimental.yolov7.reference.utils.torch_utils import is_parallel
 
 

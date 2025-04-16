@@ -3,18 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import pytest
-import ttnn
-import torch
 
+import pytest
+import torch
 from loguru import logger
 
-from models.experimental.functional_unet.tt.model_preprocessing import (
-    create_unet_input_tensors,
-)
-
-from models.experimental.functional_unet.tt import unet_shallow_ttnn
+import ttnn
 from models.experimental.functional_unet.tests.common import verify_with_pcc
+from models.experimental.functional_unet.tt import unet_shallow_ttnn
+from models.experimental.functional_unet.tt.model_preprocessing import create_unet_input_tensors
 
 
 def nearest_16(x):

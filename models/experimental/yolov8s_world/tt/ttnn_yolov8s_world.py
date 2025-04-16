@@ -2,15 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import math
+
 import torch
 from torch import nn
+
+import ttnn
 from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
-    ttnn_decode_bboxes,
     concat,
     determine_num_cores_for_upsample,
     get_core_grid_from_num_cores,
+    ttnn_decode_bboxes,
 )
 
 

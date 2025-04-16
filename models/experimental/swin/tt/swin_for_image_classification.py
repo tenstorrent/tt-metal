@@ -2,19 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from typing import Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
-from dataclasses import dataclass
-
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
 
 import ttnn
 from models.experimental.swin.swin_helper_funcs import linear as TtLinear
 from models.experimental.swin.tt.swin_model import TtSwinModel
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @dataclass

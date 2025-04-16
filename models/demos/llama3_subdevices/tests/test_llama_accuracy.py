@@ -1,19 +1,18 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import pytest
-from loguru import logger
 import os
-import ttnn
-from models.demos.llama3_subdevices.tt.llama_common import (
-    HostEmbedding,
-    PagedAttentionConfig,
-)
-from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
-from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from pathlib import Path
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.llama3_subdevices.tt.llama_common import HostEmbedding, PagedAttentionConfig
+from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
+from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations, TtModelArgs
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 
 def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: LlamaOptimizations):

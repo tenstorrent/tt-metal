@@ -2,14 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
-import ttnn
 import math
-import torch
 from typing import Optional
+
+import torch
+import torch.nn as nn
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor
+
+import ttnn
 from models.experimental.bert_tiny.bert_tiny_helper_funcs import Linear as TtLinear
+from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 
 
 def mha(

@@ -2,16 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
-import ttnn
 import re
 
-from models.experimental.stable_diffusion_xl_base.tt.tt_transformerblock import TtBasicTransformerBlock
+import torch.nn as nn
+
+import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
-    prepare_gn_mask,
     prepare_gn_beta_gamma,
+    prepare_gn_mask,
     prepare_linear_params,
 )
+from models.experimental.stable_diffusion_xl_base.tt.tt_transformerblock import TtBasicTransformerBlock
 
 
 class TtTransformer2DModel(nn.Module):

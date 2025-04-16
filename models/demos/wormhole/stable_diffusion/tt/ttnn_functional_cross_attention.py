@@ -3,18 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import ttnn
-import torch
 import os
-from ttnn import unsqueeze_to_4D
+
+import torch
+
+import ttnn
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    is_tile_dim_alligned,
-    round_up_to_tile_dim,
     dealloc_input,
     determine_blocking,
+    is_tile_dim_alligned,
     reshard_to,
+    round_up_to_tile_dim,
     weight_to_bfp8,
 )
+from ttnn import unsqueeze_to_4D
 
 
 def compare(tensor, name, transpose=False, unpad=False):

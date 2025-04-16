@@ -2,24 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-
-from torchvision import models
+import torch
 from loguru import logger
-
+from torchvision import models
 
 import ttnn
-
 from models.experimental.vgg.tt.vgg import *
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
+    Profiler,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    Profiler,
     torch_to_tt_tensor,
 )
-from models.perf.perf_utils import prep_perf_report
-
 
 BATCH_SIZE = 1
 

@@ -4,8 +4,8 @@
 
 import torch
 
-from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv
 from models.experimental.yolov5.tt.yolov5_bottleneck import TtYolov5Bottleneck
+from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv
 
 
 class TtYolov5C3(torch.nn.Module):

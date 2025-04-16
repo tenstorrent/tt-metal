@@ -70,16 +70,8 @@ from models.experimental.yolov3.reference.utils.general import (
     strip_optimizer,
     xyxy2xywh,
 )
-from models.experimental.yolov3.reference.utils.plots import (
-    Annotator,
-    colors,
-    save_one_box,
-)
-from models.experimental.yolov3.reference.utils.torch_utils import (
-    select_device,
-    smart_inference_mode,
-)
-
+from models.experimental.yolov3.reference.utils.plots import Annotator, colors, save_one_box
+from models.experimental.yolov3.reference.utils.torch_utils import select_device, smart_inference_mode
 from models.experimental.yolov3.yolov3_utils import model_location_generator
 
 data_path = model_location_generator("tt_dnn-models/Yolo/data/")

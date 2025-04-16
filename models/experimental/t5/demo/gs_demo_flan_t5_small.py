@@ -1,18 +1,14 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import pytest
-from loguru import logger
-from datasets import load_dataset
 import evaluate
 import pytest
-
-from models.experimental.t5.tt.t5_for_conditional_generation import (
-    flan_t5_small_for_conditional_generation,
-)
+from datasets import load_dataset
+from loguru import logger
+from transformers import AutoTokenizer, T5ForConditionalGeneration
 
 from models.experimental.t5.t5_utils import run_generate
-from transformers import T5ForConditionalGeneration, AutoTokenizer
+from models.experimental.t5.tt.t5_for_conditional_generation import flan_t5_small_for_conditional_generation
 
 
 @pytest.mark.parametrize(

@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-from loguru import logger
 import torch
+from loguru import logger
 
+import ttnn
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
+    teardown_fabric_interface,
 )
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import check_mesh_tensor_alloc
 

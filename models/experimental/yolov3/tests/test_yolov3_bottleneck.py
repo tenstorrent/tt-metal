@@ -3,18 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
 from loguru import logger
 
+from models.experimental.yolov3.reference.models.common import DetectMultiBackend
 from models.experimental.yolov3.tt.yolov3_bottleneck import TtBottleneck
-from models.experimental.yolov3.reference.models.common import (
-    DetectMultiBackend,
-)
-from models.utility_functions import (
-    comp_pcc,
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
+from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor
 
 
 def test_bottleneck_module(model_location_generator, device):

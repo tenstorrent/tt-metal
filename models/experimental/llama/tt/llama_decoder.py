@@ -2,15 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional, Tuple
+
 import torch
+from loguru import logger
 from torch import nn
 
 import ttnn
-from loguru import logger
-from typing import Optional, Tuple
-from models.experimental.llama.tt.llama_mlp import TtLlamaMLP
 from models.experimental.llama.tt.llama_attention import TtLlamaAttention
 from models.experimental.llama.tt.llama_layer_norm import TtLlamaRMSNorm
+from models.experimental.llama.tt.llama_mlp import TtLlamaMLP
 
 
 class TtLlamaDecoderLayer(nn.Module):

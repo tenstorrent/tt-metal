@@ -2,23 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
+from torchvision.models.detection import SSDLite320_MobileNet_V3_Large_Weights
+from torchvision.models.detection import ssdlite320_mobilenet_v3_large as pretrained
 
-from torchvision.models.detection import (
-    SSDLite320_MobileNet_V3_Large_Weights,
-    ssdlite320_mobilenet_v3_large as pretrained,
-)
-
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from models.utility_functions import (
-    comp_allclose,
-    comp_pcc,
-)
-from models.experimental.ssd.tt.ssd_mobilenetv3_features import (
-    TtMobileNetV3Features,
-)
+from models.experimental.ssd.tt.ssd_mobilenetv3_features import TtMobileNetV3Features
+from models.utility_functions import comp_allclose, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(

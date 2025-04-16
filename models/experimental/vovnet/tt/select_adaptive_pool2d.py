@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
-from typing import Union, Tuple
+from typing import Tuple, Union
 
+import torch.nn as nn
 import tt_lib.fallback_ops
 
 

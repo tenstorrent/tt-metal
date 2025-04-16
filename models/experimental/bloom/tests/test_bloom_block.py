@@ -3,15 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
-from transformers import BloomForCausalLM
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
 from loguru import logger
+from transformers import BloomForCausalLM
+
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_block as bloom_block
-from models.utility_functions import is_wormhole_b0, is_blackhole
+from models.utility_functions import is_blackhole, is_wormhole_b0
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 def run_bloom_block_test(device):

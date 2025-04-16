@@ -2,26 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Dict, List, Optional, OrderedDict, Tuple
+
 import torch
-from torch import nn
-import ttnn
 import tt_lib.fallback_ops as fallback_ops
-from typing import List, Optional, Tuple, Dict, OrderedDict
-
-from models.experimental.ssd.tt.ssd_backbone import (
-    TtSSDLiteFeatureExtractorMobileNet,
-)
-from models.experimental.ssd.tt.ssd_box_generator import (
-    TtDefaultBoxGenerator,
-)
-from models.experimental.ssd.tt.ssd_lite_head import TtSSDLiteHead
-
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from models.experimental.ssd.tt.ssd_backbone import TtSSDLiteFeatureExtractorMobileNet
-from models.experimental.ssd.tt.ssd_box_generator import TtDefaultBoxGenerator
-from torchvision.ops.boxes import batched_nms, clip_boxes_to_image
+from torch import nn
 from torchvision.models.detection._utils import BoxCoder, Matcher, SSDMatcher
 from torchvision.models.detection.transform import GeneralizedRCNNTransform
+from torchvision.ops.boxes import batched_nms, clip_boxes_to_image
+
+import ttnn
+from models.experimental.ssd.tt.ssd_backbone import TtSSDLiteFeatureExtractorMobileNet
+from models.experimental.ssd.tt.ssd_box_generator import TtDefaultBoxGenerator
+from models.experimental.ssd.tt.ssd_lite_head import TtSSDLiteHead
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 class TtSSD(nn.Module):

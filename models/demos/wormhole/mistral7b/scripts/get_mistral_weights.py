@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import tarfile
-import os
-import urllib.request
-import sys
-import time
 import argparse
+import os
+import sys
+import tarfile
+import time
+import urllib.request
 
 
 # Show progress bar when downloading files

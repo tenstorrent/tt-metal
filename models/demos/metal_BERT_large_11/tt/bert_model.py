@@ -4,15 +4,12 @@
 
 
 import torch
-
 from loguru import logger
+from tt_lib.utils import pad_activation, pad_weight
 
 import ttnn
-
-from models.demos.metal_BERT_large_11.tt.embeddings import TtEmbeddings
 from models.demos.metal_BERT_large_11.tt.bert_encoder import TtBertEncoder
-
-from tt_lib.utils import pad_activation, pad_weight
+from models.demos.metal_BERT_large_11.tt.embeddings import TtEmbeddings
 
 
 class TtBertBatchDram:

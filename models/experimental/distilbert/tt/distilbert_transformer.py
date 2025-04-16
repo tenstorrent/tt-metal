@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from typing import Optional, Tuple, Union
+
 import torch.nn as nn
 
 import ttnn
-from dataclasses import dataclass
 from models.experimental.distilbert.tt.distilbert_transformer_block import TtTransformerBlock
 
 

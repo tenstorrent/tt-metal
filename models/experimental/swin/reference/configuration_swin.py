@@ -3,10 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from torch import nn
-from .backbone_utils import (
-    BackboneConfigMixin,
-    get_aligned_output_features_output_indices,
-)
+
+from .backbone_utils import BackboneConfigMixin, get_aligned_output_features_output_indices
 
 
 class SwinConfig(BackboneConfigMixin, nn.Module):
@@ -132,9 +130,7 @@ class SwinConfig(BackboneConfigMixin, nn.Module):
         # we set the hidden_size attribute in order to make Swin work with VisionEncoderDecoderModel
         # this indicates the channel dimension after the last stage of the model
         self.hidden_size = int(embed_dim * 2 ** (len(depths) - 1))
-        self.stage_names = ["stem"] + [
-            f"stage{idx}" for idx in range(1, len(depths) + 1)
-        ]
+        self.stage_names = ["stem"] + [f"stage{idx}" for idx in range(1, len(depths) + 1)]
         (
             self._out_features,
             self._out_indices,

@@ -3,16 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import pytest
+import torch
 from loguru import logger
 
-
 import ttnn
-from models.utility_functions import (
-    comp_pcc,
-)
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
-import torch
-import pytest
+from models.utility_functions import comp_pcc
 
 
 def run_bert_large_selfout_matmul_test(device, dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config):
