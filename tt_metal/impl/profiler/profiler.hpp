@@ -224,9 +224,6 @@ public:
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 };
 
-std::shared_ptr<Buffer> get_control_buffer_view(
-    IDevice* device, uint32_t address, uint32_t size, CoreCoord logical_worker_core);
-
 }  // namespace tt_metal
 
 }  // namespace tt

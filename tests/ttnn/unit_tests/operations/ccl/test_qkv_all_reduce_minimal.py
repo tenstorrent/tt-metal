@@ -11,6 +11,8 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
+    create_and_load_sub_device_manager_with_fabric_interface,
+    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -74,6 +76,10 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
 ):
     cluster_shape = (8, 4)
 
+    create_persistent_fabric = True
+    teardown_persistent_fabric = True
+    enable_persistent_fabric = True
+
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
 
@@ -93,9 +99,17 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    if create_persistent_fabric:
+        mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+            mesh_device,
+            [worker_sub_device],
+            0,
+            0,
+            enable_persistent_fabric,
+            wrap_fabric_around_mesh=WRAP_MESH,
+            topology=ALL_GATHER_TOPOLOGY,
+        )
+        mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
     num_buffers = 2
@@ -350,7 +364,12 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             run_validate(tt_outs)
 
     finally:
-        mesh_device.reset_sub_device_stall_group()
+        if enable_persistent_fabric and teardown_persistent_fabric:
+            mesh_device.reset_sub_device_stall_group()
+            t1 = time()
+            teardown_fabric_interface(mesh_device, wrap_fabric_around_mesh=WRAP_MESH, topology=ALL_GATHER_TOPOLOGY)
+            t2 = time()
+            logger.info(f"Teardown time: {t2 - t1}")
 
 
 # Test 1: test_all_reduce_create_qkv_heads_fuse
@@ -386,13 +405,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "trace_region_size": 23887872,
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
+    [{"trace_region_size": 23887872, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 def test_all_reduce_qkv_heads_fuse(
@@ -466,13 +479,7 @@ def test_all_reduce_qkv_heads_fuse(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "trace_region_size": 23887872,
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
+    [{"trace_region_size": 23887872, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 def test_all_reduce_qkv_heads_fuse_perf(

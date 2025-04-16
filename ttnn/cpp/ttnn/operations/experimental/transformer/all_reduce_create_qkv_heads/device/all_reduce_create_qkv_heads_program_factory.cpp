@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include "all_reduce_create_qkv_heads_program_factory.hpp"
-#include <tt-metalium/fabric.hpp>
 
 namespace ttnn {
 
@@ -21,6 +20,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool enable_persistent_fabric_mode,
     const uint32_t num_q_heads,
     const uint32_t num_kv_heads,
     const uint32_t head_dim) {
@@ -35,7 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     Tensor& v_output_tensor = output_tensors[3];
 
     IDevice* device = input_tensor.device();
-    const bool enable_persistent_fabric_mode = true;
+
     // For qkv heads fuse
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
@@ -148,6 +148,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         is_first_chip,
         is_last_chip);
 
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
+        ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
+            device,
+            forward_device.value_or(nullptr),
+            backward_device.value_or(nullptr),
+            &program,
+            enable_persistent_fabric_mode,
+            num_links,
+            topology);
+
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors_ccl = {input_tensor};
     std::vector<Tensor> output_tensors_ccl = {output_tensor};
@@ -197,7 +207,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     tt::log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = input_tensor_num_pages;  // TODO: Reduce this to double-buffer packet-size?
@@ -502,6 +512,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
             output_tensor_cores_y.push_back(this_core.y);
         }
 
+        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
+            !forward_device.has_value()
+                ? std::nullopt
+                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
+        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
+            !backward_device.has_value()
+                ? std::nullopt
+                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
+                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
+
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),    // tensor_address0
@@ -571,19 +592,30 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-
-        writer_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+        writer_rt_args.push_back(forward_fabric_connection.has_value());
+        if (forward_fabric_connection.has_value()) {
+            auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
+            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
+            auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
+            append_worker_to_fabric_edm_sender_rt_args(
+                forward_fabric_connection.value(),
+                sender_worker_flow_control_semaphore_id,
+                sender_worker_teardown_semaphore_id,
+                sender_worker_buffer_index_semaphore_id,
+                writer_rt_args);
         }
-
-        writer_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+        writer_rt_args.push_back(backward_fabric_connection.has_value());
+        if (backward_fabric_connection.has_value()) {
+            auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
+            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
+            auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
+            append_worker_to_fabric_edm_sender_rt_args(
+                backward_fabric_connection.value(),
+                sender_worker_flow_control_semaphore_id,
+                sender_worker_teardown_semaphore_id,
+                sender_worker_buffer_index_semaphore_id,
+                writer_rt_args);
         }
-
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
 
         // Set reduction worker runtime args

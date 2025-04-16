@@ -1186,7 +1186,7 @@ void Program::generate_dispatch_commands(IDevice* device) {
 
 void Program::allocate_kernel_bin_buf_on_device(IDevice* device) { pimpl_->allocate_kernel_bin_buf_on_device(device); }
 
-void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
+void detail::ProgramImpl::compile(IDevice* device, bool fd_bootloader_mode) {
     //ZoneScoped;
     if (compiled_.contains(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
         return;
@@ -1213,7 +1213,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         }
     };
 
-    auto validate_kernel_placement = [&device, &force_slow_dispatch](std::shared_ptr<Kernel> kernel) {
+    auto validate_kernel_placement = [&device, &fd_bootloader_mode](std::shared_ptr<Kernel> kernel) {
         // Placement rules:
         //  Slow dispatch:
         //      - kernels cannot be on storage only cores
@@ -1236,7 +1236,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         TT_FATAL(not on_storage_only_core, "Illegal kernel placement for {}. Kernels cannot be placed on storage only cores!", kernel->name());
 
         // Kernels used to implement fast dispatch can be placed on dispatch cores
-        if (not slow_dispatch and not force_slow_dispatch) {
+        if (not slow_dispatch and not fd_bootloader_mode) {
             const std::vector<CoreCoord>& dispatch_cores =
                 MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
             bool on_dispatch_core = std::any_of(dispatch_cores.begin(), dispatch_cores.end(), [&kernel, &dispatch_core_type](const CoreCoord &dispatch_core) {
@@ -1303,7 +1303,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     compiled_.insert(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
 }
 
-void Program::compile(IDevice* device, bool force_slow_dispatch) { pimpl_->compile(device, force_slow_dispatch); }
+void Program::compile(IDevice* device, bool fd_bootloader_mode) { pimpl_->compile(device, fd_bootloader_mode); }
 
 void detail::ProgramImpl::set_runtime_id(uint64_t id) { this->runtime_id = id; }
 

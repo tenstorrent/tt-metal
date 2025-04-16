@@ -645,11 +645,6 @@ CommandQueue& MeshDevice::command_queue(size_t cq_id) {
     return reference_device()->command_queue(cq_id);
 }
 
-bool MeshDevice::dispatch_firmware_active() const {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->dispatch_firmware_active(); });
-}
-
 // Trace management
 void MeshDevice::begin_trace(const uint8_t cq_id, const uint32_t tid) {
     for (auto& device : scoped_devices_->root_devices()) {

@@ -82,23 +82,6 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override = std::nullopt,
     std::optional<std::vector<size_t>> const& tensor_indices = std::nullopt,
     ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr);
-
-void generate_multi_input_command_stream_kernel_rt_args(
-    tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle kernel_id,
-    std::vector<Tensor const*> const& tensors,
-    std::vector<size_t> const& page_sizes,
-    IDevice* device,
-    uint32_t link,
-    uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
-    CoreRangeSet const& worker_core_range,
-    std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream0,
-    std::optional<std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>> const& ccl_command_stream1,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override = std::nullopt,
-    std::optional<std::vector<size_t>> const& tensor_indices = std::nullopt,
-    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr);
 // Helper functions for building command processing datamovement kernels
 // TODO: Bundle into command bundle per command stream to cut down
 //       on args and improve usability

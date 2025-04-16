@@ -8,7 +8,6 @@ target_sources(
         routing_table_generator.cpp
         mesh_graph.cpp
         erisc_datamover_builder.cpp
-        fabric.cpp
         fabric_host_utils.cpp
 )
 
