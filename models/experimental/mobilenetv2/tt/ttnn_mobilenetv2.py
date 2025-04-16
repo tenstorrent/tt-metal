@@ -87,37 +87,125 @@ class TtMobileNetV2:
             block_shard=False,
         )
         self.block6 = TtInvertedResidual(
-            model_params, device, batchsize, expand_ratio=6, stride=2, in_channels=32, out_channels=64, id=6
+            model_params,
+            device,
+            batchsize,
+            expand_ratio=6,
+            stride=2,
+            in_channels=32,
+            out_channels=64,
+            id=6,
+            block_shard=True,
         )
         self.block7 = TtInvertedResidual(
-            model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=64, out_channels=64, id=7
+            model_params,
+            device,
+            batchsize,
+            expand_ratio=6,
+            stride=1,
+            in_channels=64,
+            out_channels=64,
+            id=7,
+            block_shard=True,
         )
         self.block8 = TtInvertedResidual(
-            model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=64, out_channels=64, id=8
+            model_params,
+            device,
+            batchsize,
+            expand_ratio=6,
+            stride=1,
+            in_channels=64,
+            out_channels=64,
+            id=8,
+            block_shard=True,
         )
         self.block9 = TtInvertedResidual(
-            model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=64, out_channels=64, id=9
+            model_params,
+            device,
+            batchsize,
+            expand_ratio=6,
+            stride=1,
+            in_channels=64,
+            out_channels=64,
+            id=9,
+            block_shard=True,
         )
         self.block10 = TtInvertedResidual(
-            model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=64, out_channels=96, id=10
+            model_params,
+            device,
+            batchsize,
+            expand_ratio=6,
+            stride=1,
+            in_channels=64,
+            out_channels=96,
+            id=10,
+            block_shard=True,
         )
         self.block11 = TtInvertedResidual(
-            model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=96, out_channels=96, id=11
+            model_params,
+            device,
+            batchsize,
+            expand_ratio=6,
+            stride=1,
+            in_channels=96,
+            out_channels=96,
+            id=11,
+            block_shard=True,
         )
         self.block12 = TtInvertedResidual(
-            model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=96, out_channels=96, id=12
+            model_params,
+            device,
+            batchsize,
+            expand_ratio=6,
+            stride=1,
+            in_channels=96,
+            out_channels=96,
+            id=12,
+            block_shard=True,
         )
         self.block13 = TtInvertedResidual(
-            model_params, device, batchsize, expand_ratio=6, stride=2, in_channels=96, out_channels=160, id=13
+            model_params,
+            device,
+            batchsize,
+            expand_ratio=6,
+            stride=2,
+            in_channels=96,
+            out_channels=160,
+            id=13,
+            block_shard=True,
         )
         self.block14 = TtInvertedResidual(
-            model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=160, out_channels=160, id=14
+            model_params,
+            device,
+            batchsize,
+            expand_ratio=6,
+            stride=1,
+            in_channels=160,
+            out_channels=160,
+            id=14,
+            block_shard=True,
         )
         self.block15 = TtInvertedResidual(
-            model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=160, out_channels=160, id=15
+            model_params,
+            device,
+            batchsize,
+            expand_ratio=6,
+            stride=1,
+            in_channels=160,
+            out_channels=160,
+            id=15,
+            block_shard=True,
         )
         self.block16 = TtInvertedResidual(
-            model_params, device, batchsize, expand_ratio=6, stride=1, in_channels=160, out_channels=320, id=16
+            model_params,
+            device,
+            batchsize,
+            expand_ratio=6,
+            stride=1,
+            in_channels=160,
+            out_channels=320,
+            id=16,
+            block_shard=True,
         )
 
         self.conv4 = TtMobileNetV2Conv2D(
@@ -125,6 +213,8 @@ class TtMobileNetV2:
             (model_params["fused_conv_34_weight"], model_params["fused_conv_34_bias"]),
             device,
             batchsize,
+            reshard_if_not_optimal=True,
+            width_shard=True,
         )
         self.l1_weight = model_params["classifier_1_weight"]
         self.l1_bias = model_params["classifier_1_bias"]

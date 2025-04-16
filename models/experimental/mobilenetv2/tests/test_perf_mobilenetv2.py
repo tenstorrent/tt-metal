@@ -117,7 +117,7 @@ def test_mobilenetv2(device, input_tensor, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 686],
+        [1, 712],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

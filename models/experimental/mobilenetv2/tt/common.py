@@ -16,7 +16,7 @@ class TtMobileNetV2Conv2D:
         groups=1,
         dilation=1,
         act_block_h=False,
-        block_shard=None,
+        block_shard=False,
         deallocate_activation=False,
         output_layout=ttnn.TILE_LAYOUT,
         width_shard=False,
@@ -26,6 +26,7 @@ class TtMobileNetV2Conv2D:
         reshard_if_not_optimal=False,
         use_shallow_covariant=False,
         activation_dtype=ttnn.bfloat8_b,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ):
         self.device = device
         self.parameters = parameters
@@ -43,6 +44,12 @@ class TtMobileNetV2Conv2D:
         self.enable_split_reader = enable_split_reader
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
+        self.shard_layout = shard_layout
+        if self.block_shard:
+            self.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        if self.width_shard:
+            self.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+
         self.use_shallow_covariant = use_shallow_covariant
         self.conv_config = self._initialize_conv_config()
         self.compute_config = self._initialize_compute_config()
@@ -53,7 +60,7 @@ class TtMobileNetV2Conv2D:
             dtype=self.activation_dtype,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=self.shard_layout,
             input_channels_alignment=16 if self.use_shallow_covariant else 32,
             act_block_w_div=1,
             transpose_shards=False,
@@ -63,7 +70,7 @@ class TtMobileNetV2Conv2D:
             enable_subblock_padding=False,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
-            reshard_if_not_optimal=True,
+            reshard_if_not_optimal=self.reshard_if_not_optimal,
         )
 
         if self.act_block_h:
@@ -116,7 +123,7 @@ class TtMobileNetV2Conv2D:
 
 class TtInvertedResidual:
     def __init__(
-        self, model_params, device, batchsize, expand_ratio, stride, in_channels, out_channels, id, block_shard=True
+        self, model_params, device, batchsize, expand_ratio, stride, in_channels, out_channels, id, block_shard=False
     ):
         self.device = device
         self.batchsize = batchsize
@@ -136,8 +143,10 @@ class TtInvertedResidual:
                 (model_params[f"fused_conv_{id * 3 - id}_weight"], model_params[f"fused_conv_{id * 3 - id}_bias"]),
                 device,
                 batchsize,
+                reshard_if_not_optimal=True if id > 6 else False,
                 block_shard=False if id == 6 and (11 < id <= 16) else self.block_shard,
             )
+
         self.conv2 = TtMobileNetV2Conv2D(
             [3, stride, 1, hidden_dim],
             (model_params[f"fused_conv_{id * 3 -id +1}_weight"], model_params[f"fused_conv_{id * 3 - id + 1}_bias"]),
@@ -145,12 +154,14 @@ class TtInvertedResidual:
             batchsize,
             groups=hidden_dim,
             block_shard=self.block_shard,
+            reshard_if_not_optimal=True if id >= 6 else False,
         )
         self.conv3 = TtMobileNetV2Conv2D(
             [1, 1, 0, out_channels],
             (model_params[f"conv_{id}_weight"], model_params[f"conv_{id}_bias"]),
             device,
             batchsize,
+            reshard_if_not_optimal=True if id >= 6 else False,
             block_shard=False if (10 <= id <= 16) else self.block_shard,
         )
 
