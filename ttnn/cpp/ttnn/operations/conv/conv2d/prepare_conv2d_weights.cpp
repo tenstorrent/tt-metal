@@ -1199,8 +1199,8 @@ ttnn::Tensor prepare_conv_weights(
             device,
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
-            has_bias,
-            input_width);
+            input_width,
+            has_bias);
     } else {
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
             weight_tensor,
@@ -1214,8 +1214,8 @@ ttnn::Tensor prepare_conv_weights(
             device,
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
-            has_bias,
-            input_width);
+            input_width,
+            has_bias);
     }
 
     return weight_tensor_on_device;
