@@ -97,10 +97,18 @@ def test_segformer_model(
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor_permuted,
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+
+    # adjust padding if necessary
+    if num_channels < 16:
+        ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, [batch_size, height, width, 16], [0, 0, 0, 0], 0)
+    elif num_channels > 16 and num_channels % 32 != 0:
+        ttnn_input_tensor = ttnn.pad(
+            ttnn_input_tensor, [batch_size, height, width, num_channels + (32 - num_channels % 32)], [0, 0, 0, 0], 0
+        )
+
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     ttnn_output = ttnn_model(
         device,

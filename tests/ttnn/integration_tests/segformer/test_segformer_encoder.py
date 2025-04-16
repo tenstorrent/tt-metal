@@ -126,7 +126,7 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             device=device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
     else:
         torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
