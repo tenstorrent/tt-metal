@@ -137,7 +137,7 @@ class ConvTranspose:
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
-        output_tensor, [_out_height, _out_width], [self.weights, self.bias] = ttnn.conv_transpose2d(
+        output_tensor, [_out_height, _out_width] = ttnn.conv_transpose2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,

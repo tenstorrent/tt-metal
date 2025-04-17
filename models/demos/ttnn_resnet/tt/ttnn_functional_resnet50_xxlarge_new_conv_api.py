@@ -718,7 +718,7 @@ class resnet50:
         #     self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
         #     self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device)
 
-        x, [x_height, x_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
+        x, [x_height, x_width] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.conv1_weight_tensor,
             bias_tensor=self.conv1_bias_tensor,

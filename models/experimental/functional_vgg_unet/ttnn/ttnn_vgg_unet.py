@@ -208,7 +208,7 @@ class Conv_transpose:
         return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
 
     def __call__(self, x):
-        [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv_transpose2d(
+        [x, [output_height, output_width]] = ttnn.conv_transpose2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
