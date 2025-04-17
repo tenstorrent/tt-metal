@@ -19,8 +19,8 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
     const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_heads,
+    const ttnn::MemoryConfig& memory_config,
     const std::optional<uint32_t> num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode) {
@@ -32,8 +32,8 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
         mesh_device,
         multi_device_global_semaphore,
         num_heads,
-        num_links,
         memory_config,
+        num_links,
         topology,
         subdevice_id,
         enable_persistent_fabric_mode);
