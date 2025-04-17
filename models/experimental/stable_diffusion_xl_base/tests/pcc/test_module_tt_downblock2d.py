@@ -45,7 +45,7 @@ def test_downblock2d(device, temb_shape, input_shape, use_program_cache):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    ttnn_output_tensor, output_shape, _ = tt_downblock.forward(ttnn_input_tensor, ttnn_temb_tensor, [B, C, H, W])
+    ttnn_output_tensor, output_shape, _ = tt_downblock.forward(ttnn_input_tensor, [B, C, H, W], ttnn_temb_tensor)
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
     output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])
