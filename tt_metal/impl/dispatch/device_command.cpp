@@ -206,7 +206,7 @@ void DeviceCommand<hugepage_write>::add_prefetch_relay_paged(
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_prefetch_relay_paged_packed(
     uint32_t length,
-    std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
+    const std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
     uint16_t num_sub_cmds,
     uint32_t offset_idx) {
     static_assert(sizeof(CQPrefetchRelayPagedPackedSubCmd) % sizeof(uint32_t) == 0);
