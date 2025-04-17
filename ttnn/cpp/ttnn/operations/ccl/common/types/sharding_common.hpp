@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 
 namespace shard_addr_gen_consts {
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
-#include <buffer_constants.hpp>
+#include <buffer_types.hpp>
 #include <command_queue.hpp>
 #include <device.hpp>
 #include <sub_device.hpp>

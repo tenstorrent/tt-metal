@@ -19,7 +19,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/command_queue_common.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>

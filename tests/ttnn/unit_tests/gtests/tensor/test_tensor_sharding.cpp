@@ -19,7 +19,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "common_tensor_test_utils.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "gmock/gmock.h"

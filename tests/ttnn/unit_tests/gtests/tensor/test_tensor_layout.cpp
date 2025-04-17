@@ -9,7 +9,7 @@
 #include <optional>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "common_tensor_test_utils.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>

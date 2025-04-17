@@ -9,7 +9,7 @@
 #include <tuple>
 
 #include "conv2d_utils.hpp"
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/hal.hpp>
 #include "tt-metalium/logger.hpp"

@@ -8,7 +8,7 @@
 #include <memory>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
