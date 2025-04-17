@@ -157,11 +157,7 @@ def create_tt_model(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
-        )
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
+            tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
         )
 
     model = TtTransformer(
@@ -489,7 +485,7 @@ def create_tt_model(
             "trace_region_size": 102000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "worker_l1_size": 1344544,
+            "worker_l1_size": 1345000,
             "fabric_config": True,
         }
     ],
@@ -849,6 +845,8 @@ def test_demo_text(
         # Start decoding
         iteration = 0
         users_decoding = True
+        is_cur_pos_sharded = True
+        is_page_table_sharded = True
 
         # Replace the prefill token with reference token if PCC check enabled
         out_tok = prefilled_token if not pcc_check else ref_tokens[max_encoded_prompt_len]
@@ -895,6 +893,8 @@ def test_demo_text(
                     sampling_params=device_sampling_params,
                     reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,
+                    is_cur_pos_sharded=is_cur_pos_sharded,
+                    is_page_table_sharded=is_page_table_sharded,
                 )
                 read_events.append(read_event)
                 tt_out_toks.append(tt_out_tok)

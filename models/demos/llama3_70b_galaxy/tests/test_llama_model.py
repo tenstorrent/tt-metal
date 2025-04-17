@@ -82,7 +82,7 @@ from models.utility_functions import skip_for_grayskull
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "worker_l1_size": 1344544,
+            "worker_l1_size": 1345000,
             "fabric_config": True,
         }
     ],
@@ -106,6 +106,7 @@ def test_llama_model_inference(
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
 
+    breakpoint()
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
         top_k = [top_k] * batch_size
@@ -148,6 +149,7 @@ def test_llama_model_inference(
     final_v_cache_pcc = {
         "llama31_70b": 0.9997,
     }[model_name]
+    breakpoint()
 
     if layers is not None:
         model_args.n_layers = layers
@@ -193,7 +195,7 @@ def test_llama_model_inference(
 
     page_table_tt = None
     paged_attention_config = None
-
+    breakpoint()
     # Prepare page table for paged attention
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
@@ -208,17 +210,31 @@ def test_llama_model_inference(
             model_args.batch_size_per_device_group,
             paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
         )
+        page_table = page_table.repeat(model_args.sub_core_grids.num_cores(), 1)
+        page_table_shard_spec = ttnn.ShardSpec(
+            model_args.sub_core_grids,
+            (
+                model_args.batch_size_per_device_group,
+                paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+            ),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        page_table_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, page_table_shard_spec
+        )
         page_table_tt = ttnn.from_torch(
             page_table,
             device=mesh_device,
-            dtype=ttnn.int32,
+            dtype=ttnn.uint16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
                 dims=(None, None),
                 mesh_shape=model_args.cluster_shape,
             ),
+            memory_config=page_table_memory_config,
         )
+    breakpoint()
 
     # Load TTNN model
     tt_model = TtTransformer(
@@ -240,10 +256,10 @@ def test_llama_model_inference(
         all_tests_pass = True
         final_tests_pass = True
         kv_cache_tests_pass = True
+    breakpoint()
 
     seqlen = 1  # Generating one token per user at a time
     batch = model_args.max_batch_size
-
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
     pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
@@ -255,30 +271,43 @@ def test_llama_model_inference(
         all_outputs_ref = []
 
     # Initial positions
-    current_pos = torch.tensor([generation_start_pos for _ in range(batch)])
+    current_pos_dram = torch.tensor([generation_start_pos for _ in range(batch)])
+    is_cur_pos_sharded = False
+    cur_pos_mesh_shard_dim = 1 if is_cur_pos_sharded else 0
+    if is_cur_pos_sharded:
+        current_pos_sram = torch.tensor(
+            [[generation_start_pos for _ in range(batch)]] * model_args.sub_core_grids.num_cores()
+        )
+        cur_pos_shard_spec = ttnn.ShardSpec(
+            model_args.sub_core_grids, (1, batch // mesh_device.shape[1]), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        cur_pos_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
+        )
     current_pos_tensor = ttnn.from_torch(
-        current_pos,
+        current_pos_sram if is_cur_pos_sharded else current_pos_dram,
         device=mesh_device,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, cur_pos_mesh_shard_dim) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
+        memory_config=cur_pos_memory_config if is_cur_pos_sharded else None,
     )
     all_pccs = []
+    breakpoint()
 
     try:
         for i in range(generation_length):
             logger.info(f"[Llama3 Model] Generating token {i}")
-
             decode_input = model_args.prepare_residual_tensor_decode(
                 tt_decode_input,
                 model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
 
             # Get cos/sin matrices for the current position of each user
-            rot_mats = tt_model.rope_setup.get_rm_rot_mats(current_pos)
+            rot_mats = tt_model.rope_setup.get_rm_rot_mats(current_pos_dram)
 
             # Run TT model
             tt_out = tt_model(
@@ -307,19 +336,30 @@ def test_llama_model_inference(
 
             if run_ref_pt:  # Run reference model
                 # In this test all users have the same position
-                ref_output = reference_model(pt_decode_input, current_pos[0])
+                ref_output = reference_model(pt_decode_input, current_pos_dram[0])
 
             # Increment position
-            current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
+            current_pos = torch.tensor(
+                [generation_start_pos + i for _ in range(batch)]  # * model_args.sub_core_grids.num_cores()
+            )
+            # cur_pos_shard_spec = ttnn.ShardSpec(
+            #     model_args.sub_core_grids,
+            #     (1, batch // mesh_device.shape[1]),
+            #     ttnn.ShardOrientation.ROW_MAJOR,
+            # )
+            # cur_pos_memory_config = ttnn.MemoryConfig(
+            #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
+            # )
             current_pos_tensor = ttnn.from_torch(
                 current_pos,
                 device=mesh_device,
                 dtype=ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device,
-                    dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                    dims=(None, cur_pos_mesh_shard_dim) if (model_args.is_galaxy and batch_size > 1) else (None, None),
                     mesh_shape=model_args.cluster_shape,
                 ),
+                # memory_config=cur_pos_memory_config,
             )
 
             # Append the generated token to the list of outputs
