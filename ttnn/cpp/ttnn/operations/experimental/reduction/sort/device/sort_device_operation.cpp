@@ -8,8 +8,17 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::reduction::sort {
 
+constexpr uint32_t MAX_SINGLE_CORE_SORT_HEIGHT = 2;
+
 SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const auto input_tensor_shape = tensor_args.input_tensor.get_padded_shape();
+    const uint32_t Ht =
+        (input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2]) / tt::constants::TILE_HEIGHT;
+
+    if (Ht >= MAX_SINGLE_CORE_SORT_HEIGHT) {
+        return sort::program::SortProgramFactoryMulticore{};
+    }
     return sort::program::SortProgramFactory{};
 }
 
