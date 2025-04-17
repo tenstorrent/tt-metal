@@ -38,7 +38,7 @@ def test_segformer_classification_demo(device, imagenet_label_dict, iterations, 
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             device=device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         reference_model.load_state_dict(torch_model.state_dict())
         reference_model.eval()

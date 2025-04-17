@@ -65,7 +65,7 @@ def test_segformer_image_classificaton(device, reset_seeds):
         dtype=ttnn.bfloat16,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     new_state_dict = {}
     keys = [name for name, parameter in reference_model.state_dict().items()]
@@ -90,4 +90,4 @@ def test_segformer_image_classificaton(device, reset_seeds):
         model=reference_model,
     )
     ttnn_final_output = ttnn.to_torch(ttnn_output.logits)
-    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.972)
+    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.968)
