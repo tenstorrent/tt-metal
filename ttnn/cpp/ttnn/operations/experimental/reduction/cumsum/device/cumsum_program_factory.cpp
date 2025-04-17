@@ -122,6 +122,12 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     std::vector<uint32_t> compute_kernel_args = {};
+    std::map<std::string, std::string> defines_kernel_args = {};
+
+    if (is_integer_format(out_df)) {
+        defines_kernel_args["CUMSUM_USE_INT32"] = "1";
+    }
+
     KernelHandle cumsum_compute_handle_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/reduction/cumsum/device/kernels/compute/cumsum_compute.cpp",
@@ -130,7 +136,8 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
-            .compile_args = compute_kernel_args});
+            .compile_args = compute_kernel_args,
+            .defines = defines_kernel_args});
 
     // Parameters setup
     const auto& input_shape = input_tensor.get_padded_shape();

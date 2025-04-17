@@ -58,19 +58,31 @@ void MAIN {
         for (unsigned j = 0; j < tiles_per_row; j++) {
             // [UNPACK]: Input => TILE_DEST
             cb_wait_front(cb_in, 1);
-            copy_tile_to_dst_init_short(cb_in);
-            copy_tile(cb_in, first_tile, TILE_DEST);
+            // copy_tile_to_dst_init_short(cb_in);
+            // copy_tile(cb_in, first_tile, TILE_DEST);
 
             // [UNPACK]: Accumulator (db_intermed) => TILE_ACC
             cb_wait_front(cb_intermed, 1);
+            // copy_tile_to_dst_init_short(cb_intermed);
+            // copy_tile(cb_intermed, first_tile, TILE_ACC);
+#ifdef CUMSUM_USE_INT32
+            copy_tile_to_dst_init_short(cb_in);
+            copy_tile(cb_in, first_tile, TILE_DEST);
+
             copy_tile_to_dst_init_short(cb_intermed);
             copy_tile(cb_intermed, first_tile, TILE_ACC);
+#endif  // CUMSUM_USE_INT32
 
             // MATH
             tile_regs_acquire();  // acquire 8 tile registers
 
+#ifndef CUMSUM_USE_INT32
             add_tiles_init(cb_in, cb_intermed);
             add_tiles(cb_in, cb_intermed, 0, 0, TILE_DEST);
+#else
+            add_int32_tile_init();
+            add_int32_tile(TILE_DEST, TILE_ACC);
+#endif  // CUMSUM_USE_INT32
 
             // MATH(dprint_tensix_dest_reg(TILE_DEST));
             tile_regs_commit();

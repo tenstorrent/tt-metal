@@ -13,6 +13,8 @@
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/reduction/cumsum/device/cumsum_device_operation.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -32,10 +34,19 @@ Tensor CumSumOperation::invoke(
 
     // TODO: Handle type conversion (convert input_tensor if necessary)
     // TODO: ttnn::to_dtype() does not seem to work with DeviceStorage (?)
-    // if (dtype.has_value() && input_dtype != dtype.value()) {
-    //    auto converted_tensor = ttnn::to_dtype(input_tensor, DataType::BFLOAT16);
-    //    adjusted_input_tensor = converted_tensor;
-    // }
+    if (dtype.has_value() && input_dtype != dtype.value()) {
+        // auto converted_tensor = ttnn::to_dtype(input_tensor, DataType::BFLOAT16);
+        // adjusted_input_tensor = converted_tensor;
+
+        // Create new tensor with proper dtype
+        TensorSpec converted_specs = TensorSpec(
+            input_tensor.get_logical_shape(),
+            tt::tt_metal::TensorLayout(
+                dtype.value(), tt::tt_metal::PageConfig(input_tensor.layout()), input_tensor.memory_config()));
+        Tensor converted_tensor = tt::tt_metal::create_device_tensor(converted_specs, input_tensor.device());
+
+        // Manually convert dtype
+    }
 
     if (tensor_rank == 0 || adjusted_input_tensor.get_logical_volume() == 0) {  // empty input tensor => nothing to do
         return adjusted_input_tensor;
@@ -49,7 +60,7 @@ Tensor CumSumOperation::invoke(
     // If dim is x or y axis (last or second last dimension)
     if (dim == tensor_rank - 1 || dim == tensor_rank - 2) {
         int initial_tensor_rank = tensor_rank;
-        if (initial_tensor_rank <= 2) {
+        if (initial_tensor_rank <= 2) {  // 1D or 2D tensor
             // reshape tensor => make 3D or 4D
             ttnn::SmallVector<uint32_t> new_dims = {1, 1};
             new_dims.insert(new_dims.end(), input_shape.cbegin(), input_shape.cend());
