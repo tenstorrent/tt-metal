@@ -6,6 +6,7 @@
 
 import os
 import sys
+import csv
 from argparse import ArgumentParser
 from loguru import logger  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
@@ -19,9 +20,10 @@ test_id_to_name = {
     0: "DRAM Interleaved Packet Sizes",
     1: "DRAM Interleaved Core Locations",
     2: "DRAM Sharded",
-    3: "One to One Core",
+    3: "One to One Packet Sizes",
 }
 
+# Correspondng test bounds for each test id
 test_bounds = {
     0: {
         "riscv_1": {"latency": {"lower": 500, "upper": 1100}, "bandwidth": 0.06},
@@ -42,20 +44,91 @@ test_bounds = {
 }
 
 
-def run_dm_tests(profile, verbose, plot, gtest_filter):
+def run_dm_tests(profile, verbose, gtest_filter, plot, report):
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
+
+    # Profile tests
     if profile or not os.path.exists(log_file_path) or gtest_filter:
+        profile_dm_tests(verbose=verbose, gtest_filter=gtest_filter)
+
+    # Gather analysis stats
+    dm_stats = gather_analysis_stats(log_file_path, verbose=verbose)
+
+    # Print stats if explicitly requested
+    if verbose:
+        print_stats(dm_stats)
+
+    # Plot results
+    if plot:
+        plot_dm_stats(dm_stats)
+
+    # Export results to csv
+    if report:
+        export_dm_stats_to_csv(dm_stats)
+
+    # Check performance (TODO: enable assertions)
+    performance_check(dm_stats, verbose=verbose)
+
+    logger.info("Data movement tests completed.")
+
+
+def profile_dm_tests(verbose=False, gtest_filter=None):
+    if verbose:
         logger.info(f"Profiling Kernels...")
-        cmd = f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_data_movement"
+    cmd = f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_data_movement"
 
-        if gtest_filter:
-            cmd += f' --gtest_filter="*{gtest_filter}*"'
+    if gtest_filter:
+        cmd += f' --gtest_filter="*{gtest_filter}*"'
 
-        os.system(cmd)
+    os.system(cmd)
 
+
+def gather_analysis_stats(file_path, verbose=False):
+    # Gather stats from csv and set up analysis
+    stats = gather_stats_from_csv(file_path, verbose=verbose)
+    cores = [key for key in stats["devices"][0]["cores"].keys() if key != "DEVICE"]
+    dm_stats = {
+        "riscv_1": {
+            "analysis": {"stats": dict(), "series": []},
+            "attributes": dict(),
+        },
+        "riscv_0": {
+            "analysis": {"stats": dict(), "series": []},
+            "attributes": dict(),
+        },
+    }
+
+    # Gather analysis stats
+    # Statistics are recorded per core, but timeseries data is aggregated for all cores
+    for core in cores:
+        core_analysis = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]
+        if "riscv_1_analysis" in core_analysis.keys():
+            dm_stats["riscv_1"]["analysis"]["stats"][core] = core_analysis["riscv_1_analysis"]["stats"]
+            dm_stats["riscv_1"]["analysis"]["series"].extend(core_analysis["riscv_1_analysis"]["series"])
+
+        if "riscv_0_analysis" in core_analysis.keys():
+            dm_stats["riscv_0"]["analysis"]["stats"][core] = core_analysis["riscv_0_analysis"]["stats"]
+            dm_stats["riscv_0"]["analysis"]["series"].extend(core_analysis["riscv_0_analysis"]["series"])
+
+    # Gather test attributes
+    for kernel in dm_stats.keys():
+        attributes = dm_stats[kernel]["attributes"]
+        for event in stats["devices"][0]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"][kernel + "_events"]:
+            run_host_id = event[0]["run_host_id"]
+            if run_host_id in attributes.keys():
+                attributes[run_host_id][event[0]["zone_name"]] = event[2]
+            else:
+                attributes[run_host_id] = {event[0]["zone_name"]: event[2]}
+
+        dm_stats[kernel]["attributes"] = attributes
+
+    return dm_stats
+
+
+def gather_stats_from_csv(file_path, verbose=False):
     # Configure post proc script
     setup = device_post_proc_config.default_setup()
-    setup.deviceInputLog = log_file_path
+    setup.deviceInputLog = file_path
     setup.timerAnalysis = {
         "riscv_1_analysis": {
             "across": "core",
@@ -82,47 +155,14 @@ def run_dm_tests(profile, verbose, plot, gtest_filter):
     }
 
     # Gather stats from csv
-    stats = import_log_run_stats(setup)
-    cores = [key for key in stats["devices"][0]["cores"].keys() if key != "DEVICE"]
-    dm_stats = {
-        "riscv_1": {
-            "analysis": {"stats": dict(), "series": []},
-            "attributes": dict(),
-        },
-        "riscv_0": {
-            "analysis": {"stats": dict(), "series": []},
-            "attributes": dict(),
-        },
-    }
+    if not verbose:
+        logger.disable("tt_metal.tools.profiler.process_device_log")
 
-    # Gather analysis stats
-    for core in cores:
-        dm_stats["riscv_1"]["analysis"]["stats"][core] = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"][
-            "analysis"
-        ]["riscv_1_analysis"]["stats"]
-        dm_stats["riscv_1"]["analysis"]["series"].extend(
-            stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["riscv_1_analysis"]["series"]
-        )
-        dm_stats["riscv_0"]["analysis"]["stats"][core] = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"][
-            "analysis"
-        ]["riscv_0_analysis"]["stats"]
-        dm_stats["riscv_0"]["analysis"]["series"].extend(
-            stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["riscv_0_analysis"]["series"]
-        )
+    return import_log_run_stats(setup)
 
-    # Gather test attributes
-    for kernel in dm_stats.keys():
-        attributes = dm_stats[kernel]["attributes"]
-        for event in stats["devices"][0]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"][kernel + "_events"]:
-            run_host_id = event[0]["run_host_id"]
-            if run_host_id in attributes.keys():
-                attributes[run_host_id][event[0]["zone_name"]] = event[2]
-            else:
-                attributes[run_host_id] = {event[0]["zone_name"]: event[2]}
 
-        dm_stats[kernel]["attributes"] = attributes
-
-    # Stats per runtime host id, print if explicitly requested
+def performance_check(dm_stats, verbose=False):
+    # Results' ranges
     results_bounds = {}
     for i in range(len(dm_stats["riscv_1"]["analysis"]["series"])):
         run_host_id = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
@@ -166,16 +206,7 @@ def run_dm_tests(profile, verbose, plot, gtest_filter):
             results_bounds[test_id]["riscv_0"]["bandwidth"], riscv0_bw
         )
 
-        if verbose:
-            logger.info(f"Run host id: {run_host_id}")
-            logger.info(f"RISCV 1 duration: {riscv1_cycles}")
-            logger.info(f"RISCV 0 duration: {riscv0_cycles}")
-            logger.info(f"Attributes:")
-            for attr, val in dm_stats["riscv_1"]["attributes"][run_host_id].items():
-                logger.info(f"  {attr}: {val}")
-            logger.info(f"\n")
-
-    # # # # # # Performance checks per test # # # # # #
+    # Performance checks per test
     for test_id, bounds in results_bounds.items():
         # Bounds check
         riscv1_cycles_within_bounds = (
@@ -225,11 +256,22 @@ def run_dm_tests(profile, verbose, plot, gtest_filter):
         # assert riscv1_bw_within_bounds
         # assert riscv0_bw_within_bounds
 
-    if plot:
-        plot_dm_stats(dm_stats)
+
+def print_stats(dm_stats):
+    # Print stats per runtime host id
+    for i in range(len(dm_stats["riscv_1"]["analysis"]["series"])):
+        run_host_id = dm_stats["riscv_1"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
+
+        logger.info(f"Run host id: {run_host_id}")
+        logger.info(f'RISCV 1 duration: {dm_stats["riscv_1"]["analysis"]["series"][i]["duration_cycles"]}')
+        logger.info(f'RISCV 0 duration: {dm_stats["riscv_0"]["analysis"]["series"][i]["duration_cycles"]}')
+        logger.info(f"Attributes:")
+        for attr, val in dm_stats["riscv_1"]["attributes"][run_host_id].items():
+            logger.info(f"  {attr}: {val}")
+        logger.info(f"\n")
 
 
-def plot_dm_stats(dm_stats):
+def plot_dm_stats(dm_stats, output_file="dm_stats_plot.png"):
     # Extract data for plotting
     riscv_1_series = dm_stats["riscv_1"]["analysis"]["series"]
     riscv_0_series = dm_stats["riscv_0"]["analysis"]["series"]
@@ -327,16 +369,53 @@ def plot_dm_stats(dm_stats):
         ax.grid()
 
     # Save the combined plot
-    plt.savefig("dm_stats_plot.png")
+    plt.savefig(output_file)
     plt.close()
+    logger.info(f"dm_stats plots saved at {output_file}")
+
+
+def export_dm_stats_to_csv(dm_stats, output_file="dm_stats.csv"):
+    with open(output_file, mode="w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+
+        # Write the header
+        writer.writerow(["Kernel", "Run Host ID", "Test ID", "Latency (cycles)", "Bandwidth (bytes/cycle)"])
+
+        # Iterate over the dm_stats object
+        for kernel, kernel_data in dm_stats.items():
+            for run_host_id, attributes in kernel_data["attributes"].items():
+                test_id = attributes.get("Test id", "N/A")
+                duration_cycles = next(
+                    (
+                        entry["duration_cycles"]
+                        for entry in kernel_data["analysis"]["series"]
+                        if entry["duration_type"][0]["run_host_id"] == run_host_id
+                    ),
+                    None,
+                )
+                if duration_cycles:
+                    transaction_size = attributes.get("Transaction size in bytes", 0)
+                    num_transactions = attributes.get("Number of transactions", 0)
+                    bandwidth = (num_transactions * transaction_size) / duration_cycles if duration_cycles else 0
+                    writer.writerow([kernel, run_host_id, test_id, duration_cycles, bandwidth])
+
+    logger.info(f"dm_stats exported to {output_file}")
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser(description="Generate reference outputs for LLaMA accuracy testing.")
-    parser.add_argument("-p", "--profile", action="store_true")
-    parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("--plot", action="store_true")
-    parser.add_argument("-g", "--gtest-filter", dest="gtest_filter")
+    parser = ArgumentParser(description="Generate profiling results for data movement tests.")
+    parser.add_argument(
+        "-p", "--profile", action="store_true", help="Profile the kernels. If not set, use existing profiler logs."
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging of profiling results.")
+    parser.add_argument(
+        "-g",
+        "--gtest-filter",
+        dest="gtest_filter",
+        help="Filter for gtest tests to run. If not set, all tests are run.",
+    )
+    parser.add_argument("--plot", action="store_true", help="Export profiling plots to a .png file.")
+    parser.add_argument("-r", "--report", action="store_true", help="Export profiling results to a .csv file.")
     args = parser.parse_args()
 
     run_dm_tests(*vars(args).values())
