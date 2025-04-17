@@ -1763,8 +1763,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         }
     }
     CoreRangeSet all_cores = CoreRangeSet(non_idle_cores_vec);
-    std::vector<CoreRange> ring_list = all_worker_cores.ranges();
-    std::vector<CoreRange> hop_list = hop_cores.ranges();
+    auto ring_list = all_worker_cores.ranges();
+    const auto& hop_list = hop_cores.ranges();
     ring_list.insert(ring_list.end(), hop_list.begin(), hop_list.end());
 
     CoreRangeSet ring_cores = CoreRangeSet(ring_list);

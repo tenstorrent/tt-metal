@@ -13,6 +13,7 @@
 #include <tt-metalium/program_device_map.hpp>
 #include <tt-metalium/worker_config_buffer.hpp>
 #include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace tt {
 
@@ -151,7 +152,7 @@ public:
 
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_corerange(const CoreRange& cr) const;
 
-    std::vector<CoreRange> circular_buffers_unique_coreranges() const;
+    CoreRangeVector circular_buffers_unique_coreranges() const;
 
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
@@ -190,6 +191,8 @@ public:
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;
 
+    void update_runtime_info_from_descriptor(ProgramDescriptor&& descriptor);
+
 private:
     std::unique_ptr<detail::ProgramImpl> pimpl_;
 
@@ -202,6 +205,7 @@ private:
         const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
+    friend Program CreateProgram(ProgramDescriptor&& descriptor);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program& program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 
@@ -220,6 +224,7 @@ private:
         const CoreRangeSet& core_range_set,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
+    CBHandle add_circular_buffer(CBDescriptor&& descriptor);
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 

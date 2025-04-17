@@ -35,6 +35,46 @@ CircularBufferConfig::CircularBufferConfig(
     this->set_config(data_format_spec);
 }
 
+CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : total_size_(descriptor.total_size) {
+    if (descriptor.buffer) {
+        this->set_globally_allocated_address(*descriptor.buffer);
+    }
+
+    auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {
+        if (format_descriptor.buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
+            TT_THROW(
+                "Buffer index ({}) exceeds max number of circular buffers per core ({})",
+                format_descriptor.buffer_index,
+                NUM_CIRCULAR_BUFFERS);
+        }
+        this->data_formats_[format_descriptor.buffer_index] = format_descriptor.data_format;
+        if (this->total_size_ % format_descriptor.page_size != 0) {
+            TT_THROW(
+                "Total circular buffer size {} B must be divisible by page size {} B",
+                this->total_size_,
+                format_descriptor.page_size);
+        }
+        this->page_sizes_[format_descriptor.buffer_index] = format_descriptor.page_size;
+        if (format_descriptor.tile) {
+            this->tiles_[format_descriptor.buffer_index] = Tile(
+                {format_descriptor.tile->height, format_descriptor.tile->width}, format_descriptor.tile->transpose);
+        }
+    };
+    this->buffer_indices_.reserve(descriptor.format_descriptors.size() + descriptor.remote_format_descriptors.size());
+    this->local_buffer_indices_.reserve(descriptor.format_descriptors.size());
+    this->remote_buffer_indices_.reserve(descriptor.remote_format_descriptors.size());
+    for (const auto& format_descriptor : descriptor.format_descriptors) {
+        process_format_descriptor(format_descriptor);
+        this->buffer_indices_.insert(format_descriptor.buffer_index);
+        this->local_buffer_indices_.insert(format_descriptor.buffer_index);
+    }
+    for (const auto& format_descriptor : descriptor.remote_format_descriptors) {
+        process_format_descriptor(format_descriptor);
+        this->buffer_indices_.insert(format_descriptor.buffer_index);
+        this->remote_buffer_indices_.insert(format_descriptor.buffer_index);
+    }
+}
+
 // For flatbuffer deserialization, set all private members.
 CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size,
