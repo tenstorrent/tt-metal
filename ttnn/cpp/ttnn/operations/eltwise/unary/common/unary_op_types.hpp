@@ -18,6 +18,7 @@ enum class UnaryOpType {
     SQRT,
     SIGMOID,
     LOG,
+    LOG1P,
     TANH,
     LOG2,
     LOG10,

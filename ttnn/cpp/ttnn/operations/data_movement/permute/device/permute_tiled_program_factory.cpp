@@ -132,7 +132,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
         output_cb_index = src1_cb_index;
     }
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, rank, input_page_size, num_tiles};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -142,7 +142,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index, (std::uint32_t)dst_is_dram};
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -329,10 +329,10 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
             .set_page_size(src0_cb_index, input_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t output_H = input_shape[dims[rank - 2]];
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t element_size = input_tensor.element_size();
 
     bool needs_padding = (output_H % tile_shape[1] != 0) && pad_value.has_value();
@@ -711,8 +711,8 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         auto cb_padding = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_padding_cfg);
     }
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t non_x_rows = num_rows / x;
 
     std::vector<uint32_t> reader_compile_time_args = {

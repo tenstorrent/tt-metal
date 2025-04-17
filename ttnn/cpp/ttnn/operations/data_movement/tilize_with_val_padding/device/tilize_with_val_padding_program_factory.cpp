@@ -797,7 +797,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     /** writer
      */
     KernelHandle unary_writer_kernel_id;
-    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? true : false;
+    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     std::vector<uint32_t> writer_ct_args = {
         output_cb_index,
     };

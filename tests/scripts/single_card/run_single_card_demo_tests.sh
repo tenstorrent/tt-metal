@@ -189,6 +189,12 @@ run_whisper_perf() {
 
 }
 
+run_yolov9c_perf() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/experimental/functional_yolov9c/demo/demo.py --timeout 600
+
+}
+
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
   if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then

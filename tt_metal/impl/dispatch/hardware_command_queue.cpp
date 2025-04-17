@@ -32,7 +32,6 @@
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include "program_device_map.hpp"
-#include "rtoptions.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -329,7 +328,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     program.set_last_used_command_queue_for_testing(this);
 
 #ifdef DEBUG
-    if (tt::llrt::RunTimeOptions::get_instance().get_validate_kernel_binaries()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager_.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
         if (const auto buffer = program.get_kernels_buffer(device_)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
@@ -394,7 +393,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     this->enqueue_command(command, blocking, sub_device_ids);
 
 #ifdef DEBUG
-    if (tt::llrt::RunTimeOptions::get_instance().get_validate_kernel_binaries()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager_.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
         if (const auto buffer = program.get_kernels_buffer(device_)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
@@ -552,7 +551,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
     std::shared_ptr<Event> event = std::make_shared<Event>();
     this->enqueue_record_event(event, sub_device_ids);
-    if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
             if (DPrintServerHangDetected()) {
                 // DPrint Server hang, early exit. We're in test mode, so main thread will assert.
@@ -597,7 +596,7 @@ void HWCommandQueue::record_end() {
     auto& trace_data = this->trace_ctx_->data;
     trace_data = std::move(this->manager_.get_bypass_data());
     // Add trace end command to terminate the trace buffer
-    DeviceCommand command_sequence(hal_ref.get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);

@@ -21,7 +21,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/fabric.hpp>
 
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
@@ -56,6 +55,25 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 // computes layernorm(a+*b)*gamma
 // if b is nullptr it's treated as zero (no addition)
 
+void append_fabric_connection_rt_args(
+    const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& connection,
+    const CoreCoord& core,
+    tt::tt_metal::Program& program,
+    std::vector<uint32_t>& writer_rt_args) {
+    writer_rt_args.push_back(connection.has_value());
+    if (connection.has_value()) {
+        auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
+        auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
+        auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
+        append_worker_to_fabric_edm_sender_rt_args(
+            connection.value(),
+            sender_worker_flow_control_semaphore_id,
+            sender_worker_teardown_semaphore_id,
+            sender_worker_buffer_index_semaphore_id,
+            writer_rt_args);
+    }
+}
+
 operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     const Tensor& a,                       // input
     const std::optional<const Tensor>& b,  // residual
@@ -74,6 +92,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    bool enable_persistent_fabric_mode = true;
     const uint32_t dim = 3;
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
@@ -85,6 +104,16 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     tt::tt_metal::Program program{};
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
+
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
+        ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
+            device,
+            forward_device.value_or(nullptr),
+            backward_device.value_or(nullptr),
+            &program,
+            true,
+            num_links,
+            topology);
     uint32_t page_size = 0;
     uint32_t output_page_size = 0;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -124,25 +153,23 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
 
     // Tensor Info
-    // const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const uint32_t input_tensor_num_pages = 1;
     const auto input_tensor_cores = a.memory_config().shard_spec->grid;
     const auto output_tensor_cores = output.memory_config().shard_spec->grid;
     const auto output_tensor_shard_shape = output.memory_config().shard_spec->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
+    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = output_page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
-        input_tensor_num_pages / num_links +
+        (num_links == 1) +
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    if (dst_full_sync_en == false) {
+    if (!dst_full_sync_en) {
         if (fp32_dest_acc_en) {
             TT_FATAL(
                 subblock_wt <= 4,
@@ -406,10 +433,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             .set_page_size(ex2_cb_index, single_tile_size);
     auto cb_ex2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_config);
 
-    uint32_t add_out_cb_index = tt::CBIndex::c_4;
-
     // ex_external2
-    uint32_t ex_cb_external2_index = tt::CBIndex::c_5;
+    uint32_t ex_cb_external2_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig ex_cb_external2_config =
         tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external2_index, cb_data_format}})
             .set_page_size(ex_cb_external2_index, single_tile_size);
@@ -418,7 +443,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     CBHandle cb_stats = 0;
 
     // in0 sharded
-    uint32_t in0_cb_index = tt::CBIndex::c_6;
+    uint32_t in0_cb_index = tt::CBIndex::c_5;
     tt::tt_metal::CircularBufferConfig in0_cb_config =
         tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
             .set_page_size(in0_cb_index, in_single_tile_size)
@@ -426,16 +451,14 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     auto cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
 
     // x
-    uint32_t x_cb_index = tt::CBIndex::c_7;
+    uint32_t x_cb_index = tt::CBIndex::c_6;
     tt::tt_metal::CircularBufferConfig x_cb_config =
         tt::tt_metal::CircularBufferConfig(x_CB_size, {{x_cb_index, cb_data_format}})
             .set_page_size(x_cb_index, single_tile_size);
     auto cb_x = tt::tt_metal::CreateCircularBuffer(program, all_cores, x_cb_config);
 
-    uint32_t in1_cb_index = tt::CBIndex::c_8;
-
     // out
-    uint32_t cb_to_allgather_writer = tt::CBIndex::c_9;
+    uint32_t cb_to_allgather_writer = tt::CBIndex::c_7;
     tt::tt_metal::CircularBufferConfig output_cb_config =
         tt::tt_metal::CircularBufferConfig(out_CB_size, {{cb_to_allgather_writer, out_data_format}})
             .set_page_size(cb_to_allgather_writer, out_single_tile_size);
@@ -443,7 +466,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CBIndex::c_10;
+    const auto reserved_packet_header_CB_index = tt::CBIndex::c_8;
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
@@ -452,6 +475,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, all_cores, cb_reserved_packet_header_config);
+
+    uint32_t add_out_cb_index = tt::CBIndex::c_9;
+    uint32_t in1_cb_index = tt::CBIndex::c_10;
 
     if (b) {
         tt::tt_metal::CircularBufferConfig add_out_cb_config =
@@ -808,7 +834,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         // Set all gather runtime args
 
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
-
+        // all_gather_rts Start at RT index 3 of writer
         std::vector<uint32_t> all_gather_rts = {
             semaphore.address(),        // out_ready_sem_bank_addr (absolute address)
             out_ready_sem_wait_value,   // out_ready_sem_wait_value
@@ -818,13 +844,12 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         if (i < num_links) {
             // Add RT values for the all gather core to all_gather_rts
             // Will be appended to the end of writer rt args
-            uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
-            uint32_t remainder = input_tensor_num_pages % num_links;
+            uint32_t base_pages_per_worker = 1 / num_links;
+            uint32_t remainder = 1 % num_links;
             uint32_t input_tile_id_start = i * base_pages_per_worker + std::min(i, remainder);
             uint32_t input_tile_id_end = (i + 1) * base_pages_per_worker + std::min(i + 1, remainder);
-            uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
             uint32_t output_first_core_tile_start_offset =
-                (input_tensor_num_pages * ring_index + input_tile_id_start) % output_tensor_shard_num_pages;
+                (ring_index + input_tile_id_start) % output_tensor_shard_num_pages;
             std::vector<uint32_t> output_tensor_cores_x;
             std::vector<uint32_t> output_tensor_cores_y;
             for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
@@ -838,10 +863,17 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
                 // drain sync core is the first worker core
                 drain_sync_core = device->worker_core_from_logical_core(core);
             }
-
+            std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
+                !forward_device.has_value() ? std::nullopt
+                                            : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(
+                                                  local_fabric_handle->uniquely_connect_worker(
+                                                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
+            std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
+                !backward_device.has_value() ? std::nullopt
+                                             : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(
+                                                   local_fabric_handle->uniquely_connect_worker(
+                                                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
             std::vector<uint32_t> base_rt_args = {
-                output_tensor_shard_num_pages,        // num_tiles_per_core
-                worker_num_tiles_to_read,             // num_tiles_to_read
                 output_first_core_tile_start_offset,  // first_core_tile_start_offset
                 output_tensor_cores_x.size(),         // num_cores
                 drain_sync_core.x,                    // out_ready_sem_noc0_x
@@ -850,18 +882,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             all_gather_rts.insert(all_gather_rts.end(), base_rt_args.begin(), base_rt_args.end());
             all_gather_rts.insert(all_gather_rts.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
             all_gather_rts.insert(all_gather_rts.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
-
-            all_gather_rts.push_back(forward_device.has_value());
-            if (forward_device.has_value()) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    device->id(), forward_device.value()->id(), i, program, {core}, all_gather_rts);
-            }
-
-            all_gather_rts.push_back(backward_device.has_value());
-            if (backward_device.has_value()) {
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    device->id(), backward_device.value()->id(), i, program, {core}, all_gather_rts);
-            }
+            append_fabric_connection_rt_args(forward_fabric_connection, core, program, all_gather_rts);
+            append_fabric_connection_rt_args(backward_fabric_connection, core, program, all_gather_rts);
         }
         // Set writer runtime args
 
@@ -952,7 +974,10 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
     uint32_t block_wt,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel_config,
+    const GlobalSemaphore& semaphore,
+    const uint32_t ring_size,
+    const uint32_t num_links) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
@@ -969,7 +994,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    if (dst_full_sync_en == false) {
+    if (!dst_full_sync_en) {
         if (fp32_dest_acc_en) {
             TT_FATAL(
                 subblock_wt <= 4,
@@ -1290,8 +1315,18 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             .set_page_size(x_cb_index, single_tile_size);
     auto cb_x = tt::tt_metal::CreateCircularBuffer(program, all_cores, x_cb_config);
 
+    uint32_t output_reshard_cb_index = tt::CBIndex::c_7;
+    tt::tt_metal::CircularBufferConfig output_reshard_cb_config =
+        tt::tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_reshard_cb_index, out_data_format}})
+            .set_page_size(output_reshard_cb_index, out_single_tile_size);
+    CBHandle cb_output_reshard = 0;
+    if (!skip_write_back) {
+        output_reshard_cb_config = output_reshard_cb_config.set_globally_allocated_address(*output.buffer());
+        cb_output_reshard = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_reshard_cb_config);
+    }
+
     // cb_var
-    uint32_t cb_var_index = tt::CBIndex::c_7;
+    uint32_t cb_var_index = tt::CBIndex::c_8;
     tt::tt_metal::CircularBufferConfig cb_var_config =
         tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{cb_var_index, cb_data_format}})
             .set_page_size(cb_var_index, single_tile_size);
@@ -1299,7 +1334,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
 
     // cb_stats_reduced
     uint32_t cb_stats_reduced_index;
-    cb_stats_reduced_index = tt::CBIndex::c_8;
+    cb_stats_reduced_index = tt::CBIndex::c_9;
     tt::tt_metal::CircularBufferConfig stats_reduced_cb_config =
         tt::tt_metal::CircularBufferConfig(stats_reduced_cb_size, {{cb_stats_reduced_index, cb_data_format}})
             .set_page_size(cb_stats_reduced_index, single_tile_size);
@@ -1307,23 +1342,12 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
 
     // cb_stats
     uint32_t cb_stats_index;
-    cb_stats_index = tt::CBIndex::c_9;
+    cb_stats_index = tt::CBIndex::c_10;
     tt::tt_metal::CircularBufferConfig stats_cb_config =
         tt::tt_metal::CircularBufferConfig(stats_cb_size, {{cb_stats_index, cb_data_format}})
             .set_page_size(cb_stats_index, single_tile_size)
             .set_globally_allocated_address(*stats.value().buffer());
     auto cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
-
-    uint32_t output_reshard_cb_index = tt::CBIndex::c_10;
-    tt::tt_metal::CircularBufferConfig output_reshard_cb_config =
-        tt::tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_reshard_cb_index, out_data_format}})
-            .set_page_size(output_reshard_cb_index, out_single_tile_size);
-    CBHandle cb_output_reshard = 0;
-    if (!skip_write_back) {
-        output_reshard_cb_config = output_reshard_cb_config.set_globally_allocated_address(*output.buffer());
-        cb_output_reshard =
-            tt::tt_metal::CreateCircularBuffer(program, all_worker_and_storage_cores, output_reshard_cb_config);
-    }
 
     const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
 
@@ -1648,7 +1672,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             write_back_writer_args.push_back(num_tiles_to_write_back);                   // num_bytes_to_write_back
             write_back_writer_args.push_back(storage_core_noc_x[current_storage_core]);  // current_storage_core_noc_x
             write_back_writer_args.push_back(storage_core_noc_y[current_storage_core]);  // current_storage_core_noc_y
-
             worker_core_current_offset += num_tiles_to_write_back;
             current_storage_core_offset += num_tiles_to_write_back;
 
