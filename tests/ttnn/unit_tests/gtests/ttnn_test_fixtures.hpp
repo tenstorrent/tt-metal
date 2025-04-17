@@ -22,26 +22,22 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "hostdevcommon/common_values.hpp"
 
-using namespace tt::tt_metal;  // For test
-
 namespace ttnn {
+using namespace tt::tt_metal;  // For test
 
 class TTNNFixtureWithDevice : public ::testing::Test {
 protected:
     int trace_region_size_ = DEFAULT_TRACE_REGION_SIZE;
     int l1_small_size_ = DEFAULT_L1_SMALL_SIZE;
 
-    union {
-        tt::tt_metal::IDevice* device_;
-        std::map<chip_id_t, tt::tt_metal::IDevice*> devs;
-    };
+    IDevice* device_;
 
     tt::ARCH arch_ = tt::ARCH::Invalid;
     size_t num_devices_ = 0;
 
     void InitStateEnv() {
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
+        num_devices_ = GetNumAvailableDevices();
     }
 
     void checkSlowDispatch() {
@@ -61,7 +57,7 @@ protected:
             trace_region_size_);
     }
 
-    void TearDown() override { device_->close(); }
+    void TearDown() override { CloseDevice(device_); }
 
 public:
     TTNNFixtureWithDevice() : trace_region_size_(DEFAULT_TRACE_REGION_SIZE), l1_small_size_(DEFAULT_L1_SMALL_SIZE) {}
@@ -98,6 +94,10 @@ protected:
 // TODO: deduplicate the code with `TTNNFixtureWithDevice`.
 class MultiCommandQueueT3KFixture : public TTNNFixtureWithDevice {
 protected:
+    // TODO: I think device_ still shows up here, not sure what to do about that though
+
+    std::map<chip_id_t, tt::tt_metal::IDevice*> devs;
+
     void SetUp() override {
         InitStateEnv();
         checkSlowDispatch();
