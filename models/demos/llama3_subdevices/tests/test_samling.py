@@ -90,9 +90,9 @@ def test_llama_sampling_inference(dtype, batch_size, mesh_device, use_program_ca
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=32, dummy_weights=True)
     # torch_input = torch.randn(1, 1, 32, model_args.padded_vocab_size)
     torch_input = torch.zeros(1, 1, 32, model_args.padded_vocab_size)
-    torch_input[:, :, :, 0] = 2
-    torch_input[:, :, :, 16 * 1024] = 3
-    torch_input[:, :, :, 16 * 1024 * 2] = 4
+    torch_input[:, :, :, 0:32] = 2
+    # torch_input[:, :, :, 16 * 1024] = 3
+    # torch_input[:, :, :, 16 * 1024 * 2] = 4
     # torch_input[:, :, :, 16*1024*3 + 35] = 5
     # torch_input[:, :, :, 16*1024*4 + 35] = 6
     # torch_input[:, :, :, 16*1024*5 + 35] = 7
@@ -147,6 +147,8 @@ def test_llama_sampling_inference(dtype, batch_size, mesh_device, use_program_ca
         )
     tt_output_torch = tt_output_torch[0, 0, :, :]
     tt_output_torch = tt_output_torch.reshape(-1, 1)
+
+    breakpoint()
 
     pcc_required = 0.99
     passing, pcc_message = comp_allclose(reference_output, tt_output_torch, pcc_required)
