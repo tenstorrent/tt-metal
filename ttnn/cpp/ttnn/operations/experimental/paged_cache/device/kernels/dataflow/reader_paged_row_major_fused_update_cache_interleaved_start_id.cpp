@@ -76,9 +76,12 @@ void kernel_main() {
         cb_reserve_back(cb_index_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
         // index_tensor has one page to read
-        uint64_t tensor_index_noc_addr = get_noc_addr(0, addrg);
-        noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
-        noc_async_read_barrier();
+        if constexpr (index_is_dram) {
+            uint64_t tensor_index_noc_addr = get_noc_addr(0, addrg);
+            noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
+            noc_async_read_barrier();
+        }
+
         cb_push_back(cb_index_id, 1);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
 

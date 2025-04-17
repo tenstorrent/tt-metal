@@ -103,20 +103,48 @@ void PagedUpdateCacheDeviceOperation::validate(
             optional_input_tensors.at(0).has_value() != update_idxs.size() > 0,
             "Only an update tensor or an update vector can be provided. Not both or neither.");
 
-        uint32_t num_indices;
+        uint32_t num_indices = 0;
+        uint32_t num_cores_cur_pos = 0;
         if (optional_input_tensors.at(0).has_value()) {
             const auto& update_idxs_tensor = optional_input_tensors.at(0).value();
             TT_FATAL(update_idxs_tensor.dtype() == DataType::INT32, "Error");
             TT_FATAL(update_idxs_tensor.layout() == Layout::ROW_MAJOR, "Error");
-            num_indices = update_idxs_tensor.padded_shape()[0];
 
-            TT_FATAL(update_idxs_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-            TT_FATAL(update_idxs_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Error");
+            if (optional_input_tensors.at(0)->is_sharded()) {
+                TT_FATAL(
+                    update_idxs_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+                TT_FATAL(update_idxs_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::L1, "Error");
+                num_cores_cur_pos = update_idxs_tensor.padded_shape()[0];
+                num_indices = update_idxs_tensor.logical_shape()[1];
+            } else {
+                TT_FATAL(
+                    update_idxs_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+                TT_FATAL(update_idxs_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Error");
+                num_cores_cur_pos = 0;
+                num_indices = update_idxs_tensor.padded_shape()[0];
+            }
         } else {
             num_indices = update_idxs.size();
         }
-
-        TT_FATAL(input_tensor.padded_shape()[1] == num_indices, "Number of update_idxs should match batch size");
+        if (optional_input_tensors.at(0)->is_sharded()) {
+            uint32_t in_num_cores_cur_pos = optional_input_tensors.at(0)->shard_spec().value().grid.num_cores();
+            TT_FATAL(
+                input_tensor.padded_shape()[1] == num_indices,
+                "Number of update_idxs ({}) should match batch size ({})",
+                num_indices,
+                input_tensor.padded_shape()[1]);
+            TT_FATAL(
+                in_num_cores_cur_pos == num_cores_cur_pos,
+                "Number of cores sharded on L1 ({}) should match dimension of update_idxs at 0 ({})",
+                in_num_cores_cur_pos,
+                num_cores_cur_pos);
+        } else {
+            TT_FATAL(
+                input_tensor.padded_shape()[1] == num_indices,
+                "Number of update_idxs ({}) should match batch size ({})",
+                num_indices,
+                input_tensor.padded_shape()[1]);
+        }
     };
 
     const auto validateSharding = [](const Tensor& input_tensor) {
