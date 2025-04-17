@@ -65,8 +65,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
     auto cb = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? true : false;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? true : false;
+    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(unpadded_row_size_nbytes);
     uint32_t src_log2_stick_size =
         src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(unpadded_row_size_nbytes) : 0;
@@ -259,8 +259,8 @@ operation::ProgramWithCallbacks pad_tile(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       (std::uint32_t)src0_is_dram};
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
@@ -524,8 +524,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? true : false;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? true : false;
+    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(unpadded_row_size_nbytes);
     uint32_t src_log2_stick_size =
         src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(unpadded_row_size_nbytes) : 0;
@@ -874,8 +874,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? true : false;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? true : false;
+    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
     bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size_padded);

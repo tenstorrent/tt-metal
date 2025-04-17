@@ -512,7 +512,7 @@ TEST_F(DeviceFixture, TensixComputeReduceW) {
         }
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
@@ -630,7 +630,7 @@ TEST_F(DeviceFixture, TensixComputeReduceWMathOnly) {
         }
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
@@ -749,7 +749,7 @@ TEST_F(DeviceFixture, TensixComputeReduceWShortInit) {
         }
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
@@ -829,7 +829,7 @@ TEST_F(DeviceFixture, TensixComputeReduceWTinyTiles) {
         }
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
@@ -870,7 +870,7 @@ TEST_F(DeviceFixture, TensixComputeReduceWTinyTilesShortInit) {
         }
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
-                if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+                if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {

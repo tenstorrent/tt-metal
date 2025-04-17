@@ -302,7 +302,7 @@ Tensor ExecuteDiv::invoke(
             result = ttnn::floor(queue_id, result, output_mem_config, output_tensor);
         }
 
-        if (accurate_mode == false) {  // If input_b is non-zero tensor
+        if (!accurate_mode) {  // If input_b is non-zero tensor
             return typecast(queue_id, result, input_dtype, std::nullopt, output_tensor);
         }
 
@@ -337,7 +337,7 @@ Tensor ExecuteDiv::invoke(
             ttnn::floor(queue_id, output_tensor.value(), output_mem_config, output_tensor);
         }
 
-        if (accurate_mode == false) {  // If input_b is non-zero tensor
+        if (!accurate_mode) {  // If input_b is non-zero tensor
             return output_tensor.value();
         }
 

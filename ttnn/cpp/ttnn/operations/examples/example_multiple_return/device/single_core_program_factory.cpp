@@ -56,7 +56,7 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
             .set_page_size(output_cb_index, single_tile_size_output);
     auto cb_output1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
 
     bool dst_is_dram1 = output_tensor1.has_value()
