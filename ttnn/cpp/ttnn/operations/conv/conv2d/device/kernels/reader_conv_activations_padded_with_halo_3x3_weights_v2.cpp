@@ -42,25 +42,7 @@ void kernel_main() {
         return;
     }
 
-    // LOOP TO FILL READER OFFSETS
-    /* We can add another loop to read chunks of a stick as well.
-     * - Duplicate reader_offset for same stick X times (window_inner must be 1)
-     * - New loop between outer and inner that loops X times reading from same stick
-     * - Read conv_act_c_read_bytes / X each time
-     * - Update l1_write_addr_act by conv_act_c_read_bytes
-     */
-    uint32_t reader_offsets[weight_size_w * weight_size_h];
-    uint32_t reader_offset = 0;  // Constant offset for each pixel within filter window
-    uint32_t reader_offset_idx = 0;
-    for (uint32_t channel_stick_h = 0; channel_stick_h < weight_size_h; channel_stick_h++) {
-        uint32_t reader_offset_row = reader_offset;
-        for (uint32_t channel_stick_w = 0; channel_stick_w < weight_size_w; channel_stick_w++) {
-            reader_offsets[reader_offset_idx++] = reader_offset_row;
-            reader_offset_row += dilation_w;
-        }
-        // -1 to go back to previous reader_offset
-        reader_offset += (dilation_h * conv_act_size_w_padded);
-    }
+    constexpr uint32_t window_outer_offset = conv_act_size_w_padded * conv_act_c_read_bytes * dilation_h;
 
     constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2;  // Extra /2 because of packed uint16 reads
     constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
@@ -84,7 +66,6 @@ void kernel_main() {
     // the other path away this has shown to be a big perf win
 
     // coalesce reads along weight_size_w
-    reader_offset_idx = 0;
     uint32_t act_l1_offset = 0;
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
@@ -96,13 +77,14 @@ void kernel_main() {
 
     uint32_t start_reader_idx = 0;
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
+        uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             // Reset reader_idx to finish act_block_h_datums
             reader_idx = start_reader_idx;
 
             cb_reserve_back(cb_id_act, act_block_num_tiles_read);
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
-            uint32_t reader_offset = act_l1_read_addr + (reader_offsets[reader_offset_idx] * conv_act_c_read_bytes);
+
             // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
             uint32_t act_block_h_datums_read_curr =
                 bh == act_num_blocks_h - 1 ? act_block_h_datums_read_last_block : act_block_h_datums_read;
@@ -144,9 +126,8 @@ void kernel_main() {
 
             cb_push_back(cb_id_act, act_block_num_tiles_read);
 
-            reader_offset_idx += window_inner;
+            reader_offset += window_outer_offset;
         }
-        reader_offset_idx = 0;
 
         start_reader_idx = reader_idx;
 #ifdef SPLIT_READER

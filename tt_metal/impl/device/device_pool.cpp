@@ -29,10 +29,8 @@
 #include "host_api.hpp"
 #include "logger.hpp"
 #include "profiler_types.hpp"
-#include "rtoptions.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt_metal.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -290,7 +288,7 @@ void DevicePool::initialize_host(IDevice* dev) const {
     watcher_init(dev->id());
 
     // TODO: as optimization, investigate removing all this call for already initialized devivces
-    if (!llrt::RunTimeOptions::get_instance().get_skip_reset_cores_on_init()) {
+    if (!tt_metal::MetalContext::instance().rtoptions().get_skip_reset_cores_on_init()) {
         dev->reset_cores();
     }
     dev->initialize_and_launch_firmware();
@@ -465,19 +463,21 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 
 void DevicePool::wait_for_fabric_router_sync() const {
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     if (tt_fabric::is_1d_fabric_config(fabric_config)) {
         const auto edm_config = tt_fabric::get_1d_fabric_config();
         std::vector<uint32_t> signal(1, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
         auto wait_for_handshake = [&](IDevice* dev) {
             std::vector<std::uint32_t> master_router_status{0};
-            auto fabric_ethernet_channels =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(dev->id());
-            if (fabric_ethernet_channels.empty()) {
+            auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+
+            auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+            if (router_chans_and_direction.empty()) {
                 return;
             }
 
-            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            tt_fabric::chan_id_t fabric_master_router_chan = router_chans_and_direction.begin()->first;
             CoreCoord virtual_eth_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                     dev->id(), fabric_master_router_chan);
@@ -517,30 +517,25 @@ void DevicePool::wait_for_fabric_router_sync() const {
             }
         }
     } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
-        auto fabric_router_sync_sem_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        auto fabric_router_sync_sem_addr = MetalContext::instance().hal().get_dev_addr(
+            HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
         std::vector<std::uint32_t> master_router_status{0};
         for (const auto& dev : this->get_all_active_devices()) {
-            auto fabric_ethernet_channels =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(dev->id());
-            if (fabric_ethernet_channels.empty()) {
-                continue;
+            auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+
+            auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+            if (router_chans_and_direction.empty()) {
+                return;
             }
 
-            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            tt_fabric::chan_id_t fabric_master_router_chan = router_chans_and_direction.begin()->first;
             CoreCoord virtual_eth_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                     dev->id(), fabric_master_router_chan);
             auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
 
-            auto [mesh_id, chip_id] = tt::tt_metal::MetalContext::instance()
-                                          .get_cluster()
-                                          .get_control_plane()
-                                          ->get_mesh_chip_id_from_physical_chip_id(dev->id());
-            auto num_routers =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane()->get_num_active_fabric_routers(
-                    mesh_id, chip_id);
+            auto num_routers = router_chans_and_direction.size();
             while (master_router_status[0] != num_routers) {
                 tt_metal::detail::ReadFromDeviceL1(
                     dev,
@@ -739,6 +734,7 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
 
     // Terminate fabric routers
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     if (tt_fabric::is_1d_fabric_config(fabric_config)) {
         std::vector<uint32_t> signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
         static constexpr std::size_t edm_buffer_size =
@@ -753,14 +749,15 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
                 // 1d fabric is not launched on TG gateways
                 continue;
             }
+            auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
 
-            auto fabric_ethernet_channels =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(dev->id());
-            if (fabric_ethernet_channels.empty()) {
+            auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+            if (router_chans_and_direction.empty()) {
                 continue;
             }
 
-            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            tt_fabric::chan_id_t fabric_master_router_chan = router_chans_and_direction.begin()->first;
+
             CoreCoord virtual_eth_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                     dev->id(), fabric_master_router_chan);
@@ -770,16 +767,17 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
         }
     } else if (tt_fabric::is_2d_fabric_config(fabric_config)) {
         std::vector<uint32_t> master_router_terminate(1, 0);
-        auto fabric_router_sync_sem_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        auto fabric_router_sync_sem_addr = MetalContext::instance().hal().get_dev_addr(
+            HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
         for (const auto& dev : this->get_all_active_devices()) {
-            auto fabric_ethernet_channels =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(dev->id());
-            if (fabric_ethernet_channels.empty()) {
+            auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+
+            auto router_chans_and_direction = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+            if (router_chans_and_direction.empty()) {
                 continue;
             }
 
-            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            tt_fabric::chan_id_t fabric_master_router_chan = router_chans_and_direction.begin()->first;
             CoreCoord virtual_eth_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
                     dev->id(), fabric_master_router_chan);

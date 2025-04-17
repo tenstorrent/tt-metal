@@ -9,7 +9,6 @@
 
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "impl/context/metal_context.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
 #include "system_memory_manager.hpp"
@@ -73,9 +72,10 @@ typedef struct dispatch_dependent_config {
     // Populated if fabric is being used to talk to downstream
     std::optional<uint32_t> fabric_router_noc_xy;
     std::optional<uint32_t> upstream_mesh_id;
-    std::optional<uint32_t> upstream_chip_id;
+    std::optional<uint32_t> upstream_dev_id;
     std::optional<uint32_t> downstream_mesh_id;
-    std::optional<uint32_t> downstream_chip_id;
+    std::optional<uint32_t> downstream_dev_id;
+    std::optional<uint32_t> outbound_eth_chan;
 } dispatch_dependent_config_t;
 
 class DispatchKernel : public FDKernel {
@@ -121,6 +121,7 @@ public:
 
     void UpdateArgsForFabric(
         const CoreCoord& fabric_router,
+        uint32_t outbound_eth_chan,
         tt::tt_fabric::mesh_id_t src_mesh_id,
         chip_id_t src_chip_id,
         tt::tt_fabric::mesh_id_t dst_mesh_id,

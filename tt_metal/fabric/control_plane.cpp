@@ -27,7 +27,6 @@
 #include "core_coord.hpp"
 #include "fabric_host_interface.h"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
 #include "logger.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_graph.hpp"
@@ -309,6 +308,9 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
                 get_ethernet_cores_grouped_by_connected_chips(physical_chip_id_from_north);
             bool found_chip = false;
             for (const auto& [connected_chip_id, eth_ports] : eth_links_grouped_by_connected_chips) {
+                if (is_external_ubb_cable(physical_chip_id_from_north, eth_ports[0])) {
+                    continue;
+                }
                 if (visited_physical_chips.find(connected_chip_id) == visited_physical_chips.end() and
                     eth_ports.size() == num_ports_per_side) {
                     physical_chip_ids[i * mesh_ew_size + j] = connected_chip_id;
@@ -538,11 +540,13 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                                                       RoutingDirection direction) {
         auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
         auto fabric_router_channels_on_chip = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_chip_id);
-        auto chan_id = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
-        // TODO: remove this from Cluster, manage retraining links only in control plane
-        auto active_eth_cores = tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(physical_chip_id, false);
+        // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
+        auto chan_id = tt::tt_metal::MetalContext::instance()
+                           .get_cluster()
+                           .get_soc_desc(physical_chip_id)
+                           .logical_eth_core_to_chan_map.at(eth_core);
         // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
-        if (fabric_router_channels_on_chip.contains(chan_id) and active_eth_cores.contains(eth_core)) {
+        if (fabric_router_channels_on_chip.contains(chan_id)) {
             this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id][direction].push_back(chan_id);
         } else {
             log_debug(
@@ -670,7 +674,7 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                     physical_chip_id, eth_chan);
 
             TT_ASSERT(
-                tt_metal::hal_ref.get_dev_size(
+                tt_metal::MetalContext::instance().hal().get_dev_size(
                     tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG) ==
                     sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 "ControlPlane: Fabric router config size mismatch");
@@ -684,7 +688,7 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                 (void*)&fabric_router_config,
                 sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 tt_cxy_pair(physical_chip_id, virtual_eth_core),
-                tt_metal::hal_ref.get_dev_addr(
+                tt_metal::MetalContext::instance().hal().get_dev_addr(
                     tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG),
                 false);
         }
@@ -758,16 +762,16 @@ eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDire
     return dir;
 }
 
-eth_chan_directions ControlPlane::get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, int chan) const {
+std::set<std::pair<chan_id_t, eth_chan_directions>> ControlPlane::get_active_fabric_eth_channels(
+    mesh_id_t mesh_id, chip_id_t chip_id) const {
+    std::set<std::pair<chan_id_t, eth_chan_directions>> active_fabric_eth_channels;
     for (const auto& [direction, eth_chans] :
          this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id]) {
         for (const auto& eth_chan : eth_chans) {
-            if (chan == eth_chan) {
-                return this->routing_direction_to_eth_direction(direction);
-            }
+            active_fabric_eth_channels.insert({eth_chan, this->routing_direction_to_eth_direction(direction)});
         }
     }
-    TT_THROW("Cannot Find Ethernet Channel Direction");
+    return active_fabric_eth_channels;
 }
 
 std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(

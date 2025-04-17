@@ -252,7 +252,7 @@ def test_multi_device_argmax(pcie_mesh_device, layout, mem_config):
         mesh_mapper=ttnn.ReplicateTensorToMesh(pcie_mesh_device),
     )
 
-    tt_out_11BH = ttnn.argmax(tt_out_11BH, dim=-1)
+    tt_out_11BH = ttnn.argmax(tt_out_11BH, keepdim=True, dim=-1)
     tt_out_1B = ttnn.reshape(tt_out_11BH[:1, :, :, :], ttnn.Shape([1, 32]))
     tt_out_1B = ttnn.to_torch(tt_out_1B, mesh_composer=ttnn.ConcatMeshToTensor(pcie_mesh_device, dim=0))[0]
 

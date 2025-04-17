@@ -9,7 +9,7 @@
 
 #include "assert.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
@@ -221,7 +221,8 @@ public:
 private:
     void add_prefetch_relay_inline() { this->cmd_write_offsetB += sizeof(CQPrefetchCmd); }
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t pcie_alignment =
+        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
+    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 };
 }  // namespace tt::tt_metal

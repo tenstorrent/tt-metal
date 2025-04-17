@@ -40,6 +40,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case QUANT:
         case REQUANT:
         case DEQUANT:
+        case MAXIMUM:
+        case MINIMUM:
         case POWER: return true;
         default: return false;
     }

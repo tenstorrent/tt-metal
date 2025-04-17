@@ -44,13 +44,12 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "fmt/base.h"
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -271,12 +270,12 @@ int main(int argc, char** argv) {
         uint32_t fidel = 0;  // lofi
         uint32_t num_tests = 10;
         uint32_t num_blocks = 1;
-        bool matmul_block = 0;
-        bool packer_l1 = 0;
-        bool fp32 = 0;
+        bool matmul_block = false;
+        bool packer_l1 = false;
+        bool fp32 = false;
         uint32_t interm_cb_dtype = 0;
         uint32_t subblock_choice = 0;
-        bool single_core = 0;
+        bool single_core = false;
         bool fast_dispatch_mode = false;
         try {
             std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 11264);
@@ -323,7 +322,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         if (single_core) {
             TT_ASSERT(fast_dispatch_mode, "single core test only supports in fast dispatch mode");
-        } else if (fast_dispatch_mode == false) {
+        } else if (!fast_dispatch_mode) {
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
 
 #if !defined(TRACY_ENABLE)
@@ -485,7 +484,7 @@ int main(int argc, char** argv) {
         auto [math_fidelity, fp32_dest_acc_en] = get_compute_params(arch);
         if (single_core) {
             math_fidelity = fidel == 0 ? MathFidelity::LoFi : MathFidelity::HiFi2;
-            fp32_dest_acc_en = fp32 == 0 ? false : true;
+            fp32_dest_acc_en = fp32 != 0;
         }
         auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt, subblock_choice);
         auto [in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr] =
@@ -601,7 +600,7 @@ int main(int argc, char** argv) {
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
-            if (fast_dispatch_mode == false) {
+            if (!fast_dispatch_mode) {
                 log_debug(LogTest, "calling detail::LaunchProgram");
                 detail::LaunchProgram(device, program);
                 log_debug(LogTest, "detail::LaunchProgram done");
@@ -699,7 +698,7 @@ int main(int argc, char** argv) {
                 in1_bfp8_unpack_slice);
         }
 
-        if ((validation_result == false || performance_result == false) && bypass_check == false) {
+        if ((!validation_result || !performance_result) && !bypass_check) {
             log_error(
                 LogTest,
                 "The compute performance does not meet the criteria. "

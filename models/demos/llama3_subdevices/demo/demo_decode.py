@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 5
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 340, "max": 355}, 10: {"min": 180, "max": 200}, 80: {"min": 39, "max": 41}}
+TSU_THRESHOLDS = {1: {"min": 360, "max": 380}, 10: {"min": 195, "max": 215}, 80: {"min": 43, "max": 47}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -310,13 +310,17 @@ def run_llama3_demo(
         )
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
         tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-            tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
+            tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
         )
         logger.info(f"sampling done")
 
     if not stress_test:
         ttnn.plus_one(
             current_pos_tensor,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
+        ttnn.plus_one(
+            rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
     # profiler.end(f"plus one position done")
@@ -346,7 +350,7 @@ def run_llama3_demo(
     )
     tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
     tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-        tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
+        tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
     )
 
     if not stress_test:
@@ -354,7 +358,10 @@ def run_llama3_demo(
             current_pos_tensor,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
-    # ttnn.plus_one(rot_mat_idxs)  # FIXME <- This won't work since embedding requires uint32 and plus_one only works for int32
+        ttnn.plus_one(
+            rot_mat_idxs,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -392,7 +399,7 @@ def run_llama3_demo(
     users_decoding = True  # reset to handle next batch
     total_decoding_time = 0  # Track total decoding time
     total_tokens_generated = 0  # Track total tokens generated
-    tokens_per_second_per_user_token127 = 0  # Track tokens per second per user at token 128
+    tokens_per_second_per_user_token127 = None  # Track tokens per second per user at token 128
 
     all_outputs = []
 
@@ -420,8 +427,6 @@ def run_llama3_demo(
         # If this tensor is int32, it won't be supported by ttnn.embedding
         if not stress_test:
             current_pos += 1
-        rot_mat_idxs_updated = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
-        ttnn.copy_host_to_device_tensor(rot_mat_idxs_updated, rot_mat_idxs)
         # ttnn.synchronize_device(mesh_device)
         # Write to host
         tt_output_torch = ttnn.to_torch(
@@ -491,6 +496,22 @@ def run_llama3_demo(
         if iteration >= max_generated_tokens:
             users_decoding = False
 
+    # Release trace
+    ttnn.release_trace(mesh_device, trace_id)
+
+    # Finish profiling at the end of all batches inference
+    profiler.end(profiler_step_name)
+    profiler.end("run")
+
+    if is_ci_env and tokens_per_second_per_user_token127 is not None:
+        benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
+
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"tg_llama_demo_decode",
+            ml_model_name="llama70b-tg",
+        )
+
     if not stress_test:
         # print before assertion
         out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
@@ -500,22 +521,6 @@ def run_llama3_demo(
 
     # Print out total number of tsu_failures
     logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
-
-    # Release trace
-    ttnn.release_trace(mesh_device, trace_id)
-
-    # Finish profiling at the end of all batches inference
-    profiler.end(profiler_step_name)
-    profiler.end("run")
-
-    if is_ci_env:
-        benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
-
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type=f"tg-llama-demo-e2e",
-            ml_model_name="tg-llama",
-        )
 
 
 # List of supported Parameters for demo.py

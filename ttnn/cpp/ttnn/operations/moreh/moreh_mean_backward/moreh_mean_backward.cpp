@@ -18,7 +18,7 @@ Tensor MorehMeanBackward::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     auto output_grad_rank = output_grad.get_logical_shape().rank();
     auto input_grad_rank = output_grad_rank;
-    if (keepdim == false) {
+    if (!keepdim) {
         if (!dim.has_value()) {
             // do nothing
         } else if (std::holds_alternative<int64_t>(dim.value())) {
