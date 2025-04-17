@@ -155,39 +155,30 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">pad</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.pad',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.data_movement.pad_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.pad" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Returns a padded tensor, with a specified value at the specified location. If the input tensor is on host, the pad will be performed on host, and if its on device it will be performed on device.</p>
-<p>Equivalent pytorch code:</p>
-<div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">padding</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
-<span class="n">torch</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">output_tensor_shape</span><span class="p">,</span> <span class="n">input_tensor_start</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
-</pre></div>
-</div>
+<p>Returns a padded tensor, with a specified value at the specified location. If the input tensor is on host, the pad will be performed on host, and if its on device it will be performed on device.
+Any rank of tensor is supported, however tensors with rank &gt; 4 can only apply padding to the lower 3 dimensions.</p>
+<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: (ttnn.Tensor): the input tensor.
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">padding</span></code>: (list[Tuple[int,int]]): padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor. Mutually exclusive to output_tensor_shape and input_tensor_start.
+:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">value</span></code>: (Union[float,int]): value to pad with.</p>
+<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">use_multicore</span></code>: (Optional[bool]) switch to use multicore implementation
+:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: (Optional[ttnn.MemoryConfig]): Memory configuration for the operation. Defaults to <cite>None</cite>.
+:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">queue_id</span></code>: (Optional[int]): command queue id. Defaults to <cite>0</cite>.</p>
 <dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<ul class="simple">
-<li><p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor.</p></li>
-<li><p><strong>padding</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor. Mutually exclusive to output_tensor_shape and input_tensor_start.</p></li>
-<li><p><strong>output_tensor_shape</strong> (<em>shape</em>) – Final shape of padded tensor. This along with input_tensor_start is mutually exclusive from padding.</p></li>
-<li><p><strong>input_tensor_start</strong> (<em>shape</em>) – Shape describing where to start padding. This along with output_tensor_shape is mutually exclusive from padding.</p></li>
-<li><p><strong>value</strong> (<em>number</em>) – value to pad with.</p></li>
-</ul>
-</dd>
-<dt class="field-even">Keyword Arguments<span class="colon">:</span>
-</dt>
-<dd class="field-even">
-<ul class="simple">
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
-</ul>
-</dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <p><em>List of ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">pad</span><span class="p">(</span><span class="n">pad_input</span><span class="p">,</span> <span class="p">[(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">12</span><span class="p">),</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">12</span><span class="p">)],</span> <span class="mi">0</span><span class="p">)</span>
+<span class="k">assert</span> <span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">[:,</span> <span class="p">:,</span> <span class="mi">20</span><span class="p">:</span><span class="mi">32</span><span class="p">,</span> <span class="mi">20</span><span class="p">:</span><span class="mi">32</span><span class="p">])</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+<span class="k">assert</span> <span class="n">input_tensor</span><span class="o">.</span><span class="n">shape</span> <span class="o">==</span> <span class="n">Shape</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">])</span>
+</pre></div>
+</div>
+</div>
 </dd>
 </dl>
 
