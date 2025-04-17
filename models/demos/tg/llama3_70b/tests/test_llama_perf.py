@@ -19,7 +19,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 
 from models.utility_functions import (
     profiler,
-    disable_compilation_reports,
     skip_for_grayskull,
     profiler,
     enable_persistent_kernel_cache,
@@ -132,8 +131,8 @@ def run_test_LlamaModel_end_to_end(
         cache_path,
         read_cache=True,
     )
-    for device in mesh_device.get_devices():
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
+
     # Run prefill num_iterations times and measure time
     enable_persistent_kernel_cache()
     for iter_idx in range(num_iterations):
@@ -150,8 +149,7 @@ def run_test_LlamaModel_end_to_end(
         )
 
         profiler.end(f"prefill_iteration_{iter_idx}")
-        for device in mesh_device.get_devices():
-            ttnn.synchronize_device(device)
+        ttnn.synchronize_device(mesh_device)
 
     # Calculate average time for prefill
     profiler.print()
@@ -198,7 +196,6 @@ def test_Llama_perf_host(
     check_mesh_device(mesh_device, model_config)
     mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
-    disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end(
         mesh_device,

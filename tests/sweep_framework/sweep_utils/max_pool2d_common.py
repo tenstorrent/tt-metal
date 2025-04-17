@@ -57,6 +57,8 @@ def run_max_pool2d(
     device,
     sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ceil_mode=False,
+    memory_config=None,
+    in_place=False,
 ):
     kernel_size = [kernel_h, kernel_w]
     stride = [stride_h, stride_h]
@@ -98,8 +100,9 @@ def run_max_pool2d(
         stride=[stride_h, stride_w],
         padding=[pad_h, pad_w],
         dilation=[dilation_h, dilation_w],
-        memory_config=None,
+        memory_config=memory_config,
         applied_shard_scheme=sharding,
+        in_place_halo=in_place,
     )
 
     output_host = output.cpu()

@@ -9,11 +9,8 @@ import pytest
 import evaluate
 
 from loguru import logger
-from ttnn.model_preprocessing import *
 from models.utility_functions import (
     profiler,
-    skip_for_wormhole_b0,
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -125,7 +122,6 @@ def run_squeezebert_question_and_answering_inference(
         base_addr=f"transformer.",
         parameters=parameters,
         device=device,
-        reader_patterns_cache=None,
     )
     profiler.end(f"inference_time")
 
@@ -222,7 +218,6 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
                     base_addr=f"transformer.",
                     parameters=parameters,
                     device=device,
-                    reader_patterns_cache=None,
                 )
                 tt_output = (
                     ttnn.to_torch(ttnn.from_device(tt_output))
@@ -281,7 +276,6 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
 @pytest.mark.parametrize("squeezebert", [ttnn_functional_squeezebert])
 def test_demo(input_loc, batch_size, sequence_size, model_name, squeezebert, device, use_program_cache, reset_seeds):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_squeezebert_question_and_answering_inference(
         device=device,
@@ -311,7 +305,6 @@ def test_demo_squadv2(
     batch_size, sequence_size, model_name, squeezebert, n_iterations, device, use_program_cache, reset_seeds
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_squeezebert_question_and_answering_inference_squad_v2(
         device=device,

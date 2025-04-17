@@ -2,7 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
+#include <array>
+#include <cstddef>
 #include <ostream>
+#include <utility>
 
 #include "shape2d.hpp"
 

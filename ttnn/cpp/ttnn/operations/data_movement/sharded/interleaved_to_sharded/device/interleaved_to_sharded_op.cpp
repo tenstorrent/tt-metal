@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/hal.hpp>
+
 #include "interleaved_to_sharded_op.hpp"
-
-
 #include "interleaved_to_sharded_program_factory.hpp"
 
 using namespace tt::tt_metal;
@@ -20,7 +20,7 @@ void InterleavedToShardedDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(this->output_mem_config.is_sharded(), "Error");
     TT_FATAL(this->output_mem_config.buffer_type == BufferType::L1, "Error");
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        TT_FATAL((*this->output_mem_config.shard_spec).shape[1] * input_tensor.element_size() % hal.get_alignment(HalMemType::L1) == 0, "Shard page size must currently have L1 aligned page size");
+        TT_FATAL((*this->output_mem_config.shard_spec).shape[1] * input_tensor.element_size() % hal::get_l1_alignment() == 0, "Shard page size must currently have L1 aligned page size");
     }
     if (input_tensor.get_dtype() != this->output_dtype) {
         TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");

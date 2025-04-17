@@ -17,8 +17,8 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/reflection.hpp>
-#include <tt-metalium/span.hpp>
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "cpp/ttnn/tensor/enum_types.hpp"
@@ -42,6 +42,8 @@ enum class DataType {
     INT32 = 7,
     INVALID = 8,
 };
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
 
 template <typename T>
 consteval inline DataType convert_to_data_type() {

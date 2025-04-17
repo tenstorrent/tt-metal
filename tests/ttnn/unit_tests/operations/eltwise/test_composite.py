@@ -358,25 +358,6 @@ def test_unary_composite_lgamma_ttnn(input_shapes, device):
     assert comp_pass
 
 
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_composite_log1p_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -1, 1, device)
-
-    output_tensor = ttnn.log1p(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.log1p)
-    golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
 @skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shapes",
@@ -387,7 +368,8 @@ def test_unary_composite_log1p_ttnn(input_shapes, device):
     ),
 )
 def test_unary_composite_mish_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -20, 100, device)
+    in_data1 = torch.Tensor(size=input_shapes).uniform_(-20, 100).to(torch.bfloat16)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.mish(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.mish)
     golden_tensor = golden_function(in_data1)
@@ -448,26 +430,6 @@ def test_unary_composite_rad2deg_ttnn(input_shapes, device):
     output_tensor = ttnn.rad2deg(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.rad2deg)
     golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@skip_for_grayskull()
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_composite_round_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    decimal = 1
-    output_tensor = ttnn.round(input_tensor1, decimals=decimal)
-    golden_function = ttnn.get_golden_function(ttnn.round)
-    golden_tensor = golden_function(in_data1, decimal)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

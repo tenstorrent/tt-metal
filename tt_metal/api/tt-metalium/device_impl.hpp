@@ -7,26 +7,22 @@
 #include <memory>
 #include <utility>
 
-#include "device.hpp"
-#include "hostdevcommon/common_values.hpp"
-#include "work_executor_types.hpp"
-#include "basic_allocator.hpp"
-#include "l1_banking_allocator.hpp"
-#include "data_types.hpp"
-#include "program_device_map.hpp"
-#include "build.hpp"
-#include "hal.hpp"
-#include "command_queue_interface.hpp"
-#include "command_queue.hpp"
-#include "sub_device_manager_tracker.hpp"
-#include "sub_device_types.hpp"
-#include "trace_buffer.hpp"
-#include "span.hpp"
-#include "program_cache.hpp"
+#include <tt-metalium/device.hpp>
+#include <hostdevcommon/common_values.hpp>
+#include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
+#include <tt-metalium/work_executor_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/program_device_map.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/sub_device_manager_tracker.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/trace_buffer.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/program_cache.hpp>
 
 namespace tt::tt_metal {
-
-inline namespace v0 {
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
@@ -41,7 +37,8 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false,
         uint32_t worker_thread_core = 0,
-        uint32_t completion_queue_reader_core = 0);
+        uint32_t completion_queue_reader_core = 0,
+        std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
     ~Device() override;
 
@@ -68,10 +65,7 @@ public:
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
-    CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const override;
 
-    // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
-    CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
@@ -147,6 +141,7 @@ public:
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
+        size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
     void reset_cores() override;
@@ -208,13 +203,18 @@ private:
 
     void initialize_cluster();
     std::unique_ptr<Allocator> initialize_allocator(
-        size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t worker_l1_unreserved_start,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
     void initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core);
     void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
 
-    void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
-
-    void update_dispatch_cores_for_multi_cq_eth_dispatch();
+    void initialize_default_sub_device_state(
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t worker_l1_unreserved_start,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
     void compile_command_queue_programs();
     void configure_command_queue_programs();
@@ -232,7 +232,6 @@ private:
 
     CoreCoord physical_worker_core_from_logical_core(const CoreCoord &logical_core) const;
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
-    CoreType core_type_from_physical_core(const CoreCoord &physical_core) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
     chip_id_t id_;
@@ -245,7 +244,7 @@ private:
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
 
-    // Fabric program includes ethernet router kernel and tensix gatekeeper kernel
+    // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
 
     // Work Executor for this device - can asynchronously process host side work for
@@ -276,5 +275,4 @@ private:
         false;  // To avoid spam with warnings about calling Device methods when it's not initialized.
 };
 
-}  // namespace v0
 }  // namespace tt::tt_metal

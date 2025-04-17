@@ -8,9 +8,7 @@ from torchvision import transforms, datasets
 from loguru import logger
 import ttnn
 import pytest
-import numpy as np
 import evaluate
-from torch import Generator
 
 from models.experimental.mnist.tt.mnist_model import mnist_model
 from models.utility_functions import (

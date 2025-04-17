@@ -59,13 +59,7 @@ ttnn::Tensor to_device(
     const std::optional<MemoryConfig>& memory_config,
     QueueId cq_id) {
     auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    // Currently no direct sharded write support in BLACKHOLE due to alignment issue
-    if (mem_config.is_sharded() and (mesh_device->arch() == tt::ARCH::BLACKHOLE)) {
-        auto interleaved_tensor = tensor.to_device(mesh_device, ttnn::DRAM_MEMORY_CONFIG, cq_id);
-        return ttnn::interleaved_to_sharded(ttnn::DefaultQueueId, interleaved_tensor, mem_config, std::nullopt);
-    } else {
-        return tensor.to_device(mesh_device, mem_config, cq_id);
-    }
+    return tensor.to_device(mesh_device, mem_config, cq_id);
 }
 
 ttnn::Tensor allocate_tensor_on_device(
@@ -109,13 +103,7 @@ void copy_host_to_device_tensor(const ttnn::Tensor& host_tensor, ttnn::Tensor de
 }
 
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, QueueId cq_id) {
-    // Currently no direct sharded read support in BLACKHOLE due to alignment issue
-    if (tensor.is_sharded() and (tensor.device()->arch() == tt::ARCH::BLACKHOLE)) {
-        auto interleaved_tensor = ttnn::sharded_to_interleaved(cq_id, tensor, ttnn::DRAM_MEMORY_CONFIG, std::nullopt);
-        return interleaved_tensor.cpu(blocking, cq_id);
-    } else {
-        return tensor.cpu(blocking, cq_id);
-    }
+    return tensor.cpu(blocking, cq_id);
 }
 
 void deallocate(Tensor& tensor, bool force) { tensor.deallocate(force); }

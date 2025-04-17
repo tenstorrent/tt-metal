@@ -35,9 +35,9 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
 
     Program program{};
 
-    bool grad_is_dram = grad_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool index_is_dram = index_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool grad_is_dram = grad_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool index_is_dram = index_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     uint32_t grad_element_size_bytes = grad_tensor.element_size();
     uint32_t index_element_size_bytes = index_tensor.element_size();
@@ -163,12 +163,14 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, cores, device](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto index_dram_buffer = input_buffers.at(0);
-        auto grad_dram_buffer = input_buffers.at(1);
-        auto output_dram_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto index_dram_buffer = input_tensors.at(0).buffer();
+        auto grad_dram_buffer = input_tensors.at(1).buffer();
+        auto output_dram_buffer = output_tensors.at(0).buffer();
 
         auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const auto& core : cores) {

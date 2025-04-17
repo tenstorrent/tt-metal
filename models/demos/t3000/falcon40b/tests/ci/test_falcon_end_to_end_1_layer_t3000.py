@@ -10,7 +10,6 @@ from models.demos.t3000.falcon40b.tt.model_config import (
 )
 from models.utility_functions import (
     disable_persistent_kernel_cache,
-    disable_compilation_reports,
     skip_for_grayskull,
 )
 
@@ -107,7 +106,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     )
 
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     run_test_FalconCausalLM_end_to_end(
         t3k_mesh_device,

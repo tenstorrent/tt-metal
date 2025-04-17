@@ -4,7 +4,6 @@
 
 import torch
 from diffusers import StableDiffusionPipeline
-import os
 import ttnn
 import pytest
 
@@ -35,7 +34,9 @@ from models.demos.wormhole.stable_diffusion.tests.parameterizations import CROSS
         CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO[2] + (2,),
     ),
 )
-def test_downsample_512x512(reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, block_index):
+def test_downsample_512x512(
+    reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, block_index, use_program_cache
+):
     # Initialize PyTorch component
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
@@ -43,7 +44,6 @@ def test_downsample_512x512(reset_seeds, device, hidden_states, shard_layout, sh
     torch_downsample = pipe.unet.down_blocks[block_index].downsamplers[0]
 
     # Initialize ttnn component
-    reader_patterns_cache = {}
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
@@ -51,7 +51,7 @@ def test_downsample_512x512(reset_seeds, device, hidden_states, shard_layout, sh
     N, _, H, W = hidden_states
     compute_kernel_config = get_default_compute_config(device)
 
-    ttnn_downsample = downsample_2d(device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config)
+    ttnn_downsample = downsample_2d(device, parameters, N, H, W, compute_kernel_config)
 
     # Prepare inputs
     in_channels = hidden_states[1]

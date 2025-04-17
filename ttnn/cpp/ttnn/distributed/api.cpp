@@ -6,14 +6,15 @@
 
 #include <memory>
 
-#include <tt-metalium/overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
+#include "tt-metalium/assert.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 
 using namespace tt::tt_metal;
 
@@ -26,10 +27,16 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     const std::optional<MeshCoordinate>& offset,
-    const std::vector<int>& physical_device_ids) {
-    auto config =
-        MeshDeviceConfig{.mesh_shape = mesh_shape, .offset = offset, .physical_device_ids = physical_device_ids};
-    return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
+    const std::vector<int>& physical_device_ids,
+    size_t worker_l1_size) {
+    return MeshDevice::create(
+        MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
+        l1_small_size,
+        trace_region_size,
+        num_command_queues,
+        dispatch_core_config,
+        {},
+        worker_l1_size);
 }
 
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }
@@ -93,7 +100,25 @@ Tensor aggregate_as_tensor(
         }
         auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());
+    } else if (storage_type == StorageType::BORROWED) {
+        std::vector<ttnn::TensorSpec> specs;
+        std::vector<OwnedBuffer> host_owned_buffers;
+        for (const auto& shard : tensor_shards) {
+            auto buffer = std::get<BorrowedStorage>(shard.get_storage()).buffer;
+            specs.push_back(shard.get_tensor_spec());
+
+            auto visitor = tt::stl::overloaded{[&shard, &host_owned_buffers](const auto& buffer) -> OwnedBuffer {
+                using BorrowedBufferType = std::vector<typename std::decay_t<decltype(buffer)>::value_type>;
+
+                return owned_buffer::create(BorrowedBufferType(buffer.begin(), buffer.end()));
+            }};
+
+            host_owned_buffers.push_back(std::visit(visitor, buffer));
+        }
+        auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
+        return Tensor(std::move(storage), reference_shard.get_tensor_spec());
     } else {
+        TT_FATAL(storage_type == StorageType::DEVICE, "Unexpected storage type {}", storage_type);
         std::vector<int> ordered_device_ids;
         std::unordered_map<int, ttnn::TensorSpec> specs;
         std::unordered_map<int, std::shared_ptr<Buffer>> device_buffers;
@@ -128,7 +153,7 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     auto num_devices = instance.get_shape().mesh_size();
     TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
 
-    auto physical_device_ids = instance.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = MeshShape(1, 8)});
+    auto physical_device_ids = instance.get_mapped_physical_device_ids(MeshShape(1, 8));
     return physical_device_ids;
 }
 
@@ -206,6 +231,8 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id)
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const IDevice* device) {
     return get_device_tensor(multi_device_tensor, device->id());
 }
+
+bool is_host_mesh_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST; }
 
 bool is_multi_device_tensor(const Tensor& tensor) {
     return tensor.storage_type() == StorageType::MULTI_DEVICE or

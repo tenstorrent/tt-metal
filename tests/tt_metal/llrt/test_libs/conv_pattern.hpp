@@ -250,6 +250,7 @@ std::vector<std::vector<T>> move_weights_dram_to_l1_mm(tt::deprecated::Tensor<T>
     return output;
 }
 
+namespace test {
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data
 // is contiguous
@@ -281,6 +282,7 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
     }
     return result;
 }
+}  // namespace test
 
 std::tuple<uint32_t, uint32_t, uint32_t, std::vector<uint32_t>> gen_source_addresses_for_conv_act_layout_transform(
     std::array<uint32_t, 4> input_nhwc_shape, ConvParameters conv_params, uint32_t data_type_size_bytes) {

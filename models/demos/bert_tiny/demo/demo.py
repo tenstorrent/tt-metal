@@ -9,18 +9,15 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     profiler,
 )
-from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
 
-from ttnn.model_preprocessing import *
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from models.demos.bert_tiny.tt.bert_tiny import bert_for_question_answering, preprocess_inputs
 import evaluate
@@ -261,7 +258,6 @@ def test_demo(
     use_program_cache,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bert_question_and_answering_inference(
         device=device,
@@ -292,7 +288,6 @@ def test_demo_squadv2(
     use_program_cache,
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_bert_question_and_answering_inference_squad_v2(
         device=device,

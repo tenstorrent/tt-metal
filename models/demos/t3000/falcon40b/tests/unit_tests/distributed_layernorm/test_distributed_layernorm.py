@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-import math
 from loguru import logger
 
 import ttnn

@@ -8,10 +8,10 @@ target_sources(
         core_coord.cpp
         mesh_coord.cpp
         metal_soc_descriptor.cpp
+        shape.cpp
         shape2d.cpp
         shape_base.cpp
         tt_backend_api_types.cpp
-        utils.cpp
         work_split.cpp
         thread_pool.cpp
 )
@@ -32,9 +32,10 @@ target_link_libraries(
         fmt::fmt-header-only
         span
         small_vector
-        Metalium::Metal::STL
+        TT:STL
         umd::Firmware
         umd::device
+        simde::simde
     PRIVATE
         Tracy::TracyClient
         TT::Metalium::HostDevCommon

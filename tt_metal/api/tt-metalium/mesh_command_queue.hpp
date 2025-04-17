@@ -4,16 +4,49 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <atomic>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <queue>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
-#include "buffer.hpp"
-#include "command_queue_interface.hpp"
-#include "mesh_buffer.hpp"
-#include "mesh_device.hpp"
-#include "mesh_workload.hpp"
-#include "mesh_trace.hpp"
-#include "mesh_trace_id.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/launch_message_ring_buffer_state.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_trace.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/multi_producer_single_consumer_queue.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/vector_aligned.hpp>
+#include <tt-metalium/worker_config_buffer.hpp>
+#include <umd/device/tt_core_coordinates.h>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class SystemMemoryManager;
+namespace distributed {
+class MeshDevice;
+class MeshWorkload;
+}  // namespace distributed
+struct ProgramCommandSequence;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -22,7 +55,10 @@ class ThreadPool;
 namespace distributed {
 
 class MeshEvent;
+struct MeshBufferReadDescriptor;
 struct MeshReadEventDescriptor;
+
+using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
 
 class MeshCommandQueue {
     // Main interface to dispatch data and workloads to a MeshDevice
@@ -30,6 +66,7 @@ class MeshCommandQueue {
     // tt::tt_metal::CommandQueue.
     // Additional support for Reads and Writes to be added
 private:
+    void populate_read_descriptor_queue();
     void populate_virtual_program_dispatch_core();
     void populate_dispatch_core_type();
     CoreCoord virtual_program_dispatch_core() const;
@@ -45,8 +82,10 @@ private:
         std::shared_ptr<Buffer>& shard_view,
         void* dst,
         const BufferRegion& region,
+        std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-
+    void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking);
+    void increment_num_entries_in_completion_queue();
     // Helper functions for read and write entire Sharded-MeshBuffers
     void write_sharded_buffer(const MeshBuffer& buffer, const void* src);
     void read_sharded_buffer(MeshBuffer& buffer, void* dst);
@@ -89,20 +128,27 @@ private:
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
         bool unicast_go_signals);
+    // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
+    void clear_expected_num_workers_completed();
     // Access a reference system memory manager, which acts as a global host side state manager for
-    // specific MeshCommandQueue attributes (launch_message_buffer_state, event counter, etc.)
+    // specific MeshCommandQueue attributes.
     // TODO: All Mesh level host state managed by this class should be moved out, since its not
-    // tied to system memory anyway.
+    // tied to system memory anyway. Move out:
+    // 1. Event ID managment.
+    // 2. Bypass mode tracker.
     SystemMemoryManager& reference_sysmem_manager();
+    MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
 
-    std::array<tt::tt_metal::WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> config_buffer_mgr_;
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed_;
+    // Shared across all MeshCommandQueue instances for a MeshDevice.
+    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;
 
-    std::array<LaunchMessageRingBufferState, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>
-        worker_launch_message_buffer_state_reset_;
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed_reset_;
-    std::array<tt::tt_metal::WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>
-        config_buffer_mgr_reset_;
+    DispatchArray<uint32_t> expected_num_workers_completed_;
+    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
+
+    DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
+    DispatchArray<uint32_t> expected_num_workers_completed_reset_;
+    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
+
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads
     // i.e. between record_begin() and record_end() being called
     std::optional<MeshTraceId> trace_id_;
@@ -113,15 +159,51 @@ private:
     uint32_t id_ = 0;
     CoreCoord dispatch_core_;
     CoreType dispatch_core_type_ = CoreType::WORKER;
-    std::queue<std::shared_ptr<MeshReadEventDescriptor>> event_descriptors_;
-    // MeshCommandQueues and the MeshDevice share the thread-pool
-    std::shared_ptr<ThreadPool> thread_pool_;
+    // MeshCommandQueues and the MeshDevice share thread-pools for dispatching to and reading from the Mesh
+    std::shared_ptr<ThreadPool>
+        dispatch_thread_pool_;  // Thread pool used to dispatch to the Mesh (used by main thread)
+    std::shared_ptr<ThreadPool>
+        reader_thread_pool_;  // Thread pool used to read from the Mesh (used by the Completion Queue Reader thread)
+
+    // Member Vars used to control the execution of the Completion Queue Reader thread
+
+    // TODO: Explore other thread-safe data-structures for these queues.
+    // Main thread submits request to the completion queue reader through this queue
+    MultiProducerSingleConsumerQueue<MeshCompletionReaderVariant> completion_queue_reads_;
+    // Main thread pushes to a queue per physical device, specifying the buffer read configuration that
+    // must be used by the completion queue reader. Only used for reading buffer data from the Mesh.
+    std::unordered_map<uint32_t, std::unique_ptr<MultiProducerSingleConsumerQueue<CompletionReaderVariant>>>
+        read_descriptors_;
+    // CV used by main thread to notify completion queue reader of work
+    std::condition_variable reader_thread_cv_;
+    std::mutex reader_thread_cv_mutex_;
+    // CV used by the completion queue reader to notify the main thread that all work is completed
+    std::condition_variable reads_processed_cv_;
+    std::mutex reads_processed_cv_mutex_;
+    // Number of outstanding reads to be completed by the completion queue reader
+    std::atomic<uint32_t> num_outstanding_reads_ = 0;
+    // Exit signal for the completion queue reader
+    std::atomic<bool> exit_condition_ = false;
+    // Completion Queue Reader thread
+    std::thread completion_queue_reader_thread_;
+    // Global Mutex (used by both CQs) to safely use the reader_thread_pool_
+    inline static std::mutex reader_thread_pool_mutex_;
+    // Used to Maintain state: Mark/Check if this data structure is being used for dispatch.
+    // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
+    bool in_use_ = false;
 
 public:
-    MeshCommandQueue(MeshDevice* mesh_device, uint32_t id, std::shared_ptr<ThreadPool>& thread_pool);
+    MeshCommandQueue(
+        MeshDevice* mesh_device,
+        uint32_t id,
+        std::shared_ptr<ThreadPool>& dispatch_thread_pool,
+        std::shared_ptr<ThreadPool>& reader_thread_pool,
+        std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state);
 
     MeshCommandQueue(const MeshCommandQueue& other) = delete;
     MeshCommandQueue& operator=(const MeshCommandQueue& other) = delete;
+
+    ~MeshCommandQueue();
 
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
@@ -166,12 +248,16 @@ public:
     void verify_reported_events_after_draining(const MeshEvent& event);
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void reset_worker_state(
-        bool reset_launch_msg_state,
-        uint32_t num_sub_devices,
-        const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
+        bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data);
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx);
     void record_end();
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking);
+    // Main function (event loop) for the Completion Queue Reader
+    void read_completion_queue();
+    // Helper function - read events from Completion Queue
+    void read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor);
+    // Helper function - read buffer data from Completion Queue
+    void copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor);
 };
 
 }  // namespace distributed

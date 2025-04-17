@@ -4,19 +4,53 @@
 
 #pragma once
 
+#include <tt_stl/span.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <ostream>
+#include <set>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include "device.hpp"
+#include <hostdevcommon/common_values.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/program_device_map.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/trace_buffer.hpp>
+#include <umd/device/types/arch.h>
+#include <tt-metalium/work_executor_types.hpp>
 
-#include "mesh_config.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device_view.hpp"
-#include "mesh_trace_id.hpp"
-#include "sub_device_types.hpp"
-#include "span.hpp"
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class Allocator;
+class CommandQueue;
+class SubDevice;
+class SystemMemoryManager;
+namespace program_cache {
+namespace detail {
+struct ProgramCache;
+}  // namespace detail
+}  // namespace program_cache
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -29,6 +63,8 @@ class MeshCommandQueue;
 class MeshDeviceView;
 class MeshSubDeviceManagerId;
 class MeshTraceBuffer;
+
+using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
 private:
@@ -44,8 +80,16 @@ private:
             size_t l1_small_size,
             size_t trace_region_size,
             size_t num_command_queues,
+            size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config);
+        ScopedDevices(
+            const std::vector<int>& device_ids,
+            size_t l1_small_size,
+            size_t trace_region_size,
+            size_t num_command_queues,
+            size_t worker_l1_size,
+            const DispatchCoreConfig& dispatch_core_config);
 
         // Destructor releases physical resources
         ~ScopedDevices();
@@ -57,16 +101,21 @@ private:
     };
 
     std::shared_ptr<ScopedDevices> scoped_devices_;
-    MeshDeviceID mesh_id_;
+    int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
-    std::vector<std::shared_ptr<MeshDevice>>
-        submeshes_;                          // Parent owns submeshes and is responsible for their destruction
-    std::weak_ptr<MeshDevice> parent_mesh_;  // Submesh created with reference to parent mesh
-    std::vector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
+    // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
+    std::shared_ptr<MeshDevice> parent_mesh_;
+    std::vector<std::weak_ptr<MeshDevice>> submeshes_;
+
+    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
+
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
     uint32_t trace_buffers_size_ = 0;
-    std::shared_ptr<ThreadPool> thread_pool_;
+
+    std::shared_ptr<ThreadPool> dispatch_thread_pool_;
+    std::shared_ptr<ThreadPool> reader_thread_pool_;
+
     std::recursive_mutex push_work_mutex_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
@@ -80,7 +129,7 @@ public:
     MeshDevice(
         std::shared_ptr<ScopedDevices> scoped_devices,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
-        std::weak_ptr<MeshDevice> parent_mesh = {});
+        std::shared_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice() override;
 
     MeshDevice(const MeshDevice&) = delete;
@@ -91,7 +140,7 @@ public:
 
     // IDevice interface implementation
     tt::ARCH arch() const override;
-    MeshDeviceID id() const override;
+    int id() const override;
     chip_id_t build_id() const override;
     uint8_t num_hw_cqs() const override;
     bool is_initialized() const override;
@@ -103,8 +152,6 @@ public:
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
-    CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const override;
-    CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>&logical_cores) const override;
@@ -172,6 +219,7 @@ public:
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
+        size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
     void reset_cores() override;
@@ -220,7 +268,7 @@ public:
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
 
-    const DeviceIds get_device_ids() const;
+    DeviceIds get_device_ids() const;
 
     size_t num_devices() const;
 
@@ -283,7 +331,24 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+    static std::shared_ptr<MeshDevice> create_unit_mesh(
+        int device_id,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+    static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
+        const std::vector<int>& device_ids,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);

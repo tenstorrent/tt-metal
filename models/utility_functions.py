@@ -8,7 +8,6 @@ import ttnn
 import torch
 import numpy as np
 from loguru import logger
-import os
 import math
 import struct
 import pytest
@@ -161,20 +160,6 @@ def disable_persistent_kernel_cache():
     Disables persistent compiled kernel caching. This is the default state.
     """
     ttnn.device.DisablePersistentKernelCache()
-
-
-def enable_compilation_reports():
-    """
-    Enables generating reports of compilation statistics in .reports/tt_metal dir
-    """
-    return ttnn.device.EnableCompilationReports()
-
-
-def disable_compilation_reports():
-    """
-    Disables generating reports of compilation statistics
-    """
-    return ttnn.device.DisableCompilationReports()
 
 
 def enable_memory_reports():

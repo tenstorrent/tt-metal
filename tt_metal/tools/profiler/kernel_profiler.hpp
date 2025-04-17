@@ -32,10 +32,8 @@
     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));
 
-#if defined(PROFILE_KERNEL) &&                                                                     \
-    (!defined(DISPATCH_KERNEL) ||                                                                  \
-     (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)) &&           \
-     (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)))
+#if defined(PROFILE_KERNEL) && \
+    (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)))
 namespace kernel_profiler {
 
 extern uint32_t wIndex;
@@ -188,7 +186,7 @@ inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+    ncrisc_noc_fast_write_any_len<noc_mode>(
         noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
     WAYPOINT("NAWD");
 }
@@ -197,7 +195,7 @@ FORCE_INLINE
 void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
     WAYPOINT("NPPW");
     while (!ncrisc_noc_posted_writes_sent(noc));
-    WAYPOINT("NPPD")
+    WAYPOINT("NPPD");
 }
 
 #endif
@@ -268,8 +266,9 @@ __attribute__((noinline)) void finish_profiler() {
 }
 
 __attribute__((noinline)) void quick_push() {
-#if defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES) && \
-    (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
+#if (                                                                                          \
+    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
+    defined(COMPILE_FOR_IDLE_ERISC))
 
     SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
     mark_time_at_index_inlined(wIndex, hash);
@@ -381,6 +380,14 @@ struct profileScopeAccumulate {
     }
 };
 
+// performs quick push to DRAM if buffers appear full
+template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
+inline __attribute__((always_inline)) void flush_to_dram_if_full() {
+    if (not bufferHasRoom<dispatch>()) {
+        quick_push();
+    }
+}
+
 template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 inline __attribute__((always_inline)) void timeStampedData(uint64_t data) {
     if (bufferHasRoom<dispatch>()) {
@@ -400,25 +407,27 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 }
 }  // namespace kernel_profiler
 
+#include "noc_event_profiler.hpp"
+
 // Not dispatch
-#if (                            \
-    !defined(DISPATCH_KERNEL) || \
-    !(defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)))
+#if (!defined(DISPATCH_KERNEL))
 
 #define DeviceZoneScopedN(name)                                                \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
-#define DeviceTimestampedData(data_id, data) kernel_profiler::timeStampedData<data_id>(data);
+#define DeviceTimestampedData(name, data)                                          \
+    {                                                                              \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+        kernel_profiler::timeStampedData<hash>(data);                              \
+    }
 
 #define DeviceRecordEvent(event_id) kernel_profiler::recordEvent(event_id);
 
 // Dispatch and enabled
-#elif (                                                                                                 \
-    defined(DISPATCH_KERNEL) &&                                                                       \
-    (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)) && \
-    (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
+#elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
 
 #define DeviceZoneScopedN(name)                                                         \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
@@ -426,9 +435,14 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
         kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
 
-#define DeviceTimestampedData(data_id, data) kernel_profiler::timeStampedData<data_id, true>(data);
+#define DeviceTimestampedData(name, data)                                                       \
+    {                                                                                           \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                            \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));              \
+        kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH>(data); \
+    }
 
-#define DeviceRecordEvent(event_id) kernel_profiler::recordEvent<true>(event_id);
+#define DeviceRecordEvent(event_id) kernel_profiler::recordEvent<kernel_profiler::DoingDispatch::DISPATCH>(event_id);
 
 // Dispatch but disabled
 #else
@@ -484,5 +498,10 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 #define DeviceTimestampedData(data_id, data)
 
 #define DeviceRecordEvent(event_id)
+
+// null macros when noc tracing is disabled
+#define RECORD_NOC_EVENT_WITH_ADDR(type, noc_addr, num_bytes, vc)
+#define RECORD_NOC_EVENT_WITH_ID(type, noc_id, num_bytes, vc)
+#define RECORD_NOC_EVENT(type)
 
 #endif

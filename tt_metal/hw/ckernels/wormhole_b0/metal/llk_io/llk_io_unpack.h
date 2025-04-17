@@ -8,7 +8,6 @@
 #include "ckernel.h"
 #include "stream_interface.h"
 #include "stream_io_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "llk_unpack_common_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 

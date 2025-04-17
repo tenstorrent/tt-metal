@@ -588,7 +588,7 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
         cb_ids[input_id] = input_id;
     }
 
-    bool dst_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {num_input_tensors};
     std::vector<uint32_t> writer_compile_time_args = {num_input_tensors, std::uint32_t(dst_is_dram)};
 
@@ -796,7 +796,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
-            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM;
             page_size_per_tensor[i] = buffer->page_size();
             if (dim == num_dims - 1) {
                 num_pages_per_block[i] = num_accum_pages;
@@ -813,7 +813,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
-            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+            is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM;
             uint32_t dim_pages = input_tensors[i].get_padded_shape()[dim] / scale_factor;
             num_pages_per_block[i] = num_accum_pages * dim_pages;
             num_output_pages_per_block += num_accum_pages * dim_pages;
@@ -831,7 +831,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)src0_cb_index,
@@ -846,7 +846,9 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
                                                       (std::uint32_t)src0_cb_index,
-                                                      (std::uint32_t)dst_is_dram};
+                                                      (std::uint32_t)dst_is_dram,
+                                                      0,
+                                                      0};
 
     // Tilized reader
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
@@ -917,15 +919,17 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     }
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cores](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        std::vector<uint32_t> src_addrs(input_buffers.size());
-        for (uint32_t i = 0; i < input_buffers.size(); ++i) {
-            src_addrs[i] = input_buffers[i]->address();
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        std::vector<uint32_t> src_addrs(input_tensors.size());
+        for (uint32_t i = 0; i < input_tensors.size(); ++i) {
+            src_addrs[i] = input_tensors[i].buffer()->address();
         }
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         for (const auto& core : cores) {
             {

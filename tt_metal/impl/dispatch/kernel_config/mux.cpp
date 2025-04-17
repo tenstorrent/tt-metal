@@ -2,21 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "mux.hpp"
-#include "dispatch.hpp"
-#include "eth_router.hpp"
-#include "eth_tunneler.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
-
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "device.hpp"
+#include "dispatch.hpp"
+#include "impl/context/metal_context.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "eth_tunneler.hpp"
+#include "hal.hpp"
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
 void MuxKernel::GenerateStaticConfigs() {
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
-    logical_core_ = dispatch_core_manager::instance().mux_d_core(device_->id(), channel, this->cq_id_);
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+    logical_core_ =
+        MetalContext::instance().get_dispatch_core_manager().mux_d_core(device_->id(), channel, this->cq_id_);
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
     static_config_.reserved = 0;
     static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
@@ -25,10 +37,10 @@ void MuxKernel::GenerateStaticConfigs() {
                                          4;
     static_config_.mux_fan_in = upstream_kernels_.size();
     for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
-        static_config_.remote_rx_network_type[idx] = DispatchRemoteNetworkType::NOC0;
+        static_config_.remote_rx_network_type[idx] = tt::packet_queue::DispatchRemoteNetworkType::NOC0;
     }
 
-    static_config_.tx_network_type = (uint32_t)DispatchRemoteNetworkType::NOC0;
+    static_config_.tx_network_type = (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
     static_config_.test_results_buf_addr_arg = 0;
     static_config_.test_results_buf_size_bytes = 0;
     static_config_.timeout_cycles = 0;
@@ -43,7 +55,7 @@ void MuxKernel::GenerateStaticConfigs() {
 
 void MuxKernel::GenerateDependentConfigs() {
     // Upstream, expect DISPATCH_D or TUNNELER
-    TT_ASSERT(upstream_kernels_.size() <= MAX_SWITCH_FAN_IN && upstream_kernels_.size() > 0);
+    TT_ASSERT(upstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_IN && upstream_kernels_.size() > 0);
     uint32_t num_upstream_dispatchers = 0;
     for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
         FDKernel* k = upstream_kernels_[idx];
@@ -68,9 +80,10 @@ void MuxKernel::GenerateDependentConfigs() {
     }
     uint32_t src_id = 0xC1 + (FDKernel::GetTunnelStop(device_id_) - 1) * num_upstream_dispatchers;
     uint32_t dest_id = 0xD1 + (FDKernel::GetTunnelStop(device_id_) - 1) * num_upstream_dispatchers;
-    static_config_.input_packetize_src_endpoint = packet_switch_4B_pack(src_id, src_id + 1, src_id + 2, src_id + 3);
+    static_config_.input_packetize_src_endpoint =
+        tt::packet_queue::packet_switch_4B_pack(src_id, src_id + 1, src_id + 2, src_id + 3);
     static_config_.input_packetize_dest_endpoint =
-        packet_switch_4B_pack(dest_id, dest_id + 1, dest_id + 2, dest_id + 3);
+        tt::packet_queue::packet_switch_4B_pack(dest_id, dest_id + 1, dest_id + 2, dest_id + 3);
 
     // Downstream, expect TUNNELER
     TT_ASSERT(downstream_kernels_.size() == 1);
@@ -114,7 +127,7 @@ void MuxKernel::CreateKernel() {
         0,  // Populate input_packetize_config after
         static_config_.input_packetize_src_endpoint.value(),
         static_config_.input_packetize_dest_endpoint.value()};
-    for (int idx = 0; idx < MAX_SWITCH_FAN_IN; idx++) {
+    for (int idx = 0; idx < tt::packet_queue::MAX_SWITCH_FAN_IN; idx++) {
         if (dependent_config_.remote_rx_x[idx]) {
             compile_args[4 + idx] |= (dependent_config_.remote_rx_x[idx].value() & 0xFF);
             compile_args[4 + idx] |= (dependent_config_.remote_rx_y[idx].value() & 0xFF) << 8;
@@ -132,23 +145,18 @@ void MuxKernel::CreateKernel() {
     }
     TT_ASSERT(compile_args.size() == 25);
     const auto& grid_size = device_->grid_size();
+    const auto& hal = MetalContext::instance().hal();
     std::map<string, string> defines = {
         // All of these unused, remove later
-        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.x, 0))},
-        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.y, 0))},
+        {"MY_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.x, 0))},
+        {"MY_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.y, 0))},
         {"UPSTREAM_NOC_INDEX", std::to_string(noc_selection_.upstream_noc)},
-        {"UPSTREAM_NOC_X",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.x, 0))},
-        {"UPSTREAM_NOC_Y",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_NOC_X",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_NOC_Y",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_X",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_Y",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"UPSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.x, 0))},
+        {"UPSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
         {"SKIP_NOC_LOGGING", "1"}};
     configure_kernel_variant(dispatch_kernel_file_names[MUX_D], compile_args, defines, false, false, false);
 }

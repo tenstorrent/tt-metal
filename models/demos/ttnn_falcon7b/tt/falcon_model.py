@@ -10,7 +10,7 @@ import ttnn
 
 from models.demos.ttnn_falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.ttnn_falcon7b.tt.common import create_attention_mask
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorToMesh
 
 
 class TtFalconModelShared:
@@ -133,6 +133,7 @@ class TtFalconModelShared:
             layer_output,
             epsilon=self.layernorm_eps,
             memory_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         layer_output = ttnn.mul(
             layer_output,

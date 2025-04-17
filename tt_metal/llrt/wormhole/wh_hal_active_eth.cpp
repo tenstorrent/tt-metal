@@ -4,17 +4,17 @@
 
 #define COMPILE_FOR_ERISC
 
+#include <dev_msgs.h>
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "core_config.h"
-#include <dev_msgs.h>
 #include "eth_l1_address_map.h"
-
-#include "hal.hpp"
-#include "hal_asserts.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include <umd/device/tt_core_coordinates.h>
 #include "wormhole/wh_hal.hpp"
-
-#include "umd/device/tt_soc_descriptor.h"  // CoreType
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
     ((uint64_t)&(((mailboxes_t*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
@@ -93,7 +93,14 @@ HalCoreInfoType create_active_eth_mem_map() {
         processor_classes[processor_class_idx] = processor_types;
     }
 
-    return {HalProgrammableCoreType::ACTIVE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
+    return {
+        HalProgrammableCoreType::ACTIVE_ETH,
+        CoreType::ETH,
+        processor_classes,
+        mem_map_bases,
+        mem_map_sizes,
+        false /*supports_cbs*/,
+        false /*supports_receiving_multicast_cmds*/};
 }
 
 }  // namespace tt::tt_metal::wormhole

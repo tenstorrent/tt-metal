@@ -8,6 +8,8 @@
 #include "hostdevcommon/common_values.hpp"
 #include "debug/dprint.h"
 
+enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
+
 void kernel_main() {
     // Compile time args
     constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(0);
@@ -20,11 +22,16 @@ void kernel_main() {
 
     // Runtime args
     uint32_t rt_args_idx = 0;
+    uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
+    if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE) {
+        return;
+    }
+    bool is_hop_core = core_type == (uint32_t)CORE_TYPE::HOP_CORE;
+
     uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t next_core_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t next_core_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
-    bool is_hop_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);
     bool end_of_hop = (bool)get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t* unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
     rt_args_idx += ring_size;
@@ -78,4 +85,5 @@ void kernel_main() {
             }
         }
     }
+    noc_async_atomic_barrier();
 }

@@ -8,25 +8,6 @@ set(HAL_INCLUDE_DIRS
     ${PROJECT_SOURCE_DIR}/tt_metal
 )
 
-add_library(gs_hal OBJECT)
-add_library(HAL::grayskull ALIAS gs_hal)
-target_sources(gs_hal PRIVATE grayskull/gs_hal.cpp)
-target_include_directories(
-    gs_hal
-    BEFORE
-    PRIVATE
-        ${HAL_INCLUDE_DIRS}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/grayskull
-        ${PROJECT_SOURCE_DIR}/tt_metal/api/grayskull/tt-metalium
-)
-target_link_libraries(
-    gs_hal
-    PRIVATE
-        hw
-        fmt::fmt-header-only
-        umd::device
-)
-
 add_library(wh_hal OBJECT)
 add_library(HAL::wormhole ALIAS wh_hal)
 target_sources(
@@ -81,14 +62,15 @@ target_link_libraries(
 )
 
 set(LLRT_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/llrt.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core_descriptor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rtoptions.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tlb_config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_cluster.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_elffile.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_memory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/hal.cpp
+    llrt.cpp
+    core_descriptor.cpp
+    rtoptions.cpp
+    tlb_config.cpp
+    tt_cluster.cpp
+    tt_elffile.cpp
+    tt_memory.cpp
+    hal.cpp
+    utils.cpp
 )
 
 add_library(llrt OBJECT ${LLRT_SRC})
@@ -100,7 +82,6 @@ target_link_libraries(
         umd::device
         Metalium::Metal::Hardware
     PRIVATE
-        HAL::grayskull
         HAL::wormhole
         HAL::blackhole
         Tracy::TracyClient
@@ -109,7 +90,7 @@ target_link_libraries(
         yaml-cpp::yaml-cpp
         magic_enum::magic_enum
         span
-        common
+        TT::Metalium::Common
 )
 target_include_directories(llrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)

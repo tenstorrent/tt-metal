@@ -293,13 +293,6 @@ def get_devices(device):
     return devices
 
 
-def synchronize_devices(device):
-    # device is either a ttnn.MeshDevice or a ttnn.Device
-    devices = get_devices(device)
-    for device in devices:
-        ttnn.synchronize_device(device)
-
-
 def tt_from_torch(torch_tensor, dtype=None, device=None, layout=None, memory_config=None, mesh_mapper=None):
     # device is either a ttnn.MeshDevice or a ttnn.Device
     return ttnn.from_torch(

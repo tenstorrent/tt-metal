@@ -19,7 +19,7 @@ class DistributedGPTMLP : public autograd::ModuleBase {
 public:
     DistributedGPTMLP(uint32_t embedding_size, float dropout_prob);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input);
+    autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 
 private:
     std::shared_ptr<distributed::ColumnParallelLinear> m_fc1;
@@ -32,7 +32,7 @@ public:
     explicit DistributedGPTBlock(
         uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm = false);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
+    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
 
 private:
     std::shared_ptr<DistributedGPTMLP> m_mlp;

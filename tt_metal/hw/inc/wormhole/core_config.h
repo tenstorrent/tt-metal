@@ -18,6 +18,7 @@ enum class TensixProcessorTypes : uint8_t { DM0 = 0, DM1 = 1, MATH0 = 2, MATH1 =
 enum class EthProcessorTypes : uint8_t { DM0 = 0, COUNT = 1 };
 
 constexpr uint8_t MaxProcessorsPerCoreType = 5;
+constexpr uint8_t MaxDMProcessorsPerCoreType = 2;
 constexpr uint8_t NumTensixDispatchClasses = 3;
 constexpr uint8_t NumEthDispatchClasses = 1;
 constexpr uint8_t noc_size_x = 10;

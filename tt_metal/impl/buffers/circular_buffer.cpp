@@ -2,15 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <circular_buffer.hpp>
-
-#include <host_api.hpp>
-#include "llrt.hpp"
 #include <buffer.hpp>
+#include <circular_buffer.hpp>
 #include <global_circular_buffer_impl.hpp>
-#include <tt_metal.hpp>
-#include <device.hpp>
-#include <command_queue.hpp>
+#include <array>
+#include <string>
+#include <unordered_map>
+
+#include "assert.hpp"
+#include "circular_buffer_constants.h"
+#include "tile.hpp"
+#include "utils.hpp"
 
 namespace tt {
 
@@ -35,7 +37,7 @@ CircularBuffer::CircularBuffer(const CoreRangeSet& core_ranges, const CircularBu
 CircularBuffer::CircularBuffer(
     const CoreRangeSet& core_ranges,
     const CircularBufferConfig& config,
-    const v1::experimental::GlobalCircularBuffer& global_circular_buffer) :
+    const experimental::GlobalCircularBuffer& global_circular_buffer) :
     id_(reinterpret_cast<uintptr_t>(this)),
     core_ranges_(core_ranges),
     config_(config),
@@ -124,7 +126,7 @@ uint32_t CircularBuffer::address() const {
 
 void CircularBuffer::assign_global_address() { globally_allocated_address_ = config_.shadow_global_buffer->address(); }
 
-void CircularBuffer::set_global_circular_buffer(const v1::experimental::GlobalCircularBuffer& global_circular_buffer) {
+void CircularBuffer::set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(
         global_circular_buffer.all_cores().contains(this->core_ranges_),
         "Specified cores are not contained in associated GlobalCircularBuffer");

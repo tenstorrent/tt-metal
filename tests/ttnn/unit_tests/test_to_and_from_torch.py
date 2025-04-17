@@ -98,9 +98,12 @@ def test_from_torch_large(device):
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_to_for_01_rank(shape, layout, dtype):
+@pytest.mark.parametrize("pad_value", [None, 1])
+def test_to_for_01_rank(shape, layout, dtype, pad_value):
+    if pad_value != None and layout != ttnn.TILE_LAYOUT:
+        pytest.skip("Pad value is only supported for tile layout")
     torch_input_tensor = torch.rand(shape, dtype=dtype)
-    tensor = ttnn.from_torch(torch_input_tensor, layout=layout)
+    tensor = ttnn.from_torch(torch_input_tensor, layout=layout, pad_value=pad_value)
     torch_output_tensor = ttnn.to_torch(tensor)
     assert torch_input_tensor.shape == torch_output_tensor.shape
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
@@ -118,9 +121,12 @@ def test_to_for_01_rank(shape, layout, dtype):
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_to_for_01_rank_on_device(device, shape, layout, dtype):
+@pytest.mark.parametrize("pad_value", [None, 1])
+def test_to_for_01_rank_on_device(device, shape, layout, dtype, pad_value):
+    if pad_value != None and layout != ttnn.TILE_LAYOUT:
+        pytest.skip("Pad value is only supported for tile layout")
     torch_input_tensor = torch.rand(shape, dtype=dtype)
-    tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+    tensor = ttnn.from_torch(torch_input_tensor, layout=layout, pad_value=pad_value, device=device)
     torch_output_tensor = ttnn.to_torch(tensor)
     assert torch_input_tensor.shape == torch_output_tensor.shape
     assert torch.allclose(torch_input_tensor, torch_output_tensor)

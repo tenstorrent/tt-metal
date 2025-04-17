@@ -8,7 +8,7 @@
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
-#include "tt-metalium/overloaded.hpp"
+#include <tt_stl/overloaded.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -16,6 +16,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/distributed/api.hpp"
+
+#include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
 
@@ -296,7 +298,7 @@ struct DimensionShortener {
 
     bool print_parenthesis_and_advance_index_if_reached_half_of_max_and_check_if_loop_is_done(
         std::ostream& ss, std::size_t& index, const std::string& before, const std::string& after) const {
-        if (this->max.has_value() and this->size >= this->max.value() and index == this->max.value() / 2) {
+        if (this->max.has_value() and this->size > this->max.value() and index == this->max.value() / 2) {
             ss << before << "...," << after;
             index = this->size - (this->max.value() / 2);
         }
@@ -375,7 +377,9 @@ void to_string_row_major(
     if (dim > 0 and outer_index > 0) {
         ss << spaces;
     }
-    ss << "[";
+    if (rank != 0) {
+        ss << "[";
+    }
     auto dimension_shortener = get_dimension_shortener(rank != 0 ? shape[-rank] : 1);
     for (std::size_t index = 0;
          dimension_shortener.print_parenthesis_and_advance_index_if_reached_half_of_max_and_check_if_loop_is_done(
@@ -398,7 +402,9 @@ void to_string_row_major(
         }
         print_trailing_comma(ss, index, rank != 0 ? shape[-rank] : 1, after_comma);
     }
-    ss << "]";
+    if (rank != 0) {
+        ss << "]";
+    }
 }
 
 template <typename BufferType>
@@ -481,7 +487,13 @@ std::string to_string(
                 return ss.str();
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 std::stringstream ss;
-                apply(tensor, [&](const Tensor& device_tensor) { ss << to_string<T>(device_tensor) << std::endl; });
+                auto device_tensors = ttnn::distributed::get_tensors_from_multi_device_storage(tensor);
+                for (size_t i = 0; i < device_tensors.size(); i++) {
+                    ss << to_string<T>(device_tensors[i]);
+                    if (i + 1 != device_tensors.size()) {
+                        ss << std::endl;
+                    }
+                }
                 return ss.str();
             } else {
                 raise_unsupported_storage<StorageType>();
@@ -603,7 +615,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
 
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
             .shard_coord = *shard_coord,
-            .host_data = std::visit([](auto& b) { return b.data(); }, buffers.back()),
+            .host_data = std::visit([](auto& b) { return reinterpret_cast<T*>(b.data()); }, buffers.back()),
             .region = BufferRegion(0, tensor_size_bytes)});
         ++shard_coord;
     }
@@ -1209,7 +1221,10 @@ Tensor pad(
     }
 
     auto pad_value_ = static_cast<T>(pad_value);
-    const auto input_padded_shape = tensor.get_padded_shape();
+    auto input_padded_shape = tensor.get_padded_shape();
+    if (input_padded_shape.rank() < 2) {
+        input_padded_shape = input_padded_shape.to_rank(2);
+    }
     const auto input_strides = tensor.strides();
     const auto input_data_type = tensor.get_dtype();
 
@@ -1281,7 +1296,7 @@ Tensor pad(
         tensor.get_storage());
     return Tensor(
         OwnedStorage{output_buffer},
-        tensor.get_padded_shape(),
+        tensor.get_logical_shape(),
         output_padded_shape,
         tensor.get_dtype(),
         tensor.get_layout(),

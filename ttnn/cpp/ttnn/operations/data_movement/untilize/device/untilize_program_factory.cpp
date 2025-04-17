@@ -15,6 +15,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/allocator.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -102,7 +103,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
     std::vector<uint32_t> reader_ct_args = {(uint32_t)src0_is_dram};
 
     auto reader_kernel_id = CreateKernel(
@@ -111,7 +112,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
-    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
     std::vector<uint32_t> writer_ct_args = {
@@ -132,7 +133,8 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
     std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
-    };
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -287,7 +289,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
     std::vector<uint32_t> reader_ct_args = {(uint32_t)src0_is_dram};
 
     auto unary_reader_kernel_id = CreateKernel(
@@ -296,7 +298,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         all_cores,
         ReaderDataMovementConfig(reader_ct_args));
 
-    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
     std::vector<uint32_t> writer_ct_args = {
@@ -317,11 +319,13 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
-    };
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
     std::vector<uint32_t> compute_args_cliff = {
         (uint32_t)nblocks_per_core_cliff,
         (uint32_t)ntiles_per_block,  // per_block_ntiles
-    };
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -706,11 +710,13 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
 
     auto override_runtime_args_callback =
         [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const Program& program,
-            const std::vector<Buffer*>& input_buffers,
-            const std::vector<Buffer*>& output_buffers) {
-            auto src_buffer = input_buffers.at(0);
-            auto dst_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+            auto src_buffer = input_tensors.at(0).buffer();
+            auto dst_buffer = output_tensors.at(0).buffer();
 
             auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
@@ -737,6 +743,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
     bool fp32_dest_acc_en,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::tt_metal::Program program{};
+
+    if (sub_core_grids.has_value()) {
+        return untilize_multi_core_parallelize_column_subgrid(
+            a, output, use_pack_untilize, fp32_dest_acc_en, sub_core_grids.value());
+    }
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
@@ -803,12 +814,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
         if (!src_sharded and !out_sharded) {
             uint32_t ntiles_height = ntiles / ntiles_per_block;
             if (ntiles_height == 1) {
-                if (sub_core_grids.has_value()) {
-                    return untilize_multi_core_parallelize_column_subgrid(
-                        a, output, use_pack_untilize, fp32_dest_acc_en, sub_core_grids.value());
-                } else {
-                    return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
-                }
+                return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
+
             } else {
                 return untilize_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
             }
@@ -889,7 +896,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             all_cores,
             tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     } else {
-        bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+        bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
         std::vector<uint32_t> reader_ct_args = {(uint32_t)src0_is_dram};
 
         unary_reader_kernel_id = CreateKernel(
@@ -910,7 +917,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
     } else {
-        bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+        bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
         if (src_block_sharded) {
             std::vector<uint32_t> writer_ct_args = {
                 (uint32_t)out_is_dram, (uint32_t)(input_cb_data_format == tt::DataFormat::Float32)};
@@ -942,11 +949,13 @@ operation::ProgramWithCallbacks untilize_multi_core(
     std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
-    };
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
     std::vector<uint32_t> compute_args_cliff = {
         (uint32_t)nblocks_per_core_cliff,
         (uint32_t)ntiles_per_block,  // per_block_ntiles
-    };
+        (uint32_t)src0_cb_index,
+        (uint32_t)output_cb_index};
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -1270,10 +1279,10 @@ operation::ProgramWithCallbacks untilize_single_core(
         leftover_width_in_row,
         std::uint32_t{0}};
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};
 
-    bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(stick_size) - 1) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
@@ -1299,8 +1308,9 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     std::vector<uint32_t> compute_args = {
         uint32_t(num_tiles / num_tiles_per_block),  // per_core_block_cnt
-        uint32_t(num_tiles_per_block)               // per_core_block_tile_cnt
-    };
+        uint32_t(num_tiles_per_block),              // per_core_block_tile_cnt
+        uint32_t(src0_cb_index),
+        uint32_t(output_cb_index)};
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -1325,11 +1335,13 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
                                            writer_kernel_id = unary_writer_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 

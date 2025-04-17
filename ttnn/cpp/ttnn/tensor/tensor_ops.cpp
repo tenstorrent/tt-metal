@@ -99,6 +99,10 @@ Tensor tensor_to_device(
 }
 
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
+    if (input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED) {
+        return input_tensor;
+    }
+
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
     auto workers = input_tensor.get_workers(blocking);
@@ -200,12 +204,10 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             auto& worker = workers[worker_index];
             worker->push_work([input_tensor, tensor_modified_layout, target_layout, worker, worker_index]() mutable {
                 TT_ASSERT(
-                    input_tensor.storage_type() == StorageType::OWNED ||
-                    input_tensor.storage_type() == StorageType::BORROWED ||
-                    input_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST &&
-                        "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
-                        "workers "
-                        "are specified");
+                    input_tensor.is_host_tensor(),
+                    "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
+                    "workers "
+                    "are specified");
                 ;
                 auto shard = get_shard_for_device(input_tensor, worker, worker_index);
                 shard = tensor_impl::to_layout_wrapper(shard, target_layout);
@@ -250,10 +252,7 @@ Tensor tensor_pad(
     ZoneScoped;
     GraphTracker::instance().track_function_start(
         "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
-    TT_ASSERT(
-        input_tensor.storage_type() == StorageType::OWNED or
-        input_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST or
-        input_tensor.storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
+    TT_ASSERT(input_tensor.is_host_tensor(), "Tensor must be on host for padding");
     // TODO: Flip to assert when we remove use cases in python and c++
     if (input_tensor.get_layout() != Layout::ROW_MAJOR) {
         log_warning(
@@ -292,7 +291,7 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
     ttnn::SmallVector<uint32_t> padded_shape;
     ttnn::SmallVector<uint32_t> input_tensor_start;
 
-    for (auto index = 0; index < input_tensor.get_padded_shape().rank() - 2; index++) {
+    for (auto index = 0; index < static_cast<int>(input_tensor.get_padded_shape().rank()) - 2; index++) {
         padded_shape.push_back(input_tensor.get_padded_shape()[index]);
         input_tensor_start.push_back(0);
     }

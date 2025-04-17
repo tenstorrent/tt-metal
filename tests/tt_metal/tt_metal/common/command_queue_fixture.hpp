@@ -14,7 +14,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
 
 namespace tt::tt_metal {
@@ -47,7 +47,8 @@ protected:
 
     void create_device(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
         const chip_id_t device_id = 0;
-        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         this->device_ =
             tt::tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
     }
@@ -91,17 +92,28 @@ protected:
     }
 
     void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         const chip_id_t mmio_device_id = 0;
+        std::vector<chip_id_t> chip_ids;
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
+            for (unsigned int id = 0; id < tt::tt_metal::GetNumAvailableDevices(); id++) {
+                chip_ids.push_back(id);
+            }
+        } else {
+            chip_ids.push_back(mmio_device_id);
+        }
         this->reserved_devices_ = tt::tt_metal::detail::CreateDevices(
-            {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
+            chip_ids, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_config);
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
         if (enable_remote_chip) {
             for (const auto& [id, device] : this->reserved_devices_) {
                 this->devices_.push_back(device);
             }
         } else {
-            this->devices_.push_back(this->reserved_devices_.at(mmio_device_id));
+            for (const auto& chip_id : chip_ids) {
+                this->devices_.push_back(this->reserved_devices_.at(chip_id));
+            }
         }
     }
 
@@ -146,7 +158,8 @@ protected:
             chip_ids.push_back(id);
         }
 
-        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
+        const auto& dispatch_core_config =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         reserved_devices_ = tt::tt_metal::detail::CreateDevices(
             chip_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
         for (const auto& [id, device] : reserved_devices_) {

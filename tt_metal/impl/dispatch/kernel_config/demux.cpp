@@ -2,28 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "demux.hpp"
-#include "dispatch.hpp"
-#include "eth_tunneler.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
-
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "device.hpp"
+#include "dispatch.hpp"
+#include "impl/context/metal_context.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "eth_tunneler.hpp"
+#include "hal.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
 void DemuxKernel::GenerateStaticConfigs() {
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
-    uint16_t channel =
-        tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id_);  // TODO: this can be mmio
-    logical_core_ = dispatch_core_manager::instance().demux_core(servicing_device_id_, channel, placement_cq_id_);
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
+        servicing_device_id_);  // TODO: this can be mmio
+    logical_core_ = MetalContext::instance().get_dispatch_core_manager().demux_core(
+        servicing_device_id_, channel, placement_cq_id_);
     static_config_.endpoint_id_start_index = 0xD1;
     static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
     static_config_.rx_queue_size_words = 0x10000 >> 4;
     static_config_.demux_fan_out = downstream_kernels_.size();
 
-    static_config_.remote_rx_network_type = DispatchRemoteNetworkType::NOC0;
+    static_config_.remote_rx_network_type = tt::packet_queue::DispatchRemoteNetworkType::NOC0;
 
     static_config_.test_results_buf_addr_arg = 0;
     static_config_.test_results_buf_size_bytes = 0;
@@ -32,7 +45,7 @@ void DemuxKernel::GenerateStaticConfigs() {
     for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
         FDKernel* k = downstream_kernels_[idx];
         static_config_.remote_tx_queue_id[idx] = 0;
-        static_config_.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+        static_config_.remote_tx_network_type[idx] = (uint32_t)tt::packet_queue::DispatchRemoteNetworkType::NOC0;
         static_config_.output_depacketize_cb_log_page_size[idx] = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.output_depacketize_local_sem_id[idx] =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
@@ -61,7 +74,7 @@ void DemuxKernel::GenerateDependentConfigs() {
     }
 
     // Downstream, expect DISPATCH_H or DEMUX
-    TT_ASSERT(downstream_kernels_.size() <= MAX_SWITCH_FAN_OUT && downstream_kernels_.size() > 0);
+    TT_ASSERT(downstream_kernels_.size() <= tt::packet_queue::MAX_SWITCH_FAN_OUT && downstream_kernels_.size() > 0);
     dependent_config_.output_depacketize = 0;  // Populated per downstream kernel
     for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
         FDKernel* k = downstream_kernels_[idx];
@@ -71,17 +84,14 @@ void DemuxKernel::GenerateDependentConfigs() {
         if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
             dependent_config_.remote_tx_queue_start_addr_words[idx] =
                 dispatch_kernel->GetStaticConfig().dispatch_cb_base.value() >> 4;
-            dependent_config_.remote_tx_queue_size_words[idx] =
-                ((1 << dispatch_kernel->GetStaticConfig().dispatch_cb_log_page_size.value()) *
-                 dispatch_kernel->GetStaticConfig().dispatch_cb_pages.value()) >>
-                4;
+            dependent_config_.remote_tx_queue_size_words[idx] = dispatch_kernel->GetDispatchBufferSize() >> 4;
             dependent_config_.output_depacketize =
                 dependent_config_.output_depacketize.value() | (1 << idx);  // Only depacketize for dispatch downstream
             dependent_config_.output_depacketize_downstream_sem_id[idx] =
                 dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
             uint32_t dest_map_array[4] = {0, 1, 2, 3};  // TODO: how to set these generically? Currently just matching
                                                         // the hard-coded previous implementation
-            uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+            uint64_t dest_endpoint_output_map = tt::packet_queue::packet_switch_dest_pack(dest_map_array, 4);
             dependent_config_.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
             dependent_config_.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
         } else if (auto demux_kernel = dynamic_cast<DemuxKernel*>(k)) {
@@ -92,10 +102,10 @@ void DemuxKernel::GenerateDependentConfigs() {
             if (device_->num_hw_cqs() == 1) {
                 uint32_t dest_map_array[4] = {0, 0, 1, 1};  // TODO: how to set these generically? Currently just
                                                             // matching the hard-coded previous implementation
-                dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+                dest_endpoint_output_map = tt::packet_queue::packet_switch_dest_pack(dest_map_array, 4);
             } else {
                 uint32_t dest_map_array[8] = {0, 0, 0, 0, 1, 1, 1, 1};
-                dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 8);
+                dest_endpoint_output_map = tt::packet_queue::packet_switch_dest_pack(dest_map_array, 8);
             }
             dependent_config_.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
             dependent_config_.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
@@ -138,7 +148,7 @@ void DemuxKernel::CreateKernel() {
         0,
         0  // Populate output_depacketize_config after
     };
-    for (int idx = 0; idx < MAX_SWITCH_FAN_OUT; idx++) {
+    for (int idx = 0; idx < tt::packet_queue::MAX_SWITCH_FAN_OUT; idx++) {
         if (dependent_config_.remote_tx_x[idx]) {
             compile_args[4 + idx] |= (dependent_config_.remote_tx_x[idx].value() & 0xFF);
             compile_args[4 + idx] |= (dependent_config_.remote_tx_y[idx].value() & 0xFF) << 8;
@@ -164,24 +174,20 @@ void DemuxKernel::CreateKernel() {
     TT_ASSERT(compile_args.size() == 30);
     const auto& grid_size = device_->grid_size();
     tt_cxy_pair my_virtual_core =
-        tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(logical_core_, GetCoreType());
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            logical_core_, GetCoreType());
+    const auto& hal = MetalContext::instance().hal();
     std::map<string, string> defines = {
         // All of these unused, remove later
-        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.x, 0))},
-        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.y, 0))},
+        {"MY_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.x, 0))},
+        {"MY_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.non_dispatch_noc, grid_size.y, 0))},
         {"UPSTREAM_NOC_INDEX", std::to_string(noc_selection_.upstream_noc)},
-        {"UPSTREAM_NOC_X",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.x, 0))},
-        {"UPSTREAM_NOC_Y",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_NOC_X",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_NOC_Y",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_X",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
-        {"DOWNSTREAM_SLAVE_NOC_Y",
-         std::to_string(tt::tt_metal::hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"UPSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.x, 0))},
+        {"UPSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.upstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
+        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.x, 0))},
+        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(hal.noc_coordinate(noc_selection_.downstream_noc, grid_size.y, 0))},
         {"SKIP_NOC_LOGGING", "1"}};
     configure_kernel_variant(dispatch_kernel_file_names[DEMUX], compile_args, defines, false, false, false);
 }

@@ -27,11 +27,13 @@ CPMAddPackage(
         "BOOST_ENABLE_CMAKE ON"
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
-        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio"
+        "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess\\\;asio\\\;lockfree"
     FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
 )
 
+ensureboosttarget(algorithm)
 ensureboosttarget(asio)
+ensureboosttarget(lockfree)
 ensureboosttarget(core)
 ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
@@ -70,6 +72,7 @@ CPMAddPackage(
     VERSION 1.13.0
     OPTIONS
         "INSTALL_GTEST OFF"
+        "BUILD_SHARED_LIBS OFF"
 )
 
 if(googletest_ADDED)
@@ -218,4 +221,15 @@ if(flatbuffers_ADDED)
     # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
     target_compile_options(flatc PRIVATE -Wno-restrict)
     target_compile_options(flatbuffers PRIVATE -Wno-restrict)
+endif()
+
+############################################################################################################################
+# simd-everywhere/simde : https://github.com/simd-everywhere/simde
+############################################################################################################################
+
+CPMAddPackage(NAME simd-everywhere GITHUB_REPOSITORY simd-everywhere/simde GIT_TAG v0.8.2)
+if(simd-everywhere_ADDED)
+    add_library(simde INTERFACE)
+    add_library(simde::simde ALIAS simde)
+    target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
 endif()

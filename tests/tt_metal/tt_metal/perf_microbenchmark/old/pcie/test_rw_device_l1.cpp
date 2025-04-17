@@ -2,15 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <string>
-
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <time.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "test_common.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstring>
+#include <exception>
+#include <string>
+#include <tuple>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/logger.hpp>
+#include "test_common.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -25,7 +42,7 @@ int main(int argc, char** argv) {
         // Initial Runtime Args Parse
         std::vector<std::string> input_args(argv, argv + argc);
 
-        string size_string = "";
+        std::string size_string = "";
         try {
             std::tie(size_string, input_args) = test_args::get_command_option_and_remaining_args(input_args, "--size");
         } catch (const std::exception& e) {

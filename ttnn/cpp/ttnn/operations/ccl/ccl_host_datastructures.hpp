@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include "cpp/ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
@@ -15,8 +15,8 @@ namespace ttnn {
 namespace ccl {
 
 struct EriscDatamoverConfig {
-    std::size_t total_l1_buffer_space = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_size();
-    std::size_t usable_l1_base_address = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base();
+    std::size_t total_l1_buffer_space = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
+    std::size_t usable_l1_base_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     static constexpr std::size_t semaphore_size = 32;
     static constexpr std::size_t handshake_location_size = 16;    // ethernet word size

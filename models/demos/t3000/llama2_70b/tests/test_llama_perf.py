@@ -6,7 +6,6 @@ import pytest
 import os
 from functools import partial
 from loguru import logger
-from pathlib import Path
 import torch
 import ttnn
 
@@ -17,15 +16,9 @@ from models.demos.t3000.llama2_70b.tt.model_config import (
 )
 from models.demos.t3000.llama2_70b.tt.llama_common import get_llama_path, MAX_SEQ_LEN, BASE_URL, load_llama_state_dict
 from models.utility_functions import (
-    torch2tt_tensor,
     tt2torch_tensor,
     profiler,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-    disable_compilation_reports,
-    nearest_32,
     skip_for_grayskull,
-    get_devices_for_t3000,
 )
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
@@ -139,9 +132,7 @@ def run_test_LlamaModel_end_to_end(
         read_cache=False,
     )
 
-    for i in mesh_device.get_device_ids():
-        device = mesh_device.get_device(i)
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     del state_dict
 
@@ -183,8 +174,7 @@ def run_test_LlamaModel_end_to_end(
     generated_ids = torch.concat((prefill_ids[..., :prefill_length], output_ids), dim=1)
     print_output_prompts(generated_ids, tokenizer)
 
-    for device in devices:
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
     logger.info("Finished 1st run prefill stage with compile!")
 
     batch, seq_len = 32, 1
@@ -232,9 +222,7 @@ def run_test_LlamaModel_end_to_end(
         del tt_inp_emb
         del rot_mat
 
-        for i in mesh_device.get_device_ids():
-            device = mesh_device.get_device(i)
-            ttnn.synchronize_device(device)
+        ttnn.synchronize_device(mesh_device)
 
         logits = ttnn.to_torch(tt_logits, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
         logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]
@@ -320,7 +308,6 @@ def test_Llama_perf_host(
 
     t3k_mesh_device.enable_async(True)
     t3k_mesh_device.enable_program_cache()
-    disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end(
         t3k_mesh_device,

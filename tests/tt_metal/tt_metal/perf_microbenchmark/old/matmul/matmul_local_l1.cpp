@@ -2,26 +2,50 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <chrono>
-#include <functional>
-#include <random>
-#include <thread>
-
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/test_tiles.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "test_common.hpp"
-#include <tt-metalium/host_api.hpp>
-#include "dprint_server.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <optional>
+#include <ratio>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 #define LAUNCH
 
 using std::vector;
 using namespace tt;
 
+namespace test {
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data
 // is contiguous
@@ -72,6 +96,7 @@ std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
 
     return result;
 }
+}  // namespace test
 
 std::vector<bfloat16> get_row_slice(
     std::vector<bfloat16> data, int total_row_slices, int row_slice_index, int rows, int cols) {
@@ -153,7 +178,7 @@ std::vector<T> slice(std::vector<T> const& v, int m, int n) {
     return vec;
 }
 
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const string& name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
     for (int i = 0; i < rows; i++) {
@@ -286,14 +311,14 @@ int main(int argc, char** argv) {
                 std::vector<bfloat16> weights_slice = get_col_slice(identity, num_cores_c, c, Kt * 32, Nt * 32);
 
                 CoreCoord core = {(std::size_t)c, (std::size_t)r};
-                auto activations_tilized = tilize(activation_slice, per_core_Mt * 32, Kt * 32);
-                auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+                auto activations_tilized = test::tilize(activation_slice, per_core_Mt * 32, Kt * 32);
+                auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
                 pass &= tt_metal::detail::WriteToDeviceL1(device, core, activations_addr, activations);
                 TT_FATAL(pass, "Error");
 
-                auto identity_tilized = tilize(weights_slice, Kt * 32, per_core_Nt * 32);
-                auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+                auto identity_tilized = test::tilize(weights_slice, Kt * 32, per_core_Nt * 32);
+                auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 auto weights_tile_transposed = transpose_tiles(weights, Kt, per_core_Nt, 1);
                 pass &= tt_metal::detail::WriteToDeviceL1(device, core, weights_addr, weights_tile_transposed);
@@ -384,8 +409,8 @@ int main(int argc, char** argv) {
                     tt_metal::detail::ReadFromDeviceL1(
                         device, core, output_addr, cb_output_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                    auto result_flat_layout = convert_to_flat_layout(result_bfp16);
-                    auto result_untilized = untilize(result_flat_layout, per_core_Mt * 32, per_core_Nt * 32);
+                    auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
+                    auto result_untilized = test::untilize(result_flat_layout, per_core_Mt * 32, per_core_Nt * 32);
 
                     if (print_tensor) {
                         print_vec(

@@ -1,4 +1,4 @@
 BeginTraceCapture
 =================
 
-.. doxygenfunction:: tt::tt_metal::v0::BeginTraceCapture
+.. doxygenfunction:: tt::tt_metal::BeginTraceCapture

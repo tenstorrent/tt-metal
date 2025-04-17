@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import torch
 from torch import nn
 
 import ttnn
 from loguru import logger
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple
 from models.experimental.llama.tt.llama_mlp import TtLlamaMLP
 from models.experimental.llama.tt.llama_attention import TtLlamaAttention
 from models.experimental.llama.tt.llama_layer_norm import TtLlamaRMSNorm

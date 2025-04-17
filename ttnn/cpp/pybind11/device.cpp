@@ -10,21 +10,25 @@
 
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include <tt-metalium/persistent_kernel_cache.hpp>
-#include <tt-metalium/compilation_reporter.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/trace.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include <tt-metalium/hal_exp.hpp>
+#include "tools/profiler/op_profiler.hpp"
+
 using namespace tt::tt_metal;
 
 namespace py = pybind11;
 
 namespace {
-inline void DumpDeviceProfiler(IDevice* device) { tt::tt_metal::detail::DumpDeviceProfileResults(device); }
+void DumpDeviceProfiler(IDevice* device) {
+    ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
+    tt::tt_metal::detail::DumpDeviceProfileResults(device, ProfilerDumpState::NORMAL, prof_metadata);
+}
 }  // namespace
 
 namespace ttnn {
@@ -40,6 +44,7 @@ void ttnn_device(py::module& module) {
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
         py::arg("dispatch_core_config") = tt::tt_metal::DispatchCoreConfig{},
+        py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
         py::return_value_policy::reference,
         R"doc(
             Open a device with the given device_id. If the device is already open, return the existing device.
@@ -48,6 +53,7 @@ void ttnn_device(py::module& module) {
                 device_id (int): The device ID to open.
                 l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`.
                 trace_region_size (int, optional): The size of the trace region. Defaults to `ttnn.device.DEFAULT_TRACE_REGION_SIZE`.
+                worker_l1_size (int, optional): The size of the user-allocatable L1 buffer. Defaults to a hardware-specific value.
                 dispatch_core_type (ttnn.device.DispatchCoreType, optional): The type of dispatch core to use. Defaults to `ttnn.device.DispatchCoreType.WORKER`.
 
             Returns:
@@ -288,27 +294,28 @@ void device_module(py::module& m_device) {
             )doc")
             .def(
                 "sfpu_eps",
-                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); },
+                [](IDevice* device) { return tt::tt_metal::hal::get_eps(); },
                 R"doc(Returns machine epsilon value for current architecture.)doc")
             .def(
                 "sfpu_nan",
-                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); },
+                [](IDevice* device) { return tt::tt_metal::hal::get_nan(); },
                 R"doc(Returns NaN value for current architecture.)doc")
             .def(
                 "sfpu_inf",
-                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); },
+                [](IDevice* device) { return tt::tt_metal::hal::get_inf(); },
                 R"doc(Returns Infinity value for current architecture.)doc");
 
     auto pyDevice = static_cast<py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<tt::tt_metal::Device, py::nodelete>>>(m_device.attr("Device"));
-    pyDevice
-        .def(
-            py::init<>([](int device_id, size_t l1_small_size, size_t trace_region_size) {
-                return tt::tt_metal::Device(device_id, 1, l1_small_size, trace_region_size);
-            }),
-            "Create device.",
-            py::arg("device_id"),
-            py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
-            py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE);
+    pyDevice.def(
+        py::init<>([](int device_id, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
+            return tt::tt_metal::Device(device_id, 1, l1_small_size, trace_region_size, {}, {}, worker_l1_size);
+        }),
+        "Create device.",
+        py::arg("device_id"),
+        py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
+        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
+        py::kw_only(),
+        py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
 
     m_device.def(
         "CreateDevice",
@@ -316,9 +323,16 @@ void device_module(py::module& m_device) {
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
+           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+           size_t worker_l1_size) {
             return tt::tt_metal::CreateDevice(
-                device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
+                device_id,
+                num_command_queues,
+                l1_small_size,
+                trace_region_size,
+                dispatch_core_config,
+                {},
+                worker_l1_size);
         },
         R"doc(
         Creates an instance of TT device.
@@ -333,16 +347,25 @@ void device_module(py::module& m_device) {
         py::arg("num_command_queues") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{});
+        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{},
+        py::kw_only(),
+        py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     m_device.def(
         "CreateDevices",
         [](const std::vector<int>& device_ids,
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
+           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+           size_t worker_l1_size) {
             return tt::tt_metal::detail::CreateDevices(
-                device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
+                device_ids,
+                num_command_queues,
+                l1_small_size,
+                trace_region_size,
+                dispatch_core_config,
+                {},
+                worker_l1_size);
         },
         R"doc(
         Creates an instance of TT device.
@@ -357,7 +380,9 @@ void device_module(py::module& m_device) {
         py::arg("num_command_queues") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{});
+        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{},
+        py::kw_only(),
+        py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     m_device.def("CloseDevice", &tt::tt_metal::CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
@@ -492,29 +517,17 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "pad_to_tile_shape",
-        [](const std::array<uint32_t, 4>& unpadded_shape,
-           bool pad_c = false,
-           bool pad_n = false,
-           bool pad_h = true,
-           bool pad_w = true) -> std::vector<uint32_t> {
-            auto result = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                ttnn::Shape(unpadded_shape), pad_c, pad_n, pad_h, pad_w);
+        [](const std::array<uint32_t, 4>& unpadded_shape) -> std::vector<uint32_t> {
+            auto result =
+                ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
             return std::vector<uint32_t>(result.cbegin(), result.cend());
         },
         py::arg("unpadded_shape"),
-        py::arg("pad_c") = false,
-        py::arg("pad_n") = false,
-        py::arg("pad_h") = true,
-        py::arg("pad_w") = true,
         R"doc(
         Pads the given shape to tile shape based on specified padding options.
 
         Args:
             unpadded_shape (List of [int]): The original shape of the tensor to pad.
-            pad_c (bool, optional): Pad the channel dimension. Defaults to `False`.
-            pad_n (bool, optional): Pad the batch dimension. Defaults to `False`.
-            pad_h (bool, optional): Pad the height dimension. Defaults to `True`.
-            pad_w (bool, optional): Pad the width dimension. Defaults to `True`.
 
         Returns:
             List of [int]: The padded shape.
@@ -523,7 +536,7 @@ void device_module(py::module& m_device) {
             This functionality is planned for deprecation in the future.
 
         Example:
-            >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2], pad_c=False, pad_n=False, pad_h=True, pad_w=True)
+            >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2])
 
         )doc");
 
@@ -533,13 +546,6 @@ void device_module(py::module& m_device) {
     m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
         Disables kernel compilation cache from being persistent across runs
     )doc");
-    m_device.def("EnableCompilationReports", &tt::tt_metal::detail::EnableCompilationReports, R"doc(
-        Enables tt-metal to generate reports of compilation statistics
-    )doc");
-    m_device.def("DisableCompilationReports", &tt::tt_metal::detail::DisableCompilationReports, R"doc(
-        Disables generation of compilation statistics reports in tt-metal
-    )doc");
-
     m_device.def("EnableMemoryReports", &tt::tt_metal::detail::EnableMemoryReports, R"doc(
         Enables tt-metal to generate reports of memory allocation statistics
     )doc");
@@ -582,17 +588,7 @@ void device_module(py::module& m_device) {
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_device.def(
-        "synchronize_device",
-        [](IDevice* device, const QueueId cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            // Send finish command to issue queue through worker thread
-            // Worker thread will stall until the device is flushed.
-            device->push_work(
-                [device, cq_id, &sub_device_ids]() mutable { Synchronize(device, *cq_id, sub_device_ids); });
-            // Main thread stalls until worker is complete (full device and worker queue flush).
-            device->synchronize();
-        },
-        R"doc(
+    constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
                 If cq_id is provided then only the operations associated with that cq_id are waited for,
                 otherwise operations for all command queues are waited on.
@@ -612,9 +608,46 @@ void device_module(py::module& m_device) {
                     >>> device = ttnn.open_device(device_id=device_id)
                     >>> # Assume some operations are queued on the device
                     >>> ttnn.synchronize_device(device)
-            )doc",
+            )doc";
+    m_device.def(
+        "synchronize_device",
+        [](IDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+            // Send finish command to issue queue through worker thread
+            // Worker thread will stall until the device is flushed.
+            device->push_work([device, cq_id, &sub_device_ids]() mutable {
+                Synchronize(device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
+            });
+            // Main thread stalls until worker is complete (full device and worker queue flush).
+            device->synchronize();
+        },
+        synchronize_device_doc.data(),
         py::arg("device"),
-        py::arg("cq_id") = DefaultQueueId,
+        py::arg("cq_id") = std::nullopt,
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
+    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
+    m_device.def(
+        "synchronize_device",
+        [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+            for (auto& d : device->get_devices()) {
+                d->push_work([d, cq_id, &sub_device_ids]() mutable {
+                    Synchronize(d, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
+                });
+                d->synchronize();
+            }
+        },
+        synchronize_device_doc.data(),
+        py::arg("device"),
+        py::arg("cq_id") = std::nullopt,
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
+    m_device.def(
+        "synchronize_mesh_device",
+        [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+            tt::tt_metal::distributed::Synchronize(
+                device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
+        },
+        synchronize_device_doc.data(),
+        py::arg("device"),
+        py::arg("cq_id") = std::nullopt,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), R"doc(
         Dump device side profiling data.
@@ -626,13 +659,16 @@ void device_module(py::module& m_device) {
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_device.def(
-        "get_arch_name",
-        &tt::tt_metal::experimental::hal::get_arch_name,
-        "Return the name of the architecture present.");
+    m_device.def("get_arch_name", &tt::tt_metal::hal::get_arch_name, "Return the name of the architecture present.");
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
     m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);
+    m_device.attr("DEFAULT_WORKER_L1_SIZE") = py::int_(DEFAULT_WORKER_L1_SIZE);
+
+    m_device.def(
+        "get_max_worker_l1_unreserved_size",
+        &tt::tt_metal::hal::get_max_worker_l1_unreserved_size,
+        "Return the maximum size of the worker L1 unreserved memory.");
 
     m_device.attr("DefaultQueueId") = ttnn::DefaultQueueId;
 }

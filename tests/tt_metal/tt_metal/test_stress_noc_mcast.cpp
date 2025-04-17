@@ -8,25 +8,32 @@
 //  - rapidly grid of tensix workers generates random noc traffic
 //  - does not verify correct transactions, just runs til termination
 
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
-#include <functional>
-#include <random>
+#include <map>
+#include <optional>
 #include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
-#include "core_coord.hpp"
-#include "logger.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
 #include "test_common.hpp"
-#include <tt-metalium/rtoptions.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/event.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/hal.hpp>
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 
@@ -62,7 +69,7 @@ void init(int argc, char** argv) {
         log_info(LogTest, "     -t: time in seconds (default {})", DEFAULT_SECONDS);
         log_info(LogTest, "     -x: grid top left x");
         log_info(LogTest, "     -y: grid top left y");
-        log_info(LogTest, " -width: unicast grid width (default {})", DEFAULT_TARGET_WIDTH);
+        log_info(LogTest, "-width: unicast grid width (default {})", DEFAULT_TARGET_WIDTH);
         log_info(LogTest, "-height: unicast grid height (default {})", DEFAULT_TARGET_HEIGHT);
         log_info(LogTest, "    -mx: mcast core x");
         log_info(LogTest, "    -my: mcast core y");
@@ -136,7 +143,7 @@ int main(int argc, char** argv) {
     }
 
     CoreCoord mcast_end = device->worker_core_from_logical_core(workers_logical.end_coord);
-    bool virtualization_enabled = tt::tt_metal::hal.is_coordinate_virtualization_enabled();
+    bool virtualization_enabled = tt::tt_metal::MetalContext::instance().hal().is_coordinate_virtualization_enabled();
     uint32_t num_dests = workers_logical.size();
     CoreCoord virtual_offset = virtualization_enabled
                                    ? device->worker_core_from_logical_core({0, 0})
@@ -156,10 +163,10 @@ int main(int argc, char** argv) {
         virtual_offset.y,
         N_RANDS,
         rnd_delay_g,
-        tt::tt_metal::hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
-        tt::tt_metal::hal.get_dev_addr(
-            mcast_from_eth_g ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::TENSIX,
-            HalL1MemAddrType::UNRESERVED),
+        device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
+        mcast_from_eth_g ? tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+                               HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED)
+                         : device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1),
     };
 
     KernelHandle ucast_kernel = tt_metal::CreateKernel(
@@ -229,13 +236,16 @@ int main(int argc, char** argv) {
         CoreCoord mcast_physical;
         if (mcast_from_eth_g) {
             mcast_virtual = device->ethernet_core_from_logical_core(mcast_logical);
-            mcast_physical = tt::Cluster::instance()
+            mcast_physical = tt::tt_metal::MetalContext::instance()
+                                 .get_cluster()
                                  .get_soc_desc(device_num_g)
                                  .get_physical_ethernet_core_from_logical(mcast_logical);
         } else {
             mcast_virtual = device->worker_core_from_logical_core(mcast_logical);
-            mcast_physical =
-                tt::Cluster::instance().get_soc_desc(device_num_g).get_physical_tensix_core_from_logical(mcast_logical);
+            mcast_physical = tt::tt_metal::MetalContext::instance()
+                                 .get_cluster()
+                                 .get_soc_desc(device_num_g)
+                                 .get_physical_tensix_core_from_logical(mcast_logical);
         }
 
         log_info(

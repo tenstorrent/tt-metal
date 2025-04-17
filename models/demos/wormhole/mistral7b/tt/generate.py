@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
 import torch
 from models.demos.wormhole.mistral7b.reference.model import Transformer, precompute_freqs_cis
 from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer

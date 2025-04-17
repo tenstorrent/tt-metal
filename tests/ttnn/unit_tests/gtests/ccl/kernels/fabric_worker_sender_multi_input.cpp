@@ -5,8 +5,8 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tests/ttnn/unit_tests/gtests/ccl/kernels/test_kernels.common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
 
@@ -37,15 +37,13 @@ static constexpr size_t NORMALIZED_NOC_INDEX = 0;
 template <typename AddrGen>
 auto forward_to_fabric_from_cb(
     size_t total_pages_to_send,
-    tt::fabric::WorkerToFabricEdmSender &sender,
+    tt::tt_fabric::WorkerToFabricEdmSender& sender,
     uint32_t cb_id,
-    transmit_config const& config,
+    const transmit_config& config,
     size_t page_size,
-    const AddrGen &dest_addr_gen,
+    const AddrGen& dest_addr_gen,
     size_t num_pages_per_send,
-    size_t current_page
-    ) {
-
+    size_t current_page) {
     // for (uint32_t p = 0; p < total_pages_to_send; p += num_pages_per_send) {
     uint32_t pages_to_send = std::min<uint32_t>(num_pages_per_send, total_pages_to_send - current_page);
     sender.wait_for_empty_write_slot();
@@ -58,11 +56,13 @@ auto forward_to_fabric_from_cb(
     auto& packet_header = *reinterpret_cast<PACKET_HEADER_TYPE*>(packet_addr);
     if constexpr (mcast_mode) {
         packet_header
-            .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
-            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_address}, (pages_to_send * page_size));
+            .to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
+            .to_noc_unicast_write(
+                tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_address}, (pages_to_send * page_size));
     } else {
         packet_header.to_chip_unicast(config.unicast.distance)
-            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_address}, (pages_to_send * page_size));
+            .to_noc_unicast_write(
+                tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_address}, (pages_to_send * page_size));
     }
 
     uint64_t buffer_address = sender.edm_buffer_addr + (*sender.buffer_index_ptr * (sender.buffer_size_bytes + sizeof(eth_channel_sync_t)));
@@ -72,7 +72,15 @@ auto forward_to_fabric_from_cb(
 }
 
 template <typename AddrGen>
-void non_blocking_read_and_forward(size_t &current_page_in, uint32_t cb_id, const AddrGen &dest_addr_gen, tt::fabric::WorkerToFabricEdmSender &sender, transmit_config const& config, uint32_t page_size, uint32_t total_pages_to_send, uint32_t num_pages_per_send) {
+void non_blocking_read_and_forward(
+    size_t& current_page_in,
+    uint32_t cb_id,
+    const AddrGen& dest_addr_gen,
+    tt::tt_fabric::WorkerToFabricEdmSender& sender,
+    const transmit_config& config,
+    uint32_t page_size,
+    uint32_t total_pages_to_send,
+    uint32_t num_pages_per_send) {
     uint32_t pages_to_send = std::min<uint32_t>(num_pages_per_send, total_pages_to_send - current_page_in);
     if (!cb_pages_available_at_front(cb_id, pages_to_send)) {
         return;
@@ -110,7 +118,7 @@ void kernel_main() {
 
     transmit_config config;
     size_t arg_idx = 0;
-    auto sender = tt::fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+    auto sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
     volatile uint32_t* const last_message_semaphore_address = reinterpret_cast<volatile uint32_t* const >(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
     size_t output_buffer0_addr = get_arg_val<uint32_t>(arg_idx++);
     size_t output_buffer1_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -189,7 +197,7 @@ void kernel_main() {
     uint64_t last_message_sem_noc_addr = get_noc_addr(my_x[0], my_y[0], last_message_semaphore_address);
     packet_header.to_chip_unicast(kLoopbackNumHopsToMyChip);
     packet_header.to_noc_unicast_atomic_inc(
-        tt::fabric::NocUnicastAtomicIncCommandHeader(last_message_sem_noc_addr, 1, 32));
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader(last_message_sem_noc_addr, 1, 32));
 
     sender.send_payload_blocking_from_address(a_packet_header_addr, packet_header.get_payload_size_including_header());
 

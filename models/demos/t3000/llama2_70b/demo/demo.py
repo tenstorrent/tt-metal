@@ -4,7 +4,6 @@
 
 from dataclasses import dataclass
 import os
-import gc
 import json
 import torch
 import torch.nn.functional as F
@@ -346,7 +345,6 @@ def get_all_text(tokenizer, tokens, prompt_tokens, max_gen_len):
             toks = toks[start : len(prompt_tokens[i]) + max_gen_len]
         except IndexError:
             logger.info(f"Index out of range for sequence {i}, returning entire sequence.")
-            pass
 
         # cut to eos tok if any
         if tokenizer.eos_id in toks:

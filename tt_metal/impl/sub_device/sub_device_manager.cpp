@@ -2,32 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <vector>
-
-#include <sub_device_manager.hpp>
-
-#include <assert.hpp>
-#include <host_api.hpp>
 #include <allocator.hpp>
+#include <assert.hpp>
 #include <device.hpp>
-#include <command_queue_interface.hpp>
-#include <data_types.hpp>
+#include <host_api.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include <trace.hpp>
-#include <trace_buffer.hpp>
-#include <span.hpp>
 #include <tt_align.hpp>
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include <tt_stl/span.hpp>
+#include <functional>
+#include <limits>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
-#include "tt_cluster.hpp"
+#include "allocator_types.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "dispatch_settings.hpp"
+#include "hal.hpp"
+#include <tt_stl/strong_type.hpp>
+#include "sub_device_manager.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/xy_pair.h>
+#include "vector_aligned.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
-// assert here to avoid the need to include command_queue_interface.hpp in header
 static_assert(
-    SubDeviceManager::MAX_NUM_SUB_DEVICES <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
-    "MAX_NUM_SUB_DEVICES must be less than or equal to DispatchSettings::DISPATCH_MESSAGE_ENTRIES");
+    DispatchSettings::DISPATCH_MESSAGE_ENTRIES <= std::numeric_limits<SubDeviceId::value_type>::max(),
+    "Max number of sub-devices must be less than or equal to the max value of SubDeviceId::Id");
 
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
@@ -35,7 +48,7 @@ SubDeviceManager::SubDeviceManager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
-    local_l1_size_(tt::align(local_l1_size, hal.get_alignment(HalMemType::L1))),
+    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))),
     device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
@@ -86,9 +99,7 @@ const SubDevice& SubDeviceManager::sub_device(SubDeviceId sub_device_id) const {
     return sub_devices_[sub_device_index];
 }
 
-const vector_memcpy_aligned<uint32_t>& SubDeviceManager::noc_mcast_unicast_data() const {
-    return noc_mcast_unicast_data_;
-}
+const vector_aligned<uint32_t>& SubDeviceManager::noc_mcast_unicast_data() const { return noc_mcast_unicast_data_; }
 
 uint8_t SubDeviceManager::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
@@ -175,7 +186,11 @@ uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const 
 }
 
 void SubDeviceManager::validate_sub_devices() const {
-    TT_FATAL(sub_devices_.size() <= SubDeviceManager::MAX_NUM_SUB_DEVICES, "Too many sub devices specified");
+    TT_FATAL(
+        sub_devices_.size() <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+        "Number of sub-devices specified {} is larger than the max number of sub-devices {}",
+        sub_devices_.size(),
+        DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
@@ -192,7 +207,8 @@ void SubDeviceManager::validate_sub_devices() const {
         if (sub_device.has_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
             const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
             uint32_t num_eth_cores = 0;
-            const auto& device_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_->id());
+            const auto& device_eth_cores =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_->id());
             for (const auto& dev_eth_core : device_eth_cores) {
                 if (eth_cores.contains(dev_eth_core)) {
                     num_eth_cores++;
@@ -308,7 +324,7 @@ void SubDeviceManager::populate_noc_data() {
     noc_mcast_data_start_index_.resize(num_sub_devices);
     noc_unicast_data_start_index_.resize(num_sub_devices);
 
-    NOC noc_index = DispatchQueryManager::instance().go_signal_noc();
+    NOC noc_index = MetalContext::instance().get_dispatch_query_manager().go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         const auto& tensix_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX).merge_ranges();

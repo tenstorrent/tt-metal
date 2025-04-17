@@ -44,7 +44,6 @@ endfunction()
 
 # Define the architectures for which to create test executables
 set(ARCHITECTURES
-    "grayskull"
     "wormhole"
     "blackhole"
 )

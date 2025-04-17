@@ -7,7 +7,7 @@
 #include "flatbuffers/flatbuffers.h"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/span.hpp>
+#include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <kernel_types.hpp>
 
@@ -19,12 +19,10 @@ struct DataMovementConfig;
 struct ComputeConfig;
 struct EthernetConfig;
 
-inline namespace v0 {
 class IDevice;
 struct BufferConfig;
 struct CircularBufferConfig;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
-}  // namespace v0
 
 //////////////////////////////////////////////////////////////
 // TRACE GUARD & LIGHT METAL TRACE MACRO                    //
@@ -91,7 +89,8 @@ void CaptureBufferCreate(
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id);
 
-void CaptureDeallocateBuffer(Buffer& buffer);
+void CaptureBufferDeallocate(const Buffer& buffer);
+void CaptureBufferDelete(const Buffer& buffer);
 
 void CaptureEnqueueWriteBuffer(
     CommandQueue& cq,

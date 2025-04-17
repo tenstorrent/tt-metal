@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <sys/types.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <initializer_list>
 #include <vector>
-#include <tt-metalium/tilize_untilize.hpp>
 
 template <bool tilize_first, typename T>
 void tilize_untilize_helper(

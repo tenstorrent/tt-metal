@@ -13,7 +13,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/any_device.hpp"
 #include "ttnn/common/queue_id.hpp"
@@ -25,7 +25,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include "types.hpp"
 
 namespace tt {
@@ -146,7 +146,10 @@ public:
     // The data in the buffer is copied into a tensor with an owned storage.
     template <typename T>
     static Tensor from_span(
-        tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+        tt::stl::Span<const T> buffer,
+        const TensorSpec& spec,
+        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
@@ -171,7 +174,10 @@ public:
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>
     static Tensor from_vector(
-        const std::vector<T>& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
+        const std::vector<T>& buffer,
+        const TensorSpec& spec,
+        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
         return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
 
@@ -179,7 +185,10 @@ public:
     // physical shape matches logical shape, and no type conversion is needed.
     template <typename T>
     static Tensor from_vector(
-        std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+        std::vector<T>&& buffer,
+        const TensorSpec& spec,
+        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Converts a `Tensor` to a `std::vector<T>`.
     // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
@@ -187,7 +196,7 @@ public:
     //
     // If the tensor resides on a device, it will be brough back to host.
     template <typename T>
-    std::vector<T> to_vector() const;
+    std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_device(
         IDevice* target_device,
@@ -218,7 +227,7 @@ public:
 
     Tensor unpad_from_tile(const ttnn::Shape& output_tensor_shape) const;
 
-    const std::string write_to_string() const;
+    std::string write_to_string() const;
     void print() const;
 
     Tensor extract_shard(const CoreCoord& core) const;
@@ -262,7 +271,9 @@ public:
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
-    const ttnn::Shape strides() const;
+    bool is_host_tensor() const;
+    bool is_device_tensor() const;
+    ttnn::Shape strides() const;
     uint32_t volume() const;
 
     // todo: rename volume to get_volume to indicate that its blocking
@@ -324,7 +335,7 @@ public:
     const MemoryConfig& memory_config() const { return get_tensor_spec().tensor_layout().get_memory_config(); }
     const std::optional<ShardSpec>& shard_spec() const { return this->memory_config().shard_spec; }
 
-    const bool is_sharded() const;
+    bool is_sharded() const;
 
     // Size in bytes of a single element held in tensor
     uint32_t element_size() const;

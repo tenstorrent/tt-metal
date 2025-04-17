@@ -9,6 +9,12 @@ endif()
 # Project setup
 ############################################
 
+# For single-config generators, default to RelWithDebInfo if unspecified
+get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT isMultiConfig)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type")
+endif()
+
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(version)
 ParseGitDescribe()
@@ -23,6 +29,11 @@ project(
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
+
+# Defining build types is the pervue of the top-level project
+if(PROJECT_IS_TOP_LEVEL)
+    include(sanitizers)
+endif()
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(
@@ -56,36 +67,21 @@ include(CTest)
 get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 
 # Global settings if we're the top-level project
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    set(CMAKE_CONFIGURATION_TYPES
-        Release
-        RelWithDebInfo
-        Debug
-        CI
-    )
-    if(NOT CMAKE_BUILD_TYPE AND NOT isMultiConfig)
-        message(STATUS "Setting build type to 'Release' as none was specified.")
-        set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Release build is the default" FORCE)
-    endif()
-
+if(PROJECT_IS_TOP_LEVEL)
     set_property(
         GLOBAL
         PROPERTY
             GLOBAL_DEPENDS_NO_CYCLES
-                FALSE #FIXME(14541): We've got work to do :(
+                TRUE
     )
 
     if(ENABLE_CCACHE)
-        include(cmake/ccache.cmake)
+        include(ccache)
     endif()
 endif()
 
 include(compilers)
 CHECK_COMPILERS()
-
-if(NOT isMultiConfig AND NOT CMAKE_BUILD_TYPE IN_LIST CMAKE_CONFIGURATION_TYPES)
-    message(FATAL_ERROR "Invalid build type: ${CMAKE_BUILD_TYPE}. Valid options are: ${CMAKE_CONFIGURATION_TYPES}")
-endif()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
@@ -105,10 +101,6 @@ set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 ############################################################################################################################
 message(STATUS "ENABLE_LIBCXX: ${ENABLE_LIBCXX}")
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
-message(STATUS "Build with ASAN: ${ENABLE_ASAN}")
-message(STATUS "Build with MSAN: ${ENABLE_MSAN}")
-message(STATUS "Build with TSAN: ${ENABLE_TSAN}")
-message(STATUS "Build with UBSAN: ${ENABLE_UBSAN}")
 message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
 message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
@@ -127,25 +119,6 @@ if(ENABLE_BUILD_TIME_TRACE)
         message(FATAL_ERROR "ENABLE_BUILD_TIME_TRACE is only supported with Clang")
     endif()
 endif()
-
-set(SANITIZER_ENABLED ${ENABLE_ASAN})
-if(SANITIZER_ENABLED AND ENABLE_MSAN)
-    message(FATAL_ERROR "Multiple sanitizers are not supported")
-elseif(ENABLE_MSAN)
-    set(SANITIZER_ENABLED ${ENABLE_MSAN})
-endif()
-
-if(SANITIZER_ENABLED AND ENABLE_TSAN)
-    message(FATAL_ERROR "Multiple sanitizers are not supported")
-elseif(ENABLE_TSAN)
-    set(SANITIZER_ENABLED ${ENABLE_TSAN})
-endif()
-
-if(SANITIZER_ENABLED AND ENABLE_UBSAN)
-    message(FATAL_ERROR "Multiple sanitizers are not supported")
-endif()
-
-unset(SANITIZER_ENABLED)
 
 ############################################################################################################################
 # Find all required libraries to build
@@ -194,46 +167,52 @@ target_link_libraries(
 )
 
 add_compile_options(
-    -Werror
-    -Wno-deprecated-declarations
-    -Wdelete-non-virtual-dtor
-    -Wreturn-type
-    -Wswitch
-    -Wuninitialized
-    -Wno-unused-parameter
-    -mavx2
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-mavx2>"
+    -fno-lto # FIXME: This seems to be here for ttnn; it should go to TTNN, then.
     -fPIC
     -fvisibility-inlines-hidden
-    -fno-lto # FIXME: This seems to be here for ttnn; it should go to TTNN, then.
-    "$<$<CXX_COMPILER_ID:Clang>:-Wsometimes-uninitialized>"
+    -Wall
+    -Werror
+    # The following list is not indicative of what we _desire_ only the status quo to build.
+    -Wno-deprecated-declarations
+    -Wno-bool-operation
+    -Wno-pessimizing-move
+    -Wno-range-loop-construct
+    -Wno-unused-but-set-variable
+    -Wno-unused-function
+    -Wno-unused-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-error=local-type-template-args>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-delete-non-abstract-non-virtual-dtor>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-c99-designator>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-shift-op-parentheses>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-non-c-typedef-for-linkage>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-this-capture>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-builtins>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-for-loop-analysis>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-mismatched-tags>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-missing-braces>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-self-assign-overloaded>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-self-assign>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-self-move>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-shift-op-parentheses>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-lambda-capture>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-local-typedef>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-private-field>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unknown-pragmas>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-array-bounds>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-attributes>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overflow>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-int-in-bool-context>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-maybe-uninitialized>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-missing-requires>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-non-template-friend>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-error=non-template-friend>"
-    "$<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>"
-    "$<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>"
-    "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
-    "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
-)
-add_link_options(
-    "$<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>"
-    "$<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>"
-    "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
-    "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-parentheses>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-pragmas>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-reorder>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-restrict>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-sign-compare>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-aliasing>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overflow>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-unused-local-typedefs>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-volatile>"
 )
 
 # Planned to be temporary, remove later.
@@ -257,6 +236,7 @@ include(tracy)
 # Build subdirectories
 ############################################################################################################################
 
+add_subdirectory(tt_stl)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 
@@ -288,7 +268,7 @@ if(WITH_PYTHON_BINDINGS)
             DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY
             DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            COMPONENT dev
+            COMPONENT tar
     )
 
     install(

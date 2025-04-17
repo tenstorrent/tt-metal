@@ -7,6 +7,7 @@
 #include <math.h>
 
 #include "upsample_op.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
@@ -14,7 +15,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
 using namespace tt::constants;
@@ -31,23 +32,28 @@ static Tensor create_config_tensor(
     const uint32_t in_w,
     const uint32_t scale_factor_h,
     const uint32_t scale_factor_w,
-    const uint32_t ncores_x,
-    const bool is_height_sharded,
-    const bool is_col_major) {
-    uint16_t in_core = 0, curr_stick = 0;
+    const bool is_height_sharded) {
+    uint16_t core_idx = 0;        // Tracks the current core being processed
+    uint16_t stick_offset = 0;    // Tracks the current stick offset within the core
+    uint16_t ch_start_core = 0;   // Starting core index where channels are distributed
+    uint16_t ch_end_core = 0;     // Ending core index where channels are distributed
+    uint16_t nhw_start_core = 0;  // Starting core index for NHW distribution
     const uint32_t input_nsticks_per_core = shard_spec.shape[0];
 
-    std::vector<std::vector<int>> core_range;
+    auto logical_cores = corerange_to_cores(
+        shard_spec.grid, shard_spec.num_cores(), shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto ranges = shard_spec.grid.ranges();
-    // in case of height sharding and shards arranged in column major order, get cores where shard are placed.
-    if (is_col_major && is_height_sharded) {
-        for (auto i = 0; i < ranges.size(); i++) {
-            auto range = ranges[i];
-            for (auto x = range.start_coord.x; x <= range.end_coord.x; x++) {
-                for (auto y = range.start_coord.y; y <= range.end_coord.y; y++) {
-                    core_range.push_back({x, y});
-                }
-            }
+
+    if (!is_height_sharded) {
+        auto all_cores = shard_spec.grid;
+        if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
+            ch_start_core = all_cores.ranges().begin()->start_coord.x;
+            ch_end_core = all_cores.ranges().begin()->end_coord.x;
+            nhw_start_core = all_cores.ranges().begin()->start_coord.y;
+        } else {
+            ch_start_core = all_cores.ranges().begin()->start_coord.y;
+            ch_end_core = all_cores.ranges().begin()->end_coord.y;
+            nhw_start_core = all_cores.ranges().begin()->start_coord.x;
         }
     }
 
@@ -57,18 +63,18 @@ static Tensor create_config_tensor(
     // Create map of core and respective offsets in input
     for (uint32_t b = 0; b < batch_size; ++b) {
         for (uint32_t h = 0; h < in_h; ++h) {
-            for (uint32_t w = 0; w < in_w; ++w, ++curr_stick) {
-                if (curr_stick == input_nsticks_per_core) {
-                    curr_stick = 0, ++in_core;
+            for (uint32_t w = 0; w < in_w; ++w, ++stick_offset) {
+                if (stick_offset == input_nsticks_per_core) {
+                    stick_offset = 0, ++core_idx;
                 }
-                if (is_height_sharded && is_col_major) {
-                    logical_core_to_stick_map.push_back(core_range[in_core][0]);
-                    logical_core_to_stick_map.push_back(core_range[in_core][1]);
+                if (is_height_sharded) {
+                    logical_core_to_stick_map.push_back(logical_cores[core_idx].x);
+                    logical_core_to_stick_map.push_back(logical_cores[core_idx].y);
                 } else {
-                    logical_core_to_stick_map.push_back(in_core);
+                    logical_core_to_stick_map.push_back(nhw_start_core + core_idx);
                     logical_core_to_stick_map.push_back(0);
                 }
-                logical_core_to_stick_map.push_back(curr_stick);
+                logical_core_to_stick_map.push_back(stick_offset);
             }
             for (uint32_t j = 1; j < scale_factor_h; ++j) {
                 logical_core_to_stick_map.insert(
@@ -85,25 +91,18 @@ static Tensor create_config_tensor(
     CoreCoord core_coords;
     if (is_height_sharded) {
         for (size_t j = 0; j < logical_core_to_stick_map.size(); j += logical_core_to_stick_map_entry_size) {
-            if (is_col_major) {
-                core_coords = device->worker_core_from_logical_core(
-                    CoreCoord(logical_core_to_stick_map[j], logical_core_to_stick_map[j + 1]));
-            } else {
-                core_coords = device->worker_core_from_logical_core(
-                    CoreCoord(logical_core_to_stick_map[j] % ncores_x, logical_core_to_stick_map[j] / ncores_x));
-            }
+            core_coords = device->worker_core_from_logical_core(
+                CoreCoord(logical_core_to_stick_map[j], logical_core_to_stick_map[j + 1]));
             // Combine the x and y coordinates of the core into a single 16-bit value.
-            // The x coordinate is shifted left by 8 bits and added to the y coordinate.
             uint16_t cores = (core_coords.x << 8) + core_coords.y;
             config_vector.push_back(cores);
             config_vector.push_back(logical_core_to_stick_map[j + 2]);
         }
     } else {
-        for (size_t i = 0; i < ncores_x; i++) {
+        for (size_t i = ch_start_core; i <= ch_end_core; i++) {
             for (size_t j = 0; j < logical_core_to_stick_map.size(); j += logical_core_to_stick_map_entry_size) {
                 core_coords = device->worker_core_from_logical_core(CoreCoord(i, logical_core_to_stick_map[j]));
                 // Combine the x and y coordinates of the core into a single 16-bit value.
-                // The x coordinate is shifted left by 8 bits and added to the y coordinate.
                 uint16_t cores = (core_coords.x << 8) + core_coords.y;
                 config_vector.push_back(cores);
                 config_vector.push_back(logical_core_to_stick_map[j + 2]);
@@ -165,8 +164,8 @@ operation::ProgramWithCallbacks upsample_multi_core(
 
     // extra limitation to avoid post upsample step of resharding
     if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        ncores_x = all_cores.ranges().begin()->end_coord.x + 1;
-        ncores_nhw = all_cores.ranges().begin()->end_coord.y + 1;
+        ncores_x = all_cores.ranges().begin()->end_coord.x - all_cores.ranges().begin()->start_coord.x + 1;
+        ncores_nhw = all_cores.ranges().begin()->end_coord.y - all_cores.ranges().begin()->start_coord.y + 1;
         input_stick_nbytes = input_stick_nbytes / ncores_x;
         output_stick_nbytes = output_stick_nbytes / ncores_x;
     }
@@ -184,28 +183,21 @@ operation::ProgramWithCallbacks upsample_multi_core(
     // CBs
 
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
-
+    uint32_t next_cb_index = CBIndex::c_0;
     // input data is in a sharded CB
-    uint32_t in_cb_id = CBIndex::c_0;
     uint32_t aligned_input_stick_nbytes = round_up_to_mul32(input_stick_nbytes);
     uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
     uint32_t in_cb_npages = input_nsticks_per_core * buffering_factor;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, input_cb_data_format}})
-            .set_page_size(in_cb_id, in_cb_pagesize)
-            .set_globally_allocated_address(*input.buffer());
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    auto [in_cb_id, cb_src0] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, in_cb_pagesize, in_cb_npages, input_cb_data_format, input.buffer());
 
     // output sharded CB with upsampled data
-    uint32_t out_cb_id = CBIndex::c_16;
-    uint32_t aligned_output_stick_nbytes = round_up_to_mul32(output_stick_nbytes);
-    uint32_t out_cb_pagesize = aligned_output_stick_nbytes;
+    uint32_t out_cb_pagesize = round_up_to_mul32(output_stick_nbytes);  // aligned output stick n bytes
     uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
-    CircularBufferConfig out_cb_config =
-        CircularBufferConfig(out_cb_pagesize * out_cb_npages, {{out_cb_id, output_cb_data_format}})
-            .set_page_size(out_cb_id, out_cb_pagesize)
-            .set_globally_allocated_address(*output.buffer());
-    auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
+
+    auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output.buffer());
 
     log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
@@ -229,9 +221,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
             in_w,
             scale_factor_h,
             scale_factor_w,
-            ncores_x,
-            input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-            shard_spec.orientation == ShardOrientation::COL_MAJOR);
+            input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
     } else {
         TT_THROW("Unsupported sharding layout");
     }
@@ -246,11 +236,9 @@ operation::ProgramWithCallbacks upsample_multi_core(
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
     auto config_buffer = config_tensor_device.device_buffer();
     auto config_buffer_page_size = config_buffer->page_size();
-    uint32_t config_cb_id = CBIndex::c_6;
-    auto config_cb_config = CircularBufferConfig(config_buffer_page_size, {{config_cb_id, config_df}})
-                                .set_page_size(config_cb_id, config_buffer->page_size())
-                                .set_globally_allocated_address(*config_buffer);
-    CBHandle config_cb = CreateCircularBuffer(program, all_cores, config_cb_config);
+
+    auto [config_cb_id, config_cb] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
 
     // Kernels
 
@@ -289,8 +277,20 @@ operation::ProgramWithCallbacks upsample_multi_core(
 
     uint32_t start_input_stick_id = 0;
     if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        for (int32_t core = 0; core < ncores_nhw; ++core) {
-            for (int32_t core_x = 0; core_x < ncores_x; ++core_x) {
+        uint16_t ch_start_core = 0, ch_end_core = 0, nhw_start_core = 0, nhw_end_core = 0;
+        if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
+            ch_start_core = all_cores.ranges().begin()->start_coord.x;
+            ch_end_core = all_cores.ranges().begin()->end_coord.x;
+            nhw_start_core = all_cores.ranges().begin()->start_coord.y;
+            nhw_end_core = all_cores.ranges().begin()->end_coord.y;
+        } else {
+            ch_start_core = all_cores.ranges().begin()->start_coord.y;
+            ch_end_core = all_cores.ranges().begin()->end_coord.y;
+            nhw_start_core = all_cores.ranges().begin()->start_coord.x;
+            nhw_end_core = all_cores.ranges().begin()->end_coord.x;
+        }
+        for (int32_t core = nhw_start_core; core <= nhw_end_core; ++core) {
+            for (int32_t core_x = ch_start_core; core_x <= ch_end_core; ++core_x) {
                 CoreCoord core_coord(core_x, core);  // logical
                 writer_rt_args[6] = start_input_stick_id;
                 SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
@@ -299,11 +299,11 @@ operation::ProgramWithCallbacks upsample_multi_core(
             start_input_stick_id += input_nsticks_per_core;
         }
     } else if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        for (int32_t core = 0; core < ncores_nhw; ++core) {
-            CoreCoord core_coord(core % ncores_x, core / ncores_x);  // logical
+        auto cores = corerange_to_cores(all_cores);
+        for (auto core : cores) {
             writer_rt_args[6] = start_input_stick_id;
-            SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
-            SetRuntimeArgs(program, reader_kernel, core_coord, writer_rt_args);
+            SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
+            SetRuntimeArgs(program, reader_kernel, core, writer_rt_args);
             start_input_stick_id += input_nsticks_per_core;
         }
     } else {

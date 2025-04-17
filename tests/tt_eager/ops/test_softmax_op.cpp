@@ -2,14 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/operations/functions.hpp"
 
-#include <algorithm>
-#include <functional>
-#include <random>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt;
 using namespace tt::tt_metal;

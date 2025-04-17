@@ -13,6 +13,8 @@
 
 namespace NAMESPACE {
 
+enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
+
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -155,6 +157,10 @@ void MAIN {
 
     // Runtime args
     uint32_t rt_args_idx = 0;
+    uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
+    if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
+        return;
+    }
     uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t* unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
     rt_args_idx += ring_size;

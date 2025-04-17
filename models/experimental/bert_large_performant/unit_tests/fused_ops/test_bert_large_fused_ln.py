@@ -8,7 +8,6 @@ import torch
 
 
 from tt_lib.utils import (
-    pad_weight,
     tilize_to_list,
     untilize,
     is_close,

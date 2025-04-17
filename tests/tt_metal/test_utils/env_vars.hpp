@@ -8,6 +8,7 @@
 #include "umd/device/device_api_metal.h"
 #include "umd/device/tt_cluster_descriptor.h"
 #include "umd/device/tt_simulation_device.h"
+#include "impl/context/metal_context.hpp"
 
 #include <string>
 
@@ -41,12 +42,12 @@ inline std::string get_env_arch_name() {
 
 inline std::string get_umd_arch_name() {
 
-    if(llrt::RunTimeOptions::get_instance().get_simulator_enabled()) {
-        tt_SimulationDeviceInit init(llrt::RunTimeOptions::get_instance().get_simulator_path());
+    if(tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        tt_SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
         return tt::arch_to_str(init.get_arch_name());
     }
 
-    auto cluster_desc = tt_ClusterDescriptor::create();
+    auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
     const std::unordered_set<chip_id_t> &device_ids = cluster_desc->get_all_chips();
     tt::ARCH arch = cluster_desc->get_arch(*device_ids.begin());
     for (auto device_id : device_ids) {

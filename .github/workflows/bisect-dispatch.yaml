@@ -7,7 +7,6 @@ on:
         required: true
         type: choice
         options:
-          - grayskull
           - wormhole_b0
           - blackhole
       tracy:
@@ -30,7 +29,6 @@ on:
           - P150
           - config-t3000
           - config-tg
-          - config-tgg
         description: "Runner Type Label"
       extra-label:
         required: true
@@ -81,6 +79,7 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files

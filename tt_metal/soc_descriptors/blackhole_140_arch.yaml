@@ -27,49 +27,49 @@ dram_views:
   [
     {
       channel: 0,
-      eth_endpoint: 1,
+      eth_endpoint: 2,
       worker_endpoint: 2,
       address_offset: 0
     },
     {
       channel: 1,
-      eth_endpoint: 0,
+      eth_endpoint: 2,
       worker_endpoint: 2,
       address_offset: 0
     },
     {
       channel: 2,
-      eth_endpoint: 1,
+      eth_endpoint: 2,
       worker_endpoint: 2,
       address_offset: 0
     },
     {
       channel: 3,
-      eth_endpoint: 0,
+      eth_endpoint: 2,
       worker_endpoint: 2,
       address_offset: 0
     },
     {
       channel: 4,
-      eth_endpoint: 1,
+      eth_endpoint: 2,
       worker_endpoint: 2,
       address_offset: 0
     },
     {
       channel: 5,
-      eth_endpoint: 0,
+      eth_endpoint: 2,
       worker_endpoint: 2,
       address_offset: 0
     },
     {
       channel: 6,
-      eth_endpoint: 1,
+      eth_endpoint: 2,
       worker_endpoint: 2,
       address_offset: 0
     },
     {
       channel: 7,
-      eth_endpoint: 0,
+      eth_endpoint: 2,
       worker_endpoint: 2,
       address_offset: 0
     }
@@ -107,7 +107,7 @@ router_only:
   ]
 
 worker_l1_size:
-  1499136
+  1572864
 
 dram_bank_size:
   4278190080

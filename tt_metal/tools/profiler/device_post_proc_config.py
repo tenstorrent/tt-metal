@@ -240,14 +240,14 @@ class test_dispatch_cores(default_setup):
         "Tensix CQ Dispatch": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "zone_name": "CQ-DISPATCH"},
-            "end": {"risc": "NCRISC", "zone_name": "CQ-DISPATCH"},
+            "start": {"risc": "BRISC", "zone_name": "CQ-DISPATCH"},
+            "end": {"risc": "BRISC", "zone_name": "CQ-DISPATCH"},
         },
         "Tensix CQ Prefetch": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
-            "end": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
+            "start": {"risc": "BRISC", "zone_name": "KERNEL-MAIN-HD"},
+            "end": {"risc": "BRISC", "zone_name": "KERNEL-MAIN-HD"},
         },
     }
     detectOps = False

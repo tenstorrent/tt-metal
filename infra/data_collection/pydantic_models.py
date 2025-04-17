@@ -90,6 +90,10 @@ class Job(BaseModel):
     failure_signature: Optional[str] = Field(None, description="Failure signature.")
     failure_description: Optional[str] = Field(None, description="Failure description.")
     tests: List[Test] = []
+    job_label: Optional[str] = Field(None, description="GitHub CI runner label for the job.")
+    tt_smi_version: Optional[str] = Field(
+        None, description="Version of the tt-smi tool in order to check consistency across CI fleets."
+    )
 
     # Model validator to check the unique combination constraint
     @model_validator(mode="before")
@@ -104,6 +108,18 @@ class Job(BaseModel):
                 raise ValueError(f"Duplicate test combination found: {test_combination}")
             seen_combinations.add(test_combination)
         return values
+
+
+class PipelineStatus(str, Enum):
+    success = "success"
+    failure = "failure"
+    skipped = "skipped"
+    cancelled = "cancelled"
+    neutral = "neutral"
+    timed_out = "timed_out"
+    action_required = "action_required"
+    completed = "completed"
+    stale = "stale"
 
 
 class Pipeline(BaseModel):
@@ -128,6 +144,10 @@ class Pipeline(BaseModel):
     )
     pipeline_start_ts: datetime = Field(description="Timestamp with timezone when the pipeline execution started.")
     pipeline_end_ts: datetime = Field(description="Timestamp with timezone when the pipeline execution ended.")
+    pipeline_status: Optional[PipelineStatus] = Field(
+        None,
+        description="Pipeline execution status, possible statuses include success, failure, skipped, cancelled, neutral, etc.",
+    )
     name: str = Field(description="Name of the pipeline.")
     project: Optional[str] = Field(None, description="Name of the software project.")
     trigger: Optional[str] = Field(None, description="Type of trigger that initiated the pipeline.")
@@ -141,6 +161,20 @@ class Pipeline(BaseModel):
     git_author: str = Field(description="Author of the Git commit.")
     orchestrator: Optional[str] = Field(None, description="CI/CD pipeline orchestration platform.")
     jobs: List[Job] = []
+
+    # Model validator to check the unique combination constraint
+    @model_validator(mode="before")
+    def check_unique_jobs(cls, values):
+        jobs = values.get("jobs", [])
+        seen_combinations = set()
+
+        for job in jobs:
+            # for each pipeline, the job constraint is (name, job_submission_ts, job_start_ts, job_end_ts)
+            job_combination = (job.name, job.job_submission_ts, job.job_start_ts, job.job_end_ts)
+            if job_combination in seen_combinations:
+                raise ValueError(f"Duplicate job combination found: {job_combination}")
+            seen_combinations.add(job_combination)
+        return values
 
 
 class BenchmarkMeasurement(BaseModel):

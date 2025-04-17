@@ -49,8 +49,7 @@ def run_with_trace(
         num_buffers_per_channel=n_buffer,
         topology=topology,
     )
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -67,15 +66,13 @@ def run_with_trace(
             topology=topology,
         )
     ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(t3k_mesh_device, trace_id, blocking=False)
     ttnn.release_trace(t3k_mesh_device, trace_id)
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     return output_tensor_mesh
 
@@ -156,8 +153,7 @@ def run_reduce_scatter_test(
                 topology=topology,
             )
 
-            for device_id in mesh_device.get_device_ids():
-                ttnn.synchronize_device(mesh_device.get_device(device_id))
+            ttnn.synchronize_device(mesh_device)
             logger.info(f"Done iteration {i}")
 
     # ttnn.visualize_mesh_device(t3k_mesh_device, tensor=output_tensor_mesh)
@@ -504,8 +500,7 @@ def run_reduce_scatter_sharded_test(
                 topology=topology,
             )
 
-            for device_id in t3k_mesh_device.get_device_ids():
-                ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+            ttnn.synchronize_device(t3k_mesh_device)
             logger.info(f"Done iteration {i}")
 
     # Compute golden

@@ -18,8 +18,8 @@ void kernel_main() {
     constexpr uint32_t Wt_final = get_compile_time_arg_val(7);
     constexpr uint32_t num_dests = get_compile_time_arg_val(8);
 
-    constexpr uint32_t final_values_cb_index = tt::CBIndex::c_6;
-    constexpr uint32_t final_indices_cb_index = tt::CBIndex::c_7;
+    constexpr uint32_t final_values_cb_index = tt::CBIndex::c_26;
+    constexpr uint32_t final_indices_cb_index = tt::CBIndex::c_27;
 
     volatile tt_l1_ptr uint32_t* receiver_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore);

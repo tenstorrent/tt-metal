@@ -1,0 +1,20 @@
+name: "Cleanup Action"
+description: "Cleans up the workspace to remove root-owned files on non-ephemeral runners."
+
+inputs:
+  path:
+    description: "The directory to clean up"
+    required: false
+    default: "/__w/tt-metal/tt-metal/docker-job"
+runs:
+  using: "composite"
+  steps:
+    - name: Cleanup
+      shell: bash
+      run: |
+        cd /
+        echo "pre rm"
+        ls -al "${{ inputs.path }}"
+        rm -rf "${{ inputs.path }}"
+        echo "post rm"
+        ls -al "$(dirname "${{ inputs.path }}")"

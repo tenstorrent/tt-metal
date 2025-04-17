@@ -16,6 +16,9 @@
 #include "noc/noc_parameters.h"
 #include "debug/dprint.h"
 #include "risc_common.h"
+#if !defined(COMPILE_FOR_TRISC)
+#include "dataflow_api.h"
+#endif
 
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
@@ -81,4 +84,92 @@ void wait_for_go_message() {
     while (mailboxes->go_message.signal != RUN_MSG_GO) {
         invalidate_l1_cache();
     }
+}
+
+#if !defined(COMPILE_FOR_TRISC)
+FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) {
+    go_msg_t go_message;
+    go_message.all = go_message_in->all;
+    uint64_t addr = NOC_XY_ADDR(
+        NOC_X(go_message.master_x),
+        NOC_Y(go_message.master_y),
+        DISPATCH_MESSAGE_ADDR + NOC_STREAM_REG_SPACE_SIZE * go_message.dispatch_message_offset);
+    return addr;
+}
+
+FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index) {
+    // Workaround for BH inline writes does not apply here because this writes to a stream register.
+    // See comment in `noc_get_interim_inline_value_addr` for more details.
+    noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        1 << REMOTE_DEST_BUF_WORDS_FREE_INC,
+        dispatch_addr,
+        0xF,  // byte-enable
+        NOC_UNICAST_WRITE_VC,
+        false,  // mcast
+        true    // posted
+    );
+}
+#endif
+
+#if defined(DEBUG_EARLY_RETURN_KERNELS) && !defined(DISPATCH_KERNEL)
+// Used to early-return when NULLing out kernels. Will always return true while a kernel is running, but can't be
+// optimized away.
+FORCE_INLINE
+bool is_message_go() {
+    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+
+    return mailboxes->go_message.signal == RUN_MSG_GO;
+}
+
+#define EARLY_RETURN_FOR_DEBUG \
+    if (is_message_go()) {     \
+        return;                \
+    }
+#else
+#define EARLY_RETURN_FOR_DEBUG
+#endif
+
+inline __attribute__((always_inline)) void disable_gathering() {
+#if defined(ARCH_BLACKHOLE)
+    // Disable gathering: set bit 18
+    asm(R"ASM(
+        .option push
+        li   t1, 0x2
+        csrrs zero, 0x7c0, t1
+        li   t1, 0x1
+        slli t1, t1, 18
+        fence
+        csrrs zero, 0x7c0, t1
+        li   t1, 0x2
+        csrrc zero, 0x7c0, t1
+        fence
+        .option pop
+         )ASM" ::
+            : "t1");
+#endif
+}
+
+inline __attribute__((always_inline)) void configure_l1_data_cache() {
+#if defined(ARCH_BLACKHOLE)
+#if defined(DISABLE_L1_DATA_CACHE)
+    // Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
+    // L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
+    // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR*,ER*>
+    asm(R"ASM(
+            li t1, 0x8
+            csrrs zero, 0x7c0, t1
+             )ASM" ::
+            : "t1");
+#elif !defined(ENABLE_HW_CACHE_INVALIDATION)
+    // Disable gathering to stop HW from invalidating the data cache after 128 transactions
+    // This is default enabled
+    asm(R"ASM(
+            lui  t1, 0x40
+            csrrs zero, 0x7c0, t1
+             )ASM" ::
+            : "t1");
+#endif
+#endif
 }

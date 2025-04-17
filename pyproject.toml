@@ -1,8 +1,7 @@
 [build-system]
 requires = [
-  "setuptools==69.5.1",
-  "setuptools-scm==7.1.0",
-  "wheel",
+  "setuptools==70.1.0",
+  "setuptools-scm==8.1.0"
 ]
 build-backend = "setuptools.build_meta"
 
@@ -46,3 +45,5 @@ include = '^.*(ttnn|tests/scripts|tests/ttnn|tests/tt_eager/python_api_testing|t
 
 [tool.ruff]
 line-length = 120
+
+[tool.setuptools_scm]

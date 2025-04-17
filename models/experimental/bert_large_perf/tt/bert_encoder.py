@@ -5,7 +5,6 @@
 import pytest
 import torch
 from transformers import BertForQuestionAnswering
-import numpy as np
 from loguru import logger
 
 import ttnn
@@ -13,9 +12,8 @@ from models.experimental.bert_large_perf.tt.mha import TtMultiHeadAttentionModel
 from models.experimental.bert_large_perf.tt.ffn import TtFeedForwardModel
 from models.experimental.bert_large_perf.fused_ops.add_and_norm import AddAndNorm
 from models.experimental.bert_large_perf.fused_ops.layernorm import create_var_scaler
-from models.experimental.bert_large_perf.fused_ops.linear import Linear
-from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from models.utility_functions import comp_pcc, comp_allclose, profiler
+from tt_lib.utils import pad_activation, pad_weight
+from models.utility_functions import comp_pcc, comp_allclose
 
 
 class TtBertEncoder(torch.nn.Module):

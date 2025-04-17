@@ -4,12 +4,12 @@
 
 #include "tt_memory.h"
 
-#include <cstddef>
+#include <assert.hpp>
+#include <algorithm>
 #include <cstdint>
-#include <limits>
+#include <span>
 
 #include "tt_elffile.hpp"
-#include <assert.hpp>
 
 namespace ll_api {
 
@@ -97,6 +97,12 @@ void memory::process_spans(
         std::vector<uint32_t>::iterator it = data_.begin() + offset;
         callback(it, span.addr, span.len);
         offset += span.len;
+    }
+}
+
+void memory::update_spans(std::function<void(uint64_t& addr)>& callback) {
+    for (auto& span : link_spans_) {
+        callback(span.addr);
     }
 }
 

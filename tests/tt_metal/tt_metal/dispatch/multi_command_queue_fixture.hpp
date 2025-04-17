@@ -8,14 +8,13 @@
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/hal.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -24,7 +23,7 @@ protected:
     void SetUp() override {
         this->validate_dispatch_mode();
 
-        this->num_cqs_ = tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs();
+        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
         if (this->num_cqs_ != 2) {
             tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
@@ -90,7 +89,7 @@ protected:
     void SetUp() override {
         this->validate_dispatch_mode();
 
-        this->num_cqs_ = tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs();
+        this->num_cqs_ = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
         if (this->num_cqs_ != 2) {
             tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
@@ -120,7 +119,7 @@ protected:
             GTEST_SKIP();
         }
 
-        auto num_cqs = tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs();
+        auto num_cqs = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
         if (num_cqs != 2) {
             tt::log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();

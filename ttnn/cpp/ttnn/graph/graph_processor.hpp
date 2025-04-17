@@ -67,6 +67,7 @@ public:
         int counter = 0;
         std::string node_type;
         std::unordered_map<std::string, std::string> params;
+        std::vector<std::string> arguments;
         std::vector<int> connections;
     };
     using ProcessFunc = std::function<void(const std::any&)>;

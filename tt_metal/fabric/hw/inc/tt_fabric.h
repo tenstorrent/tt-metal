@@ -15,6 +15,21 @@
 
 using namespace tt::tt_fabric;
 
+#ifndef DISABLE_LOW_LATENCY_ROUTING
+#ifndef LOW_LATENCY_ROUTING
+#define LOW_LATENCY_ROUTING
+#endif
+#endif
+
+#define FVC_MODE_ROUTER 1
+#define FVC_MODE_ENDPOINT 2
+
+#define STREAM_ID_ETH_WORDS_RECEIVED 0
+#define STREAM_ID_ETH_RECEIVER_BUFFER_SPACE 1
+#define STREAM_ID_ETH_SENDER_BUFFER_SPACE 2
+#define STREAM_ID_NOC_WORDS_RECEIVED 6
+#define STREAM_ID_NOC_RECEIVER_BUFFER_SPACE 10
+
 constexpr uint32_t SYNC_BUF_SIZE = 16;  // must be 2^N
 constexpr uint32_t SYNC_BUF_SIZE_MASK = (SYNC_BUF_SIZE - 1);
 constexpr uint32_t SYNC_BUF_PTR_MASK = ((SYNC_BUF_SIZE << 1) - 1);
@@ -25,6 +40,9 @@ extern volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
 extern chan_payload_ptr inbound_rdptr_ack;
 extern volatile chan_payload_ptr remote_rdptr;
 
+void tt_fabric_reserve_pull_request_slot(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request, uint32_t num_slots = 1);
+template <bool blocking_mode>
+bool tt_fabric_check_pull_request_slot(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request, uint32_t wrptr);
 uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request);
 uint32_t num_words_available_to_pull(volatile pull_request_t* pull_request);
 uint32_t words_before_pull_buffer_wrap(uint32_t buffer_size, uint32_t rd_ptr);
@@ -37,7 +55,792 @@ inline uint64_t get_timestamp() {
     return (((uint64_t)timestamp_high) << 32) | timestamp_low;
 }
 
-typedef struct fvc_consumer_state {
+typedef struct fvc_outbound_push_state {
+    uint32_t local_rdptr;
+    uint32_t buffer_size;
+    uint32_t buffer_slot_start[FABRIC_ROUTER_OUTBOUND_BUF_SLOTS];
+    uint32_t remote_buffer_size;
+    uint32_t remote_buffer_slot_start[FABRIC_ROUTER_INBOUND_BUF_SLOTS];
+    uint32_t slots_sent_remote_update;
+    uint32_t buffer_id_patch;
+    volatile uint32_t* sender_slots_cleared;
+    volatile uint32_t* update_sender_slots_cleared;
+    volatile uint32_t* receiver_buffer_space;
+    volatile uint32_t* update_receiver_buffer_space;
+    volatile uint32_t* slot_credits;
+    uint32_t* update_slot_credits;
+    volatile uint64_t* slots_cleared_ack_addr;
+
+    inline void init(uint32_t buffer_id, uint32_t data_buf_start, uint32_t data_buf_size_words) {
+        uint32_t words = sizeof(fvc_outbound_push_state) / 4;
+        uint32_t* ptr = (uint32_t*)this;
+        for (uint32_t i = 0; i < words; i++) {
+            ptr[i] = 0;
+        }
+        uint32_t buffer_start = data_buf_start;
+        for (uint32_t i = 0; i < FABRIC_ROUTER_OUTBOUND_BUF_SLOTS; i++) {
+            buffer_slot_start[i] = buffer_start + i * FABRIC_ROUTER_BUF_SLOT_SIZE;
+        }
+        buffer_size = FABRIC_ROUTER_OUTBOUND_BUF_SLOTS;
+        uint32_t remote_buffer_start = FABRIC_ROUTER_DATA_BUF_START + 4 * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
+        for (uint32_t i = 0; i < FABRIC_ROUTER_INBOUND_BUF_SLOTS; i++) {
+            remote_buffer_slot_start[i] = remote_buffer_start + i * FABRIC_ROUTER_BUF_SLOT_SIZE;
+        }
+        remote_buffer_size = FABRIC_ROUTER_INBOUND_BUF_SLOTS;
+        // used to send word credits to ethernet receiver
+        slots_sent_remote_update =
+            (STREAM_REG_ADDR(STREAM_ID_ETH_WORDS_RECEIVED, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        // written by ethernet receiver to signal words cleared from sender buffer.
+        uint32_t sender_eth_credits_reg = buffer_id + STREAM_ID_ETH_SENDER_BUFFER_SPACE;
+        sender_slots_cleared = reinterpret_cast<uint32_t*>(
+            STREAM_REG_ADDR(sender_eth_credits_reg, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+        update_sender_slots_cleared = reinterpret_cast<uint32_t*>(
+            STREAM_REG_ADDR(sender_eth_credits_reg, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        // used to track available buffer space in ethernet receiver. Initialized to receiver buffer size in words.
+        // ethernet sender decrements it. ethernet receiver increments it.
+        receiver_buffer_space = reinterpret_cast<uint32_t*>(
+            STREAM_REG_ADDR(STREAM_ID_ETH_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+        update_receiver_buffer_space = reinterpret_cast<uint32_t*>(STREAM_REG_ADDR(
+            STREAM_ID_ETH_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+
+        // credit register that is incremented by fabric data producer/pusher.
+        uint32_t sender_noc_credits_reg = buffer_id + STREAM_ID_NOC_WORDS_RECEIVED;
+        slot_credits = reinterpret_cast<volatile uint32_t*>(
+            STREAM_REG_ADDR(sender_noc_credits_reg, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+        update_slot_credits = reinterpret_cast<uint32_t*>(
+            STREAM_REG_ADDR(sender_noc_credits_reg, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+
+        volatile uint64_t* sender_addr = (volatile uint64_t*)FABRIC_ROUTER_REQ_QUEUE_START;
+        slots_cleared_ack_addr = &sender_addr[buffer_id];
+        buffer_id_patch = buffer_id << 30;
+
+        *(uint32_t*)(STREAM_REG_ADDR(sender_eth_credits_reg, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) = 0;
+        *(uint32_t*)(STREAM_REG_ADDR(STREAM_ID_ETH_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) =
+            remote_buffer_size;
+        *(uint32_t*)(STREAM_REG_ADDR(sender_noc_credits_reg, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) = 0;
+
+        if (buffer_id == 0) {
+            // set the address where credits are returned to noc senders.
+            // don't need to set the upper 32-bits since those will be updated on every write.
+            // using noc 1 for stateful operation.
+            // noc 0 is used for inline dword writes that go in different directions, so we cannot really
+            // cache the dest address and other fields.
+            noc_inline_dw_write_set_state<true>(
+                STREAM_REG_ADDR(
+                    STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX),
+                0xF,
+                write_at_cmd_buf,
+                1);
+        }
+    }
+
+    FORCE_INLINE uint32_t get_num_slots_cleared() { return *sender_slots_cleared; }
+
+    FORCE_INLINE uint32_t get_remote_num_slots_free() { return *receiver_buffer_space; }
+
+    FORCE_INLINE uint32_t get_local_buffer_read_addr() { return buffer_slot_start[local_rdptr]; }
+
+    FORCE_INLINE void advance_local_rdptr(uint32_t num_words) {
+        if constexpr (is_power_of_2(FABRIC_ROUTER_OUTBOUND_BUF_SLOTS)) {
+            local_rdptr = (local_rdptr + num_words) & (FABRIC_ROUTER_OUTBOUND_BUF_SLOTS - 1);
+        } else {
+            uint32_t temp = local_rdptr + num_words;
+            if (temp >= buffer_size) {
+                temp -= buffer_size;
+            }
+            local_rdptr = temp;
+        }
+        *update_receiver_buffer_space = (-num_words) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+    }
+
+    FORCE_INLINE void advance_remote_wrptr(uint32_t& remote_wrptr, uint32_t num_words) {
+        if constexpr (is_power_of_2(FABRIC_ROUTER_INBOUND_BUF_SLOTS)) {
+            remote_wrptr = (remote_wrptr + num_words) & (FABRIC_ROUTER_INBOUND_BUF_SLOTS - 1);
+        } else {
+            uint32_t temp = remote_wrptr + num_words;
+            if (temp >= remote_buffer_size) {
+                temp -= remote_buffer_size;
+            }
+            remote_wrptr = temp;
+        }
+    }
+
+    FORCE_INLINE void relay_slots_cleared() {
+        uint32_t slots_cleared = get_num_slots_cleared();
+        if (slots_cleared == 0) {
+            return;
+        } else {
+            // relay the credits to noc data sender to replenish buffer space in noc sender
+            noc_inline_dw_write_with_state<false, true, true, true>(
+                slots_cleared << REMOTE_DEST_BUF_WORDS_FREE_INC, *slots_cleared_ack_addr >> 32, write_at_cmd_buf, 1);
+            // clear the credits receied from ethernet receiver.
+            *update_sender_slots_cleared = (-slots_cleared) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+        }
+    }
+
+    inline bool forward_data_from_fvc_buffer(uint32_t& remote_wrptr) {
+        relay_slots_cleared();
+
+        uint32_t slots_to_forward = *slot_credits;
+        // new_slots can be 0 here when idle
+        // We will still do all the operations since having a branch here hurts perf.
+
+        uint32_t remote_fvc_buffer_space = get_remote_num_slots_free();
+        bool nothing_to_do = (slots_to_forward == 0) || (remote_fvc_buffer_space == 0);
+
+        // if either slots to forward or remote buffer space is 0
+        // there is nothing to forward
+        if (nothing_to_do == true) {
+            return false;
+        }
+
+        volatile uint32_t* packet_start = (volatile uint32_t*)(get_local_buffer_read_addr());
+        uint32_t temp = *packet_start << 2;
+        // uint32_t words_to_forward = ((temp + ((PACKET_WORD_SIZE_BYTES << 2) - 1)) >> 6);
+        *packet_start = (temp >> 2) | buffer_id_patch;
+        uint32_t dest_addr = remote_buffer_slot_start[remote_wrptr];
+        internal_::eth_send_packet_byte_addr(
+            0, (uint32_t)packet_start, dest_addr, FABRIC_ROUTER_BUF_SLOT_SIZE / PACKET_WORD_SIZE_BYTES);
+        // send word credits to receiver
+        internal_::eth_write_remote_reg<false>(
+            0, (uint32_t)slots_sent_remote_update, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        advance_local_rdptr(1);
+        advance_remote_wrptr(remote_wrptr, 1);
+        // decrement slots to be forwarded by 1.
+        *update_slot_credits = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+        return true;
+    }
+
+} fvc_outbound_push_state_t;
+
+static_assert(sizeof(fvc_outbound_push_state_t) % 4 == 0);
+
+typedef struct fvc_inbound_push_state {
+    chan_payload_ptr inbound_wrptr;
+    uint32_t slots_inbound;
+    uint32_t slots_cleared;
+    uint32_t packet_words_remaining;
+    uint32_t packet_size_bytes;
+    uint32_t fvc_out_rdptr;
+    uint32_t buffer_size;
+    uint32_t buffer_slot_start[FABRIC_ROUTER_INBOUND_BUF_SLOTS];
+    uint32_t remote_buffer_size;
+    uint32_t remote_buffer_slot_start[FABRIC_ROUTER_OUTBOUND_BUF_SLOTS];
+    uint32_t remote_wrptr[4];
+    uint32_t remote_wrptr_direction;
+    uint32_t mcast_router_noc_xy[4];
+    uint32_t router_push_addr;
+#ifdef LOW_LATENCY_ROUTING
+    volatile low_latency_packet_header_t* packet_header;
+#else
+    uint32_t my_id;
+    uint32_t last_dest_id;
+    uint32_t dest_addr;
+    uint32_t command;
+    uint32_t for_local_chip;
+    volatile packet_header_t* packet_header;
+#endif
+    volatile uint32_t* slots_received;
+    uint32_t* slots_received_local_update;
+    uint32_t update_sender_buffer_space[4];
+    uint32_t update_receiver_buffer_space;
+    uint32_t sender_buffer_index;
+    volatile uint32_t* next_router_space;  // need 3 for 3 forwarding directions
+    volatile uint32_t* update_router_space;
+#ifndef LOW_LATENCY_ROUTING
+    uint8_t port_direction_table[16];
+#endif
+
+    inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words) {
+        uint32_t words = sizeof(fvc_inbound_push_state) / 4;
+        uint32_t* ptr = (uint32_t*)this;
+        for (uint32_t i = 0; i < words; i++) {
+            ptr[i] = 0;
+        }
+#ifndef LOW_LATENCY_ROUTING
+        my_id = routing_table->my_device_id << 16 | routing_table->my_mesh_id;
+        last_dest_id = 0xFFFFFFFF;  // initialize to an invalid mesh/device.
+#endif
+        uint32_t buffer_start = data_buf_start;
+        for (uint32_t i = 0; i < FABRIC_ROUTER_INBOUND_BUF_SLOTS; i++) {
+            buffer_slot_start[i] = buffer_start + i * FABRIC_ROUTER_BUF_SLOT_SIZE;
+        }
+        buffer_size = FABRIC_ROUTER_INBOUND_BUF_SLOTS;
+        remote_buffer_size = FABRIC_ROUTER_OUTBOUND_BUF_SLOTS;
+        slots_received = reinterpret_cast<volatile uint32_t*>(
+            STREAM_REG_ADDR(STREAM_ID_ETH_WORDS_RECEIVED, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+        slots_received_local_update = reinterpret_cast<uint32_t*>(
+            STREAM_REG_ADDR(STREAM_ID_ETH_WORDS_RECEIVED, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        for (uint32_t i = eth_chan_directions::EAST; i < eth_chan_directions::COUNT; i++) {
+            update_sender_buffer_space[i] = (STREAM_REG_ADDR(
+                STREAM_ID_ETH_SENDER_BUFFER_SPACE + i, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        }
+
+        update_receiver_buffer_space = (STREAM_REG_ADDR(
+            STREAM_ID_ETH_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+
+        // credit register that is incremented by fabric data producer/pusher.
+        // will need to be unique per direction, if routers per direction have different buffer sizes.
+        // or if we want to track buffer space for each router separately.
+        next_router_space = reinterpret_cast<volatile uint32_t*>(
+            STREAM_REG_ADDR(STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+        update_router_space = reinterpret_cast<uint32_t*>(STREAM_REG_ADDR(
+            STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        *(uint32_t*)(STREAM_REG_ADDR(STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) =
+            remote_buffer_size;
+        *(uint32_t*)(STREAM_REG_ADDR(STREAM_ID_ETH_WORDS_RECEIVED, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) = 0;
+    }
+
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    void register_with_routers(uint32_t device_id, uint32_t mesh_id = 0) {
+        if constexpr (fvc_mode == FVC_MODE_ROUTER) {
+            tt::tt_fabric::chan_id_t my_chan = routing_table->intra_mesh_table.dest_entry[device_id];
+            uint32_t my_direction;
+
+            if (routing_table->port_direction.directions[eth_chan_directions::EAST] == my_chan) {
+                my_direction = eth_chan_directions::EAST;
+                mcast_router_noc_xy[eth_chan_directions::WEST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::WEST]];
+                mcast_router_noc_xy[eth_chan_directions::NORTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::NORTH]];
+                mcast_router_noc_xy[eth_chan_directions::SOUTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::SOUTH]];
+            } else if (routing_table->port_direction.directions[eth_chan_directions::WEST] == my_chan) {
+                my_direction = eth_chan_directions::WEST;
+                mcast_router_noc_xy[eth_chan_directions::EAST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::EAST]];
+                mcast_router_noc_xy[eth_chan_directions::NORTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::NORTH]];
+                mcast_router_noc_xy[eth_chan_directions::SOUTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::SOUTH]];
+            } else if (routing_table->port_direction.directions[eth_chan_directions::NORTH] == my_chan) {
+                my_direction = eth_chan_directions::NORTH;
+                mcast_router_noc_xy[eth_chan_directions::EAST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::EAST]];
+                mcast_router_noc_xy[eth_chan_directions::WEST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::WEST]];
+                mcast_router_noc_xy[eth_chan_directions::SOUTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::SOUTH]];
+            } else if (routing_table->port_direction.directions[eth_chan_directions::SOUTH] == my_chan) {
+                my_direction = eth_chan_directions::SOUTH;
+                mcast_router_noc_xy[eth_chan_directions::EAST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::EAST]];
+                mcast_router_noc_xy[eth_chan_directions::WEST] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::WEST]];
+                mcast_router_noc_xy[eth_chan_directions::NORTH] =
+                    eth_chan_to_noc_xy[noc_index][routing_table->port_direction.directions[eth_chan_directions::NORTH]];
+            }
+
+            // set the stream auto increment to use on remote router according to
+            // this router's direction.
+            router_push_addr = (STREAM_REG_ADDR(
+                STREAM_ID_NOC_WORDS_RECEIVED + my_direction, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+            uint32_t remote_buffer_start =
+                FABRIC_ROUTER_DATA_BUF_START + my_direction * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
+            for (uint32_t i = 0; i < FABRIC_ROUTER_OUTBOUND_BUF_SLOTS; i++) {
+                remote_buffer_slot_start[i] = remote_buffer_start + i * FABRIC_ROUTER_BUF_SLOT_SIZE;
+            }
+            for (uint32_t i = eth_chan_directions::EAST; i < eth_chan_directions::COUNT; i++) {
+                if (i == my_direction) {
+                    // skip self
+                    continue;
+                }
+                uint32_t forwarding_channel = routing_table->port_direction.directions[i];
+                if (forwarding_channel == INVALID_DIRECTION) {
+                    // No channel in this forwarding direction
+                    continue;
+                }
+#ifndef LOW_LATENCY_ROUTING
+                port_direction_table[forwarding_channel] = i;
+#endif
+                // register the stream_reg to receive word credit updates from
+                // the 3 routers that this router forwards traffic to.
+                // Every outbound router has 4 data pushers. 3 are directional routers and
+                // fourth is a local device worker. Each pusher has to register its local address where
+                // outbound router should return credits for available buffer space.
+                // Each NOC return address is 64-bits (8 Bytes).
+                // A pusher registers its return address by calculating its respecitve its entry in the 4 entry
+                // outbound router table.
+                // direction can be one of 0, 1, 2, 3. Respective 64-bit entry is direction * 8
+                uint32_t my_direction_offset = my_direction * sizeof(uint64_t);
+                uint64_t router_addr = get_noc_addr_helper(
+                    eth_chan_to_noc_xy[noc_index][forwarding_channel],
+                    FABRIC_ROUTER_REQ_QUEUE_START + my_direction_offset);
+                // Split 64-bit wirte data to two 4-byte write.
+                // Write lower 4 Bytes of 8 Byte entry.
+                noc_inline_dw_write(router_addr, (uint32_t)update_router_space);
+                // Write upper 4 Bytes of 8 Byte entry.
+                noc_inline_dw_write(router_addr + (sizeof(uint32_t)), xy_local_addr >> 32);
+            }
+        } else {
+            uint32_t router_direction = get_next_hop_router_direction(mesh_id, device_id);
+            uint32_t router_addr_h = get_next_hop_router_noc_xy(mesh_id, device_id);
+            uint64_t router_addr = get_noc_addr_helper(router_addr_h, FABRIC_ROUTER_REQ_QUEUE_START);
+            router_push_addr = (STREAM_REG_ADDR(
+                STREAM_ID_NOC_WORDS_RECEIVED + router_direction,
+                STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+            router_addr += router_direction * sizeof(uint64_t);
+            // stream register to receive router buffer space available updates.
+            noc_inline_dw_write(router_addr, (uint32_t)update_router_space);
+            noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> 32);
+            uint32_t remote_buffer_start =
+                FABRIC_ROUTER_DATA_BUF_START + router_direction * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
+            for (uint32_t i = 0; i < FABRIC_ROUTER_OUTBOUND_BUF_SLOTS; i++) {
+                remote_buffer_slot_start[i] = remote_buffer_start + i * FABRIC_ROUTER_BUF_SLOT_SIZE;
+            }
+            remote_wrptr_direction = router_direction;
+        }
+    }
+
+    inline uint32_t inc_ptr_with_wrap(uint32_t ptr, uint32_t inc) {
+        uint32_t temp = ptr + inc;
+        if (temp >= buffer_size) {
+            temp -= buffer_size;
+        }
+        return temp;
+    }
+
+    inline void advance_local_wrptr(uint32_t num_slots) {
+        inbound_wrptr.ptr = inc_ptr_with_wrap(inbound_wrptr.ptr, num_slots);
+        slots_inbound += num_slots;
+    }
+
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    FORCE_INLINE void advance_out_rdptr(uint32_t num_slots) {
+        if constexpr (fvc_mode == FVC_MODE_ROUTER) {
+            if constexpr (is_power_of_2(FABRIC_ROUTER_INBOUND_BUF_SLOTS)) {
+                fvc_out_rdptr = (fvc_out_rdptr + num_slots) & (FABRIC_ROUTER_INBOUND_BUF_SLOTS - 1);
+            } else {
+                uint32_t temp = fvc_out_rdptr + num_slots;
+                if (temp >= buffer_size) {
+                    temp -= buffer_size;
+                }
+                fvc_out_rdptr = temp;
+            }
+            *slots_received_local_update = (-num_slots) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+        } else {
+            uint32_t temp = fvc_out_rdptr + num_slots;
+            if (temp >= buffer_size) {
+                temp -= buffer_size;
+            }
+            fvc_out_rdptr = temp;
+        }
+    }
+
+#ifdef LOW_LATENCY_ROUTING
+    FORCE_INLINE void advance_remote_wrptr(uint32_t num_slots, uint32_t direction) {
+        if constexpr (is_power_of_2(FABRIC_ROUTER_OUTBOUND_BUF_SLOTS)) {
+            remote_wrptr[direction] = (remote_wrptr[direction] + num_slots) & (FABRIC_ROUTER_OUTBOUND_BUF_SLOTS - 1);
+        } else {
+            uint32_t temp = remote_wrptr[direction] + num_slots;
+            if (temp >= remote_buffer_size) {
+                temp -= remote_buffer_size;
+            }
+            remote_wrptr[direction] = temp;
+        }
+    }
+#else
+    FORCE_INLINE void advance_remote_wrptr(uint32_t num_slots) {
+        if constexpr (is_power_of_2(FABRIC_ROUTER_OUTBOUND_BUF_SLOTS)) {
+            remote_wrptr[remote_wrptr_direction] =
+                (remote_wrptr[remote_wrptr_direction] + num_slots) & (FABRIC_ROUTER_OUTBOUND_BUF_SLOTS - 1);
+        } else {
+            uint32_t temp = remote_wrptr[remote_wrptr_direction] + num_slots;
+            if (temp >= remote_buffer_size) {
+                temp -= remote_buffer_size;
+            }
+            remote_wrptr[remote_wrptr_direction] = temp;
+        }
+    }
+#endif
+
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    FORCE_INLINE uint32_t get_num_slots_available() {
+        if constexpr (fvc_mode == FVC_MODE_ROUTER) {
+            return *slots_received;
+        } else {
+            return slots_inbound - slots_cleared;
+        }
+    }
+
+    FORCE_INLINE
+    uint32_t get_num_slots_free() { return buffer_size - slots_inbound; }
+
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    FORCE_INLINE bool get_curr_packet_valid() {
+        if (packet_words_remaining) {
+            return true;
+        }
+        if (get_num_slots_available<fvc_mode>()) {
+            // Wait for a full packet header to arrive before advancing to next packet.
+            return advance_next_packet<fvc_mode>();
+        } else if (slots_cleared) {
+            flush_async_writes<fvc_mode, true>();
+        }
+        return false;
+    }
+
+    FORCE_INLINE uint32_t get_local_buffer_read_addr() { return buffer_slot_start[fvc_out_rdptr]; }
+
+    FORCE_INLINE uint32_t get_local_buffer_write_addr() { return buffer_slot_start[inbound_wrptr.ptr]; }
+
+    FORCE_INLINE void free_sender_buffer_space(uint32_t words) {
+        // send received word credits to receiver
+        internal_::eth_write_remote_reg<false>(
+            0, (uint32_t)update_sender_buffer_space[sender_buffer_index], words << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    }
+
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    FORCE_INLINE void free_receiver_buffer_space(uint32_t words) {
+        if constexpr (fvc_mode == FVC_MODE_ROUTER) {
+            // send received word credits to receiver
+            internal_::eth_write_remote_reg<false>(
+                0, (uint32_t)update_receiver_buffer_space, words << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        } else {
+            slots_inbound -= words;
+        }
+    }
+
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    FORCE_INLINE bool advance_next_packet() {
+#ifdef LOW_LATENCY_ROUTING
+        packet_header = (volatile low_latency_packet_header_t*)get_local_buffer_read_addr();
+#else
+        packet_header = (volatile packet_header_t*)get_local_buffer_read_addr();
+#endif
+        uint32_t packet_size = packet_header->routing.packet_size_bytes;
+        sender_buffer_index = packet_size >> 30;
+        packet_size &= 0x3FFFFFFF;
+        packet_size_bytes = packet_size;
+
+        if constexpr (fvc_mode == FVC_MODE_ROUTER) {
+            free_sender_buffer_space(1);
+        }
+#ifndef LOW_LATENCY_ROUTING
+        for_local_chip = ((volatile uint32_t*)packet_header)[1] == my_id;
+#endif
+        packet_words_remaining = (packet_size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+        return true;
+    }
+
+#ifndef LOW_LATENCY_ROUTING
+    uint32_t get_next_hop_router_noc_xy() {
+        uint32_t dst_mesh_id = packet_header->routing.dst_mesh_id;
+        if (dst_mesh_id != routing_table->my_mesh_id) {
+            uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            remote_wrptr_direction = port_direction_table[next_port];
+            return eth_chan_to_noc_xy[noc_index][next_port];
+        } else {
+            uint32_t dst_device_id = packet_header->routing.dst_dev_id;
+            uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            remote_wrptr_direction = port_direction_table[next_port];
+            return eth_chan_to_noc_xy[noc_index][next_port];
+        }
+    }
+#endif
+
+    uint32_t get_next_hop_router_noc_xy(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
+        if (dst_mesh_id != routing_table->my_mesh_id) {
+            uint32_t next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+            return eth_chan_to_noc_xy[noc_index][next_port];
+        } else {
+            uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_dev_id];
+            return eth_chan_to_noc_xy[noc_index][next_port];
+        }
+    }
+
+    inline uint32_t get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
+        uint32_t next_port = 0;
+        uint32_t direction = 0;
+        if (dst_mesh_id != routing_table->my_mesh_id) {
+            next_port = routing_table->inter_mesh_table.dest_entry[dst_mesh_id];
+        } else {
+            next_port = routing_table->intra_mesh_table.dest_entry[dst_dev_id];
+        }
+
+        if (routing_table->port_direction.directions[eth_chan_directions::EAST] == next_port) {
+            direction = eth_chan_directions::EAST;
+        } else if (routing_table->port_direction.directions[eth_chan_directions::WEST] == next_port) {
+            direction = eth_chan_directions::WEST;
+        } else if (routing_table->port_direction.directions[eth_chan_directions::NORTH] == next_port) {
+            direction = eth_chan_directions::NORTH;
+        } else if (routing_table->port_direction.directions[eth_chan_directions::SOUTH] == next_port) {
+            direction = eth_chan_directions::SOUTH;
+        }
+        return direction;
+    }
+
+#ifdef LOW_LATENCY_ROUTING
+    template <uint8_t fvc_mode = FVC_MODE_ENDPOINT>
+    inline uint32_t push_data_to_eth_router(uint32_t dest_id) {
+        if constexpr (fvc_mode == FVC_MODE_ENDPOINT) {
+            if (*next_router_space < 1) {
+                return 0;
+            }
+            if (slots_cleared) {
+                flush_async_writes<fvc_mode, true>();
+            }
+
+            uint32_t dest_addr = get_next_hop_router_noc_xy(dest_id >> 16, dest_id & 0xFFFF);
+            uint64_t buffer_wr_addr =
+                get_noc_addr_helper(dest_addr, remote_buffer_slot_start[remote_wrptr[remote_wrptr_direction]]);
+            // Instead of sending the packet size (packet_words_remaining * PACKET_WORD_SIZE_BYTES) which
+            // may be less than the full slot, send the full slot.
+            noc_async_write_one_packet(
+                get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE, noc_index);
+            advance_remote_wrptr(1, remote_wrptr_direction);
+            advance_out_rdptr<fvc_mode>(1);
+            uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
+            noc_inline_dw_write<false, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+
+            *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+            uint32_t words_available = packet_words_remaining;
+            slots_cleared += 1;
+            packet_words_remaining = 0;
+            return words_available;
+        }
+        return 0;
+    }
+
+    FORCE_INLINE void issue_local_write() {
+        uint32_t addr_l = packet_header->routing.target_offset_l;
+        uint32_t addr_h = packet_header->routing.target_offset_h;
+        uint32_t command = packet_header->routing.command;
+        if (command & ASYNC_WR) {
+            noc_async_write_one_packet(
+                get_local_buffer_read_addr() + PACKET_HEADER_SIZE_BYTES,
+                get_noc_addr_helper(addr_h, addr_l),
+                packet_size_bytes - PACKET_HEADER_SIZE_BYTES);
+        }
+        if (command & ATOMIC_INC) {
+            uint64_t noc_addr =
+                get_noc_addr_helper(packet_header->routing.atomic_offset_h, packet_header->routing.atomic_offset_l);
+            noc_fast_atomic_increment(
+                noc_index,
+                NCRISC_AT_CMD_BUF,
+                noc_addr,
+                NOC_UNICAST_WRITE_VC,
+                packet_header->routing.atomic_increment,
+                packet_header->routing.atomic_wrap,
+                false);
+        }
+    }
+
+    FORCE_INLINE void issue_forward(uint32_t route_value, uint32_t direction) {
+        packet_header->routing.route_vector.hop_index = route_value + 1;
+        uint64_t buffer_wr_addr =
+            get_noc_addr_helper(mcast_router_noc_xy[direction], remote_buffer_slot_start[remote_wrptr[direction]]);
+        noc_async_write_one_packet(get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE);
+        advance_remote_wrptr(1, direction);
+        uint64_t push_addr = get_noc_addr_helper(mcast_router_noc_xy[direction], router_push_addr);
+        noc_inline_dw_write<false, true>(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+    }
+
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER, uint32_t router_direction = 0>
+    FORCE_INLINE __attribute__((optimize("jump-tables"))) void process_inbound_packet() {
+        tt_l1_ptr uint8_t* route_vector = (uint8_t*)packet_header->routing.route_vector.value;
+        uint32_t hop_index = packet_header->routing.route_vector.hop_index;
+        uint32_t hop_cmd = route_vector[hop_index];
+
+        if (slots_cleared) {
+            flush_async_writes<fvc_mode, true>();
+        }
+
+        switch (hop_cmd) {
+            case 0x0: break;
+            case tt_low_latency_routing_vector::FORWARD_EAST:
+                if constexpr (router_direction == eth_chan_directions::EAST) {
+                    issue_local_write();
+                } else {
+                    if (*next_router_space < 1) {
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::EAST);
+                }
+                break;
+            case tt_low_latency_routing_vector::FORWARD_WEST:
+                if constexpr (router_direction == eth_chan_directions::WEST) {
+                    issue_local_write();
+                } else {
+                    if (*next_router_space < 1) {
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::WEST);
+                }
+                break;
+            case tt_low_latency_routing_vector::FORWARD_EAST | tt_low_latency_routing_vector::FORWARD_WEST:
+                if constexpr (router_direction == eth_chan_directions::WEST) {
+                    issue_local_write();
+                    if (*next_router_space < 1) {
+                        route_vector[hop_index] = hop_cmd & ~tt_low_latency_routing_vector::FORWARD_WEST;
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::EAST);
+                } else {
+                    issue_local_write();
+                    if (*next_router_space < 1) {
+                        route_vector[hop_index] = hop_cmd & ~tt_low_latency_routing_vector::FORWARD_EAST;
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::WEST);
+                }
+                break;
+            case tt_low_latency_routing_vector::FORWARD_NORTH:
+                if constexpr (router_direction == eth_chan_directions::NORTH) {
+                    issue_local_write();
+                } else {
+                    if (*next_router_space < 1) {
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::NORTH);
+                }
+                break;
+            case tt_low_latency_routing_vector::FORWARD_SOUTH:
+                if constexpr (router_direction == eth_chan_directions::SOUTH) {
+                    issue_local_write();
+                } else {
+                    if (*next_router_space < 1) {
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::SOUTH);
+                }
+                break;
+            case tt_low_latency_routing_vector::FORWARD_NORTH | tt_low_latency_routing_vector::FORWARD_SOUTH:
+                if constexpr (router_direction == eth_chan_directions::SOUTH) {
+                    issue_local_write();
+                    if (*next_router_space < 1) {
+                        route_vector[hop_index] = hop_cmd & ~tt_low_latency_routing_vector::FORWARD_SOUTH;
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::NORTH);
+                } else {
+                    issue_local_write();
+                    if (*next_router_space < 1) {
+                        route_vector[hop_index] = hop_cmd & ~tt_low_latency_routing_vector::FORWARD_NORTH;
+                        return;
+                    }
+                    issue_forward(hop_index, eth_chan_directions::SOUTH);
+                }
+                break;
+            default: __builtin_unreachable();
+        }
+
+        advance_out_rdptr<fvc_mode>(1);
+        slots_cleared = 1;
+        packet_words_remaining = 0;
+    }
+#else
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    inline uint32_t push_data_to_eth_router() {
+        if (*next_router_space < 1) {
+            return 0;
+        }
+        if (slots_cleared) {
+            flush_async_writes<fvc_mode, true>();
+        }
+        // need to investigate this.
+        // nop (and how many) affects performance.
+        // Also flush_async_writes<fvc_mode, false>() affects performance positively.
+        asm("nop");
+        // asm("nop");
+        // asm("nop");
+        // asm("nop");
+
+        uint32_t dest_id = ((volatile uint32_t*)packet_header)
+            [(offsetof(packet_header_t, routing) + offsetof(tt_routing, dst_mesh_id)) / sizeof(uint32_t)];
+        if (last_dest_id != dest_id) {
+            dest_addr = get_next_hop_router_noc_xy();
+            last_dest_id = dest_id;
+        }
+        uint64_t buffer_wr_addr =
+            get_noc_addr_helper(dest_addr, remote_buffer_slot_start[remote_wrptr[remote_wrptr_direction]]);
+        // Instead of sending the packet size (packet_words_remaining * PACKET_WORD_SIZE_BYTES) which
+        // may be less than the full slot, send the full slot.
+        noc_async_write_one_packet(
+            get_local_buffer_read_addr(), buffer_wr_addr, FABRIC_ROUTER_BUF_SLOT_SIZE, noc_index);
+        advance_remote_wrptr(1);
+        advance_out_rdptr<fvc_mode>(1);
+        uint64_t push_addr = get_noc_addr_helper(dest_addr, router_push_addr);
+        noc_inline_dw_write(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+
+        *update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+        uint32_t words_available = packet_words_remaining;
+        slots_cleared += 1;
+        packet_words_remaining = 0;
+        return words_available;
+    }
+
+    FORCE_INLINE void issue_async_write() {
+        uint32_t addr_l = packet_header->session.target_offset_l;
+        uint32_t addr_h = packet_header->session.target_offset_h;
+        noc_async_write_one_packet(
+            get_local_buffer_read_addr() + PACKET_HEADER_SIZE_BYTES,
+            get_noc_addr_helper(addr_h, addr_l),
+            packet_size_bytes - PACKET_HEADER_SIZE_BYTES);
+        advance_out_rdptr(1);
+        slots_cleared += 1;
+        packet_words_remaining = 0;
+    }
+
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER, uint32_t router_direction = 0>
+    FORCE_INLINE void process_inbound_packet() {
+        if (for_local_chip) {
+            if (slots_cleared) {
+                flush_async_writes<fvc_mode, true>();
+            }
+            uint32_t command = packet_header->session.command;
+            if (command & ASYNC_WR) {
+                issue_async_write();
+                // for fused command issue the atomic inc before invalidating the current packet
+                if (command & ATOMIC_INC) {
+                    uint64_t noc_addr = get_noc_addr_helper(
+                        packet_header->packet_parameters.async_wr_atomic_parameters.noc_xy,
+                        packet_header->packet_parameters.async_wr_atomic_parameters.l1_offset);
+                    noc_fast_atomic_increment(
+                        noc_index,
+                        NCRISC_AT_CMD_BUF,
+                        noc_addr,
+                        NOC_UNICAST_WRITE_VC,
+                        packet_header->packet_parameters.async_wr_atomic_parameters.increment,
+                        31,
+                        false);
+                }
+            } else if (command & ATOMIC_INC) {
+                uint64_t noc_addr =
+                    get_noc_addr_helper(packet_header->session.target_offset_h, packet_header->session.target_offset_l);
+                noc_fast_atomic_increment(
+                    noc_index,
+                    NCRISC_AT_CMD_BUF,
+                    noc_addr,
+                    NOC_UNICAST_WRITE_VC,
+                    packet_header->packet_parameters.atomic_parameters.increment,
+                    packet_header->packet_parameters.atomic_parameters.wrap_boundary,
+                    false);
+
+                packet_words_remaining = 0;
+                advance_out_rdptr(1);
+                free_receiver_buffer_space(1);
+            }
+        } else {
+            // push to next hop.
+            push_data_to_eth_router<fvc_mode>();
+        }
+    }
+#endif
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER, bool noc_flush = true>
+    FORCE_INLINE void flush_async_writes() {
+        if constexpr (noc_flush == true) {
+            noc_async_writes_flushed();
+        }
+        free_receiver_buffer_space<fvc_mode>(slots_cleared);
+        slots_cleared = 0;
+    }
+} fvc_inbound_push_state_t;
+
+static_assert(sizeof(fvc_inbound_push_state_t) % 4 == 0);
+
+typedef struct fvc_outbound_pull_state {
     uint8_t chan_num;
     uint8_t pad[3];
     uint32_t packet_in_progress;
@@ -70,7 +873,7 @@ typedef struct fvc_consumer_state {
     }
 
     inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words) {
-        uint32_t words = sizeof(fvc_consumer_state) / 4;
+        uint32_t words = sizeof(fvc_outbound_pull_state) / 4;
         uint32_t* ptr = (uint32_t*)this;
         for (uint32_t i = 0; i < words; i++) {
             ptr[i] = 0;
@@ -156,10 +959,9 @@ typedef struct fvc_consumer_state {
         uint32_t src_addr = 0;
         uint32_t dest_addr = 0;  // should be second half of fvc buffer.
         uint32_t words_remaining = words_to_forward;
+        uint32_t num_words_before_wrap = words_before_buffer_wrap(fvc_out_rdptr);
+        uint32_t chunk_to_forward = std::min(num_words_before_wrap, words_remaining);
         while (words_remaining) {
-            uint32_t num_words_before_wrap = words_before_buffer_wrap(fvc_out_rdptr);
-
-            uint32_t chunk_to_forward = std::min(num_words_before_wrap, words_remaining);
             src_addr = get_local_buffer_read_addr();
             dest_addr = src_addr - buffer_start + remote_buffer_start;
             if constexpr (barrier) {
@@ -169,6 +971,7 @@ typedef struct fvc_consumer_state {
                 0, src_addr / PACKET_WORD_SIZE_BYTES, dest_addr / PACKET_WORD_SIZE_BYTES, chunk_to_forward);
             advance_out_rdptr(chunk_to_forward);
             words_remaining -= chunk_to_forward;
+            chunk_to_forward = words_remaining;
         }
 
         // send word credits to receiver
@@ -196,12 +999,22 @@ typedef struct fvc_consumer_state {
 
         return num_words_to_pull;
     }
-
-    FORCE_INLINE uint32_t pull_data_to_fvc_buffer(volatile pull_request_t* pull_request) {
+    template <bool packetized = true>
+    FORCE_INLINE uint32_t
+    pull_data_to_fvc_buffer(volatile pull_request_t* pull_request, volatile pull_request_t* header) {
         if (packet_in_progress == 0) {
             uint32_t size = pull_request->size;
-            packet_words_remaining = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
-            packet_in_progress = 1;
+            if constexpr (packetized == false) {
+                packet_words_remaining = PACKET_HEADER_SIZE_WORDS + ((size + PACKET_WORD_SIZE_BYTES - 1) >> 4);
+                if (move_data_to_fvc_buffer<false>(header)) {
+                    packet_in_progress = 1;
+                } else {
+                    return 0;
+                }
+            } else {
+                packet_words_remaining = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+                packet_in_progress = 1;
+            }
         }
 
         uint32_t num_words_to_pull = get_num_words_to_pull(pull_request);
@@ -222,10 +1035,13 @@ typedef struct fvc_consumer_state {
         return num_words_to_pull;
     }
 
-    inline uint32_t move_data_to_fvc_buffer(volatile pull_request_t* pull_request) {
-        if (packet_in_progress == 0) {
-            packet_words_remaining = PACKET_HEADER_SIZE_WORDS;
-            packet_in_progress = 1;
+    template <bool packet = true>
+    FORCE_INLINE uint32_t move_data_to_fvc_buffer(volatile pull_request_t* pull_request) {
+        if constexpr (packet == true) {
+            if (packet_in_progress == 0) {
+                packet_words_remaining = PACKET_HEADER_SIZE_WORDS;
+                packet_in_progress = 1;
+            }
         }
 
         // if fvc does not have enough space, try again later.
@@ -273,12 +1089,9 @@ typedef struct fvc_consumer_state {
         register_move_data(PACKET_HEADER_SIZE_WORDS);
         return PACKET_HEADER_SIZE_WORDS;
     }
-} fvc_consumer_state_t;
+} fvc_outbound_pull_state_t;
 
-static_assert(sizeof(fvc_consumer_state_t) % 4 == 0);
-
-#define FVC_MODE_ROUTER 1
-#define FVC_MODE_ENDPOINT 2
+static_assert(sizeof(fvc_outbound_pull_state_t) % 4 == 0);
 
 enum ProcessingFlags : uint8_t {
     UCAST_DEST = 1,
@@ -294,7 +1107,7 @@ enum ProcessingFlags : uint8_t {
 // direction, socket receiver/consumer buffer, center worker/consumer buffer.
 // Which ever entity receives the pull request is responsible draining the required amount of data from
 // FVC Producer.
-typedef struct fvc_producer_state {
+typedef struct fvc_inbound_pull_state {
     chan_payload_ptr inbound_wrptr;
     chan_payload_ptr inbound_rdptr;
     uint32_t my_id;
@@ -312,7 +1125,6 @@ typedef struct fvc_producer_state {
     uint32_t buffer_size_2x;
     uint32_t buffer_start;
     uint32_t pull_words_in_flight;
-    uint32_t words_before_read_wrap;
     uint32_t words_to_forward;
     bool curr_packet_valid;
     bool packet_corrupted;
@@ -325,6 +1137,9 @@ typedef struct fvc_producer_state {
     uint32_t* words_received_local_update;
     uint32_t update_sender_buffer_space;
     uint32_t update_receiver_buffer_space;
+    uint64_t pull_req_dest_address;
+    bool pull_request_pending;
+    uint8_t padding[3];
 
     inline void reset_words_received() {
         // Setting STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX resets the credit register
@@ -334,7 +1149,7 @@ typedef struct fvc_producer_state {
     }
 
     inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words) {
-        uint32_t words = sizeof(fvc_producer_state) / 4;
+        uint32_t words = sizeof(fvc_inbound_pull_state) / 4;
         uint32_t* ptr = (uint32_t*)this;
         for (uint32_t i = 0; i < words; i++) {
             ptr[i] = 0;
@@ -355,17 +1170,17 @@ typedef struct fvc_producer_state {
         packet_id = (uint32_t*)&current_packet_header.routing.dst_mesh_id;
         tt::tt_fabric::chan_id_t my_chan = routing_table->intra_mesh_table.dest_entry[routing_table->my_device_id];
         tt::tt_fabric::chan_id_t mcast_channel = 0;
-        if (routing_table->port_direction.east == my_chan) {
-            mcast_channel = routing_table->port_direction.west;
+        if (routing_table->port_direction.directions[eth_chan_directions::EAST] == my_chan) {
+            mcast_channel = routing_table->port_direction.directions[eth_chan_directions::WEST];
             mcast_direction = 1;
-        } else if (routing_table->port_direction.west == my_chan) {
-            mcast_channel = routing_table->port_direction.east;
+        } else if (routing_table->port_direction.directions[eth_chan_directions::WEST] == my_chan) {
+            mcast_channel = routing_table->port_direction.directions[eth_chan_directions::EAST];
             mcast_direction = 0;
-        } else if (routing_table->port_direction.north == my_chan) {
-            mcast_channel = routing_table->port_direction.south;
+        } else if (routing_table->port_direction.directions[eth_chan_directions::NORTH] == my_chan) {
+            mcast_channel = routing_table->port_direction.directions[eth_chan_directions::SOUTH];
             mcast_direction = 3;
-        } else if (routing_table->port_direction.south == my_chan) {
-            mcast_channel = routing_table->port_direction.north;
+        } else if (routing_table->port_direction.directions[eth_chan_directions::SOUTH] == my_chan) {
+            mcast_channel = routing_table->port_direction.directions[eth_chan_directions::NORTH];
             mcast_direction = 2;
         }
         mcast_router_noc_xy = eth_chan_to_noc_xy[noc_index][mcast_channel];
@@ -407,11 +1222,6 @@ typedef struct fvc_producer_state {
             }
             *words_received_local_update = (-new_words) << REMOTE_DEST_BUF_WORDS_FREE_INC;
             words_inbound += new_words;
-            uint32_t temp = inbound_wrptr.ptr + new_words;
-            if (temp >= buffer_size) {
-                temp -= buffer_size;
-            }
-            inbound_wrptr.ptr = temp;
             free_sender_buffer_space(new_words);
             return words_inbound;
         } else {
@@ -570,36 +1380,35 @@ typedef struct fvc_producer_state {
     inline uint32_t pull_data_from_fvc_buffer() {
         uint32_t words_available = get_num_words_available<fvc_mode>();
         words_available = std::min(words_available, packet_words_remaining);
+        bool try_sending_pull_request = false;
         if (packet_in_progress == 0) {
             if (current_packet_header.routing.flags == INLINE_FORWARD) {
                 copy_header((pull_request_t*)&local_pull_request->pull_request);
-                words_cleared = words_available;
             } else {
                 local_pull_request->pull_request.rd_ptr = fvc_out_rdptr;
                 local_pull_request->pull_request.size = current_packet_header.routing.packet_size_bytes;
                 local_pull_request->pull_request.buffer_size = buffer_size;
                 local_pull_request->pull_request.buffer_start = xy_local_addr + buffer_start;
-                local_pull_request->pull_request.words_written = words_available;
+                local_pull_request->pull_request.words_written = 0;
                 local_pull_request->pull_request.words_read = 0;
-                words_cleared = 0;
                 local_pull_request->pull_request.ack_addr =
                     xy_local_addr + (uint32_t)&local_pull_request->pull_request.words_read;
                 local_pull_request->pull_request.flags = FORWARD;
-                packet_in_progress = 1;
             }
-            packet_words_remaining -= words_available;
-            advance_out_rdptr<fvc_mode>(words_available);
+
+            words_cleared = 0;
+            packet_in_progress = 1;
+
             // issue noc write to noc target of pull request.
-            uint64_t dest_addr = socket_mode == false
-                                     ? ((uint64_t)get_next_hop_router_noc_xy() << 32) | FABRIC_ROUTER_REQ_QUEUE_START
-                                     : ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                                           current_packet_header.session.target_offset_l;
-            hop_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
-            if (current_packet_header.routing.flags == INLINE_FORWARD) {
-                curr_packet_valid = false;
-                flush_async_writes<fvc_mode>();
-                return words_available;
-            }
+            this->pull_req_dest_address =
+                socket_mode == false
+                    ? get_noc_addr_helper(get_next_hop_router_noc_xy(), FABRIC_ROUTER_REQ_QUEUE_START)
+                    : get_noc_addr_helper(
+                          current_packet_header.session.target_offset_h, current_packet_header.session.target_offset_l);
+            tt_fabric_reserve_pull_request_slot(this->pull_req_dest_address, local_pull_request);
+            try_sending_pull_request = true;
+        } else if (this->pull_request_pending) {
+            try_sending_pull_request = true;
         } else {
             // pull_request.rd_ptr is updated by remote puller when data is read out of producer's local buffer.
             // it is used to determine when it it safe to reclaim local buffer memory for more data.
@@ -624,11 +1433,39 @@ typedef struct fvc_producer_state {
                 curr_packet_valid = false;
             }
         }
+
+        if (try_sending_pull_request) {
+            bool can_send_pull_request =
+                tt_fabric_check_pull_request_slot<false>(this->pull_req_dest_address, local_pull_request, local_pull_request->wrptr.ptr);
+            if (!can_send_pull_request) {
+                this->pull_request_pending = true;
+                return 0;
+            }
+
+            if (current_packet_header.routing.flags == INLINE_FORWARD) {
+                words_cleared = words_available;
+            } else {
+                local_pull_request->pull_request.words_written = words_available;
+            }
+
+            hop_dest = tt_fabric_send_pull_request(this->pull_req_dest_address, local_pull_request);
+            this->pull_request_pending = false;
+
+            packet_words_remaining -= words_available;
+            advance_out_rdptr<fvc_mode>(words_available);
+
+            if (current_packet_header.routing.flags == INLINE_FORWARD) {
+                curr_packet_valid = false;
+                packet_in_progress = 0;
+                flush_async_writes<fvc_mode>();
+            }
+        }
+
         return words_available;
     }
 
     template <bool resample = true>
-    FORCE_INLINE uint32_t issue_async_write() {
+    FORCE_INLINE void issue_async_write() {
         if constexpr (resample) {
             get_num_words_available();
         }
@@ -642,7 +1479,6 @@ typedef struct fvc_producer_state {
             words_cleared += words_available;
             packet_dest += words_available * PACKET_WORD_SIZE_BYTES;
         }
-        return words_available;
     }
 
     FORCE_INLINE bool packet_is_for_local_chip() { return my_id == *packet_id; }
@@ -701,55 +1537,34 @@ typedef struct fvc_producer_state {
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     inline uint32_t process_mcast_packet() {
         uint32_t words_processed = 0;
+        uint32_t words_available = get_num_words_available();
+        words_available = std::min(words_available, packet_words_remaining);
+        bool try_sending_pull_request = false;
         if (current_packet_header.session.command & ASYNC_WR) {
-            uint32_t words_available = get_num_words_available();
-            words_available = std::min(words_available, packet_words_remaining);
             words_processed = words_available;
             if (packet_in_progress == 0) {
                 local_pull_request->pull_request.rd_ptr = fvc_out_rdptr;
                 local_pull_request->pull_request.size = current_packet_header.routing.packet_size_bytes;
                 local_pull_request->pull_request.buffer_size = buffer_size;
                 local_pull_request->pull_request.buffer_start = xy_local_addr + buffer_start;
-                local_pull_request->pull_request.words_written = words_available;
+                local_pull_request->pull_request.words_written = 0;
                 local_pull_request->pull_request.words_read = 0;
                 words_cleared = 0;
                 local_pull_request->pull_request.ack_addr =
                     xy_local_addr + (uint32_t)&local_pull_request->pull_request.words_read;
                 local_pull_request->pull_request.flags = FORWARD;
 
-                packet_words_remaining -= words_available;
-                // issue noc write to noc target of pull request.
-                // figure out next hop for mcast forwarding
-                uint64_t dest_addr = ((uint64_t)mcast_router_noc_xy << 32) | FABRIC_ROUTER_REQ_QUEUE_START;
-                hop_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
-
-                packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                              current_packet_header.session.target_offset_l;
-
-                advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
-                words_available -= PACKET_HEADER_SIZE_WORDS;
-
-                uint32_t local_words_available = std::min(words_available, words_before_buffer_wrap(fvc_out_rdptr));
-                // write available data till end of input buffer
-                if (local_words_available) {
-                    // need to check local_words_available > 0 since it is possible that we only received the packet
-                    // header so far, and words_available == 0 after words_available -= PACKET_HEADER_SIZE_WORDS above.
-                    noc_async_write(
-                        get_local_buffer_read_addr(), packet_dest, local_words_available * PACKET_WORD_SIZE_BYTES);
-                    advance_out_rdptr(local_words_available);
-                    packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
-                }
-                local_words_available = words_available - local_words_available;
-                // write remaining available data from beginning of buffer
-                if (local_words_available) {
-                    noc_async_write(
-                        get_local_buffer_read_addr(), packet_dest, local_words_available * PACKET_WORD_SIZE_BYTES);
-                    advance_out_rdptr(local_words_available);
-                    packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
-                }
                 // subtract the header words. Remaining words are the data to be written to packet_dest.
                 // Remember to account for trailing bytes which may not be a full packet word.
                 packet_in_progress = 1;
+
+                // issue noc write to noc target of pull request.
+                // figure out next hop for mcast forwarding
+                this->pull_req_dest_address = get_noc_addr_helper(mcast_router_noc_xy, FABRIC_ROUTER_REQ_QUEUE_START);
+                tt_fabric_reserve_pull_request_slot(this->pull_req_dest_address, local_pull_request);
+                try_sending_pull_request = true;
+            } else if (this->pull_request_pending) {
+                try_sending_pull_request = true;
             } else {
                 noc_async_writes_flushed();
                 // pull_request.rd_ptr is updated by remote puller when data is read out of producer's local buffer.
@@ -790,10 +1605,9 @@ typedef struct fvc_producer_state {
                 } else if (curr_words_read == local_pull_request->pull_request.words_written) {
                     // for fused command issue the atomic inc before invalidating the current packet
                     if (current_packet_header.session.command & ATOMIC_INC) {
-                        uint64_t noc_addr =
-                            ((uint64_t)current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy
-                             << 32) |
-                            current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset;
+                        uint64_t noc_addr = get_noc_addr_helper(
+                            current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy,
+                            current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset);
                         noc_fast_atomic_increment(
                             noc_index,
                             NCRISC_AT_CMD_BUF,
@@ -809,26 +1623,84 @@ typedef struct fvc_producer_state {
                     packet_timestamp = get_timestamp();
                 }
             }
+
+            if (try_sending_pull_request) {
+                bool can_send_pull_request =
+                    tt_fabric_check_pull_request_slot<false>(this->pull_req_dest_address, local_pull_request, local_pull_request->wrptr.ptr);
+                if (!can_send_pull_request) {
+                    this->pull_request_pending = true;
+                    return 0;
+                }
+
+                local_pull_request->pull_request.words_written = words_available;
+                hop_dest = tt_fabric_send_pull_request(this->pull_req_dest_address, local_pull_request);
+                this->pull_request_pending = false;
+
+                packet_words_remaining -= words_available;
+                packet_dest = get_noc_addr_helper(
+                    current_packet_header.session.target_offset_h, current_packet_header.session.target_offset_l);
+
+                advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
+                words_available -= PACKET_HEADER_SIZE_WORDS;
+
+                uint32_t local_words_available = std::min(words_available, words_before_buffer_wrap(fvc_out_rdptr));
+                // write available data till end of input buffer
+                if (local_words_available) {
+                    // need to check local_words_available > 0 since it is possible that we only received the packet
+                    // header so far, and words_available == 0 after words_available -= PACKET_HEADER_SIZE_WORDS above.
+                    noc_async_write(
+                        get_local_buffer_read_addr(), packet_dest, local_words_available * PACKET_WORD_SIZE_BYTES);
+                    advance_out_rdptr(local_words_available);
+                    packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
+                }
+                local_words_available = words_available - local_words_available;
+                // write remaining available data from beginning of buffer
+                if (local_words_available) {
+                    noc_async_write(
+                        get_local_buffer_read_addr(), packet_dest, local_words_available * PACKET_WORD_SIZE_BYTES);
+                    advance_out_rdptr(local_words_available);
+                    packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
+                }
+            }
         }
         return words_processed;
     }
 
-    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER, uint32_t router_direction = 0>
     inline uint32_t process_inbound_packet() {
         uint32_t words_processed = 0;
         if (packet_processing_flags == ProcessingFlags::UCAST_DEST) {
             if (current_packet_header.routing.flags == FORWARD) {
                 if (current_packet_header.session.command & ASYNC_WR) {
                     if (packet_in_progress == 0) {
-                        packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                                      current_packet_header.session.target_offset_l;
+                        packet_dest = get_noc_addr_helper(
+                            current_packet_header.session.target_offset_h,
+                            current_packet_header.session.target_offset_l);
                         packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
                         advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
                         words_cleared = PACKET_HEADER_SIZE_WORDS;
                         // subtract the header words. Remaining words are the data to be written to packet_dest.
                         // Remember to account for trailing bytes which may not be a full packet word.
-                        packet_in_progress = 1;
                         issue_async_write<false>();
+                        if (packet_words_remaining) {
+                            packet_in_progress = 1;
+                        } else {
+                            flush_async_writes();
+                            if (current_packet_header.session.command & ATOMIC_INC) {
+                                uint64_t noc_addr = get_noc_addr_helper(
+                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy,
+                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset);
+                                noc_fast_atomic_increment(
+                                    noc_index,
+                                    NCRISC_AT_CMD_BUF,
+                                    noc_addr,
+                                    NOC_UNICAST_WRITE_VC,
+                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.increment,
+                                    31,
+                                    false);
+                            }
+                            curr_packet_valid = false;
+                        }
                     } else {
                         flush_async_writes();
                         if (packet_words_remaining) {
@@ -836,10 +1708,9 @@ typedef struct fvc_producer_state {
                         } else {
                             // for fused command issue the atomic inc before invalidating the current packet
                             if (current_packet_header.session.command & ATOMIC_INC) {
-                                uint64_t noc_addr =
-                                    ((uint64_t)current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy
-                                     << 32) |
-                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset;
+                                uint64_t noc_addr = get_noc_addr_helper(
+                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy,
+                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset);
                                 noc_fast_atomic_increment(
                                     noc_index,
                                     NCRISC_AT_CMD_BUF,
@@ -860,8 +1731,8 @@ typedef struct fvc_producer_state {
                 if (current_packet_header.session.command == SOCKET_CLOSE) {
                     words_processed = pull_data_from_fvc_buffer<fvc_mode, true>();
                 } else {
-                    uint64_t noc_addr = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                                        current_packet_header.session.target_offset_l;
+                    uint64_t noc_addr = get_noc_addr_helper(
+                        current_packet_header.session.target_offset_h, current_packet_header.session.target_offset_l);
                     noc_fast_atomic_increment(
                         noc_index,
                         NCRISC_AT_CMD_BUF,
@@ -893,8 +1764,9 @@ typedef struct fvc_producer_state {
         free_receiver_buffer_space<fvc_mode>(words_cleared);
         words_cleared = 0;
     }
-} fvc_producer_state_t;
+} fvc_inbound_pull_state_t;
 
+static_assert(sizeof(fvc_inbound_pull_state_t) % 4 == 0);
 typedef struct fvcc_outbound_state {
     volatile chan_payload_ptr remote_rdptr;
     uint32_t remote_ptr_update_addr;
@@ -1127,7 +1999,7 @@ typedef struct fvcc_inbound_state {
     // we can process other fvcs and come back to check status of this pull request later.
     inline void forward_message(uint64_t dest_addr) {
         uint64_t noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, wrptr);
-        noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+        noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
             noc_index,
             NCRISC_AT_CMD_BUF,
             noc_addr,
@@ -1170,8 +2042,8 @@ typedef struct fvcc_inbound_state {
                     forward_message(gk_fvcc_buf_addr);
                 } else if (current_packet_header->session.command == ASYNC_WR_RESP) {
                     // Write response. Decrement transaction count for respective transaction id.
-                    uint64_t noc_addr = ((uint64_t)current_packet_header->session.target_offset_h << 32) |
-                                        current_packet_header->session.target_offset_l;
+                    uint64_t noc_addr = get_noc_addr_helper(
+                        current_packet_header->session.target_offset_h, current_packet_header->session.target_offset_l);
                     noc_fast_atomic_increment(
                         noc_index, NCRISC_AT_CMD_BUF, noc_addr, NOC_UNICAST_WRITE_VC, -1, 31, false);
                 }
@@ -1449,8 +2321,15 @@ inline void req_buf_advance_wrptr(chan_req_buf* req_buf) { req_buf_ptr_advance(&
 
 inline void req_buf_advance_rdptr(chan_req_buf* req_buf) {
     // clear valid before incrementing read pointer.
+    // PACK and FORWARD requests take 2 entries in request buffer.
+    // First entry is pull reqeust itself, second entry is packet header.
     uint32_t rd_index = req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
-    req_buf->chan_req[rd_index].bytes[47] = 0;
+    if (req_buf->chan_req[rd_index].pull_request.flags == PACK_N_FORWARD) {
+        req_buf->chan_req[rd_index].pull_request.flags = 0;
+        req_buf_ptr_advance(&(req_buf->rdptr));
+        rd_index = (rd_index + 1) & CHAN_REQ_BUF_SIZE_MASK;
+    }
+    req_buf->chan_req[rd_index].pull_request.flags = 0;
     req_buf_ptr_advance(&(req_buf->rdptr));
 }
 
@@ -1544,42 +2423,42 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
     return true;
 }
 
-// issue a pull request.
-// currently blocks till the request queue has space.
-// This needs to be non blocking, so that if one fvc pull request queue is full,
-// we can process other fvcs and come back to check status of this pull request later.
-inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request) {
+// reserve a slot in the req queue for sending the pull request
+inline void tt_fabric_reserve_pull_request_slot(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request, uint32_t num_slots) {
     uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, wrptr);
-    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
         noc_index,
         NCRISC_AT_CMD_BUF,
         noc_addr,
         NOC_UNICAST_WRITE_VC,
-        1,
+        num_slots,
         CHAN_REQ_BUF_LOG_SIZE,
         false,
         false,
         (uint32_t)&local_pull_request->wrptr.ptr);
     while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
-    uint32_t wrptr = local_pull_request->wrptr.ptr;
-    noc_addr = dest_addr + offsetof(chan_req_buf, rdptr);
-    while (1) {
+}
+
+// check if the pull request can be sent
+// issuing this in a blocking mode on routers can result in deadlocks, use carefully
+template <bool blocking_mode = false>
+inline bool tt_fabric_check_pull_request_slot(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request, uint32_t wrptr) {
+    uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, rdptr);
+    do {
         noc_async_read_one_packet(noc_addr, (uint32_t)(&local_pull_request->rdptr.ptr), 4);
         noc_async_read_barrier();
         if (!req_buf_ptrs_full(wrptr, local_pull_request->rdptr.ptr)) {
-            break;
+            return true;
         }
-#if defined(COMPILE_FOR_ERISC)
-        else {
-            // Consumer pull request buffer is full
-            // Context switch to enable base firmware routing
-            // as it might be handling slow dispatch traffic
-            internal_::risc_context_switch();
-        }
-#endif
-    }
-    uint32_t dest_wr_index = wrptr & CHAN_REQ_BUF_SIZE_MASK;
-    noc_addr = dest_addr + offsetof(chan_req_buf, chan_req) + dest_wr_index * sizeof(pull_request_t);
+    } while (blocking_mode);
+
+    return false;
+}
+
+// issue a pull request.
+inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request) {
+    uint32_t dest_wr_index = (local_pull_request->wrptr.ptr) & CHAN_REQ_BUF_SIZE_MASK;
+    uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, chan_req) + dest_wr_index * sizeof(pull_request_t);
     noc_async_write_one_packet(
         (uint32_t)(&local_pull_request->pull_request), noc_addr, sizeof(pull_request_t), noc_index);
 

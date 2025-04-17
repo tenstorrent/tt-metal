@@ -14,9 +14,8 @@ namespace distributed {
 class MeshDevice;
 }  // namespace distributed
 
-inline namespace v0 {
 class IDevice;
-}  // namespace v0
+
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::tensor_ops {

@@ -4,31 +4,20 @@
 
 #include "dispatch_core_manager.hpp"
 
-#include "core_descriptor.hpp"
-#include "core_coord.hpp"
+#include <algorithm>
+#include <functional>
 #include <list>
-#include "dispatch_core_common.hpp"
+#include <unordered_set>
 
-#include "tt_cluster.hpp"
+#include "assert.hpp"
+#include "core_coord.hpp"
+#include "core_descriptor.hpp"
+#include "dispatch_core_common.hpp"
+#include "logger.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/types/xy_pair.h>
 
 namespace tt::tt_metal {
-
-dispatch_core_manager* dispatch_core_manager::_inst = nullptr;
-
-void dispatch_core_manager::initialize(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) noexcept {
-    log_debug(tt::LogMetal, "DevicePool initialize");
-    if (_inst == nullptr) {
-        static dispatch_core_manager dispatch_core_manager(dispatch_core_config, num_hw_cqs);
-        _inst = &dispatch_core_manager;
-    } else if (_inst->dispatch_core_config_by_device[0] != dispatch_core_config or num_hw_cqs != _inst->num_hw_cqs) {
-        _inst->reset_dispatch_core_manager(dispatch_core_config, num_hw_cqs);
-    }
-}
-
-dispatch_core_manager& dispatch_core_manager::instance() {
-    TT_ASSERT(dispatch_core_manager::_inst != nullptr, "Trying to get dispatch_core_manager without initializing it");
-    return *dispatch_core_manager::_inst;
-}
 
 const tt_cxy_pair& dispatch_core_manager::prefetcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
@@ -36,7 +25,8 @@ const tt_cxy_pair& dispatch_core_manager::prefetcher_core(chip_id_t device_id, u
         return assignment.prefetcher.value();
     }
     // Issue queue interface is on the MMIO device
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     CoreCoord issue_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
     assignment.prefetcher = tt_cxy_pair(mmio_device_id, issue_queue_coord.x, issue_queue_coord.y);
     log_dispatch_assignment("Prefetcher", assignment.prefetcher.value(), device_id, channel, cq_id);
@@ -45,10 +35,7 @@ const tt_cxy_pair& dispatch_core_manager::prefetcher_core(chip_id_t device_id, u
 
 bool dispatch_core_manager::is_prefetcher_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.prefetcher.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.prefetcher.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::prefetcher_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
@@ -64,10 +51,7 @@ const tt_cxy_pair& dispatch_core_manager::prefetcher_d_core(chip_id_t device_id,
 
 bool dispatch_core_manager::is_prefetcher_d_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.prefetcher_d.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.prefetcher_d.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::mux_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
@@ -76,7 +60,8 @@ const tt_cxy_pair& dispatch_core_manager::mux_core(chip_id_t device_id, uint16_t
         return assignment.mux.value();
     }
     // Mux interface is on the MMIO device
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     CoreCoord mux_coord = this->get_next_available_dispatch_core(mmio_device_id);
     assignment.mux = tt_cxy_pair(mmio_device_id, mux_coord.x, mux_coord.y);
     log_dispatch_assignment("Mux", assignment.mux.value(), device_id, channel, cq_id);
@@ -85,10 +70,7 @@ const tt_cxy_pair& dispatch_core_manager::mux_core(chip_id_t device_id, uint16_t
 
 bool dispatch_core_manager::is_mux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.mux.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.mux.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::mux_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
@@ -109,7 +91,8 @@ const tt_cxy_pair& dispatch_core_manager::demux_core(chip_id_t device_id, uint16
         return assignment.demux.value();
     }
     // demux interface is on the MMIO device
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     CoreCoord demux_coord = this->get_next_available_dispatch_core(mmio_device_id);
     assignment.demux = tt_cxy_pair(mmio_device_id, demux_coord.x, demux_coord.y);
     log_dispatch_assignment("Demux", assignment.demux.value(), device_id, channel, cq_id);
@@ -118,10 +101,7 @@ const tt_cxy_pair& dispatch_core_manager::demux_core(chip_id_t device_id, uint16
 
 bool dispatch_core_manager::is_demux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.demux.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.demux.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::demux_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
@@ -143,8 +123,8 @@ const tt_cxy_pair& dispatch_core_manager::tunneler_core(
         return assignment.tunneler.value();
     }
 
-    auto [us_core, ds_core] =
-        tt::Cluster::instance().get_eth_tunnel_core(upstream_device_id, device_id, EthRouterMode::BI_DIR_TUNNELING);
+    auto [us_core, ds_core] = tt::tt_metal::MetalContext::instance().get_cluster().get_eth_tunnel_core(
+        upstream_device_id, device_id, EthRouterMode::BI_DIR_TUNNELING);
 
     assignment.tunneler = us_core;
     assignment.tunneler_d = ds_core;
@@ -171,7 +151,8 @@ const tt_cxy_pair& dispatch_core_manager::completion_queue_writer_core(
         return assignment.completion_queue_writer.value();
     }
     // Completion queue interface is on the MMIO device
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     CoreCoord completion_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
     assignment.completion_queue_writer =
         tt_cxy_pair(mmio_device_id, completion_queue_coord.x, completion_queue_coord.y);
@@ -189,10 +170,7 @@ const tt_cxy_pair& dispatch_core_manager::completion_queue_writer_core(
 bool dispatch_core_manager::is_completion_queue_writer_core_allocated(
     chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.completion_queue_writer.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.completion_queue_writer.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::dispatcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
@@ -200,7 +178,8 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_core(chip_id_t device_id, u
     if (assignment.dispatcher.has_value()) {
         return assignment.dispatcher.value();
     }
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     CoreCoord dispatcher_coord = this->get_next_available_dispatch_core(mmio_device_id);
     assignment.dispatcher = tt_cxy_pair(mmio_device_id, dispatcher_coord.x, dispatcher_coord.y);
     TT_ASSERT(
@@ -214,10 +193,7 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_core(chip_id_t device_id, u
 
 bool dispatch_core_manager::is_dispatcher_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.dispatcher.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.dispatcher.has_value();
 }
 
 bool dispatch_core_manager::is_dispatcher_s_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
@@ -247,8 +223,9 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(chip_id_t device_id,
         return assignment.dispatcher_s.value();
     }
     CoreCoord dispatcher_s_coord;
-    if (this->get_dispatch_core_type(device_id) == CoreType::WORKER) {
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+    if (this->get_dispatch_core_type() == CoreType::WORKER) {
+        chip_id_t mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
         if (mmio_device_id == device_id) {
             // dispatch_s is on the same tensix core as dispatch_hd
             dispatcher_s_coord = this->dispatcher_core(device_id, channel, cq_id);
@@ -264,13 +241,9 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(chip_id_t device_id,
     return assignment.dispatcher_s.value();
 }
 
-CoreType dispatch_core_manager::get_dispatch_core_type(chip_id_t device_id) {
-    return this->dispatch_core_config_by_device[device_id].get_core_type();
-}
+CoreType dispatch_core_manager::get_dispatch_core_type() { return this->dispatch_core_config_.get_core_type(); }
 
-DispatchCoreConfig dispatch_core_manager::get_dispatch_core_config(chip_id_t device_id) {
-    return this->dispatch_core_config_by_device[device_id];
-}
+DispatchCoreConfig dispatch_core_manager::get_dispatch_core_config() { return this->dispatch_core_config_; }
 
 void dispatch_core_manager::add_dispatch_core_to_device(chip_id_t device_id, const CoreCoord& core) {
     // TODO: remove this API, we should read the core descriptor once, should not have backdoors like this to add cores
@@ -281,7 +254,7 @@ void dispatch_core_manager::add_dispatch_core_to_device(chip_id_t device_id, con
 }
 
 std::vector<CoreCoord> dispatch_core_manager::get_all_logical_dispatch_cores(chip_id_t device_id) {
-    return tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_by_device[device_id]);
+    return tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_);
 }
 
 // private methods
@@ -294,16 +267,26 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) {
     this->dispatch_core_assignments.clear();
     this->available_dispatch_cores_by_device.clear();
-    this->dispatch_core_config_by_device.clear();
-    for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
+    this->dispatch_core_config_ = dispatch_core_config;
+    for (chip_id_t device_id = 0; device_id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
+         device_id++) {
         std::list<CoreCoord>& logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
         for (const CoreCoord& logical_dispatch_core :
              tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, dispatch_core_config)) {
             logical_dispatch_cores.push_back(logical_dispatch_core);
         }
 
-        this->dispatch_core_config_by_device[device_id] = dispatch_core_config;
         this->num_hw_cqs = num_hw_cqs;
+
+        // When running Multiple CQs using Ethernet Dispatch, we may need more dispatch cores than those allocated in
+        // the core descriptor (ex: 2 CQs on N300 need 10 dispatch cores and the core descriptor only allocates 6).
+        // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
+        if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+            for (const auto& idle_eth_core :
+                 tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
+                add_dispatch_core_to_device(device_id, idle_eth_core);
+            }
+        }
     }
 }
 
@@ -329,9 +312,10 @@ void dispatch_core_manager::log_dispatch_assignment(
         "Allocated {} Core: {}({}) for Device {} Channel {} CQ ID {}",
         name,
         cxy.str(),
-        tt::Cluster::instance()
+        tt::tt_metal::MetalContext::instance()
+            .get_cluster()
             .get_virtual_coordinate_from_logical_coordinates(
-                cxy, force_ethernet ? CoreType::ETH : get_dispatch_core_type(cxy.chip))
+                cxy, force_ethernet ? CoreType::ETH : get_dispatch_core_type())
             .str(),
         device_id,
         channel,

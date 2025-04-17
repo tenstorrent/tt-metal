@@ -69,14 +69,14 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src_no_mul_cb_index,
         (uint32_t)src_mul_cb_index,
         (uint32_t)src_scalar_cb_index,
         (uint32_t)src_is_dram,
         (uint32_t)bfloat16_scalar};
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_no_mul_cb_index, (std::uint32_t)output_mul_cb_index, (std::uint32_t)dst_is_dram};
 
@@ -121,12 +121,14 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
     SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_rows, half_row_size, 0});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
+                                              const void* operation,
                                               const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 

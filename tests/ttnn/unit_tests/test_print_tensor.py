@@ -105,4 +105,24 @@ def test_print(device, dtype, layout, profile, deallocate):
 def test_print_0d(device):
     torch_tensor = torch.ones((), dtype=torch.bfloat16)
     tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-    assert str(tensor) == "ttnn.Tensor([ 1.00000], shape=Shape([]), dtype=DataType::BFLOAT16, layout=Layout::TILE)"
+    assert str(tensor) == "ttnn.Tensor( 1.00000, shape=Shape([]), dtype=DataType::BFLOAT16, layout=Layout::TILE)"
+
+
+def test_print_short_profile_limit(device):
+    ttnn.set_printoptions(profile="short")  # This is the default profile
+    torch_tensor = torch.arange(16, dtype=torch.bfloat16).reshape(4, 4)
+    tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+
+    tensor_as_string = str(tensor)
+
+    # Check that ellipsis is NOT used for dimensions of size 4 with short profile
+    assert "..." not in tensor_as_string
+
+    # Check the full string representation
+    expected_string = (
+        "ttnn.Tensor([[ 0.00000,  1.00000,  2.00000,  3.00000],\n"
+        "             [ 4.00000,  5.00000,  6.00000,  7.00000],\n"
+        "             [ 8.00000,  9.00000, 10.00000, 11.00000],\n"
+        "             [12.00000, 13.00000, 14.00000, 15.00000]], shape=Shape([4, 4]), dtype=DataType::BFLOAT16, layout=Layout::TILE)"
+    )
+    assert tensor_as_string == expected_string

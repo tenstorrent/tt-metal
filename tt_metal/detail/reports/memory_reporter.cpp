@@ -2,15 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <memory_reporter.hpp>
-#include "tt_metal/detail/reports/report_utils.hpp"
 #include <allocator.hpp>
 #include <device.hpp>
-#include <program_impl.hpp>
-
-#include <algorithm>
+#include <memory_reporter.hpp>
+#include <stdint.h>
 #include <filesystem>
+#include <map>
+#include <memory>
 #include <utility>
+
+#include "buffer_constants.hpp"
+#include "tt_metal/detail/reports/report_utils.hpp"
 
 namespace fs = std::filesystem;
 

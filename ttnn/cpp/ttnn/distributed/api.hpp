@@ -19,7 +19,8 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t num_command_queues,
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
     const std::optional<MeshCoordinate>& offset = std::nullopt,
-    const std::vector<int>& physical_device_ids = {});
+    const std::vector<int>& physical_device_ids = {},
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device);
 
@@ -43,6 +44,7 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const tt::tt_metal::
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id);
 
 // Returns true has MultiDeviceHost/MultiDevice Storage
+bool is_host_mesh_tensor(const Tensor& tensor);
 bool is_multi_device_tensor(const Tensor& tensor);
 
 // Returns true if tensor has MultiDevice storage type and is allocated on a mesh buffer.

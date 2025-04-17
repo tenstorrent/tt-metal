@@ -28,7 +28,6 @@ void kernel_main() {
     // padding args (READER)
     const uint32_t last_block_w = get_arg_val<uint32_t>(rt_args_idx++);
     // padding args (WRITER)
-    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t out_last_subblock_h = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t padded_block_tiles_h_skip = get_arg_val<uint32_t>(rt_args_idx++);
@@ -107,6 +106,9 @@ void kernel_main() {
 #endif
 #else
     rt_args_idx += 2;  // Skip over placeholders
+#endif
+#ifndef OUT_SHARDED
+    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
 #endif
 
     constexpr bool fuse_op = (bool)get_compile_time_arg_val(31);

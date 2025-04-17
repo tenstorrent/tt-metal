@@ -244,6 +244,41 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::QUANT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::QUANT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::REQUANT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::REQUANT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::DEQUANT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::DEQUANT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::MAXIMUM:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::MAXIMUM;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::MINIMUM:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::MINIMUM;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -257,7 +292,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             } else {
                 return {"add_binary_tile_init();", "add_binary_tile"};
             }
-        case SUB: return {"sub_binary_tile_init();", "sub_binary_tile"};
+        case SUB:
+            if (dtype == DataType::INT32) {
+                return {"sub_int32_tile_init();", "sub_int32_tile"};
+            } else {
+                return {"sub_binary_tile_init();", "sub_binary_tile"};
+            }
         case MUL: return {"mul_binary_tile_init();", "mul_binary_tile"};
         case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
@@ -267,6 +307,13 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case BITWISE_AND: return {"binary_bitwise_tile_init();", "and_binary_tile"};
         case BITWISE_OR: return {"binary_bitwise_tile_init();", "or_binary_tile"};
         case BITWISE_XOR: return {"binary_bitwise_tile_init();", "xor_binary_tile"};
+        case MAXIMUM: return {"binary_max_tile_init();", "binary_max_tile"};
+        case MINIMUM: return {"binary_min_tile_init();", "binary_min_tile"};
+        case QUANT: return {"quant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "quant_tile"};
+        case REQUANT:
+            return {"requant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "requant_tile"};
+        case DEQUANT:
+            return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -291,13 +338,14 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
     tt::stl::Span<const unary::UnaryWithParam> activations,
-    std::string_view operand) {
+    std::string_view operand,
+    std::optional<DataType> dtype) {
     defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = std::accumulate(
         activations.begin(),
         activations.end(),
         std::string{},
         [&](std::string&& process, const unary::UnaryWithParam& a) {
-            const auto& [op_init, op_func] = unary::utils::get_op_init_and_func(a.op_type, a.params, "i");
+            const auto& [op_init, op_func] = unary::utils::get_op_init_and_func(a.op_type, a.params, "i", dtype);
             process += op_init;
             process += op_func;
             unary::utils::update_macro_defines(a.op_type, defines);
@@ -305,7 +353,39 @@ void add_activation_defines(
         });
 }
 
+std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const bool is_sfpu_op) {
+    std::map<std::string, std::string> defines;
+    if (is_sfpu_op && dtype == DataType::FLOAT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
+        defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
+    } else if (is_sfpu_op && dtype == DataType::INT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
+        defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
+    } else {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+    }
+    return defines;
+}
+
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
+
+uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op) {
+    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
+    if ((dtype == DataType::FLOAT32) || is_quant_op) {
+        return std::bit_cast<uint32_t>(scalar);
+    }
+    if (dtype == DataType::INT32) {
+        return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+    }
+    return pack_two_bfloat16_into_uint32({scalar, scalar});
+}
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>);

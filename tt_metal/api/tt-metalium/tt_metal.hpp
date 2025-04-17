@@ -3,24 +3,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <vector>
+#include <stdint.h>
+#include <cstddef>
 #include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "umd/device/tt_soc_descriptor.h"
-#include "hostdevcommon/common_values.hpp"
-#include "core_coord.hpp"
-#include "dispatch_core_manager.hpp"
-#include "buffer.hpp"
-#include "profiler.hpp"
-#include "llrt/tt_cluster.hpp"
+#include <hostdevcommon/common_values.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/profiler_types.hpp>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+
+namespace tt {
+namespace tt_metal {
+enum class FabricConfig : uint32_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
-inline namespace v0 {
-class Program;
 class Buffer;
 class IDevice;
-}  // namespace v0
+class Program;
 
 namespace detail {
 
@@ -39,7 +52,8 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
-    const std::vector<uint32_t>& l1_bank_remap = {});
+    const std::vector<uint32_t>& l1_bank_remap = {},
+    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
 void CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
 
@@ -220,7 +234,10 @@ void ProfilerSync(ProfilerSyncState state);
  * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
  * */
 void DumpDeviceProfileResults(
-    IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState = ProfilerDumpState::NORMAL);
+    IDevice* device,
+    std::vector<CoreCoord>& worker_cores,
+    ProfilerDumpState = ProfilerDumpState::NORMAL,
+    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 /**
  * Traverse all cores and read device side profiler data and dump results into device side CSV log
@@ -232,7 +249,7 @@ void DumpDeviceProfileResults(
  * | device        | The device holding the program being profiled.    | Device * |                           | True |
  * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
  * */
-void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState = ProfilerDumpState::NORMAL);
+void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState = ProfilerDumpState::NORMAL, const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 /**
  * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module

@@ -97,8 +97,8 @@ DatacopyParams setup_datacopy(
     auto all_gather_output_buffer = all_gather_output_tensor.buffer();
     auto datacopy_output_buffer = datacopy_output_tensor.buffer();
 
-    bool all_gather_output_is_dram = all_gather_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool datacopy_output_is_dram = datacopy_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool all_gather_output_is_dram = all_gather_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool datacopy_output_is_dram = datacopy_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t last_output_page_offset = (ring_size - 1) * tensor_slicer.output_page_offset;
     uint32_t num_rows = input_tensor.get_padded_shape()[2] / tile_size;
@@ -277,6 +277,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
                     config,
                     untilize_out,
                     matmul_fused_op_signaler,
+                    std::nullopt,
                     std::nullopt);
                 matmul_override_runtime_arguments_callback =
                     matmul_program_with_callbacks->override_runtime_arguments_callback;

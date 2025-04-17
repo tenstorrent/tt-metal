@@ -1,0 +1,35 @@
+name: "Find changed files"
+description: "Find which files have changed on this branch (compared to main)"
+
+outputs:
+  cmake-changed:
+    value: ${{ steps.find-changed-files.outputs.cmake-changed }}
+  clang-tidy-config-changed:
+    value: ${{ steps.find-changed-files.outputs.clang-tidy-config-changed }}
+  tt-metalium-changed:
+    value: ${{ steps.find-changed-files.outputs.tt-metalium-changed }}
+  tt-nn-changed:
+    value: ${{ steps.find-changed-files.outputs.tt-nn-changed }}
+  tt-metalium-or-tt-nn-tests-changed:
+    value: ${{ steps.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed }}
+  tt-train-changed:
+    value: ${{ steps.find-changed-files.outputs.tt-train-changed }}
+  submodule-changed:
+    value: ${{ steps.find-changed-files.outputs.submodule-changed }}
+  any-code-changed:
+    value: ${{ steps.find-changed-files.outputs.any-code-changed }}
+  docs-changed:
+    value: ${{ steps.find-changed-files.outputs.docs-changed }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: false
+    - name: Find changed files
+      id: find-changed-files
+      shell: bash
+      run: .github/scripts/utils/find-changed-files.sh

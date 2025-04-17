@@ -95,17 +95,29 @@ def manage_config(name, value):
 
 
 from ttnn._ttnn.multi_device import (
+    CppMeshToTensor,
+    CppTensorToMesh,
+    Shard2dConfig,
+    Concat2dConfig,
     get_device_tensor,
     get_device_tensors,
     aggregate_as_tensor,
+    replicate_tensor_to_mesh_mapper,
+    shard_tensor_to_mesh_mapper,
+    shard_tensor_to_2d_mesh_mapper,
+    concat_mesh_to_tensor_composer,
+    concat_2d_mesh_to_tensor_composer,
+    aggregate_tensor,
+    distribute_tensor,
     get_t3k_physical_device_ids_ring,
 )
 
 from ttnn._ttnn.events import (
     MeshEvent,
-    create_event,
     record_event,
     wait_for_event,
+    record_mesh_event,
+    wait_for_mesh_event,
 )
 
 from ttnn._ttnn.operations.trace import (
@@ -123,6 +135,8 @@ from ttnn._ttnn.operations.trace import (
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
+
+from ttnn._ttnn.fabric import FabricConfig, initialize_fabric_config
 
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
@@ -175,6 +189,7 @@ from ttnn.types import (
     MeshShape,
     MeshCoordinate,
     MeshCoordinateRange,
+    MeshCoordinateRangeSet,
     QueueId,
     UnaryWithParam,
     UnaryOpType,
@@ -194,8 +209,10 @@ from ttnn.device import (
     disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
+    synchronize_mesh_device,
     dump_device_memory_state,
     get_memory_view,
+    get_max_worker_l1_unreserved_size,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -230,6 +247,7 @@ from ttnn.core import (
     get_memory_config,
     light_metal_begin_capture,
     light_metal_end_capture,
+    LightMetalReplay,
     create_sharded_memory_config,
     create_sharded_memory_config_,
     dump_memory_config,
@@ -279,6 +297,7 @@ sub = ttnn.subtract
 sub_ = ttnn.subtract_
 mul = ttnn.multiply
 mul_ = ttnn.multiply_
+div_ = ttnn.divide_
 
 
 # TODO: pybind the overloaded operators below
@@ -336,8 +355,14 @@ from ttnn.operations.conv2d import (
     get_conv_output_dim,
     prepare_conv_weights,
     prepare_conv_bias,
+    Conv2dSliceConfig,
+    Conv2dSliceHeight,
+    Conv2dSliceWidth,
 )
-from ttnn.operations.conv1d import Conv1d, Conv1dConfig
+
+from ttnn._ttnn.operations.experimental import Conv3dConfig
+
+Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
 

@@ -14,7 +14,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from loguru import logger
 
 import models.experimental.bloom_old.bloom_utils as bloom_utils
-import models.experimental.bloom_old.tt.bloom_attention as bloom_attention
 import models.experimental.bloom_old.tt.bloom_block as bloom_block
 
 

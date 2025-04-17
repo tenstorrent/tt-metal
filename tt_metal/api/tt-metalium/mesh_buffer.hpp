@@ -4,12 +4,19 @@
 
 #pragma once
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device.hpp"
-#include "mesh_device_view.hpp"
-#include "shape2d.hpp"
+#include <stdint.h>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <variant>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/shape2d.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -27,7 +34,7 @@ struct DeviceLocalBufferConfig {
     std::optional<ShardSpecBuffer> shard_parameters;
 
     // The direction in which memory for this buffer is allocated.
-    bool bottom_up = false;
+    std::optional<bool> bottom_up;
 };
 
 // Specifies MeshBuffer that is replicated across the virtual mesh.
@@ -99,6 +106,10 @@ public:
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
     std::shared_ptr<Buffer> get_device_buffer(const MeshCoordinate& device_coord) const;
+
+    // TODO: Remove this method, once there is no need to interop MeshBuffer with Buffer.
+    std::shared_ptr<Buffer> get_reference_buffer() const;
+
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
     std::pair<bool, bool> replicated_dims() const;
@@ -156,6 +167,24 @@ private:
     struct DeallocatedState {};
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
+};
+
+class AnyBuffer {
+public:
+    AnyBuffer() = default;
+    static AnyBuffer create(const tt::tt_metal::ShardedBufferConfig& config);
+    static AnyBuffer create(const tt::tt_metal::InterleavedBufferConfig& config);
+
+    Buffer* get_buffer() const;
+    bool is_mesh_buffer() const;
+    std::shared_ptr<MeshBuffer> get_mesh_buffer() const;
+
+private:
+    AnyBuffer(std::shared_ptr<Buffer> buffer);
+    AnyBuffer(std::shared_ptr<MeshBuffer> buffer);
+
+    Buffer* buffer_ = nullptr;
+    std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>> holder_;
 };
 
 }  // namespace tt::tt_metal::distributed

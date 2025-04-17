@@ -2,14 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <boost/move/utility_core.hpp>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <cstddef>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <utility>
+#include <vector>
 
-#include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
-#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -105,6 +123,9 @@ TEST_F(MeshEventsTestT3000, ShardedAsyncIO) {
 }
 
 TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     uint32_t num_iters = 5;
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
@@ -114,9 +135,13 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
 
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
+    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
     auto mesh_workload = CreateMeshWorkload();
-    MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, mesh_device_->num_cols() - 1});
-    MeshCoordinateRange devices_1(MeshCoordinate{1, 0}, MeshCoordinate{1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_0(
+        MeshCoordinate{0, 0}, MeshCoordinate{num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange devices_1(
+        MeshCoordinate{num_rows_in_workload, 0},
+        MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
 
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), devices_0);
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), devices_1);
@@ -166,7 +191,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
                         dst_vec,
                         output_bufs[col_idx * worker_grid_size.y + row_idx],
                         device_coord);
-                    if (device_coord[0] == 0) {
+                    if (device_coord[0] <= num_rows_in_workload - 1) {
                         for (int i = 0; i < dst_vec.size(); i++) {
                             EXPECT_EQ(dst_vec[i].to_float(), (2 * iter + 5));
                         }
@@ -182,6 +207,9 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
 }
 
 TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     uint32_t NUM_TILES = 1000;
     uint32_t num_iterations = 20;
     int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
@@ -231,6 +259,79 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
     }
     Finish(mesh_device_->mesh_command_queue(0));
     Finish(mesh_device_->mesh_command_queue(1));
+}
+
+TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
+    // Reads and writes on 2 CQs
+    auto& write_cq = mesh_device_->mesh_command_queue(0);
+    auto& read_cq = mesh_device_->mesh_command_queue(1);
+
+    uint32_t num_tiles = 1024;
+    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t dram_buffer_size = single_tile_size * num_tiles;
+
+    constexpr uint32_t NUM_ITERS = 500;
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = dram_buffer_size,
+        .buffer_type = tt_metal::BufferType::DRAM,
+        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        .bottom_up = true};
+    ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
+    MeshCoordinateRange devices_0(mesh_device_->shape());
+
+    uint32_t num_devices = mesh_device_->num_devices();
+
+    // Read and write different data from the same buffer across iterations
+    auto buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+    // Initialize containers to store input and output data
+    std::vector<std::vector<uint32_t>> input_shard_data = {};
+    std::vector<std::vector<MeshCommandQueue::ShardDataTransfer>> read_shards = {};
+    std::vector<std::vector<uint32_t>> output_shard_data = {};
+
+    for (int i = 0; i < NUM_ITERS; i++) {
+        // Initialize different input data across iterations
+        input_shard_data.push_back(std::vector<uint32_t>(dram_buffer_size / sizeof(uint32_t)));
+        std::iota(input_shard_data.back().begin(), input_shard_data.back().end(), i);
+        // Initialize ShardDataTransfer objects for reads across iterations and allocate
+        // output buffers on host
+        read_shards.push_back({});
+        for (const auto& device_coord : devices_0) {
+            output_shard_data.push_back(std::vector<uint32_t>(input_shard_data.back().size()));
+            read_shards.back().push_back(MeshCommandQueue::ShardDataTransfer{
+                .shard_coord = device_coord,
+                .host_data = output_shard_data.back().data(),
+            });
+        }
+    }
+
+    // Events signalling read and write completion
+    std::vector<MeshEvent> write_events;
+    std::vector<MeshEvent> read_events;
+
+    for (int i = 0; i < NUM_ITERS; i++) {
+        if (i > 0) {
+            // Wait for read to complete before writing, since the same
+            // buffer is used across iterations
+            EnqueueWaitForEvent(write_cq, read_events.back());
+        }
+        EnqueueWriteMeshBuffer(write_cq, buffer, input_shard_data[i], true);
+        write_events.push_back(EnqueueRecordEventToHost(write_cq));
+        // Wait for write to complete before reading
+        EnqueueWaitForEvent(read_cq, write_events.back());
+        read_cq.enqueue_read_shards(read_shards[i], buffer, false);
+        read_events.push_back(EnqueueRecordEventToHost(read_cq));
+    }
+
+    // Stall on read and write CQs before data verification
+    Finish(write_cq);
+    Finish(read_cq);
+
+    uint32_t idx = 0;
+    for (auto& dst_vec : output_shard_data) {
+        EXPECT_EQ(dst_vec, input_shard_data[idx / num_devices]);
+        idx++;
+    }
 }
 
 }  // namespace

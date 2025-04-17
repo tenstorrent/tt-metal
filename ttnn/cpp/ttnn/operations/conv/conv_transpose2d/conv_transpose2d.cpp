@@ -130,7 +130,7 @@ Result conv_transpose2d(
         .input_hw = {input_height, input_width},
         .window_hw = {kernel_size[0], kernel_size[1]},
         .stride_hw = {stride[0], stride[1]},
-        .pad_hw = {padding[0], padding[1]},
+        .padding = sliding_window::get_pair_n4_padding(padding),
         .output_pad_hw = {output_padding[0], output_padding[1]},
         .dilation_hw = {dilation[0], dilation[1]},
         .is_transpose = true};
@@ -294,7 +294,8 @@ Result conv_transpose2d(
             device,
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
-            input_width);
+            input_width,
+            bias_tensor.has_value());
     }
     if (mm_conv) {
         input_tensor_post_tm = ttnn::to_layout(
@@ -338,13 +339,12 @@ Result conv_transpose2d(
         out_channels,
         groups,
         conv_config.output_layout == Layout::ROW_MAJOR,
-        conv_config.activation == "relu",
+        conv_config.activation,
         opt_conv_op_parallel_config,
         opt_conv_op_block_config,
         conv_out_memory_config,
         conv_config.dtype,
         {batch_size, input_height, input_width, in_channels},
-        conv_config.input_channels_alignment == 16,
         compute_config,
         conv_config.enable_act_double_buffer,
         conv_config.enable_split_reader,

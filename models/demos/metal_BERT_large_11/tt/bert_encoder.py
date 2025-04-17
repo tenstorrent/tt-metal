@@ -5,7 +5,6 @@
 
 import torch
 from typing import Optional
-from functools import partial
 
 import ttnn
 from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel
@@ -175,6 +174,7 @@ class TtBertEncoder:
             bias=self.mha_beta,
             program_config=self.mha_ln_program_config,
             memory_config=self.model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         return mha_out_add_and_norm
 
@@ -187,6 +187,7 @@ class TtBertEncoder:
             bias=self.ffn_beta,
             program_config=self.ffn_ln_program_config,
             memory_config=self.model_config["OP11_LAYERNORM_OUTPUT_MEMCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         return ffn_out_add_and_norm
 

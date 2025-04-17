@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 
 void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;

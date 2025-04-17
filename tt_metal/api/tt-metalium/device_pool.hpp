@@ -4,20 +4,24 @@
 
 #pragma once
 
+#include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include "assert.hpp"
-#include "device.hpp"
-#include "dispatch_core_common.hpp"
-#include "span.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "control_plane.hpp"
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt {
 namespace tt_metal::detail {
@@ -46,7 +50,8 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         const tt_metal::DispatchCoreConfig& dispatch_core_config,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {}) noexcept;
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE) noexcept;
 
     tt_metal::IDevice* get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
@@ -57,14 +62,13 @@ public:
     void unregister_worker_thread_for_device(tt_metal::IDevice* device);
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
 
-    tt::tt_fabric::ControlPlane* get_control_plane() const;
-
 private:
     ~DevicePool();
     DevicePool();
     uint8_t num_hw_cqs;
     size_t l1_small_size;
     size_t trace_region_size;
+    size_t worker_l1_size;
     std::vector<uint32_t> l1_bank_remap;
     bool using_fast_dispatch;
     std::mutex lock;
@@ -79,21 +83,19 @@ private:
     bool skip_remote_devices;
     std::unordered_set<uint32_t> firmware_built_keys;
 
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
-
     // Determine which CPU cores the worker threads need to be placed on for each device
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map;
     std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map;
     void init_firmware_on_active_devices() const;
     void init_profiler_devices() const;
     void activate_device(chip_id_t id);
-    void initialize_device(tt_metal::IDevice* dev) const;
+    // Initialize state on the host for this device
+    void initialize_host(tt_metal::IDevice* dev) const;
+    // Initialize state for activated devices
+    void initialize_active_devices() const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
-    void wait_for_fabric_master_router_sync() const;
+    void wait_for_fabric_router_sync() const;
     tt_metal::IDevice* get_device(chip_id_t id) const;
-
-    // Fabric setup helper functions
-    void initialize_control_plane();
 
     static DevicePool* _inst;
 };

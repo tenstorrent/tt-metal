@@ -13,7 +13,8 @@ def get_xml_file_root_element_tree(filepath):
     root_element_tree = XMLParse(filepath)
     root_element = root_element_tree.getroot()
 
-    assert root_element.tag == "testsuites"
+    # For ctest, the junit XML root element tag is <testsuite> instead of <testsuites>
+    assert root_element.tag in ["testsuite", "testsuites"]
 
     return root_element_tree
 

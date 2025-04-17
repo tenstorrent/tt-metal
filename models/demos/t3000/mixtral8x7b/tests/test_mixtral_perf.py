@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
 import pytest
 
@@ -19,7 +18,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import profiler, enable_persistent_kernel_cache
+from models.utility_functions import profiler
 
 
 class Emb(torch.nn.Module):
@@ -354,9 +353,7 @@ def run_inference_prefill(tt_model, model_args, prefill_seqlen, mesh_device, pt_
 
         # Device sync to get proper e2e timing
         profiler.start(f"e2e_prefill_inference_sync_{batch_id}")
-        devices = mesh_device.get_devices()
-        for device in devices:
-            ttnn.synchronize_device(device)
+        ttnn.synchronize_device(mesh_device)
         profiler.end(f"e2e_prefill_inference_sync_{batch_id}")
 
 

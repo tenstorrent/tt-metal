@@ -1,4 +1,4 @@
 LightMetalEndCapture
 ====================
 
-.. doxygenfunction:: tt::tt_metal::v0::LightMetalEndCapture
+.. doxygenfunction:: tt::tt_metal::LightMetalEndCapture
