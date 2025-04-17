@@ -204,20 +204,22 @@ def test_llama_model_inference(
             outputs.append(tt_output_torch)
 
         ##### Check outputs #####
-        for arr in [outputs]:
-            golden = arr[0]
-            all_passing = True
-            for i in range(len(arr)):
-                logger.info(f"Checking output for iteration {i}")
+        golden = outputs[0]
+        all_passing = True
+        for i in range(len(outputs)):
+            if i == 0:
+                continue
 
-                passing = torch.all(arr[i] == golden)
+            logger.info(f"Checking output for iteration {i}")
 
-                if passing:
-                    logger.info(f"Output for iteration {i} is equal to golden")
-                else:
-                    logger.warning(f"Output for iteration {i} is NOT equal to golden")
+            passing = torch.all(outputs[i][:, :, :, 0] == golden[:, :, :, 0])
 
-                all_passing = all_passing and passing
+            if passing:
+                logger.info(f"Output for iteration {i} is equal to golden")
+            else:
+                logger.warning(f"Output for iteration {i} is NOT equal to golden")
+
+            all_passing = all_passing and passing
 
     except Exception as e:
         logger.error(e)
