@@ -37,6 +37,7 @@ class TtYolov10_Conv2D:
         config_override=None,
         auto_shard=False,
         deallocate_activation=False,
+        act_block_h_override=0,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -76,6 +77,7 @@ class TtYolov10_Conv2D:
             activation=activation,
             enable_subblock_padding=False,
             output_layout=ttnn.TILE_LAYOUT,
+            act_block_h_override=act_block_h_override,
         )
         if auto_shard:
             self.conv_config.shard_layout = None
@@ -86,13 +88,11 @@ class TtYolov10_Conv2D:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
         if "bias" in conv_pth:
-            bias = ttnn.from_device(conv_pth.bias)
-            self.bias = bias
+            self.bias = conv_pth.bias
         else:
             self.bias = None
 
-        weight = ttnn.from_device(conv_pth.weight)
-        self.weight = weight
+        self.weight = conv_pth.weight
 
     def __call__(self, x):
         if self.is_detect:
@@ -107,8 +107,8 @@ class TtYolov10_Conv2D:
             batch_size = self.conv.batch_size
             input_height = self.conv.input_height
             input_width = self.conv.input_width
-
-        [x, [output_height, output_width]] = ttnn.conv2d(
+        print("Input Shape = {} x {} x {} x {}".format(batch_size, input_height, input_width, self.in_channels))
+        [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -125,8 +125,9 @@ class TtYolov10_Conv2D:
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,
-            return_weights_and_bias=False,
+            return_weights_and_bias=True,
         )
+        print("Output Shape = {} x {} x {} x {}".format(batch_size, output_height, output_width, self.out_channels))
         return x
 
 
@@ -146,6 +147,7 @@ class Conv:
         shard_layout=None,
         activation="",
         deallocate_activation=False,
+        act_block_h_override=0,
     ):
         self.enable_identity = enable_identity
         self.enable_act = enable_act
@@ -163,6 +165,7 @@ class Conv:
             shard_layout=shard_layout,
             activation=activation,
             deallocate_activation=deallocate_activation,
+            act_block_h_override=act_block_h_override,
         )
 
     def __call__(self, x):

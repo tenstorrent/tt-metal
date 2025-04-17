@@ -546,7 +546,7 @@ def test_yolov10x(use_weights_from_ultralytics, device, reset_seeds):
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
     torch_output = torch_model(torch_input)
-    parameters = create_yolov10x_model_parameters(torch_model, torch_input, device)
+    parameters = create_yolov10x_model_parameters(torch_model, torch_input, None)
 
     torch_model_output = torch_model(torch_input)[0]
     ttnn_module = TtnnYolov10(
@@ -554,7 +554,12 @@ def test_yolov10x(use_weights_from_ultralytics, device, reset_seeds):
         parameters=parameters,
         conv_pt=parameters,
     )
-    ttnn_output = ttnn_module(ttnn_input)
-    ttnn_output = ttnn.to_torch(ttnn_output)[0]
+    import time
 
+    for x in range(10):
+        start = time.time()
+        ttnn_output = ttnn_module(ttnn_input)
+        ttnn_output = ttnn.to_torch(ttnn_output)[0]
+        end = time.time()
+        print("Iteration", x, " took ", end - start, "seconds")
     assert_with_pcc(torch_model_output, ttnn_output, 0.999)
