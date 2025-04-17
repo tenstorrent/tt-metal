@@ -384,6 +384,19 @@ std::map<string, string> get_defines_impl(
     update_macro_defines(op_type, defines);
     return defines;
 }
+
+tt::tt_metal::KernelDescriptor::Defines get_defines_vec_impl(
+    UnaryOpType op_type,
+    const std::vector<float>& params,
+    const std::string& idst,
+    std::string init_def,
+    std::string func_def) {
+    std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, params, idst);
+    tt::tt_metal::KernelDescriptor::Defines defines = {
+        {init_def, op_init_and_name.first}, {func_def, op_init_and_name.second}};
+    update_macro_defines_vec(op_type, defines);
+    return defines;
+}
 }  // namespace
 
 bool get_op_approx_mode(UnaryOpType op_type) {
@@ -435,15 +448,24 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     TT_THROW("Unknown unary op: {}", name);
 }
 
-std::map<string, string> get_defines(
+tt::tt_metal::KernelDescriptor::Defines get_defines_vec(
     UnaryOpType op_type,
     const std::optional<std::vector<float>>& params,
     const std::string& id,
     const std::string& idst) {
     std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
-    return get_defines_impl(
+    return get_defines_vec_impl(
         op_type, params.has_value() ? params.value() : std::vector<float>{}, idst, init_def, func_def);
+}
+
+std::map<string, string> get_defines(
+    UnaryOpType op_type,
+    const std::optional<std::vector<float>>& params,
+    const std::string& id,
+    const std::string& idst) {
+    auto result = get_defines_vec(op_type, params, id, idst);
+    return std::map<string, string>(result.begin(), result.end());
 }
 
 std::pair<string, string> get_op_init_and_func(
@@ -470,6 +492,10 @@ std::map<string, string> get_block_defines(
 // update split eltwise ops include macros
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
     defines[get_macro_definition(op_type)] = "1";
+}
+
+void update_macro_defines_vec(UnaryOpType op_type, tt::tt_metal::KernelDescriptor::Defines& defines) {
+    defines.emplace_back(get_macro_definition(op_type), "1");
 }
 
 std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root) {

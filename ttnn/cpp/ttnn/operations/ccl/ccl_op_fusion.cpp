@@ -97,7 +97,7 @@ void MatmulFusedOpSignaler::init_all_gather(
 }
 
 void MatmulFusedOpSignaler::init_fused_op(
-    Program& program,
+    ProgramDescriptor& program,
     const IDevice* device,
     const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
     FusedOpSignalerMode fused_op_signaler_mode) {
@@ -107,16 +107,19 @@ void MatmulFusedOpSignaler::init_fused_op(
     this->fused_op_receiver_cores_noc.clear();
 
     // Visit the variant to handle CoreRange and CoreRangeSet differently
+    CoreRangeVector core_range_vector;
     std::visit(
         [&](auto& arg) {
             using T = std::decay_t<decltype(arg)>;
             if constexpr (std::is_same_v<T, CoreRange>) {
                 // Handle CoreRange
+                core_range_vector = {arg};
                 const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
                 for (auto& core : cores) {
                     this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
                 }
             } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                core_range_vector = arg.ranges();
                 // Handle CoreRangeSet
                 for (const auto& range : arg.ranges()) {
                     const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
@@ -129,8 +132,8 @@ void MatmulFusedOpSignaler::init_fused_op(
         core_range_to_signal);
 
     // Create the semaphores
-    this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
-    this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+    this->fused_op_receiver_signal_semaphores.push_back(program.add_semaphore(core_range_vector, 0));
+    this->fused_op_receiver_signal_semaphores.push_back(program.add_semaphore(core_range_vector, 0));
 
     // Set the number of fused op cores to signal
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();
@@ -138,7 +141,8 @@ void MatmulFusedOpSignaler::init_fused_op(
     initialized_fused_op = true;
 }
 
-void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(std::vector<uint32_t>& out_rt_args, bool use_in1_offset) {
+void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
+    tt::tt_metal::KernelDescriptor::CoreRuntimeArgs& out_rt_args, bool use_in1_offset) {
     TT_ASSERT(initialized_all_gather && initialized_fused_op, "MatmulFusedOpSignaler not initialized fully.");
 
     out_rt_args.push_back(static_cast<uint32_t>(this->num_transfers));

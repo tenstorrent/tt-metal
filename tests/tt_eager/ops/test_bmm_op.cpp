@@ -66,11 +66,11 @@ int main(int argc, char** argv) {
         Tensor b = ttnn::zeros(shapeb, DataType::BFLOAT16, Layout::TILE, *device);
         Tensor b1 = ttnn::zeros(shapeb1, DataType::BFLOAT16, Layout::TILE, *device);
 
-        Tensor mm = ttnn::operations::matmul::matmul(
+        Tensor mm = ttnn::prim::matmul(
                         a,
                         b,
                         /*bias=*/std::nullopt,
-                        ttnn::operations::matmul::Matmul{
+                        ttnn::operations::matmul::MatmulArgs{
                             /*program_config=*/std::nullopt,
                             /*bcast_batch=*/std::nullopt,
                             tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
                             /*user_fused_activation=*/std::nullopt,
                             /*user_run_batched=*/true})
                         .cpu();
-        Tensor mm1 = ttnn::operations::matmul::matmul(a, b1).cpu();
+        Tensor mm1 = ttnn::prim::matmul(a, b1).cpu();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

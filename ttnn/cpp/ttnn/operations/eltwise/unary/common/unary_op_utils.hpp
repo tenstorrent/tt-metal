@@ -28,6 +28,12 @@ std::map<std::string, std::string> get_defines(
     const std::string& id = "0",
     const std::string& idst = "0");
 
+tt::tt_metal::KernelDescriptor::Defines get_defines_vec(
+    UnaryOpType op_type,
+    const std::optional<std::vector<float>>& params = std::nullopt,
+    const std::string& id = "0",
+    const std::string& idst = "0");
+
 std::map<std::string, std::string> get_block_defines(
     const std::vector<UnaryWithParam>& op_chain, const std::string& block_id = "0", const std::string& idst = "0");
 
@@ -75,6 +81,7 @@ bool is_parametrized_type(T val) {
 }
 
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
+void update_macro_defines_vec(UnaryOpType op_type, tt::tt_metal::KernelDescriptor::Defines& defines);
 
 std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root);
 
