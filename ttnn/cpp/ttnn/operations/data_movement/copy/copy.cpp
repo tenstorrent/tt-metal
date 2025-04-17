@@ -34,11 +34,8 @@ ttnn::Tensor AssignOperation::invoke(
     const Tensor& input,
     const MemoryConfig& output_mem_config,
     std::optional<const DataType> output_dtype,
-    // const std::optional<CoreRangeSet>& sub_core_grids,
     std::optional<Tensor> optional_output_tensor) {
     return operation::run(
-               //    CopyDeviceOperation{output_mem_config, output_dtype.value_or(input.get_dtype()), sub_core_grids,
-               //    std::nullopt},
                CopyDeviceOperation{output_mem_config, output_dtype.value_or(input.get_dtype()), std::nullopt},
                {input},
                {},

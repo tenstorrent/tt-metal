@@ -52,7 +52,6 @@ Example::
                const ttnn::Tensor& input_tensor,
                const DataType dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               //    const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
                const std::optional<ttnn::Tensor>& output_tensor,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, dtype, memory_config, output_tensor);
@@ -61,7 +60,6 @@ Example::
             py::arg("dtype"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            // py::arg("sub_core_grids") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
 
