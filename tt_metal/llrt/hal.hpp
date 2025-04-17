@@ -51,7 +51,8 @@ private:
     std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
-    bool supports_cbs_;
+    bool supports_cbs_ = false;
+    bool supports_receiving_multicast_cmds_ = false;
 
 public:
     HalCoreInfoType(
@@ -60,7 +61,8 @@ public:
         const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
         const std::vector<DeviceAddr>& mem_map_bases,
         const std::vector<uint32_t>& mem_map_sizes,
-        bool supports_cbs);
+        bool supports_cbs,
+        bool supports_receiving_multicast_cmds);
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalL1MemAddrType addr_type) const;
@@ -226,6 +228,8 @@ public:
 
     bool get_supports_cbs(uint32_t programmable_core_type_index) const;
 
+    bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
+
     uint32_t get_num_risc_processors() const;
 
     const HalJitBuildConfig& get_jit_build_config(
@@ -343,6 +347,10 @@ inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) cons
 
 inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_cbs_;
+}
+
+inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const {
+    return this->core_info_[programmable_core_type_index].supports_receiving_multicast_cmds_;
 }
 
 inline const HalJitBuildConfig& Hal::get_jit_build_config(
