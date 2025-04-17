@@ -26,6 +26,7 @@
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
@@ -78,8 +79,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     // For ethernet core, need to have smaller buffer at a different address
     if (is_eth_core) {
         l1_buffer_size = 1024;
-        l1_buffer_addr = MetalContext::instance().hal().get_dev_addr(
-            HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        l1_buffer_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     }
 
     tt_metal::InterleavedBufferConfig l1_config{
