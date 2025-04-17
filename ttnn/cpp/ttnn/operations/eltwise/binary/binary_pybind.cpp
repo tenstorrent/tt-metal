@@ -1939,11 +1939,10 @@ void py_module(py::module& module) {
         )doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_binary_composite_overload(
+    detail::bind_binary_unary_max_operation(
         module,
         ttnn::minimum,
-        R"doc(Computes minimum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(Computes minimum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
     detail::bind_binary_composite(
         module,
