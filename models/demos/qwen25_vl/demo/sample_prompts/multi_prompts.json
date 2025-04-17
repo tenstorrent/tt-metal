@@ -5,7 +5,7 @@
             "content": [
                 {
                     "type": "image",
-                    "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg"
+                    "image": "file://models/sample_data/house_in_field_1080p.jpg"
                 },
                 {
                     "type": "text",
