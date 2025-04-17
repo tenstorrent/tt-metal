@@ -129,7 +129,6 @@ def map_hf_to_meta_keys(loaded_weights):
                 expert_template_key = "model.layers.{layer}.block_sparse_moe.experts.{expert}." + ".".join(parts[6:])
                 if expert_template_key in hf_to_meta:
                     meta_state_dict[hf_to_meta[expert_template_key].format(layer=layer, expert=expert)] = tensor
-                pass
             elif template_key in hf_to_meta:
                 meta_state_dict[hf_to_meta[template_key].format(layer=layer)] = tensor
             else:
