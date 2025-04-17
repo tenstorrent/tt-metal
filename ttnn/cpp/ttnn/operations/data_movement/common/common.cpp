@@ -27,6 +27,7 @@ ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& shape) { return squeeze_shape_to_ND(shape, 4); }
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& shape) { return squeeze_shape_to_ND(shape, 3); }
 
+
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
     auto shape = tensor.get_logical_shape();
     auto rank = shape.rank();
@@ -54,12 +55,13 @@ ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
 ttnn::Shape unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     ttnn::SmallVector<uint32_t> shape_vector(n, 1);
     std::copy(shape.view().rbegin(), shape.view().rend(), shape_vector.rbegin());
-
     return ttnn::Shape(shape_vector);
 }
 
+
 ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape) { return unsqueeze_shape_to_ND(shape, 3); };
 ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape) { return unsqueeze_shape_to_ND(shape, 4); };
+
 
 ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     const auto input_rank = shape.rank();
@@ -71,6 +73,8 @@ ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uin
         return squeeze_shape_to_ND(shape, n);
     }
 }
+
+
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
     const uint32_t input_single_tile_size,
@@ -139,11 +143,11 @@ ttnn::Shape compute_padded_shape(
     }
 
     ttnn::SmallVector<uint32_t> output_shape_vec(logical_shape.rank());
-
     std::copy(logical_shape.cbegin(), logical_shape.cend(), output_shape_vec.begin());
 
     const std::array<uint32_t, 2> tile_shape = {tt::constants::TILE_WIDTH, tt::constants::TILE_HEIGHT};
     auto shapeit = tile_shape.rbegin();
+
     std::for_each(output_shape_vec.rbegin(), output_shape_vec.rbegin() + 2, [&shapeit](auto& x) {
         x = tt::round_up(x, *(shapeit++));
     });
