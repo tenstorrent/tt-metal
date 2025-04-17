@@ -919,7 +919,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // Capture conv_reader_indices_buffer to cache this with the program
     auto override_runtime_arguments_callback =
-        [cb_input, cb_output, has_bias, full_core_grid, weights_kernel_id, total_num_active_cores](
+        [cb_input,
+         cb_output,
+         has_bias,
+         full_core_grid,
+         weights_kernel_id,
+         total_num_active_cores,
+         conv_reader_indices_buffer](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -932,12 +938,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             auto src_buffer_b = input_tensors.at(1).buffer();
             auto dst_buffer = output_tensors.at(0).buffer();
 
-            auto weights_kernel_runtime_args = GetRuntimeArgs(program, weights_kernel_id);
+            auto& weights_kernel_runtime_args = GetRuntimeArgs(program, weights_kernel_id);
             for (uint32_t core_index = 0; core_index < total_num_active_cores; core_index++) {
                 uint32_t core_x = core_index % full_core_grid.x;
                 uint32_t core_y = core_index / full_core_grid.x;
 
-                auto this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
+                auto& this_core_weights_kernel_runtime_args = weights_kernel_runtime_args[core_x][core_y];
                 this_core_weights_kernel_runtime_args[1] = src_buffer_b->address();
                 if (has_bias) {
                     this_core_weights_kernel_runtime_args[2] = optional_input_tensors.at(0).value().buffer()->address();
