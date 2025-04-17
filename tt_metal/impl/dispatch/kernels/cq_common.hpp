@@ -35,9 +35,6 @@ FORCE_INLINE
 uint32_t round_up_pow2(uint32_t v, uint32_t pow2_size) { return (v + (pow2_size - 1)) & ~(pow2_size - 1); }
 
 FORCE_INLINE
-uint32_t div_up(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
-
-FORCE_INLINE
 uint32_t wrap_ge(uint32_t a, uint32_t b) {
     // Careful below: have to take the signed diff for 2s complement to handle the wrap
     // Below relies on taking the diff first then the compare to move the wrap
