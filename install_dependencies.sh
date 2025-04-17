@@ -213,6 +213,13 @@ install_gcc() {
     echo "Using g++ version: $(g++ --version | head -n1)"
 }
 
+install_sfpi() {
+    TEMP_DIR=$(mktemp -d)
+    wget -P $TEMP_DIR  https://github.com/tenstorrent/sfpi/releases/download/v6.9.0/sfpi-x86_64-Linux.deb
+    apt-get install -y $TEMP_DIR/sfpi-x86_64-Linux.deb
+    rm -rf $TEMP_DIR
+}
+
 # We don't really want to have hugepages dependency
 # This could be removed in the future
 
@@ -236,6 +243,7 @@ install() {
 	case "$mode" in
             runtime)
                 prep_ubuntu_runtime
+		install_sfpi
                 ;;
             build)
                 prep_ubuntu_build
