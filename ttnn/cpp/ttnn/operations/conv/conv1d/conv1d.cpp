@@ -11,7 +11,7 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 
 #include "tt-metalium/logger.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"

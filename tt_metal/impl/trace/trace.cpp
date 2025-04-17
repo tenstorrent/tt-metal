@@ -16,7 +16,7 @@
 #include "allocator_types.hpp"
 #include "assert.hpp"
 #include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "math.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 
