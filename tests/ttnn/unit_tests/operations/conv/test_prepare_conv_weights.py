@@ -11,59 +11,59 @@ import ttnn
 
 
 @pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, groups",
     (
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
         # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, None), HANGS!!
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 256}),
-        # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 32}),  Out of Memory!!
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 256}, 1),
+        # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 32}, 1),  Out of Memory!!
         # rn50 layer1
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
-        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
-        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
+        (8, 64, 64, 56, 1, 3, 1, 1, 1, 1, 0, True, None, 64),
+        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None, 1),
+        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None, 1),
         # rn50 layer2
-        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
-        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
-        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, {"act_block_h": 32}),
-        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
-        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
-        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
+        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None, 1),
+        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None, 1),
+        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, {"act_block_h": 32}, 1),
+        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None, 1),
+        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None, 1),
+        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None, 1),
         # rn50 layer3
-        (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
-        (16, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
-        (20, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
-        (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
-        (16, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
-        (20, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
+        (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None, 1),
+        (16, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None, 1),
+        (20, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None, 1),
+        (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None, 1),
+        (16, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None, 1),
+        (20, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None, 1),
         # rn50 layer4
-        (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
-        (16, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
-        (20, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
-        (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
-        (16, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
-        (20, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
+        (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None, 1),
+        (16, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None, 1),
+        (20, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None, 1),
+        (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None, 1),
+        (16, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None, 1),
+        (20, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None, 1),
         ## small test
-        (1, 64, 64, 8, 8, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 2, "grid_size": (2, 2)}),
-        (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 4, "grid_size": (2, 4)}),
-        # (1, 160, 160, 7, 7, 3, 3, 1, 1, 1, 1, False, None), sliding_window_op_infra/sliding_window.cpp:341: indices_length_last_core <= indices_length_per_core
-        (8, 256, 256, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 64, 64, 8, 8, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 2, "grid_size": (2, 2)}, 1),
+        (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 4, "grid_size": (2, 4)}, 1),
+        # (1, 160, 160, 7, 7, 3, 3, 1, 1, 1, 1, False, None, 1), sliding_window_op_infra/sliding_window.cpp:341: indices_length_last_core <= indices_length_per_core
+        (8, 256, 256, 7, 7, 3, 3, 1, 1, 1, 1, False, None, 1),
         # r50 1x1s2 shapes
-        # Fails with packer_l1_acc = True (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, False, None),  # r50 first bottleneck downsample shape
-        (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, True, None),  # r50 first bottleneck downsample shape
-        # Fails with packer_l1_acc = True (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, False, None),  # r50 second bottleneck downsample shape
-        # (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
-        (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, False, None),  # r50 third bottleneck downsample shape
-        # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
-        (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, False, None),  # r50 fourth bottleneck downsample shape
-        # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
-        # (20, 128, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None),  ## L2M1 DS: doesn't fit
+        # Fails with packer_l1_acc = True (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, False, None, 1),  # r50 first bottleneck downsample shape
+        (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, True, None, 1),  # r50 first bottleneck downsample shape
+        # Fails with packer_l1_acc = True (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, False, None, 1),  # r50 second bottleneck downsample shape
+        # (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None, 1), - doesnt fit
+        (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, False, None, 1),  # r50 third bottleneck downsample shape
+        # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, True, None, 1), - doesnt fit
+        (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, False, None, 1),  # r50 fourth bottleneck downsample shape
+        # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, True, None, 1), - doesnt fit
+        # (20, 128, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None, 1),  ## L2M1 DS: doesn't fit
         # formerly failing test case in segformer when ntiles_channels not evenly divisible with num_cores_c
-        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
+        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None, 1),
     ),
 )
-@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
-@pytest.mark.parametrize("has_bias", [True, False], ids=["has_bias", "no_bias"])
+@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
+@pytest.mark.parametrize("is_owned", [True, False], ids=["owned_storage", "borrowed_storage"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_conv_weights(
     batch_size,
@@ -78,10 +78,11 @@ def test_prepare_conv_weights(
     pad_h,
     pad_w,
     use_1d_systolic_array,
-    packer_l1_acc,
     config_override,
-    has_bias,
+    on_device,
     device,
+    groups,
+    is_owned,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
@@ -91,8 +92,11 @@ def test_prepare_conv_weights(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
+    if groups > 1 and on_device:
+        pytest.skip("Weights Preparation on device is not supported for convs with groups > 1")
+    has_bias = False
     inp_shape = (batch_size, input_channels, input_height, input_width)
-    conv_weight_shape = (output_channels, input_channels, filter_height, filter_width)
+    conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16)
     torch_input_tensor = torch.randn(inp_shape, dtype=torch.bfloat16)
     torch_bias_tensor = torch.randn((1, 1, 1, output_channels), dtype=torch.bfloat16) if has_bias else None
@@ -104,12 +108,21 @@ def test_prepare_conv_weights(
         stride=(stride_h, stride_w),
         padding=(pad_h, pad_w),
         dilation=(1, 1),
-        groups=1,
+        groups=groups,
     ).permute(0, 2, 3, 1)
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor.transpose(-3, -2).transpose(-2, -1), ttnn.bfloat16)
-    tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
-    tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
+
+    if is_owned:
+        temp_tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
+        temp_tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
+        tt_weight_tensor = ttnn.zeros(torch_weight_tensor.shape, ttnn.bfloat16)
+        tt_bias_tensor = ttnn.zeros(torch_bias_tensor.shape, ttnn.bfloat16) if has_bias else None
+        tt_weight_tensor = temp_tt_weight_tensor[:, :, :]
+        tt_bias_tensor = temp_tt_bias_tensor[:, :, :] if has_bias else None
+    else:
+        tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
+        tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
 
     conv_config = ttnn.Conv2dConfig(
         dtype=ttnn.bfloat16,
@@ -118,8 +131,9 @@ def test_prepare_conv_weights(
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
+        preprocess_weights_on_device=on_device,
     )
-    compute_config = ttnn.init_device_compute_kernel_config(device.arch(), packer_l1_acc=packer_l1_acc)
+    compute_config = ttnn.init_device_compute_kernel_config(device.arch())
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
 
@@ -143,12 +157,16 @@ def test_prepare_conv_weights(
         "stride": (stride_h, stride_w),
         "padding": (pad_h, pad_w),
         "dilation": (1, 1),
-        "groups": 1,
+        "groups": groups,
         "device": device,
         "conv_config": conv_config,
     }
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
+    if on_device:
+        tt_weight_tensor = ttnn.to_device(tt_weight_tensor, device)
+        tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device) if has_bias else None
+
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
         weight_tensor=tt_weight_tensor,
         weights_format="OIHW",
@@ -197,8 +215,7 @@ def test_prepare_conv_weights(
         (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
     ),
 )
-@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
-@pytest.mark.parametrize("has_bias", [True, False], ids=["has_bias", "no_bias"])
+@pytest.mark.parametrize("has_bias", [True], ids=["has_bias"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_bias(
     batch_size,
@@ -213,7 +230,6 @@ def test_prepare_bias(
     pad_h,
     pad_w,
     use_1d_systolic_array,
-    packer_l1_acc,
     config_override,
     has_bias,
     device,
@@ -254,7 +270,7 @@ def test_prepare_bias(
         enable_split_reader=False,
         enable_subblock_padding=False,
     )
-    compute_config = ttnn.init_device_compute_kernel_config(device.arch(), packer_l1_acc=packer_l1_acc)
+    compute_config = ttnn.init_device_compute_kernel_config(device.arch())
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
 
@@ -285,6 +301,7 @@ def test_prepare_bias(
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
 
+    tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device)
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
             bias_tensor=tt_bias_tensor, input_memory_config=tt_input_tensor.memory_config(), **conv_kwargs
