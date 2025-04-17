@@ -208,13 +208,12 @@ class UNetConv2D:
         }
 
     def __call__(self, x):
-        x, [self.weight, self.bias] = ttnn.conv2d(
+        x = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
             compute_config=self.compute_config,
             return_output_dim=False,
-            return_weights_and_bias=True,
             **self.get_conv2d_kwargs(),
         )
         return x

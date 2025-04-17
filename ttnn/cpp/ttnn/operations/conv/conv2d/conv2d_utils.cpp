@@ -676,8 +676,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     return {input_tensor, parallel_config, output_parallel_config};
 }
 
-void validate_weight_and_bias_tensors(
-    const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor) {
+void validate_weight_and_bias_tensors(ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor) {
     TT_ASSERT(!ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE));
     TT_ASSERT(weight_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(weight_tensor.get_logical_shape().rank() == 4);

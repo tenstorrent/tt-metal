@@ -1169,7 +1169,7 @@ ttnn::Tensor prepare_conv_weights(
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
 
-    std::optional<const ttnn::Tensor> bias_tensor = std::nullopt;
+    std::optional<ttnn::Tensor> bias_tensor = std::nullopt;
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (weight_tensor.is_device_tensor() || conv_config.preprocess_weights_on_device) {

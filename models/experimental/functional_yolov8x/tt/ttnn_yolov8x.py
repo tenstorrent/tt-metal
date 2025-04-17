@@ -150,7 +150,7 @@ class Conv:
             input_height = int(math.sqrt(x.shape[2]) // self.batch_size)
             input_width = int(math.sqrt(x.shape[2]) // self.batch_size)
 
-        [x, [out_height, out_width], [self.weights, self.bias]] = ttnn.conv2d(
+        [x, [out_height, out_width]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weights,
             in_channels=self.input_params[4],
@@ -168,7 +168,6 @@ class Conv:
             compute_config=self.compute_config,
             groups=self.groups,
             memory_config=None,
-            return_weights_and_bias=True,
             return_output_dim=True,
         )
 
