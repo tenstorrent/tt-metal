@@ -23,12 +23,13 @@ class TtnnSPPF:
             device,
             parameters.cv2,
             self.conv_pt.cv2,
-            auto_shard=True,
+            use_1d_systolic_array=False,
         )
 
     def __call__(self, x):
         cv1 = self.cv1(x)
-        cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
+        if cv1.get_layout() == ttnn.TILE_LAYOUT:
+            cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
         y = [cv1]
 
         TILE_WIDTH = 32
