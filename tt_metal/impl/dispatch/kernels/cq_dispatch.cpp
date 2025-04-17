@@ -205,6 +205,7 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
     uint32_t length = cmd->write_linear_host.length;
     // DPRINT << "process_write_host_h: " << length << ENDL();
     uint32_t data_ptr = cmd_ptr;
+    uint32_t writes_done = 0;
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
     while (length != 0) {
         // Get a page if needed
@@ -239,27 +240,26 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
         // transactions
         if (completion_queue_write_addr + xfer_size > completion_queue_end_addr) {
             uint32_t last_chunk_size = completion_queue_end_addr - completion_queue_write_addr;
-            cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, last_chunk_size);
+            cq_noc_async_write_with_state_any_len_count_writes(
+                data_ptr, completion_queue_write_addr, writes_done, last_chunk_size);
             completion_queue_write_addr = completion_queue_base_addr;
             data_ptr += last_chunk_size;
             length -= last_chunk_size;
             xfer_size -= last_chunk_size;
-            uint32_t num_noc_packets_written = div_up(last_chunk_size, NOC_MAX_BURST_SIZE);
-            noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
-            noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
         }
-        cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, xfer_size);
+        cq_noc_async_write_with_state_any_len_count_writes(
+            data_ptr, completion_queue_write_addr, writes_done, xfer_size);
 
         // This will update the write ptr on device and host
         // We flush to ensure the ptr has been read out of l1 before we update it again
         completion_queue_push_back(npages);
         // completion_queue_push_back will do a write to host, so we add 1 to the number of data packets written
-        uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE) + 1;
-        noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
-        noc_nonposted_writes_acked[noc_index] += num_noc_packets_written;
+        noc_nonposted_writes_num_issued[noc_index] += writes_done + 1;
+        noc_nonposted_writes_acked[noc_index] += writes_done + 1;
 
         length -= xfer_size;
         data_ptr += xfer_size;
+        writes_done = 0;
         noc_async_writes_flushed();
     }
     cmd_ptr = data_ptr;
@@ -443,6 +443,7 @@ void process_write_linear(
     uint32_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
     uint32_t length = cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
+    uint32_t writes_done = 0;
     if (multicast) {
         cq_noc_async_write_init_state<CQ_NOC_sNdl, true>(0, get_noc_addr_helper(dst_noc, dst_addr));
     } else {
@@ -474,14 +475,14 @@ void process_write_linear(
         uint32_t available_data = cb_fence - data_ptr;
         uint32_t xfer_size = length > available_data ? available_data : length;
 
-        cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
+        cq_noc_async_write_with_state_any_len_count_writes(data_ptr, dst_addr, writes_done, xfer_size, num_mcast_dests);
         // Increment counters based on the number of packets that were written
-        uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
-        noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
-        noc_nonposted_writes_acked[noc_index] += num_mcast_dests * num_noc_packets_written;
+        noc_nonposted_writes_num_issued[noc_index] += writes_done;
+        noc_nonposted_writes_acked[noc_index] += num_mcast_dests * writes_done;
         length -= xfer_size;
         data_ptr += xfer_size;
         dst_addr += xfer_size;
+        writes_done = 0;
     }
 
     cmd_ptr = data_ptr;
@@ -799,28 +800,30 @@ void process_write_packed_large(
             if (length > available_data) {
                 xfer_size = available_data;
                 wait_for_barrier();
-                cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_dests);
+                cq_noc_async_write_with_state_any_len_count_writes(data_ptr, dst_addr, writes, xfer_size, num_dests);
                 must_barrier = false;
             } else {
                 xfer_size = length;
                 if (unlink) {
                     wait_for_barrier();
-                    uint32_t rem_xfer_size =
-                        cq_noc_async_write_with_state_any_len<false>(data_ptr, dst_addr, xfer_size, num_dests);
+                    uint32_t rem_xfer_size = cq_noc_async_write_with_state_any_len_count_writes<false>(
+                        data_ptr, dst_addr, writes, xfer_size, num_dests);
                     // Unset Link flag
                     cq_noc_async_write_init_state<CQ_NOC_sndl, true, false>(0, 0, 0);
                     uint32_t data_offset = xfer_size - rem_xfer_size;
                     cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_wait>(
                         data_ptr + data_offset, dst_addr + data_offset, rem_xfer_size, num_dests);
+                    writes++;
                     // Later writes must barrier, but the `must_barrier = true` in the `if (init_state)` block above
                     // will see to that.
                 } else {
                     wait_for_barrier();
-                    cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_dests);
+                    cq_noc_async_write_with_state_any_len_count_writes(
+                        data_ptr, dst_addr, writes, xfer_size, num_dests);
                     must_barrier = false;
                 }
             }
-            writes += div_up(xfer_size, NOC_MAX_BURST_SIZE);
+
             length -= xfer_size;
             data_ptr += xfer_size;
             dst_addr += xfer_size;
