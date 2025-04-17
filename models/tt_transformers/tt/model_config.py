@@ -603,7 +603,6 @@ class ModelArgs:
                 self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
 
-
             # Create memory config for sharded tensors
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
