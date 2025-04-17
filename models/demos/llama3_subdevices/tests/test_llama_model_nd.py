@@ -201,23 +201,26 @@ def test_llama_model_inference(
 
             tt_output_torch = ttnn.to_torch(tt_out_tok, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
 
+            # Only check user 0, see GH issue #16719
+            tt_output_torch = tt_output_torch[..., :1, :]
+
             outputs.append(tt_output_torch)
 
         ##### Check outputs #####
-        golden = outputs[0]
-        all_passing = True
-        for i in range(len(outputs)):
-            if i == 0:
-                continue
+        for arr in [outputs]:
+            golden = arr[0]
+            all_passing = True
+            for i in range(len(arr)):
+                logger.info(f"Checking output for iteration {i}")
 
-            passing = torch.all(outputs[i][0, 0, 0, 0] == golden[0, 0, 0, 0])
+                passing = torch.all(arr[i] == golden)
 
-            if passing:
-                logger.info(f"Output for iteration {i} is equal to golden")
-            else:
-                logger.warning(f"Output for iteration {i} is NOT equal to golden")
+                if passing:
+                    logger.info(f"Output for iteration {i} is equal to golden")
+                else:
+                    logger.warning(f"Output for iteration {i} is NOT equal to golden")
 
-            all_passing = all_passing and passing
+                all_passing = all_passing and passing
 
     except Exception as e:
         logger.error(e)
