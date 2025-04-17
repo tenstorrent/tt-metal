@@ -137,7 +137,13 @@ std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord e
 }
 
 std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_sockets(this->id_, connected_chip_id);
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config() !=
+        tt::tt_metal::FabricConfig::DISABLED) {
+        return tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_routers_between_src_and_dest(
+            this->id_, connected_chip_id);
+    } else {
+        return tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_sockets(this->id_, connected_chip_id);
+    }
 }
 
 bool Device::is_mmio_capable() const {
@@ -588,13 +594,41 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         &zero, sizeof(uint32_t), tt_cxy_pair(this->id(), virtual_core), launch_msg_buffer_read_ptr_addr);
 }
 
+void Device::clear_launch_messages_on_eth_cores() {
+    launch_msg_t launch_msg;
+    go_msg_t go_msg;
+    go_msg.signal = RUN_MSG_INIT;
+    std::memset(&launch_msg, 0, sizeof(launch_msg_t));
+    std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, launch_msg);
+
+    for (const auto& eth_core : this->get_active_ethernet_cores()) {
+        CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            init_launch_msg_data.data(),
+            launch_msg_buffer_num_entries * sizeof(launch_msg_t),
+            tt_cxy_pair(this->id(), phys_eth_core),
+            this->get_dev_addr(phys_eth_core, HalL1MemAddrType::LAUNCH));
+        uint32_t go_addr = this->get_dev_addr(phys_eth_core, HalL1MemAddrType::GO_MSG);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            &go_msg, sizeof(go_msg_t), tt_cxy_pair(this->id(), phys_eth_core), go_addr);
+    }
+    for (const auto& eth_core : this->get_inactive_ethernet_cores()) {
+        CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            init_launch_msg_data.data(),
+            launch_msg_buffer_num_entries * sizeof(launch_msg_t),
+            tt_cxy_pair(this->id(), phys_eth_core),
+            this->get_dev_addr(phys_eth_core, HalL1MemAddrType::LAUNCH));
+        uint32_t go_addr = this->get_dev_addr(phys_eth_core, HalL1MemAddrType::GO_MSG);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            &go_msg, sizeof(go_msg_t), tt_cxy_pair(this->id(), phys_eth_core), go_addr);
+    }
+}
+
 void Device::reset_cores() {
     ZoneScoped;
 
     const auto& hal = MetalContext::instance().hal();
-    auto kernel_still_running = [](launch_msg_t* launch_msg, go_msg_t *go_signal) {
-        return (go_signal->signal) == RUN_MSG_GO && launch_msg->kernel_config.exit_erisc_kernel == 0;
-    };
     auto erisc_app_still_running = [&](CoreCoord virtual_core) {
         // Check if the kernel/erisc_app is still running on a ethernet core with context switching enabled
         // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
@@ -1082,6 +1116,7 @@ void Device::init_command_queue_device() {
             sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices(),
             sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data());
     }
+    dispatch_firmware_active_ = true;
 }
 
 void Device::init_fabric() {
@@ -1166,6 +1201,12 @@ bool Device::initialize(
     // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
     this->work_executor_->initialize();
     this->initialized_ = true;
+    // Clear the entire launch message ring buffer on ethernet cores before application firmware is activated.
+    // This is required since ethernet cores context switch between application and routing firmware.
+    // If ERISC application firmware is activated before the launch messages are cleared, it can enter an undefined
+    // state by reading a corrupted launch message. Routing firmware will never run in this case, causing UMD issued
+    // transactions to hang.
+    this->clear_launch_messages_on_eth_cores();
 
     return true;
 }
@@ -1194,7 +1235,9 @@ bool Device::close() {
         hw_command_queue->terminate();
     }
 
+    dispatch_firmware_active_ = false;
     this->work_executor_->reset();
+
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     sub_device_manager_tracker_.reset(nullptr);

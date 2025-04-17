@@ -214,8 +214,8 @@ def test_dispatch_cores():
     RISC_COUNT = 1
     ZONE_COUNT = 37
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch": [16, 1404],
-        "Tensix CQ Prefetch": [25, 1990],
+        "Tensix CQ Dispatch": [153, 246, 365, 1035, 1548, 1634, 2447],
+        "Tensix CQ Prefetch": [410, 484, 529, 1117, 2356, 2447, 3070],
     }
 
     def verify_stats(devicesData):
@@ -233,7 +233,7 @@ def test_dispatch_cores():
                             break
                     assert (
                         res
-                    ), f"Wrong ethernet dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+                    ), f"Wrong dispatch zone count, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
         statTypes = ["Dispatch", "Prefetch"]
         statTypesSet = set(statTypes)
@@ -267,8 +267,8 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [17, 1480],
-        "Ethernet CQ Prefetch": [18, 1951],
+        "Ethernet CQ Dispatch": [632, 830, 2088, 2287],
+        "Ethernet CQ Prefetch": [520, 716, 2398, 2656],
     }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
@@ -428,11 +428,6 @@ def test_sub_device_profiler():
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
         "CommandQueueSingleCardFixture.TensixTestSubDeviceBasicPrograms",
-    )
-    run_gtest_profiler_test(
-        "./build/test/tt_metal/unit_tests_dispatch",
-        "CommandQueueSingleCardFixture.TensixActiveEthTestSubDeviceBasicEthPrograms",
-        doSync=True,
     )
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
