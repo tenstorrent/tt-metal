@@ -23,8 +23,8 @@ class ConvBlock:
         input_height,
         input_width,
         out_channels,
-        conv_in_channel_split_factor,
-        conv_out_channel_split_factor,
+        conv_in_channel_split_factor=1,
+        conv_out_channel_split_factor=1,
         kernel_size=3,
         padding=1,
     ):
