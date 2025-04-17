@@ -49,6 +49,8 @@ class TtnnAttention:
         N = H * W
 
         qkv = self.qkv(input_tensor)
+        if qkv.is_sharded():
+            qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG)
         qkv = ttnn.permute(qkv, (0, 3, 1, 2))
         qkv = ttnn.reshape(qkv, (1, qkv.shape[1], int(math.sqrt(qkv.shape[-1])), int(math.sqrt(qkv.shape[-1]))))
         qkv = ttnn.reshape(qkv, (B, self.num_heads, self.key_dim * 2 + self.head_dim, N))

@@ -35,7 +35,8 @@ class TtnnC2f:
 
         for m in self.m:
             out = m(y[-1])
-            y.append(ttnn.to_layout(out, ttnn.TILE_LAYOUT))
+            out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            y.append(out)
 
         out = ttnn.concat(y, -1, memory_config=memory_config)
 
