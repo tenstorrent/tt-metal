@@ -307,8 +307,8 @@ std::vector<T> convert_layout(
 template <typename T>
 std::vector<T>& get_test_data() {
     constexpr size_t MAX_BATCH = 1;
-    constexpr size_t MAX_ROWS = 1024;
-    constexpr size_t MAX_COLS = 1024;
+    constexpr size_t MAX_ROWS = 128;
+    constexpr size_t MAX_COLS = 128;
 
     static std::vector<T> data;
     if (!data.empty()) {
@@ -451,7 +451,8 @@ INSTANTIATE_TEST_SUITE_P(
     TilizeUntilizeTestsFixture,
     ::testing::Combine(
         ::testing::Values(1),  // n_batches not supported in reference, so only 1 batch
-        ::testing::Values(PhysicalSize{0, 0}, PhysicalSize{32, 32}, PhysicalSize{1024, 1024}),  // shape
+        ::testing::Values(
+            PhysicalSize{0, 0}, PhysicalSize{32, 32}, PhysicalSize{128, 64}, PhysicalSize{64, 128}),  // shape
         ::testing::Values(
             TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
         ::testing::Values(
@@ -519,7 +520,7 @@ INSTANTIATE_TEST_SUITE_P(
             1024)));
 
 using NonSquareTilesParams =
-    std::tuple<PhysicalSize, TensorLayoutType, TensorLayoutType, std::optional<PhysicalSize>, bool>;
+    std::tuple<PhysicalSize, TensorLayoutType, TensorLayoutType, std::pair<PhysicalSize, PhysicalSize>, bool>;
 
 class NonSquareTilesTestFixture : public ::testing::TestWithParam<NonSquareTilesParams> {};
 
@@ -528,10 +529,15 @@ TEST_P(NonSquareTilesTestFixture, ConvertLayout) {
     PhysicalSize shape = std::get<0>(params);
     auto from_layout = std::get<1>(params);
     auto to_layout = std::get<2>(params);
-    auto tile_shape = std::get<3>(params);
+    auto [tile_shape, face_shape] = std::get<3>(params);
     auto transpose = std::get<4>(params);
 
     if (from_layout == to_layout) {
+        return;
+    }
+
+    // Not supported by reference
+    if (tile_shape[0] < 16 && transpose) {
         return;
     }
 
@@ -545,10 +551,10 @@ TEST_P(NonSquareTilesTestFixture, ConvertLayout) {
         tt::stl::Span<const Type> input(data.data(), n_elements);
 
         auto output =
-            convert_layout(input, shape, from_layout, to_layout, tile_shape, std::nullopt, transpose, transpose);
+            convert_layout(input, shape, from_layout, to_layout, tile_shape, face_shape, transpose, transpose);
 
         auto output_ref = reference::convert_layout(
-            input, shape, from_layout, to_layout, tile_shape, std::nullopt, transpose, transpose);
+            input, shape, from_layout, to_layout, tile_shape, face_shape, transpose, transpose);
 
         ASSERT_EQ(output.size(), output_ref.size());
         ASSERT_EQ(output, output_ref);
@@ -564,11 +570,21 @@ INSTANTIATE_TEST_SUITE_P(
     NonSquareTilesTest,
     NonSquareTilesTestFixture,
     ::testing::Combine(
-        ::testing::Values(PhysicalSize{0, 0}, PhysicalSize{32, 32}, PhysicalSize{384, 768}),  // shape
+        ::testing::Values(PhysicalSize{32, 32}, PhysicalSize{128, 64}, PhysicalSize{64, 128}),  // shape
+        ::testing::Values(TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES),
+        ::testing::Values(TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES),
+
+        // Shapes from tt_metal/api/tt-metalium/tile.hpp
         ::testing::Values(
-            TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
-        ::testing::Values(
-            TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_SWIZZLED, TensorLayoutType::TILED_NFACES),
-        ::testing::Values(PhysicalSize{32, 16}, PhysicalSize{16, 32}),  // tile_shape.
+            std::make_pair(PhysicalSize{32, 16}, PhysicalSize{16, 16}),
+            std::make_pair(PhysicalSize{16, 32}, PhysicalSize{16, 16}),
+            std::make_pair(PhysicalSize{8, 32}, PhysicalSize{8, 16}),
+            std::make_pair(PhysicalSize{4, 32}, PhysicalSize{4, 16}),
+            std::make_pair(PhysicalSize{2, 32}, PhysicalSize{2, 16}),
+            std::make_pair(PhysicalSize{1, 32}, PhysicalSize{1, 16}),
+            std::make_pair(PhysicalSize{8, 16}, PhysicalSize{8, 16}),
+            std::make_pair(PhysicalSize{4, 16}, PhysicalSize{4, 16}),
+            std::make_pair(PhysicalSize{2, 16}, PhysicalSize{2, 16}),
+            std::make_pair(PhysicalSize{1, 16}, PhysicalSize{1, 16})),  // tile_shape.
         ::testing::Bool()                                               // transpose
         ));

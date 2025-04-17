@@ -257,7 +257,6 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
     return result;
 }
 
-// TODO: implement transpose_within_face and transpose_of_faces
 template <typename T>
 std::vector<T> convert_layout_row_major_to_tile_nfaces(
     tt::stl::Span<const T> in_row_major,
@@ -340,7 +339,6 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
     return tilized_input;
 }
 
-// TODO: implement transpose_within_face and transpose_of_faces
 template <typename T>
 std::vector<T> convert_layout_tile_nfaces_to_row_major(
     tt::stl::Span<const T> in_nfaces,
@@ -351,23 +349,23 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     bool transpose_face_order) {
     ZoneScoped;
 
-    uint32_t H = shape[0];
-    uint32_t W = shape[1];
-    uint32_t batch_size = H * W;
-    uint32_t B = in_nfaces.size() / batch_size;
+    size_t H = shape[0];
+    size_t W = shape[1];
+    size_t batch_size = H * W;
+    size_t B = in_nfaces.size() / batch_size;
 
     std::vector<T> output(in_nfaces.size());
 
-    auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
-    auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
-    auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
-    auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
+    size_t tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
+    size_t tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
+    size_t face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
+    size_t face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
 
-    uint32_t row_faces = tile_H / face_H;
-    uint32_t col_faces = tile_W / face_W;
-    uint32_t row_tiles = H / tile_H;
-    uint32_t col_tiles = W / tile_W;
-    uint32_t row_of_tiles_num_elements = tile_H * W;
+    size_t row_faces = tile_H / face_H;
+    size_t col_faces = tile_W / face_W;
+    size_t tile_rows = H / tile_H;
+    size_t tile_cols = W / tile_W;
+    size_t row_of_tiles_num_elements = tile_H * W;
 
     // We don't transpose face order if we have only one face in the row or column
     transpose_face_order = transpose_face_order && row_faces > 1 && col_faces > 1;
@@ -376,50 +374,56 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     TT_FATAL((in_nfaces.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
-    auto write_face = [&](std::vector<T>& out_data,
-                          tt::stl::Span<const T> in_data,
-                          uint32_t row_tile_start,
-                          uint32_t face_h_index_src,
-                          uint32_t face_w_index_src,
-                          uint32_t col_tile) {
-        uint32_t face_h_index_dst = transpose_face_order ? face_w_index_src : face_h_index_src;
-        uint32_t face_w_index_dst = transpose_face_order ? face_h_index_src : face_w_index_src;
-        if (!transpose_face) {
-            for (uint32_t row = 0; row < face_H; row++) {
-                size_t src_idx = row_tile_start + col_tile * tile_H * tile_W + face_h_index_src * face_H * tile_W +
-                                 face_w_index_src * face_H * face_W + row * face_H;
-                size_t dst_idx = row_tile_start + (face_h_index_dst * face_H + row) * W + col_tile * tile_W +
-                                 face_w_index_dst * face_W;
-                std::memcpy(&out_data[dst_idx], &in_data[src_idx], face_W * sizeof(T));
-            }
-        } else {
-            for (uint32_t row = 0; row < face_H; row++) {
-                for (uint32_t col = 0; col < face_W; col++) {
-                    size_t src_idx = row_tile_start + col_tile * tile_H * tile_W + face_h_index_src * face_H * tile_W +
-                                     face_w_index_src * face_H * face_W + row * face_H + col;
-
-                    size_t dst_idx = row_tile_start + (face_h_index_dst * face_H + col) * W + col_tile * tile_W +
-                                     face_w_index_dst * face_W + row;
-
-                    out_data[dst_idx] = in_data[src_idx];
+    auto write_face =
+        [&](std::vector<T>& out_data, tt::stl::Span<const T> in_data, size_t in_face_start, size_t out_face_start) {
+            if (!transpose_face) {
+                for (uint32_t row = 0; row < face_H; row++) {
+                    size_t src_idx = in_face_start + row * face_W;
+                    size_t dst_idx = out_face_start + row * tile_W * tile_cols;
+                    if (dst_idx + face_W > out_data.size()) {
+                        std::cout << "dst_idx: " << dst_idx << " out_data.size(): " << out_data.size() << std::endl;
+                    }
+                    if (src_idx + face_W > in_data.size()) {
+                        std::cout << "src_idx: " << src_idx << " in_data.size(): " << in_data.size() << std::endl;
+                    }
+                    std::memcpy(&out_data[dst_idx], &in_data[src_idx], face_W * sizeof(T));
                 }
-            }
-        }
-    };
+            } else {
+                for (uint32_t row = 0; row < face_H; row++) {
+                    for (uint32_t col = 0; col < face_W; col++) {
+                        size_t src_idx = in_face_start + row * face_W + col;
+                        size_t dst_idx = out_face_start + col * face_H * col_faces * tile_cols + row;
 
-    uint32_t batch_start = 0;
-    for (size_t i = 0; i < B; i++) {
-        uint32_t row_tile_start = batch_start;
-        for (uint32_t row_tile = 0; row_tile < row_tiles; row_tile++) {
-            for (uint32_t col_tile = 0; col_tile < col_tiles; col_tile++) {
-                for (uint32_t face_h_idx = 0; face_h_idx < row_faces; face_h_idx++) {
-                    for (uint32_t face_w_idx = 0; face_w_idx < col_faces; face_w_idx++) {
-                        write_face(output, in_nfaces, row_tile_start, face_h_idx, face_w_idx, col_tile);
+                        out_data[dst_idx] = in_data[src_idx];
                     }
                 }
             }
+        };
 
-            row_tile_start += row_of_tiles_num_elements;
+    size_t n_tiles = in_nfaces.size() / (tile_H * tile_W);
+    size_t batch_start = 0;
+    for (size_t b = 0; b < B; b++) {
+        for (size_t tile_row = 0; tile_row < tile_rows; tile_row++) {
+            for (size_t tile_col = 0; tile_col < tile_cols; tile_col++) {
+                size_t in_tile_start = batch_start + (tile_row * tile_H * W) + (tile_col * tile_H * tile_W);
+                size_t out_tile_start = transpose_face ? batch_start + (tile_row * tile_W * tile_H * tile_cols) +
+                                                             tile_col * face_H * col_faces
+                                                       : batch_start + (tile_row * tile_H * W) + tile_col * tile_W;
+
+                for (size_t face_h_idx = 0; face_h_idx < row_faces; face_h_idx++) {
+                    for (size_t face_w_idx = 0; face_w_idx < col_faces; face_w_idx++) {
+                        size_t in_face_start =
+                            in_tile_start + face_h_idx * face_H * tile_W + face_w_idx * face_H * face_W;
+
+                        auto face_h_idx_dst = transpose_face_order ? face_w_idx : face_h_idx;
+                        auto face_w_idx_dst = transpose_face_order ? face_h_idx : face_w_idx;
+                        size_t out_face_start =
+                            transpose_face ? out_tile_start + face_h_idx_dst * face_H * W + face_w_idx_dst * face_H
+                                           : out_tile_start + face_h_idx_dst * face_H * W + face_w_idx_dst * face_W;
+                        write_face(output, in_nfaces, in_face_start, out_face_start);
+                    }
+                }
+            }
         }
         batch_start += batch_size;
     }
