@@ -200,7 +200,10 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             for (size_t l = 0; l < num_links; l++) {
                 auto& edm_fwd = forward_direction_edm[l];
                 auto& edm_bwd = backward_direction_edm[l];
-                // optimize only on the same row and multi-link to not degrade other tests
+                // currently is_galaxy is only being passed in through the fabric unit test, once we switch to fabric
+                // device init, will use proper cluster type to decide which machine it is. For the optimzation on noc
+                // selection, we empirically optimize on 3/4 links for linear, and 4 links on ring, as less links caused
+                // perf degradation, potentially caused by sw overhead of checking two nocs.
                 bool enable_core_placement_opt = false;
                 if (is_galaxy) {
                     if (topology == Topology::Ring) {
