@@ -64,30 +64,6 @@ inline void dprint_data_format(uint8_t data_format) {
     }
 }
 
-// if flag DEST_ACCESS_CFG_remap_addrs is enabled
-// destination register row identifiers are remmaped
-// bits 5:3 are rotated 543 -> 354
-inline uint16_t get_remapped_row_id(uint16_t row_id) {
-    // bits 5:3 are rotating -> 543 -> 354
-    return (row_id & 0xFFC7) |         // clear bits [5:3]
-           ((row_id & 0x0008) << 2) |  // shifting bit 3 to position 5
-           ((row_id & 0x0030) >> 1);   // shifting bits 5:4 to position 4:3
-}
-
-// if flag DEST_ACCESS_CFG_swizzle_32b is enabled dest address is has bits [3:2] shuffled
-inline uint16_t get_swizzled_row_id(uint16_t row_id) {
-    if (row_id & 0x10) {
-        switch ((row_id & 0xC) >> 2) {
-            case 0: return (row_id & 0xFFF3) | 0x8;
-            case 1: return (row_id & 0xFFF3);
-            case 2: return (row_id & 0xFFF3) | 0xC;
-            case 3:
-            default: return (row_id & 0xFFF3) | 0x4;
-        }
-    } else {
-        return (row_id & 0xFFF3) | ((row_id & 0x4) << 1) | ((row_id & 0x8) >> 1);
-    }
-}
 
 // Calculates dest row address based on logical row identifiers (tile_id, face_id, row_id)
 // and dest configuration.
@@ -95,19 +71,11 @@ inline uint16_t get_dest_row_id(
     uint16_t tile_id, uint16_t face_id, uint16_t row_id, bool is_float32, bool is_remap, bool is_swizzle) {
     uint16_t row = NUM_ROWS_PER_TILE * tile_id + NUM_ROWS_PER_FACE * face_id + row_id;
 
-    if (is_remap) {
-        row = get_remapped_row_id(row);
-    }
-
+    #ifdef ARCH_WORMHOLE
     if (is_float32) {
-        if (is_swizzle) {
-            row = get_swizzled_row_id(row);
-        }
-        // 0-7  dest rows for Float16
-        // 8-15 dest rows for Mantissa
-        // need to shift row index starting from bit 3
         row = ((row & 0xFFF8) << 1) | (row & 0x7);
     }
+    #endif
 
     return row;
 }
@@ -133,8 +101,11 @@ inline uint32_t reconstruct_float32(uint32_t float16, uint32_t mantissa16) {
 // dest_row + 8 -> [[Mantissa16_1,Mantissa16_0],...[Mantissa16_15, Mantissa16_14]]
 inline void dprint_tensix_dest_reg_row_float32(uint16_t row) {
     constexpr int ARRAY_LEN = 16;
-    uint32_t rd_data_temp[ARRAY_LEN];
     uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
+
+#ifdef ARCH_WORMHOLE
+
+    uint32_t rd_data_temp[ARRAY_LEN];
 
     // read two rows [[Float16], [Mantissa]]
     dbg_read_dest_acc_row(row, rd_data_temp);
@@ -144,6 +115,17 @@ inline void dprint_tensix_dest_reg_row_float32(uint16_t row) {
         rd_data[2 * i] = reconstruct_float32(lo_word(rd_data_temp[i]), lo_word(rd_data_temp[i + 8]));
         rd_data[2 * i + 1] = reconstruct_float32(hi_word(rd_data_temp[i]), hi_word(rd_data_temp[i + 8]));
     }
+
+#else
+
+    constexpr uint32_t RISCV_DEST_START_ADDR = 0xFFBD8000;
+    uint32_t volatile    *dest_fp32  = (uint32_t volatile   *)RISCV_DEST_START_ADDR;
+    for (int i = 0; i < 8; ++i) {
+        rd_data[2 * i] = dest_fp32[2 * i + row * 16];
+        rd_data[2 * i + 1] = dest_fp32[2 * i + 1 + row * 16];
+    }
+
+#endif
 
     dprint_array_with_data_type((uint32_t)DataFormat::Float32, rd_data, ARRAY_LEN);
 }
