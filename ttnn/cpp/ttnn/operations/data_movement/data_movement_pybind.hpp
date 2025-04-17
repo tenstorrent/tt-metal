@@ -34,6 +34,7 @@
 #include "ttnn/operations/data_movement/slice/slice_pybind.hpp"
 #include "ttnn/operations/data_movement/split/split_pybind.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze_pybind.hpp"
+#include "ttnn/operations/data_movement/stack/stack_pybind.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize_pybind.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_pybind.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose_pybind.hpp"
@@ -81,6 +82,7 @@ void py_module(py::module& module) {
     py_bind_sharded_to_interleaved(module);
     py_bind_sharded_to_interleaved_partial(module);
     py_bind_squeeze(module);
+    py_bind_stack(module);
     py_bind_unsqueeze(module);
 }
 }  // namespace data_movement
