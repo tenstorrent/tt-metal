@@ -13,7 +13,6 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
@@ -114,7 +113,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     # create global semaphore handles
     num_buffers = 2
     ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, i) for i in range(num_buffers)
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, i) for i in range(num_buffers)
     ]
 
     logger.info(f"Output shape: {output_shape}")
