@@ -135,9 +135,9 @@ protected:
     const uint32_t tile_end_w;
     bool first;
 
-    inline const uint32_t h() { return start_h + tile_idx_h; }
+    inline uint32_t h() { return start_h + tile_idx_h; }
 
-    inline const uint32_t w() { return start_w + tile_idx_w; }
+    inline uint32_t w() { return start_w + tile_idx_w; }
 };
 
 std::vector<SegmentMapData> reshape_map_output_page(
@@ -256,8 +256,10 @@ Tensor compute_reshape_mapping_host_tensor(
 
     const std::array<uint32_t, 2> mapping_shape_vector = {num_output_pages, SegmentMapData::size * max_input_segments};
     const Shape mapping_shape(mapping_shape_vector);
-    const TensorLayout mapping_layout(
-        convert_to_data_type<decltype(flat_mapping_vector)::value_type>(), ttnn::ROW_MAJOR_LAYOUT, MemoryConfig());
+    const tt::tt_metal::TensorLayout mapping_layout(
+        tt::tt_metal::convert_to_data_type<decltype(flat_mapping_vector)::value_type>(),
+        ttnn::ROW_MAJOR_LAYOUT,
+        MemoryConfig());
 
     return Tensor::from_vector(flat_mapping_vector, TensorSpec(mapping_shape, mapping_layout));
 }
