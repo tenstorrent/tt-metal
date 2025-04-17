@@ -46,6 +46,13 @@ int main(int argc, char** argv) {
     run_softmax(device.get(), Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}));
     run_softmax(device.get(), Shape({1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2}));
 
-    log_info(LogTest, "Test Passed");
+    if (pass) {
+        log_info(LogTest, "Test Passed");
+    } else {
+        TT_THROW("Test Failed");
+    }
+
+    TT_FATAL(pass, "Error");
+
     return 0;
 }

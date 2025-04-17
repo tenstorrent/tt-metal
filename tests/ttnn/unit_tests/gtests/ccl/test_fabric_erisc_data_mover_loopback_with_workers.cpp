@@ -848,8 +848,6 @@ TEST(
 }
 
 TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric "
-                    "(ttnn::operations::experimental::ccl::reduce_scatter)";
     const size_t dim = 3;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
@@ -893,11 +891,10 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
             ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to_layout(layout);
         t.set_tensor_spec(TensorSpec(
             input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
-
-        device_input_tensors.push_back(t.to_device(devices[i]));
     }
     // Need to make it a mesh tensor for use with the op
     const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
+    input_mesh_tensor.to_device(test_fixture.mesh_device_.get());
 
     // FABRIC setup
     const bool enable_persistent_fabric = true;
@@ -962,11 +959,9 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 }
 
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_128) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 128}));
 }
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_8192) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 8192}));
 }
 // Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
@@ -979,7 +974,6 @@ TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_819
 }
 
 TEST(CclAsyncOp, RingAllGather_PersistentFabric_Dim3_Links1_Shape1_256_32_8192) {
-    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_ring_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 256, 32, 8192}));
 }
 

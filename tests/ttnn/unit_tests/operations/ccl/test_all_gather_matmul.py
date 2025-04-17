@@ -536,7 +536,7 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 118816}], indirect=True
+    "device_params", [{"trace_region_size": 90112}], indirect=True
 )  # TODO: Update once trace fails
 def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
     t3k_mesh_device,

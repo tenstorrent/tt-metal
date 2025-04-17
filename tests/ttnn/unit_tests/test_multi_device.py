@@ -643,7 +643,6 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         cache_file_name=tmp_path / "cache_file",
     )
     assert tensor.dtype == ttnn.float32
-    # assert tensor.devices() == mesh_device.get_devices() # TODO(jchu): fix
     assert tensor.layout == ttnn.TILE_LAYOUT
     assert ttnn.get_memory_config(tensor) == memory_config
 
@@ -657,7 +656,6 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         cache_file_name=tmp_path / "cache_file",
     )
     assert tensor.dtype == ttnn.float32
-    # assert tensor.devices() == mesh_device.get_devices() # TODO(jchu): fix
     assert tensor.layout == ttnn.TILE_LAYOUT
     assert ttnn.get_memory_config(tensor) == memory_config
 

@@ -58,10 +58,7 @@ def test_run_prefetcher_post_commit(
     )
 
 
-# This is not tested on main, but we need to test Global CB functionality through
-# TT-Mesh.
-# Test DRAM Prefetcher x Matmul on T3K. Can be removed once we bringup support on Galaxy
-# since we have tests for that system.
+# Test DRAM Prefetcher x Matmul on T3K
 @pytest.mark.skipif(is_grayskull(), reason="GS not supported")
 @pytest.mark.parametrize(
     "num_reader_cores, num_tensors, input_shapes, dtypes, num_layers",

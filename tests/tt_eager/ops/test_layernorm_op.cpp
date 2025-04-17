@@ -33,6 +33,8 @@ using namespace constants;
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
+    bool pass = true;
+
     try {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
@@ -45,11 +47,18 @@ int main(int argc, char** argv) {
         Tensor d = c.cpu();
         Tensor host_a = a.cpu();  // Move tensor a to host to validate
     } catch (const std::exception& e) {
+        pass = false;
         log_error(LogTest, "{}", e.what());
         log_error(LogTest, "System error message: {}", std::strerror(errno));
     }
 
-    log_info(LogTest, "Test Passed");
+    if (pass) {
+        log_info(LogTest, "Test Passed");
+    } else {
+        TT_THROW("Test Failed");
+    }
+
+    TT_FATAL(pass, "Error");
 
     return 0;
 }
