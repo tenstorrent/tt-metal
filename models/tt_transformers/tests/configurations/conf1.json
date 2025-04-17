@@ -1,0 +1,68 @@
+{
+    "decoders": {
+        "0": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "1": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "2": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "3": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "4": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "5": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "6": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "7": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "8": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "9": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "10": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "11": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "12": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "13": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "14": {
+            "precision_cfg": { "FF1_FF3": "BFP8", "FF2": "BFP8", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "HIFI2",  "LI_FF2": "HIFI2", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        },
+        "15": {
+            "precision_cfg": { "FF1_FF3": "BFP4", "FF2": "BFP4", "WQKV": "BFP8", "WO": "BFP4", "KV_CACHE": "BFP8", "ACTIVATION": "BFP8"},
+            "fidelity_cfg": { "LI_FF1_FF3": "LOFI",  "LI_FF2": "LOFI", "SDPA_DECODE": "HIFI2_NA", "LI_O_DECODE": "LOFI", "LI_QKV_PREFILL": "HIFI2", "SDPA_PREFILL": "HIFI4", "LI_O_PREFILL": "LOFI" }
+        }
+    }
+}
