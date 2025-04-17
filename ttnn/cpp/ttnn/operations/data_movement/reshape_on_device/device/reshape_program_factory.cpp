@@ -40,12 +40,12 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, alignment};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
 
     if (alignment > (tt::constants::FACE_WIDTH * a.element_size())) {
@@ -257,7 +257,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool old_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(old_stick_size);
     uint32_t old_log2_stick_size = old_stick_size_is_power_of_two ? (std::uint32_t)std::log2(old_stick_size) : 0;
     bool is_new_stick_larger = new_stick_size > old_stick_size;
@@ -270,7 +270,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
         (std::uint32_t)old_stick_size_is_power_of_two ? old_log2_stick_size : old_stick_size};
 
     // Writer compile-time args
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool new_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(new_stick_size);
     uint32_t new_log2_stick_size = new_stick_size_is_power_of_two ? (std::uint32_t)std::log2(new_stick_size) : 0;
     std::vector<uint32_t> writer_ct_args = {

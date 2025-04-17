@@ -174,8 +174,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         uint32_t dispatch_s_buffer_base = 0xff;
-        if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() ||
-            true) {  // Just to make it match previous implementation
+        {  // Just to make it match previous implementation
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
             if (GetCoreType() == CoreType::WORKER) {
                 // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.

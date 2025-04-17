@@ -222,7 +222,7 @@ int main(int argc, char** argv) {
 
     // Determine if it passes performance goal
     auto avg_elapsed_us = calculate_average(elapsed_us);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // goal is under 10us
         long target_us = 10;
 

@@ -62,8 +62,8 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
         });
 
     // create read/wrtie kernel
-    bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
-    bool dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;

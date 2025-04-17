@@ -322,7 +322,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         if (single_core) {
             TT_ASSERT(fast_dispatch_mode, "single core test only supports in fast dispatch mode");
-        } else if (fast_dispatch_mode == false) {
+        } else if (!fast_dispatch_mode) {
             setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
 
 #if !defined(TRACY_ENABLE)
@@ -484,7 +484,7 @@ int main(int argc, char** argv) {
         auto [math_fidelity, fp32_dest_acc_en] = get_compute_params(arch);
         if (single_core) {
             math_fidelity = fidel == 0 ? MathFidelity::LoFi : MathFidelity::HiFi2;
-            fp32_dest_acc_en = fp32 == 0 ? false : true;
+            fp32_dest_acc_en = fp32 != 0;
         }
         auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt, subblock_choice);
         auto [in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr] =
@@ -600,7 +600,7 @@ int main(int argc, char** argv) {
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
-            if (fast_dispatch_mode == false) {
+            if (!fast_dispatch_mode) {
                 log_debug(LogTest, "calling detail::LaunchProgram");
                 detail::LaunchProgram(device, program);
                 log_debug(LogTest, "detail::LaunchProgram done");
@@ -698,7 +698,7 @@ int main(int argc, char** argv) {
                 in1_bfp8_unpack_slice);
         }
 
-        if ((validation_result == false || performance_result == false) && bypass_check == false) {
+        if ((!validation_result || !performance_result) && !bypass_check) {
             log_error(
                 LogTest,
                 "The compute performance does not meet the criteria. "

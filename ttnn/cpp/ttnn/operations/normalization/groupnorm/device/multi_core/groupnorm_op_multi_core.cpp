@@ -149,7 +149,7 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
 
         current_position = group_end;
 
-        if (current_position % TILE_WIDTH == 0 and calc_num_groups_before_start_again_at_tile_beginning == true) {
+        if (current_position % TILE_WIDTH == 0 and calc_num_groups_before_start_again_at_tile_beginning) {
             num_groups_before_start_again_at_tile_beginning = current_position / group_size;
             calc_num_groups_before_start_again_at_tile_beginning = false;
         }

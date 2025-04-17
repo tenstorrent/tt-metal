@@ -97,10 +97,8 @@ DatacopyParams setup_datacopy(
     auto all_gather_output_buffer = all_gather_output_tensor.buffer();
     auto datacopy_output_buffer = datacopy_output_tensor.buffer();
 
-    bool all_gather_output_is_dram =
-        all_gather_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
-    bool datacopy_output_is_dram =
-        datacopy_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool all_gather_output_is_dram = all_gather_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool datacopy_output_is_dram = datacopy_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t last_output_page_offset = (ring_size - 1) * tensor_slicer.output_page_offset;
     uint32_t num_rows = input_tensor.get_padded_shape()[2] / tile_size;
