@@ -76,11 +76,12 @@ void DumpDeviceProfileResults(IDevice* device, const Program& program) {
     std::vector<CoreCoord> eth_cores_in_program;
 
     std::vector<std::vector<CoreCoord>> logical_cores = program.logical_cores();
-    for (uint32_t index = 0; index < hal_ref.get_programmable_core_type_count(); index++) {
-        if (hal_ref.get_core_type(index) == CoreType::WORKER) {
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        if (hal.get_core_type(index) == CoreType::WORKER) {
             worker_cores_in_program = device->worker_cores_from_logical_cores(logical_cores[index]);
         }
-        if (hal_ref.get_core_type(index) == CoreType::ETH) {
+        if (hal.get_core_type(index) == CoreType::ETH) {
             eth_cores_in_program = device->ethernet_cores_from_logical_cores(logical_cores[index]);
         }
     }
@@ -115,6 +116,8 @@ void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
     control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM] = soc_d.profiler_ceiled_core_count_perf_dram_bank;
+
+    const auto& hal = MetalContext::instance().hal();
     for (auto core :
          tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id)) {
         HalProgrammableCoreType CoreType;
@@ -138,7 +141,7 @@ void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
                 CoreType = tt_metal::HalProgrammableCoreType::IDLE_ETH;
             }
         }
-        profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+        profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
         if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
@@ -784,7 +787,7 @@ void DumpDeviceProfileResults(
     std::scoped_lock<std::mutex> lock(device_mutex);
     const auto& dispatch_core_config = get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
-    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
         auto device_id = device->id();
         auto device_num_hw_cqs = device->num_hw_cqs();
         for (const CoreCoord& core :
@@ -804,14 +807,14 @@ void DumpDeviceProfileResults(
                 }
             }
         } else {
-            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
                 auto device_id = device->id();
                 constexpr uint8_t maxLoopCount = 10;
                 constexpr uint32_t loopDuration_us = 10000;
                 auto device_num_hw_cqs = device->num_hw_cqs();
                 std::vector<CoreCoord> dispatchCores =
                     tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config);
-
+                const auto& hal = MetalContext::instance().hal();
                 while (dispatchCores.size() > 0) {
                     bool coreDone = false;
 
@@ -833,7 +836,7 @@ void DumpDeviceProfileResults(
                                                       : tt_metal::HalProgrammableCoreType::IDLE_ETH;
                     }
                     profiler_msg_t* profiler_msg =
-                        hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+                        hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
                     for (int i = 0; i < maxLoopCount; i++) {
                         std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                             device_id,

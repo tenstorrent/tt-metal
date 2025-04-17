@@ -924,7 +924,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
          full_core_grid,
          weights_kernel_id,
          total_num_active_cores,
-         conv_reader_indices_buffer](
+         conv_reader_indices_storage](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
