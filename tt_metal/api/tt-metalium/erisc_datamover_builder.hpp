@@ -18,6 +18,8 @@
 #include <optional>
 #include <cstdint>
 #include <vector>
+#include <array>
+#include <cstddef>
 
 namespace tt::tt_fabric {
 
