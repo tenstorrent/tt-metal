@@ -15,11 +15,10 @@ ttnn::Tensor TypecastOperation::invoke(
     const Tensor& input_tensor,
     const DataType& dtype,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& optional_output_tensor) {
     return tt::tt_metal::operation::run(
                ttnn::operations::data_movement::CopyDeviceOperation{
-                   output_mem_config.value_or(input_tensor.memory_config()), dtype, sub_core_grids},
+                   output_mem_config.value_or(input_tensor.memory_config()), dtype},
                {input_tensor},
                {},
                {optional_output_tensor},
@@ -31,9 +30,8 @@ ttnn::Tensor TypecastOperation::invoke(
     const Tensor& input_tensor,
     const DataType& dtype,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& optional_output_tensor) {
-    return invoke(ttnn::DefaultQueueId, input_tensor, dtype, output_mem_config, sub_core_grids, optional_output_tensor);
+    return invoke(ttnn::DefaultQueueId, input_tensor, dtype, output_mem_config, optional_output_tensor);
 }
 
 }  // namespace ttnn::operations::experimental::copy
