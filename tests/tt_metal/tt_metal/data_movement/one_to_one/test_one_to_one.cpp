@@ -154,7 +154,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 }
 }  // namespace unit_tests::dm::core_to_core
 
-/* ========== Test case for one to one data movement; Test id = 3 ========== */
+/* ========== Test case for one to one data movement; Test id = 4 ========== */
 TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     // Parameters
     uint32_t max_transactions = 64;
@@ -173,7 +173,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
              transaction_size_pages *= 2) {
             // Test config
             unit_tests::dm::core_to_core::OneToOneConfig test_config = {
-                .test_id = 3,
+                .test_id = 4,
                 .master_core_coord = master_core_coord,
                 .slave_core_coord = slave_core_coord,
                 .num_of_transactions = num_of_transactions,

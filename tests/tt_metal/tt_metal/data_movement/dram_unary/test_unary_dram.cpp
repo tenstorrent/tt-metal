@@ -263,8 +263,35 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
     }
 }
 
-// TODO: Extend sharded DRAM buffer test with (?)
-//  1. different transaction numbers and sizes
-//  2. different core locations
+/* ========== Directed ideal test case; Test id = 3 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
+    // Parameters
+    uint32_t num_of_transactions = 180;
+    uint32_t transaction_size_pages = 4 * 32;
+    uint32_t page_size_bytes = 32;  // (=flit size): 32 bytes for WH, 64 for BH
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes *= 2;
+    }
+    // Max transaction size = 4 * 32 pages = 128 * 32 bytes = 4096 bytes for WH; 8192 bytes for BH
+    // Max total transaction size = 180 * 8192 bytes = 1474560 bytes = 1.4 MB = L1 capacity
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    // Test config
+    unit_tests::dm::dram::DramConfig test_config = {
+        .test_id = 3,
+        .num_of_transactions = num_of_transactions,
+        .transaction_size_pages = transaction_size_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+        .cores = core_range_set};
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
 
 }  // namespace tt::tt_metal
