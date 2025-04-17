@@ -31,7 +31,7 @@ void kernel_launch(uint32_t kernel_base_addr) {
     noc_local_state_init(NOC_INDEX);
 
     {
-        DeviceZoneScopedMainChildN("ACTIVE-ERISC-KERNEL");
+        DeviceZoneScopedMainChildN("ERISC-KERNEL");
         WAYPOINT("K");
         kernel_main();
         WAYPOINT("KD");
