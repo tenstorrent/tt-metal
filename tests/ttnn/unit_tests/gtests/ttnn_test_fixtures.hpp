@@ -22,8 +22,9 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "hostdevcommon/common_values.hpp"
 
-namespace ttnn {
 using namespace tt::tt_metal;  // For test
+
+namespace ttnn {
 
 class TTNNFixtureWithDevice : public ::testing::Test {
 protected:
