@@ -84,7 +84,7 @@ class VisionTransformer(LightweightModule):
             dtype=dtype,
         )
 
-    def prepare_input(self, patch_input, window_index):
+    def prepare_input(self, patch_input, window_index, seq_len=None):
         """Convert a patchified torch input to a ttnn tensor
         Args:
             patch_input (torch.Tensor): Patchified input tensor
@@ -98,7 +98,7 @@ class VisionTransformer(LightweightModule):
         x = patch_input.reshape(patch_seq_len // spatial_merge_unit, spatial_merge_unit, -1)
         x = x[window_index, :, :]
         x = x.reshape(patch_seq_len, -1)
-        seq_len = ((patch_seq_len // 128) + 1) * 128
+        seq_len = ((patch_seq_len // 128) + 1) * 128 if seq_len is None else seq_len
         x = torch.nn.functional.pad(x, (0, 0, 0, seq_len - patch_seq_len)).unsqueeze(0)
         x = self.args.prepare_residual_tensor_prefill(
             x,
@@ -208,8 +208,8 @@ class DropInVisionTransformer(torch.nn.Module):
         # --- Preprocessing ---
         # 1. Calculate total unpadded sequence length
         unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
-        # Calculate padded sequence length (divisible by 128)
-        seq_len = ((unpadded_seq_len // 128) + 1) * 128
+        # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
+        seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
 
         # 2. Use preprocessing function from reference/functional to get indices and embeddings
         cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
@@ -256,7 +256,7 @@ class DropInVisionTransformer(torch.nn.Module):
         rot_mats = [cos, sin]
 
         # 5. Prepare input tensor for the TT model using window_index
-        tt_input = self.tt_model.prepare_input(patch_input, window_index)
+        tt_input = self.tt_model.prepare_input(patch_input, window_index, seq_len)
 
         # --- TT Model Execution ---
         tt_out = self.tt_model(

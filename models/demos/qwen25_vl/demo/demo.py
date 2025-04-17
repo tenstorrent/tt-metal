@@ -109,7 +109,7 @@ def create_tt_model(
             "models/demos/qwen25_vl/demo/sample_prompts/demo.json",  # single qwen demo prompt
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
-            4096,  # max_seq_len, allow for image tokens
+            12288,  # max_seq_len, allow for image tokens
             1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
