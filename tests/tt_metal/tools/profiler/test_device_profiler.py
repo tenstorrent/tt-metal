@@ -442,6 +442,56 @@ def test_noc_event_profiler():
         assert len(noc_trace_data) == 8
 
 
+@skip_for_blackhole()
+def test_fabric_event_profiler():
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
+
+    testCommand = f"build/{PROG_EXMP_DIR}/test_fabric_event_profiler"
+    clear_profiler_runtime_artifacts()
+    nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+    command = f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand}"
+    ret_code = os.waitstatus_to_exitcode(os.system(command))
+
+    RETCODE_INCOMPATIBLE_DEVICE = 95
+    if ret_code == RETCODE_INCOMPATIBLE_DEVICE:
+        logger.warning(f"fabric event profiler test skipped because device doesn't support fabric.")
+        return
+    else:
+        assert ret_code == 0, f"test command '{testCommand}' returned unsuccessfully"
+
+    expected_cluster_coords_file = f"{PROFILER_LOGS_DIR}/cluster_coordinates.json"
+    assert os.path.isfile(
+        expected_cluster_coords_file
+    ), f"expected cluster coordinates file '{expected_cluster_coords_file}' does not exist"
+
+    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    assert os.path.isfile(expected_trace_file), f"expected noc trace file '{expected_trace_file}' does not exist"
+
+    fabric_event_count = 0
+    with open(expected_trace_file, "r") as nocTraceJson:
+        try:
+            noc_trace_data = json.load(nocTraceJson)
+        except json.JSONDecodeError:
+            raise ValueError(f"noc trace file '{expected_trace_file}' is not a valid JSON file")
+
+        assert isinstance(noc_trace_data, list), f"noc trace file '{expected_trace_file}' format is incorrect"
+        assert len(noc_trace_data) > 0, f"noc trace file '{expected_trace_file}' is empty"
+        for event in noc_trace_data:
+            assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
+            if event.get("type", "") == "FABRIC_UNICAST_WRITE":
+                fabric_event_count += 1
+                fabric_send_metadata = event.get("fabric_send", None)
+                if fabric_send_metadata is not None:
+                    assert fabric_send_metadata.get("eth_chan", None) is not None
+                    assert fabric_send_metadata.get("hops", None) is not None
+
+    EXPECTED_FABRIC_EVENT_COUNT = 10
+    assert (
+        fabric_event_count == EXPECTED_FABRIC_EVENT_COUNT
+    ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {EXPECTED_FABRIC_EVENT_COUNT}"
+
+
 def test_sub_device_profiler():
     ARCH_NAME = os.getenv("ARCH_NAME")
     run_gtest_profiler_test(
