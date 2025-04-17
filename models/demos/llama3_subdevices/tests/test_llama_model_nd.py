@@ -201,6 +201,9 @@ def test_llama_model_inference(
 
             tt_output_torch = ttnn.to_torch(tt_out_tok, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
 
+            # Only check user 0, see GH issue #16719
+            tt_output_torch = tt_output_torch[..., :1, :]
+
             outputs.append(tt_output_torch)
 
         ##### Check outputs #####
