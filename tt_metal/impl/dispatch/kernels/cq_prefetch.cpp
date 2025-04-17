@@ -1457,21 +1457,25 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
     // Amount to write depends on how much free space
     uint32_t downstream_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
     if (downstream_pages_left >= npages) {
-        cq_noc_async_write_with_state_any_len<true, true>(
+        // WAIT is not needed here because previous writes have already been flushed. Prefetch H only uses this
+        // function and this function always flushes before returning
+        cq_noc_async_write_with_state_any_len<true, true, CQ_NOC_wait>(
             data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
         downstream_data_ptr += npages * downstream_cb_page_size;
     } else {
         uint32_t tail_pages = npages - downstream_pages_left;
         uint32_t available = downstream_pages_left * downstream_cb_page_size;
         if (available > 0) {
-            cq_noc_async_write_with_state_any_len<true, true>(
+            cq_noc_async_write_with_state_any_len<true, true, CQ_NOC_wait>(
                 data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
             data_ptr += available;
             length -= available;
         }
 
         // Remainder
-        cq_noc_async_write_with_state_any_len<true, true>(
+        // WAIT is needed here because previously "if (available > 0)" then it used the write buf which may still be
+        // busy at this point
+        cq_noc_async_write_with_state_any_len<true, true, CQ_NOC_WAIT>(
             data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
