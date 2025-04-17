@@ -1281,6 +1281,7 @@ void kernel_main() {
             downstream_vc0_noc_interface_buffer_index_local_addr,
             receiver_channel_forwarding_data_cmd_buf_ids[0],
             receiver_channel_forwarding_sync_cmd_buf_ids[0]);
+        downstream_edm_noc_interfaces[0].template setup_edm_noc_cmd_buf<tt::tt_fabric::edm_to_downstream_noc>();
     }
     if constexpr (enable_ring_support) {
         if (has_downstream_edm_vc1_buffer_connection) {
@@ -1302,6 +1303,7 @@ void kernel_main() {
                 downstream_vc1_noc_interface_buffer_index_local_addr,
                 receiver_channel_forwarding_data_cmd_buf_ids[1],
                 receiver_channel_forwarding_sync_cmd_buf_ids[1]);
+            downstream_edm_noc_interfaces[1].template setup_edm_noc_cmd_buf<tt::tt_fabric::edm_to_downstream_noc>();
         }
     }
     for (uint8_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
@@ -1345,7 +1347,7 @@ void kernel_main() {
 
     if (has_downstream_edm_vc0_buffer_connection) {
         for (auto& downstream_edm_noc_interface : downstream_edm_noc_interfaces) {
-            downstream_edm_noc_interface.template open<true>();
+            downstream_edm_noc_interface.template open<true, tt::tt_fabric::worker_handshake_noc>();
             *downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr = 0;
             ASSERT(*downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr == 0);
         }

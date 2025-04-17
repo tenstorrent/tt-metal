@@ -92,11 +92,27 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
         auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
         auto end_trid = start_trid + NUM_TRANSACTION_IDS;
         for (int i = start_trid; i < end_trid; i++) {
-            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+            } else {
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+            }
         }
     } else {
         for (size_t i = 0; i < NUM_TRANSACTION_IDS; i++) {
-            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+            } else {
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_downstream_noc, i));
+                while (
+                    !ncrisc_noc_nonposted_write_with_transaction_id_flushed(tt::tt_fabric::edm_to_local_chip_noc, i));
+            }
         }
     }
 }
@@ -223,6 +239,8 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
     update_packet_header_for_next_hop(packet_header, cached_routing_fields);
-    downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<enable_ring_support>(
+    downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
+        enable_ring_support,
+        tt::tt_fabric::edm_to_downstream_noc>(
         reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
 }

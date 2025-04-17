@@ -41,6 +41,12 @@ int main(int argc, char** argv) {
         tt::log_warning("This test with {} links can only be run on TG devices", num_links);
         return 1;
     }
+
+    if (tt::tt_metal::GetNumAvailableDevices() == min_test_num_devices && num_links > 1 && line_size > 4) {
+        tt::log_warning("T3000 cannot run multi-link with more than 4 devices");
+        return 1;
+    }
+
     TT_FATAL(num_messages > 0, "num_messages must be greater than 0");
     TT_FATAL(packet_payload_size_bytes > 0, "packet_payload_size_bytes must be greater than 0");
     TT_FATAL(num_links > 0, "num_links must be greater than 0");
