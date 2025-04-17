@@ -131,10 +131,24 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
+        (  # Batch-1 run with single decoder layer (CI only) - single user, small prompt
+            "models/demos/qwen25_vl/demo/sample_prompts/demo.json",  # single qwen demo prompt
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
+            4096,  # max_seq_len, allow for image tokens
+            1,  # batch_size -- samples to load from the prompt JSON
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+        ),
     ],
     ids=[
         "batch-1",  # latency
         "batch-2",  # multi-user
+        "ci-only",  # ci_only
     ],
 )
 @pytest.mark.parametrize(
@@ -178,6 +192,8 @@ def test_demo(
     """
 
     if is_ci_env and (optimizations == ModelOptimizations.accuracy or not ci_only):
+        pytest.skip("CI only runs the CI-only tests")
+    if not is_ci_env and ci_only:
         pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG
@@ -265,12 +281,21 @@ def test_demo(
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     # Load vision model and processor
+    # reduce the number of layers to 1 for fast ci runs (also useful for debugging)
+    from transformers import logging as transformers_logging
+
+    # Set logging level to ERROR to suppress warnings about unexpected keys
+    transformers_logging.set_verbosity_error()
+    config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(model_args.model_name)
+    if ci_only:
+        config.vision_config.depth = 1
     reference_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        model_args.model_name, torch_dtype="auto", device_map="auto"
+        model_args.model_name, config=config, torch_dtype="auto", device_map="auto"
     )
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
         vision_model_args = VisionModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_seq_len)
+        vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
     else:
         visual_model = reference_model.visual

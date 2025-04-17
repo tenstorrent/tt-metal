@@ -84,6 +84,7 @@ run_n150_tests(){
   run_common_perf_tests; fail+=$?
 
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo --timeout 900; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 900; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1
