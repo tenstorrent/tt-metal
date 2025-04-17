@@ -5,14 +5,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
+import torch
 import ttnn
 
-from .utils import from_torch
-
-if TYPE_CHECKING:
-    import torch
+from . import utils
+from .utils import from_torch, from_torch_fast
 
 
 @dataclass
@@ -50,8 +48,10 @@ class TtRmsNorm:
 
 @dataclass
 class TtLayerNormParameters:
+    device: ttnn.MeshDevice
     weight: ttnn.Tensor | None = None
     bias: ttnn.Tensor | None = None
+    distributed: bool = False
 
     @classmethod
     def from_torch(
@@ -59,16 +59,59 @@ class TtLayerNormParameters:
         state: dict[str, torch.Tensor],
         *,
         dtype: ttnn.DataType | None = None,
-        device: ttnn.Device,
-        shard_dim: int | None = None,
+        device: ttnn.MeshDevice,
+        distributed: bool = True,
+        weight_shape: list[int] | None = None,
     ) -> TtLayerNormParameters:
+        _, mesh_width = device.shape
+        distributed = distributed and mesh_width > 1
+
+        weight = state.get("weight")
+        bias = state.get("bias")
+
+        if distributed:
+            # ttnn.layer_norm_post_all_gather currently requires weight and bias
+            if weight is None:
+                assert weight_shape is not None, "weight_shape is required when weight is missing"
+                weight = torch.ones(weight_shape)
+            if bias is None:
+                bias = torch.zeros_like(weight)
+
+            h = 32 * mesh_width
+            # TODO: Is this the correct way to add the padding?
+            weight = torch.nn.functional.pad(weight, [0, (-weight.shape[-1]) % h])
+            bias = torch.nn.functional.pad(bias, [0, (-bias.shape[-1]) % h])
+
+            _, mesh_width = device.shape
+            weight = weight.reshape([-1, h])
+            bias = bias.reshape([-1, h])
+
+        mesh_mapper = ttnn.ShardTensor2dMesh(device, tuple(device.shape), (None, -1)) if distributed else None
+        layout = ttnn.ROW_MAJOR_LAYOUT if distributed else ttnn.TILE_LAYOUT
+        if distributed and dtype != ttnn.float32:
+            dtype = ttnn.bfloat16
+
         return cls(
-            weight=from_torch(state["weight"], dtype=dtype, mesh_device=device, shard_dim=shard_dim)
-            if "weight" in state
+            weight=from_torch_fast(
+                weight,
+                layout=layout,
+                dtype=dtype,
+                device=device,
+                mesh_mapper=mesh_mapper,
+            )
+            if weight is not None
             else None,
-            bias=from_torch(state["bias"], dtype=dtype, mesh_device=device, shard_dim=shard_dim)
-            if "bias" in state
+            bias=from_torch_fast(
+                bias,
+                layout=layout,
+                dtype=dtype,
+                device=device,
+                mesh_mapper=mesh_mapper,
+            )
+            if bias is not None
             else None,
+            distributed=distributed,
+            device=device,
         )
 
 
@@ -77,8 +120,10 @@ class TtLayerNorm:
         super().__init__()
 
         self._eps = eps
+        self._distributed = parameters.distributed
         self._weight = parameters.weight
         self._bias = parameters.bias
+        self._device = parameters.device
 
     def __call__(
         self,
@@ -87,8 +132,40 @@ class TtLayerNorm:
         program_config: ttnn.ProgramConfig | None = None,
         compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> ttnn.Tensor:
-        return ttnn.layer_norm(
+        if not self._distributed:
+            return ttnn.layer_norm(
+                x,
+                weight=self._weight,
+                bias=self._bias,
+                epsilon=self._eps,
+                memory_config=memory_config,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+
+        rank = len(x.shape)
+        if rank < 4:
+            shape = [1] * (4 - rank) + list(x.shape)
+            x = ttnn.reshape(x, shape)
+
+        stats = ttnn.layer_norm_pre_all_gather(
             x,
+            compute_kernel_config=compute_kernel_config,
+            dtype=ttnn.bfloat16,
+        )
+
+        stats = utils.all_gather(
+            stats,
+            dim=-1,
+            cluster_axis=1,
+            mesh_device=self._device,
+            # all_gather currently requires linear topology when specifying a cluster axis
+            topology=ttnn.Topology.Linear,
+        )
+
+        x = ttnn.layer_norm_post_all_gather(
+            x,
+            stats,
             weight=self._weight,
             bias=self._bias,
             epsilon=self._eps,
@@ -97,40 +174,8 @@ class TtLayerNorm:
             compute_kernel_config=compute_kernel_config,
         )
 
+        if rank < 4:
+            shape = list(x.shape)[4 - rank :]
+            x = ttnn.reshape(x, shape)
 
-class TtDistributedLayerNorm:
-    def __init__(self, parameters: TtLayerNormParameters, *, eps: float) -> None:
-        super().__init__()
-
-        self._eps = eps
-        self._weight = parameters.weight
-        self._bias = parameters.bias
-
-    def __call__(
-        self,
-        x: ttnn.Tensor,
-        memory_config: ttnn.MemoryConfig | None = None,
-        program_config: ttnn.ProgramConfig | None = None,
-        compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
-    ) -> ttnn.Tensor:
-        tt_stats = ttnn.layer_norm_pre_all_gather(x, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
-        # AllGather stats
-        tt_stats = ttnn.all_gather(
-            tt_stats,
-            dim=3,
-            memory_config=memory_config,
-        )
-        # Run distributed rmsnorm part 2
-        tt_out = ttnn.layer_norm_post_all_gather(
-            x,
-            tt_stats,
-            epsilon=self._eps,
-            weight=self._weight,
-            bias=self._bias,
-            memory_config=memory_config,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-        )
-        tt_stats.deallocate(True)
-
-        return tt_out
+        return x

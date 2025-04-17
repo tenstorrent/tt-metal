@@ -14,7 +14,7 @@ from .normalization import TtLayerNorm, TtLayerNormParameters
 from .patch_embedding import TtPatchEmbed, TtPatchEmbedParameters
 from .substate import indexed_substates, substate
 from .timestep_embedding import TtCombinedTimestepTextProjEmbeddings, TtCombinedTimestepTextProjEmbeddingsParameters
-from .transformer_block import TtTransformerBlock, TtTransformerBlockParameters, chunk_time, chunk_device_tensors
+from .transformer_block import TtTransformerBlock, TtTransformerBlockParameters, chunk_device_tensors, chunk_time
 
 if TYPE_CHECKING:
     import torch
@@ -57,7 +57,9 @@ class TtSD3Transformer2DModelParameters:
             time_embed_out=TtLinearParameters.from_torch(
                 substate(state, "norm_out.linear"), dtype=dtype, device=device, shard_dim=None
             ),
-            norm_out=TtLayerNormParameters.from_torch(substate(state, "norm_out.norm"), dtype=dtype, device=device),
+            norm_out=TtLayerNormParameters.from_torch(
+                substate(state, "norm_out.norm"), dtype=dtype, device=device, distributed=False
+            ),
             proj_out=TtLinearParameters.from_torch(
                 substate(state, "proj_out"), dtype=dtype, device=device, shard_dim=None
             ),

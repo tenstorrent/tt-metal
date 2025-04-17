@@ -44,29 +44,42 @@ def to_torch(tensor, mesh_device, dtype, shard_dim=-1):
 def from_torch_fast(
     t: torch.Tensor,
     *,
-    device: ttnn.Device | None = None,
+    device: ttnn.Device | ttnn.MeshDevice | None = None,
     layout: ttnn.Layout | None = None,
     dtype: ttnn.DataType | None = None,
     memory_config: ttnn.MemoryConfig | None = None,
     to_host: bool = False,
+    mesh_mapper: ttnn.TensorToMesh | None = None,
 ) -> ttnn.Tensor:
+    if isinstance(device, ttnn.MeshDevice) and mesh_mapper is None:
+        mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+
     # ttnn.to_layout does not support changing the datatype or memory_config if the layout already matches. ttnn.clone
     # does not support changing the datatype if the input is not tiled. An option could be to tilize the input before
     # changing the datatype and then untilize again, but it was not tested if this would be faster than converting the
-    # datatype on the host.
+    # datatype on the host. Also ttnn.to_dtype does not support device tensors.
     if device is None or layout is None or layout == ttnn.ROW_MAJOR_LAYOUT:
-        return ttnn.from_torch(t, device=device, layout=layout, dtype=dtype)
+        return ttnn.from_torch(
+            t,
+            device=None if to_host else device,
+            layout=layout,
+            dtype=dtype,
+            memory_config=memory_config,
+            mesh_mapper=mesh_mapper,
+        )
 
-    tensor = ttnn.from_torch(t, device=device)
+    tensor = ttnn.from_torch(t, device=device, mesh_mapper=mesh_mapper)
 
-    new = ttnn.to_layout(tensor, layout, dtype=dtype, memory_config=memory_config)
-    ttnn.deallocate(tensor)
-    tensor = new
+    if tensor.shape[-2] == 32 and t.shape[-2] == 1:
+        # Work around the fact that the shape is erroneously set to the padded shape under certain conditions.
+        assert isinstance(device, ttnn.MeshDevice)
+        assert dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b)
+        tensor = tensor.reshape(ttnn.Shape(t.shape))
+
+    tensor = ttnn.to_layout(tensor, layout, dtype=dtype, memory_config=memory_config)
 
     if to_host:
-        new = tensor.cpu()
-        ttnn.deallocate(tensor)
-        tensor = new
+        tensor = tensor.cpu()
 
     return tensor
 
@@ -87,7 +100,7 @@ def assert_quality(
     a: ttnn.Tensor | torch.Tensor,
     b: ttnn.Tensor | torch.Tensor,
     *,
-    num_devices,
+    num_devices: int | None = None,
     pcc: float | None = None,
     mse: float | None = None,
     shard_dim=None,
@@ -115,3 +128,35 @@ def assert_quality(
         assert pcc_calculated >= pcc, f"PCC={pcc_calculated:.6f}"
     if mse is not None:
         assert mse_calculated <= mse, f"MSE={mse_calculated:.6f}"
+
+
+def all_gather(
+    x: ttnn.Tensor,
+    dim: int,
+    *,
+    cluster_axis: int | None = None,
+    mesh_device: ttnn.MeshDevice | None = None,
+    num_links: int = 1,
+    topology: ttnn.Topology = ttnn.Topology.Ring,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    assert cluster_axis is None or mesh_device is not None, "cluster_axis requires mesh_device to be set"
+
+    if cluster_axis is not None:
+        return ttnn.all_gather(
+            x,
+            dim,
+            cluster_axis,
+            mesh_device,
+            num_links=num_links,
+            topology=topology,
+            memory_config=memory_config,
+        )
+
+    return ttnn.all_gather(
+        x,
+        dim,
+        num_links=num_links,
+        topology=topology,
+        memory_config=memory_config,
+    )

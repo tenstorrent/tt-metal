@@ -7,13 +7,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import ttnn
 import tracy
+import ttnn
 
 from .attention import TtAttention, TtAttentionParameters
 from .feed_forward import TtFeedForward, TtFeedForwardParameters
 from .linear import TtLinear, TtLinearParameters
-from .normalization import TtDistributedLayerNorm, TtLayerNorm, TtLayerNormParameters
+from .normalization import TtLayerNorm, TtLayerNormParameters
 from .substate import has_substate, substate
 
 if TYPE_CHECKING:
@@ -27,6 +27,7 @@ class TtTransformerBlockParameters:
     prompt_time_embed: TtLinearParameters
     spatial_time_embed: TtLinearParameters
     prompt_norm_1: TtLayerNormParameters
+    prompt_norm_2: TtLayerNormParameters
     spatial_norm_1: TtLayerNormParameters
     spatial_norm_2: TtLayerNormParameters
     prompt_ff: TtFeedForwardParameters | None
@@ -41,6 +42,16 @@ class TtTransformerBlockParameters:
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
     ) -> TtTransformerBlockParameters:
+        embedding_dim = state["norm1.linear.weight"].shape[1]
+
+        def norm(state: dict[str, torch.Tensor]) -> TtLayerNormParameters:
+            return TtLayerNormParameters.from_torch(
+                state,
+                dtype=dtype,
+                device=device,
+                weight_shape=[embedding_dim],
+            )
+
         has_spatial_attn = has_substate(state, "attn2")
         has_ff_context = has_substate(state, "ff_context")
         spatial_time_embed_chunks = 9 if has_spatial_attn else 6
@@ -54,15 +65,10 @@ class TtTransformerBlockParameters:
             )
             if has_spatial_attn
             else None,
-            spatial_norm_1=TtLayerNormParameters.from_torch(
-                substate(state, "norm1.norm"), dtype=dtype, device=device, shard_dim=-1
-            ),
-            spatial_norm_2=TtLayerNormParameters.from_torch(
-                substate(state, "norm2"), dtype=dtype, device=device, shard_dim=-1
-            ),
-            prompt_norm_1=TtLayerNormParameters.from_torch(
-                substate(state, "norm1_context.norm"), dtype=dtype, device=device, shard_dim=-1
-            ),
+            spatial_norm_1=norm(substate(state, "norm1.norm")),
+            spatial_norm_2=norm(substate(state, "norm2")),
+            prompt_norm_1=norm(substate(state, "norm1_context.norm")),
+            prompt_norm_2=norm({}),
             spatial_time_embed=TtLinearParameters.from_torch_time_embed(
                 substate(state, "norm1.linear"),
                 dtype=dtype,
@@ -111,10 +117,10 @@ class TtTransformerBlock:
             else None
         )
 
-        self._spatial_norm_1 = TtDistributedLayerNorm(parameters.spatial_norm_1, eps=eps)
-        self._spatial_norm_2 = TtDistributedLayerNorm(parameters.spatial_norm_2, eps=eps)
-        self._prompt_norm_1 = TtDistributedLayerNorm(parameters.prompt_norm_1, eps=eps)
-        self._prompt_norm_2 = TtDistributedLayerNorm(TtLayerNormParameters(), eps=eps)
+        self._spatial_norm_1 = TtLayerNorm(parameters.spatial_norm_1, eps=eps)
+        self._spatial_norm_2 = TtLayerNorm(parameters.spatial_norm_2, eps=eps)
+        self._prompt_norm_1 = TtLayerNorm(parameters.prompt_norm_1, eps=eps)
+        self._prompt_norm_2 = TtLayerNorm(parameters.prompt_norm_2, eps=eps)
 
         self._spatial_ff = TtFeedForward(parameters.spatial_ff)
         self._prompt_ff = TtFeedForward(parameters.prompt_ff) if parameters.prompt_ff is not None else None
