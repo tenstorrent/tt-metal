@@ -8,7 +8,6 @@ from diffusers import AutoencoderKL
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_upsample import UpsampleBlock
-from models.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -17,8 +16,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "input_channels, input_height, input_width, out_channels, output_height, output_width, conv_in_channel_split_factor, conv_out_channel_split_factor, block_id",
     [
         (512, 64, 64, 512, 128, 128, 1, 1, 0),
-        (512, 128, 128, 512, 256, 256, 8 if is_wormhole_b0() else 2, 1 if is_wormhole_b0() else 2, 1),
-        (256, 256, 256, 256, 512, 512, 8 if is_wormhole_b0() else 4, 2, 2),
+        (512, 128, 128, 512, 256, 256, 2, 2, 1),
+        (256, 256, 256, 256, 512, 512, 4, 2, 2),
     ],
 )
 def test_upsample(
@@ -76,4 +75,4 @@ def test_upsample(
     ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output, ttnn_output, 0.97)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
