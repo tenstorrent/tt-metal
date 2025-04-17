@@ -19,27 +19,27 @@ class TtBasicTransformerBlock(nn.Module):
 
         norm1_weights = state_dict[f"{module_path}.norm1.weight"]
         norm1_bias = state_dict[f"{module_path}.norm1.bias"]
-        self.tt_norm1_weights = ttnn.from_torch(norm1_weights, ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        self.tt_norm1_weights = ttnn.from_torch(norm1_weights, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         self.tt_norm1_bias = (
-            ttnn.from_torch(norm1_bias, ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(norm1_bias, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
             if norm1_bias is not None
             else None
         )
 
         norm2_weights = state_dict[f"{module_path}.norm2.weight"]
         norm2_bias = state_dict[f"{module_path}.norm2.bias"]
-        self.tt_norm2_weights = ttnn.from_torch(norm2_weights, ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        self.tt_norm2_weights = ttnn.from_torch(norm2_weights, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         self.tt_norm2_bias = (
-            ttnn.from_torch(norm2_bias, ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(norm2_bias, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
             if norm2_bias is not None
             else None
         )
 
         norm3_weights = state_dict[f"{module_path}.norm3.weight"]
         norm3_bias = state_dict[f"{module_path}.norm3.bias"]
-        self.tt_norm3_weights = ttnn.from_torch(norm3_weights, ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+        self.tt_norm3_weights = ttnn.from_torch(norm3_weights, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
         self.tt_norm3_bias = (
-            ttnn.from_torch(norm3_bias, ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+            ttnn.from_torch(norm3_bias, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
             if norm3_bias is not None
             else None
         )
