@@ -187,25 +187,6 @@ class resnet50Bottleneck:
                 ),
             }
 
-            # if not ttnn.is_tensor_storage_on_device(self.ds_conv_weight_tensor):
-            #     self.ds_conv_weight_tensor = ttnn.prepare_conv_weights(
-            #         weight_tensor=self.ds_conv_weight_tensor,
-            #         weights_format="OIHW",
-            #         input_memory_config=x.memory_config(),
-            #         input_layout=x.get_layout(),
-            #         has_bias=True,
-            #         **conv_kwargs_1,
-            #     )
-            #     self.ds_conv_bias_tensor = ttnn.prepare_conv_bias(
-            #         bias_tensor=self.ds_conv_bias_tensor,
-            #         input_memory_config=x.memory_config(),
-            #         input_layout=x.get_layout(),
-            #         **conv_kwargs_1,
-            #     )
-
-            #     self.ds_conv_weight_tensor = ttnn.to_device(self.ds_conv_weight_tensor, device)
-            #     self.ds_conv_bias_tensor = ttnn.to_device(self.ds_conv_bias_tensor, device)
-
             ds_out = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.ds_conv_weight_tensor,
@@ -264,24 +245,6 @@ class resnet50Bottleneck:
                 transpose_shards=height_sharding,
             ),
         }
-
-        # if not ttnn.is_tensor_storage_on_device(self.conv1_weight_tensor):
-        #     self.conv1_weight_tensor = ttnn.prepare_conv_weights(
-        #         weight_tensor=self.conv1_weight_tensor,
-        #         weights_format="OIHW",
-        #         input_memory_config=x.memory_config(),
-        #         input_layout=x.get_layout(),
-        #         has_bias=True,
-        #         **conv_kwargs_2,
-        #     )
-        #     self.conv1_bias_tensor = ttnn.prepare_conv_bias(
-        #         bias_tensor=self.conv1_bias_tensor,
-        #         input_memory_config=x.memory_config(),
-        #         input_layout=x.get_layout(),
-        #         **conv_kwargs_2,
-        #     )
-        #     self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
-        #     self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device)
 
         out, [input_height, input_width] = ttnn.conv2d(
             input_tensor=x,
@@ -398,25 +361,6 @@ class resnet50Bottleneck:
             ),
         }
 
-        # if not ttnn.is_tensor_storage_on_device(self.conv2_weight_tensor):
-        #     self.conv2_weight_tensor = ttnn.prepare_conv_weights(
-        #         weight_tensor=self.conv2_weight_tensor,
-        #         weights_format="OIHW",
-        #         input_memory_config=out.memory_config(),
-        #         input_layout=out.get_layout(),
-        #         has_bias=True,
-        #         **conv_kwargs_3,
-        #     )
-        #     self.conv2_bias_tensor = ttnn.prepare_conv_bias(
-        #         bias_tensor=self.conv2_bias_tensor,
-        #         input_memory_config=out.memory_config(),
-        #         input_layout=out.get_layout(),
-        #         **conv_kwargs_3,
-        #     )
-
-        #     self.conv2_weight_tensor = ttnn.to_device(self.conv2_weight_tensor, device)
-        #     self.conv2_bias_tensor = ttnn.to_device(self.conv2_bias_tensor, device)
-
         out, [input_height, input_width] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv2_weight_tensor,
@@ -452,24 +396,6 @@ class resnet50Bottleneck:
                 transpose_shards=height_sharding,
             ),
         }
-        # if not ttnn.is_tensor_storage_on_device(self.conv3_weight_tensor):
-        #     self.conv3_weight_tensor = ttnn.prepare_conv_weights(
-        #         weight_tensor=self.conv3_weight_tensor,
-        #         weights_format="OIHW",
-        #         input_memory_config=out.memory_config(),
-        #         input_layout=out.get_layout(),
-        #         has_bias=True,
-        #         **conv_kwargs_4,
-        #     )
-        #     self.conv3_bias_tensor = ttnn.prepare_conv_bias(
-        #         bias_tensor=self.conv3_bias_tensor,
-        #         input_memory_config=out.memory_config(),
-        #         input_layout=out.get_layout(),
-        #         **conv_kwargs_4,
-        #     )
-
-        #     self.conv3_weight_tensor = ttnn.to_device(self.conv3_weight_tensor, device)
-        #     self.conv3_bias_tensor = ttnn.to_device(self.conv3_bias_tensor, device)
 
         out = ttnn.conv2d(
             input_tensor=out,
@@ -699,24 +625,6 @@ class resnet50:
                 act_block_h_override=act_block_h_override,
             ),
         }
-        # if not ttnn.is_tensor_storage_on_device(self.conv1_weight_tensor):
-        #     self.conv1_weight_tensor = ttnn.prepare_conv_weights(
-        #         weight_tensor=self.conv1_weight_tensor,
-        #         weights_format="OIHW",
-        #         input_memory_config=input_tensor.memory_config(),
-        #         input_layout=input_tensor.get_layout(),
-        #         has_bias=True,
-        #         **conv_kwargs,
-        #     )
-        #     self.conv1_bias_tensor = ttnn.prepare_conv_bias(
-        #         bias_tensor=self.conv1_bias_tensor,
-        #         input_memory_config=input_tensor.memory_config(),
-        #         input_layout=input_tensor.get_layout(),
-        #         **conv_kwargs,
-        #     )
-
-        #     self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
-        #     self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device)
 
         x, [x_height, x_width] = ttnn.conv2d(
             input_tensor=input_tensor,
@@ -1053,25 +961,6 @@ class resnet50:
                 act_block_h_override=act_block_h_override,
             ),
         }
-
-        # if not ttnn.is_tensor_storage_on_device(self.conv1_weight_tensor):
-        #     self.conv1_weight_tensor = ttnn.prepare_conv_weights(
-        #         weight_tensor=self.conv1_weight_tensor,
-        #         weights_format="OIHW",
-        #         input_memory_config=input_tensor.memory_config(),
-        #         input_layout=input_tensor.get_layout(),
-        #         has_bias=True,
-        #         **conv_kwargs,
-        #     )
-        #     self.conv1_bias_tensor = ttnn.prepare_conv_bias(
-        #         bias_tensor=self.conv1_bias_tensor,
-        #         input_memory_config=input_tensor.memory_config(),
-        #         input_layout=input_tensor.get_layout(),
-        #         **conv_kwargs,
-        #     )
-
-        #     self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
-        #     self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device)
 
         x, [x_height, x_width] = ttnn.conv2d(
             input_tensor=input_tensor,
