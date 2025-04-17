@@ -433,7 +433,10 @@ def test_tt_model_acc(
         logger.info("\nError Summary (only showing errors where reference top-1 matches true token):")
         logger.info("-" * 120)
         for error in errors:
-            true_token = input_ids[0, error["position"] + 1].item()
+            if error["position"] + 1 < input_ids.shape[1]:
+                true_token = input_ids[0, error["position"] + 1].item()
+            else:
+                true_token = None
             if error["expected_ids"][0] == true_token:
                 sanitize = lambda x: repr(x)[1:-1]  # Use repr() and remove the outer quotes
                 context = sanitize(error["context"])
