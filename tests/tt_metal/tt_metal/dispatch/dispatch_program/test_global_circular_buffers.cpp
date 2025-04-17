@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "dispatch_fixture.hpp"

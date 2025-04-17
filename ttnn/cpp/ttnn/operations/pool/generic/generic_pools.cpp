@@ -4,7 +4,7 @@
 
 #include "generic_pools.hpp"
 
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"

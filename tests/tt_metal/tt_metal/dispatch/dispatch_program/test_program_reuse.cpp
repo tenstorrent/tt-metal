@@ -34,7 +34,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include "command_queue_fixture.hpp"

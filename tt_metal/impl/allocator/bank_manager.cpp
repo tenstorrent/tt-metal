@@ -13,7 +13,7 @@
 #include "allocator/algorithms/allocator_algorithm.hpp"
 #include "allocator_types.hpp"
 #include "assert.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "logger.hpp"
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"

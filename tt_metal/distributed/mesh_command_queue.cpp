@@ -18,7 +18,7 @@
 
 #include "assert.hpp"
 #include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"

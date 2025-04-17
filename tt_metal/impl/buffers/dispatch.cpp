@@ -14,7 +14,7 @@
 #include <utility>
 
 #include "assert.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "dispatch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"

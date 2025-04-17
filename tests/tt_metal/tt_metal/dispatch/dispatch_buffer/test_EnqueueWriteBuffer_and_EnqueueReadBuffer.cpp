@@ -31,7 +31,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/command_queue_common.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/constants.hpp>
