@@ -82,8 +82,8 @@ void ArgMax::validate_with_output_tensors(
 
     if (this->use_multicore && this->sub_core_grids.has_value()) {
         TT_FATAL(
-            this->sub_core_grids->ranges().size() == 1,
-            "Multicore argmax only supports a single core grid range, but got {} ranges",
+            this->sub_core_grids->ranges().size() <= 2,
+            "Multicore argmax only supports up to 2 core grid ranges, but got {} ranges",
             this->sub_core_grids->ranges().size());
     }
 }

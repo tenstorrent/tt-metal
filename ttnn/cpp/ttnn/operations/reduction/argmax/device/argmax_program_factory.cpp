@@ -17,6 +17,73 @@ namespace ttnn::operations::reduction::detail {
 
 using namespace tt::constants;
 
+/**
+ * @brief Distributes work across cores for argmax reduction operations
+ *
+ * If a sub_core_grids is provided, it will be used to distribute the work evenly across the cores.
+ * Otherwise, we distribute to maximum of two core groups, with each core group getting a minimum of
+ * `min_red_dim_units_per_core` elements to process, except the last core.
+ * @param device Pointer to the device
+ * @param red_dim_units Total units in the reduction dimension
+ * @param min_red_dim_units_per_core Minimum units per core (for alignment)
+ * @param sub_core_grids Optional core grid specification
+ * @return Tuple containing distribution parameters:
+ *         - all_cores: CoreRangeSet of all cores
+ *         - cores0: First group of cores
+ *         - cores1: Second group of cores (if any)
+ *         - red_dim_units0: Units assigned to first group per core
+ *         - red_dim_units1: Units assigned to second group per core
+ */
+static inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> distribute_work_to_cores(
+    const tt::tt_metal::IDevice* device,
+    const uint32_t red_dim_units,
+    const uint32_t min_red_dim_units_per_core,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    CoreRangeSet all_cores, cores0, cores1;
+    uint32_t red_dim_units0, red_dim_units1;
+
+    if (sub_core_grids.has_value()) {
+        all_cores = sub_core_grids.value();
+        // If there are two core groups, assign to cores0 and cores1
+        // Otherwise, assign to cores0
+        // Ensure red_dim is divided in blocks of min_red_dim_units_per_core
+        const uint32_t total_blocks = tt::div_up(red_dim_units, min_red_dim_units_per_core);
+
+        if (all_cores.size() == 2) {
+            cores0 = CoreRangeSet(all_cores.ranges().at(0));
+            cores1 = CoreRangeSet(all_cores.ranges().at(1));
+
+            // Ensure red_dim is divided in blocks of min_red_dim_units_per_core, equally to all cores
+            const uint32_t total_cores = cores0.num_cores() + cores1.num_cores();
+            const uint32_t blocks_per_core = tt::div_up(total_blocks, total_cores);
+
+            red_dim_units0 = blocks_per_core * min_red_dim_units_per_core;
+            red_dim_units1 = blocks_per_core * min_red_dim_units_per_core;
+            ;
+        } else {
+            // If there is only one core group, assign to cores0, keep cores1 empty
+            cores0 = all_cores;
+            cores1 = CoreRangeSet();
+
+            const auto total_cores = cores0.num_cores();
+            const uint32_t blocks_per_core = tt::div_up(total_blocks, total_cores);
+
+            red_dim_units0 = blocks_per_core * min_red_dim_units_per_core;
+            red_dim_units1 = 0;
+        }
+    } else {
+        // We pick as many cores as possible, but each core will read a multiple of min_red_dim_units_per_core
+        const auto core_grid = device->compute_with_storage_grid_size();
+        uint32_t num_total_cores;
+        std::tie(num_total_cores, all_cores, cores0, cores1, red_dim_units0, red_dim_units1) =
+            tt::tt_metal::split_work_to_cores(core_grid, tt::div_up(red_dim_units, min_red_dim_units_per_core));
+        red_dim_units0 *= min_red_dim_units_per_core;
+        red_dim_units1 *= min_red_dim_units_per_core;
+    }
+
+    return {all_cores, cores0, cores1, red_dim_units0, red_dim_units1};
+}
+
 operation::ProgramWithCallbacks argmax_single_core(
     const Tensor& input, const Tensor& output, const std::optional<uint32_t> dim, const bool keepdim) {
     tt::tt_metal::Program program{};
@@ -220,30 +287,14 @@ operation::ProgramWithCallbacks argmax_multi_core(
     const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
 
     const tt::tt_metal::IDevice* device = output.device();
-    CoreRangeSet all_cores, cores0, cores1;
-    uint32_t num_total_cores, num_cores0, num_cores1;
-    uint32_t red_dim_units0, red_dim_units1;
 
-    if (sub_core_grids.has_value()) {
-        all_cores = sub_core_grids.value();
-        cores0 = all_cores;
-        cores1 = CoreRangeSet();
-        num_total_cores = all_cores.num_cores();
-        num_cores0 = num_total_cores;
-        num_cores1 = 0;
-        red_dim_units0 = red_dim_units;
-        red_dim_units1 = 0;
-    } else {
-        // We pick as many cores as possible, but each core will read a multiple of min_red_dim_units_per_core
-        const auto core_grid = device->compute_with_storage_grid_size();
-        std::tie(num_total_cores, all_cores, cores0, cores1, red_dim_units0, red_dim_units1) =
-            tt::tt_metal::split_work_to_cores(
-                core_grid, tt::round_up(red_dim_units, min_red_dim_units_per_core) / min_red_dim_units_per_core);
-        red_dim_units0 *= min_red_dim_units_per_core;
-        red_dim_units1 *= min_red_dim_units_per_core;
-        num_cores0 = cores0.num_cores();
-        num_cores1 = cores1.num_cores();
-    }
+    // Distribute work to cores
+    auto [all_cores, cores0, cores1, red_dim_units0, red_dim_units1] =
+        distribute_work_to_cores(device, red_dim_units, min_red_dim_units_per_core, sub_core_grids);
+
+    const uint32_t num_cores0 = cores0.num_cores();
+    const uint32_t num_cores1 = cores1.num_cores();
+    const uint32_t num_total_cores = num_cores0 + num_cores1;
 
     // Page sizes for input and output tensors based on the ROW_MAJOR layout
     const auto src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);
