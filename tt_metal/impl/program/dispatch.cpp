@@ -59,6 +59,7 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
+#include "util.hpp"
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 
@@ -769,8 +770,8 @@ BatchedTransfers assemble_runtime_args_commands(
             const auto& common_rt_args = kernel->common_runtime_args();
 
             if (common_rt_args.size() > 0) {
-                CoreType core_type = hal.get_core_type(programmable_core_type_index);
-                if (core_type == CoreType::ETH) {
+                if (!tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(
+                        programmable_core_type_index)) {
                     uint32_t num_sub_cmds = kernel->logical_cores().size();
                     uint32_t max_packed_cmds =
                         calculator.get_max_write_packed_sub_cmds<CQDispatchWritePackedUnicastSubCmd>(
@@ -899,7 +900,8 @@ BatchedTransfers assemble_runtime_args_commands(
         // Common RTAs
         // Set by the user based on the kernel ID. All cores running that kernel ID will get these RTAs
         // On ETH use unicast
-        if (!use_kernel_group_crta_multicast || (core_type != CoreType::WORKER)) {
+        if (!use_kernel_group_crta_multicast ||
+            !tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(index)) {
             for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
                 const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
                 uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
@@ -934,7 +936,8 @@ BatchedTransfers assemble_runtime_args_commands(
                     common_rt_args_data.back().emplace_back(
                         RtaDataPair(kernel->common_runtime_args_data(), common_rt_args));
 
-                    if (core_type == CoreType::ETH) {
+                    // Target core cannot receive multicast commands -> send unicast
+                    if (!tt::tt_metal::MetalContext::instance().hal().get_supports_receiving_multicasts(index)) {
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedUnicastSubCmd>>(
                             std::vector<CQDispatchWritePackedUnicastSubCmd>());
                         auto& unicast_sub_cmd =
@@ -943,7 +946,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         for (auto& core_coord : kernel->logical_cores()) {
                             // can make a vector of unicast encodings here
                             CoreCoord virtual_core_coords =
-                                device->virtual_core_from_logical_core(core_coord, CoreType::ETH);
+                                device->virtual_core_from_logical_core(core_coord, core_type);
                             unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                                 .noc_xy_addr =
                                     device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords)});
