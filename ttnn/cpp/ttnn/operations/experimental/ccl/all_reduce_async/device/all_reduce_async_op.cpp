@@ -22,8 +22,7 @@ AllReduceAsync create_all_reduce_async_struct(
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     uint32_t num_devices = devices.size();
 
     std::optional<IDevice*> forward_device = std::nullopt;
@@ -57,8 +56,7 @@ AllReduceAsync create_all_reduce_async_struct(
         memory_config.value_or(input_tensor.memory_config()),
         topology,
         semaphore.value(),
-        sub_device_id,
-        enable_persistent_fabric_mode};
+        sub_device_id};
 }
 
 }  // namespace all_reduce_detail
@@ -162,8 +160,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
         this->ring_index,
         this->topology,
         this->semaphore,
-        this->sub_device_id,
-        this->enable_persistent_fabric_mode);
+        this->sub_device_id);
 }
 
 tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -199,8 +196,7 @@ Tensor all_reduce_async(
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -217,8 +213,7 @@ Tensor all_reduce_async(
          num_devices,
          topology,
          semaphores,
-         subdevice_id,
-         enable_persistent_fabric_mode](
+         subdevice_id](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -243,8 +238,7 @@ Tensor all_reduce_async(
                     devices,
                     topology,
                     semaphores,
-                    subdevice_id,
-                    enable_persistent_fabric_mode),
+                    subdevice_id),
                 {input_tensor, buffer_tensor});
         },
         {input_tensor, buffer_tensor},

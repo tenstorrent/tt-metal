@@ -24,6 +24,7 @@ jobs:
       matrix:
         test-group: [
           { name: "t3k_ccl_tests", arch: wormhole_b0, cmd: pytest -n auto tests/nightly/t3000/ccl, timeout: 180, owner_id: ULMEPM2MA}, # Sean Nijjar
+          { name: "t3k_ccl_legacy_tests", arch: wormhole_b0, cmd: pytest -n auto tests/nightly/t3000/ccl_legacy, timeout: 180, owner_id: ULMEPM2MA}, # Sean Nijjar
         ]
 
     name: ${{ matrix.test-group.name }}

@@ -22,8 +22,7 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
     const std::optional<uint32_t> num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     return ttnn::operations::experimental::ccl::all_gather_concat(
         input_tensor,
         buffer_tensor,
@@ -35,8 +34,7 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
         num_links,
         memory_config,
         topology,
-        subdevice_id,
-        enable_persistent_fabric_mode);
+        subdevice_id);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

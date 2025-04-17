@@ -284,7 +284,14 @@ DECODER_OP_END_IDX = -11
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872, "worker_l1_size": 1344544}],
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 23887872,
+            "worker_l1_size": 1344544,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
     indirect=True,
 )
 def test_llama_demo(
