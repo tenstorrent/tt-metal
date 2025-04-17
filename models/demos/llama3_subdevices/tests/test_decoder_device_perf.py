@@ -621,7 +621,7 @@ def test_llama_TG_perf_device(
                     f"{op_code_with_id} kernel: {avg_kernel_duration} ns is larger than target "
                     f"({perf_targets[op_code_with_id]['kernel_duration']}) ns, difference: "
                     f"{abs(avg_kernel_duration - upper_limit)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(perf_targets[op_code_with_id]['kernel_duration'] - avg_kernel_duration) / perf_targets[op_code_with_id]['kernel_duration']}"
                 )
@@ -631,7 +631,7 @@ def test_llama_TG_perf_device(
                     f"{op_code_with_id} kernel: {avg_kernel_duration} ns is smaller than target "
                     f"({perf_targets[op_code_with_id]['kernel_duration']}) ns, difference: "
                     f"{abs(lower_limit - avg_kernel_duration)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(perf_targets[op_code_with_id]['kernel_duration'] - avg_kernel_duration) / perf_targets[op_code_with_id]['kernel_duration']}"
                 )
@@ -652,7 +652,7 @@ def test_llama_TG_perf_device(
                     f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is larger than target "
                     f"({perf_targets[op_code_with_id]['op_to_op']}) ns, difference: "
                     f"{abs(avg_dispatch_duration - upper_limit)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(perf_targets[op_code_with_id]['op_to_op'] - avg_dispatch_duration) / perf_targets[op_code_with_id]['op_to_op']}"
                 )
@@ -662,7 +662,7 @@ def test_llama_TG_perf_device(
                     f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is smaller than target "
                     f"({perf_targets[op_code_with_id]['op_to_op']}) ns, difference: "
                     f"{abs(lower_limit - avg_dispatch_duration)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(perf_targets[op_code_with_id]['op_to_op'] - avg_dispatch_duration) / perf_targets[op_code_with_id]['op_to_op']}"
                 )
@@ -791,7 +791,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
                     f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is larger than target "
                     f"({expected_time}) ns, difference: "
                     f"{abs(avg_dispatch_duration - upper_limit)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(expected_time - avg_dispatch_duration) / expected_time}"
                 )
@@ -801,7 +801,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
                     f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is smaller than target "
                     f"({expected_time}) ns, difference: "
                     f"{abs(lower_limit - avg_dispatch_duration)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(expected_time - avg_dispatch_duration) / expected_time}"
                 )
