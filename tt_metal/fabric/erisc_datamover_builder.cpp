@@ -262,6 +262,19 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(std::size_t channel_buffe
     TT_FATAL(
         buffer_addr < this->max_l1_loading_size,
         "Internal error - channel buffers spilled past the end of usable L1 region.");
+
+    // set default noc and cmd bufs (current setup in TG 4U)
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
+        this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_FORWARDING_NOC;
+        this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_REG_CMD_BUF;
+        this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = FabricEriscDatamoverConfig::RD_CMD_BUF;
+        this->receiver_channel_local_write_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_LOCAL_WRITE_NOC;
+        this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+    }
+    for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+        this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
+        this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
+    }
 }
 
 void get_runtime_args_for_edm_termination_infos(
@@ -468,40 +481,36 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
     }
 
     // Sender channel args
-    constexpr size_t sender_ack_noc_id = 0;
-    // TODO: get from HAL (TODO before that - expose through HAL)
-    constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
-    constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
-    constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
-    constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
     for (size_t i = 0; i < num_sender_channels; i++) {
-        ct_args.push_back(sender_ack_noc_id);
+        ct_args.push_back(config.sender_channel_ack_noc_ids[i]);
     }
 
     // Populate the sender ack cmd buf ids for each datapath
-    ct_args.push_back(WR_REG_CMD_BUF);
-    ct_args.push_back(WR_CMD_BUF);
-    if (num_sender_channels > 2) {
-        ct_args.push_back(WR_CMD_BUF);
+    for (size_t i = 0; i < num_sender_channels; i++) {
+        ct_args.push_back(config.sender_channel_ack_cmd_buf_ids[i]);
     }
 
-    // receiver channel args
-    constexpr size_t receiver_channel_write_noc_id = 1;
     for (size_t i = 0; i < num_receiver_channels; i++) {
-        ct_args.push_back(receiver_channel_write_noc_id);
+        ct_args.push_back(config.receiver_channel_forwarding_noc_ids[i]);
     }
     for (size_t i = 0; i < num_receiver_channels; i++) {
-        ct_args.push_back(WR_REG_CMD_BUF);  // maps to receiver_channel_forwarding_data_cmd_buf_ids
+        ct_args.push_back(
+            config.receiver_channel_forwarding_data_cmd_buf_ids[i]);  // maps to
+                                                                      // receiver_channel_forwarding_data_cmd_buf_ids
     }
     for (size_t i = 0; i < num_receiver_channels; i++) {
-        ct_args.push_back(RD_CMD_BUF);  // maps to receiver_channel_forwarding_sync_cmd_buf_ids
+        ct_args.push_back(
+            config.receiver_channel_forwarding_sync_cmd_buf_ids[i]);  // maps to
+                                                                      // receiver_channel_forwarding_sync_cmd_buf_ids
     }
     for (size_t i = 0; i < num_receiver_channels; i++) {
         // TODO: pass this to the tranmission file
-        ct_args.push_back(receiver_channel_write_noc_id);  // maps to receiver_channel_local_write_noc_ids
+        ct_args.push_back(
+            config.receiver_channel_local_write_noc_ids[i]);  // maps to receiver_channel_local_write_noc_ids
     }
     for (size_t i = 0; i < num_receiver_channels; i++) {
-        ct_args.push_back(WR_CMD_BUF);  // maps to receiver_channel_local_write_cmd_buf_ids
+        ct_args.push_back(
+            config.receiver_channel_local_write_cmd_buf_ids[i]);  // maps to receiver_channel_local_write_cmd_buf_ids
     }
 
     // Special marker to help with identifying misalignment bugs
