@@ -364,7 +364,7 @@ def test_timestamped_events():
     ZONE_COUNT = 100
     WH_ERISC_COUNTS = [0, 1, 5]
     WH_TENSIX_COUNTS = [72, 64, 56]
-    BH_ERISC_COUNTS = [0, 1, 5]
+    BH_ERISC_COUNTS = [0, 1, 6, 8]
     BH_TENSIX_COUNTS = [130, 120, 110]
 
     WH_COMBO_COUNTS = []
