@@ -243,7 +243,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
 
     switch (version) {
         case AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32:
-            log_info(
+            log_trace(
                 tt::LogOp,
                 "Detected all gather specialized shape. all_gather_async_minimal_interleaved_dim3_1_1_32_any is "
                 "called");
@@ -262,7 +262,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 this->sub_device_id);
 
         case AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED:
-            log_info(tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_sharded is called");
+            log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_sharded is called");
             return all_gather_async_llama_sharded(
                 input_tensors[0],
                 target_device,
