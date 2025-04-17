@@ -69,7 +69,7 @@ public:
 
     void add_prefetch_relay_paged_packed(
         uint32_t length,
-        std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
+        const std::vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds,
         uint16_t num_sub_cmds,
         uint32_t offset_idx = 0);
 
