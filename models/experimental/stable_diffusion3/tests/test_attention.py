@@ -2,16 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from typing import TYPE_CHECKING
 
-import os
 import pytest
 import torch
 import ttnn
 
 from ..reference import SD3Transformer2DModel
 from ..tt.attention import TtAttention, TtAttentionParameters
-from ..tt.utils import from_torch, assert_quality
+from ..tt.utils import assert_quality, from_torch
 
 if TYPE_CHECKING:
     from ..reference.attention import Attention
@@ -29,10 +29,10 @@ if TYPE_CHECKING:
 @pytest.mark.parametrize(
     ("model_name", "block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
     [
-        #        ("medium", 0, 1, 4096, 333),
-        #        ("medium", 23, 1, 4096, 333),
+        # ("medium", 0, 1, 4096, 333),
+        # ("medium", 23, 1, 4096, 333),
         ("large", 0, 1, 4096, 333),
-        #        ("large", 23, 1, 4096, 333),
+        # ("large", 23, 1, 4096, 333),
     ],
 )
 @pytest.mark.parametrize(
