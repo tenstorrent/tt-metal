@@ -12,7 +12,6 @@ from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import (
     prepare_split_conv_weights_bias,
     split_conv_and_run,
 )
-from models.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -21,8 +20,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "in_channels, input_height, input_width, out_channels, output_height, output_width, conv_in_channel_split_factor, conv_out_channel_split_factor",
     [
         (512, 128, 128, 512, 128, 128, 1, 1),
-        (512, 256, 256, 512, 256, 256, 8 if is_wormhole_b0() else 2, 1 if is_wormhole_b0() else 2),
-        (256, 512, 512, 256, 512, 512, 8 if is_wormhole_b0() else 4, 2),
+        (512, 256, 256, 512, 256, 256, 2, 2),
+        (256, 512, 512, 256, 512, 512, 4, 2),
     ],
 )
 def test_split_conv(

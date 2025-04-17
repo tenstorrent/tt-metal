@@ -208,7 +208,7 @@ void run_single_core_copy_block_matmul_partials(
 TEST_F(DeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
     for (bool fp32_dest_acc_en : {true, false}) {
         // FP32 dest acc not possible for GS
-        if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+        if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
             continue;
         }
         for (bool dst_full_sync_en : {true, false}) {
@@ -223,7 +223,7 @@ TEST_F(DeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
 TEST_F(DeviceFixture, TensixComputeCopyBlockMultiple) {
     for (bool fp32_dest_acc_en : {true, false}) {
         // FP32 dest acc not possible for GS
-        if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+        if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
             continue;
         }
         for (bool dst_full_sync_en : {true, false}) {
@@ -244,7 +244,7 @@ TEST_F(DeviceFixture, TensixComputeCopyBlockMultiple) {
 TEST_F(DeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
     for (bool fp32_dest_acc_en : {true, false}) {
         // FP32 dest acc not possible for GS
-        if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+        if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
             continue;
         }
         for (bool dst_full_sync_en : {true, false}) {
