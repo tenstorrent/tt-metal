@@ -3,7 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import torch
 import requests
+from ultralytics import YOLO
+
+from models.experimental.functional_yolov9c.reference.yolov9c import YoloV9
 
 
 def load_coco_class_names():
@@ -21,3 +25,18 @@ def load_coco_class_names():
             return [line.strip() for line in f.readlines()]
 
     raise Exception("Failed to fetch COCO class names from both online and local sources.")
+
+
+def load_torch_model(use_weights_from_ultralytics=True, module=None):
+    state_dict = None
+    if use_weights_from_ultralytics:
+        model = YOLO("yolov9c.pt")
+        model.load_state_dict(model.state_dict(), strict=False)
+
+    model = YoloV9()
+    new_state_dict = {name: param for name, param in model.state_dict().items() if isinstance(param, torch.FloatTensor)}
+
+    model.load_state_dict(new_state_dict)
+    model.eval()
+
+    return model
