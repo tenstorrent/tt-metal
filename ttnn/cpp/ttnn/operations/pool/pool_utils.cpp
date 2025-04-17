@@ -9,11 +9,13 @@
 
 namespace ttnn::operations::pool {
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
-uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw) {
+uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw, int32_t divisor_override) {
     float value;
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: value = 1.; break;
-        case Pool2DType::AVG_POOL2D: value = 1. / (float)kernel_size_hw; break;
+        case Pool2DType::AVG_POOL2D:
+            value = divisor_override == 0 ? 1. / (float)kernel_size_hw : 1. / (float)divisor_override;
+            break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
     return bfloat16(value).to_packed();

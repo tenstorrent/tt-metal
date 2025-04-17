@@ -74,14 +74,14 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
         pytest.skip(f"Skipping test for failing input_spec: {input_spec}")
 
     run_avg_pool2d(
-        device,
-        tensor_map,
-        (in_n, in_c, in_h, in_w),
-        (kernel_h, kernel_w),
-        (stride_h, stride_w),
-        (pad_h, pad_w),
-        (1, 1),  # dilation
-        ceil_mode,
-        count_include_pad,
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=(in_n, in_c, in_h, in_w),
+        kernel_size=(kernel_h, kernel_w),
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        ceil_mode=ceil_mode,
+        count_include_pad=count_include_pad,
+        divisor_override=None,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     )

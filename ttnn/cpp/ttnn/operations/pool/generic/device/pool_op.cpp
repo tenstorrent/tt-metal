@@ -51,6 +51,10 @@ void validate_pool2d(
     TT_FATAL(
         sliding_window_config.ceil_mode == false || pool_type == Pool2DType::MAX_POOL2D,
         "Ceil mode set to true not supported for avg pool op");
+
+    TT_FATAL(
+        sliding_window_config.count_include_pad == true || pool_type == Pool2DType::MAX_POOL2D,
+        "Count include pad mode set to false not supported for avg pool op");
 }
 
 void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {

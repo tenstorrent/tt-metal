@@ -14,7 +14,7 @@ enum class Pool2DType {
     AVG_POOL2D = 1,
 };
 
-uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw);
+uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw, int32_t divisor_override);
 uint32_t get_bf16_pool_init_value(Pool2DType pool_type);
 std::map<std::string, std::string> get_defines(Pool2DType pool_type);
 
