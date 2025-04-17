@@ -64,22 +64,6 @@ namespace kernel_profiler {
 
 extern "C" void notify_brisc_and_halt_to_iram(uint32_t status, uint32_t first_argument);
 
-inline __attribute__((always_inline)) void notify_brisc_and_wait() {
-    while (true) {
-        uint8_t run_value = *ncrisc_run;
-        if (run_value == RUN_SYNC_MSG_GO || run_value == RUN_SYNC_MSG_LOAD) {
-            break;
-        }
-#if defined(ARCH_WORMHOLE)
-        // Avoid hammering L1 while other cores are trying to work. Seems not to
-        // be needed on Blackhole, probably because invalidate_l1_cache takes
-        // time.
-        asm volatile("nop; nop; nop; nop; nop");
-#endif
-        invalidate_l1_cache();
-    }
-}
-
 inline __attribute__((always_inline)) void signal_ncrisc_completion() { *ncrisc_run = RUN_SYNC_MSG_DONE; }
 
 #if defined(ARCH_WORMHOLE)
@@ -114,17 +98,46 @@ int main(int argc, char *argv[]) {
 
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+    // This copy of the launch message read pointer is either the same as
+    // BRISC's or ahead by 1 if the BRISC is currently finishing up processing
+    // the previous kernel.
+    uint32_t launch_msg_rd_ptr = 0;
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
-        notify_brisc_and_wait();
-        DeviceZoneScopedMainN("NCRISC-FW");
-
-        uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+        while (!(mailboxes->launch[launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
+            invalidate_l1_cache();
+            uint8_t ncrisc_run_value = *ncrisc_run;
+            if (ncrisc_run_value == RUN_SYNC_MSG_RESET_READ_PTR) {
+                launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+                *ncrisc_run = RUN_SYNC_MSG_DONE;
+            } else if (ncrisc_run_value == RUN_SYNC_MSG_GO || ncrisc_run_value == RUN_SYNC_MSG_LOAD) {
+                break;
+            }
+#if defined(ARCH_WORMHOLE)
+            // Avoid hammering L1 while other cores are trying to work. Seems not to
+            // be needed on Blackhole, probably because invalidate_l1_cache takes
+            // time.
+            asm volatile("nop; nop; nop; nop; nop");
+#endif
+        }
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
+        if (!(launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1)) {
+            if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
+                launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+            }
+            WAYPOINT("Z");
+            while (*ncrisc_run != RUN_SYNC_MSG_GO) {
+                invalidate_l1_cache();
+            }
+            *ncrisc_run = RUN_SYNC_MSG_DONE;
+            continue;
+        }
+        WAYPOINT("L");
 
-        uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM1);
+        uint32_t kernel_config_base =
+            firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM1, launch_msg_rd_ptr);
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);
 
 #if defined(ARCH_WORMHOLE)
@@ -147,16 +160,26 @@ int main(int argc, char *argv[]) {
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
-        WAYPOINT("R");
-
         void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
             (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
 #if !defined(ARCH_WORMHOLE)
         while (*ncrisc_run != RUN_SYNC_MSG_GO) {
             invalidate_l1_cache();
         }
+        // Ideally this zone would start much earlier, but we need to ensure BRISC has sent profile data for the
+        // previous kernel first.
+        DeviceZoneScopedMainN("NCRISC-FW");
+        WAYPOINT("R");
         (*kernel_address)((uint32_t)kernel_address);
 #else
+        // Wait for BRISC to process previous DONE message.
+        while (*ncrisc_run != RUN_SYNC_MSG_LOAD) {
+            invalidate_l1_cache();
+        }
+        // Ideally this zone would start much earlier, but we need to ensure BRISC has sent profile data for the
+        // previous kernel first.
+        DeviceZoneScopedMainN("NCRISC-FW");
+        WAYPOINT("R");
         // Jumping to IRAM causes bizarre behavior, so signal the brisc to reset the ncrisc to the IRAM address.
         mailboxes->ncrisc_halt.resume_addr = (uint32_t)kernel_init;
         notify_brisc_and_halt_to_iram(RUN_SYNC_MSG_WAITING_FOR_RESET, (uint32_t)kernel_address);
@@ -164,6 +187,9 @@ int main(int argc, char *argv[]) {
         RECORD_STACK_USAGE();
         WAYPOINT("D");
 
+        if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
+            launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
+        }
         signal_ncrisc_completion();
     }
 

@@ -268,32 +268,52 @@ inline void run_triscs(dispatch_core_processor_masks enables) {
     }
 }
 
-inline void start_ncrisc_kernel_run_early(dispatch_core_processor_masks enables) {
-    // On Wormhole, start_ncrisc_kernel_run will reset NCRISC to start the
-    // kernel running. We delay it until later to give the NCRISC time to load
-    // CBs before we wait on it.
-#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
-    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
-        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
-    }
+#ifdef NCRISC_FIRMWARE_KERNEL_SPLIT
+bool have_reset_ncrisc_to_kernel = false;
+
+inline void reset_ncrisc_to_kernel() {
+    mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
+    volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
+    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
+    assert_just_ncrisc_reset();
+    // Wait a bit to ensure NCRISC has time to actually reset (otherwise it
+    // may just continue where it left off). This wait value was chosen
+    // empirically.
+    riscv_wait(5);
+    deassert_all_reset();
+}
 #endif
+
+inline void start_ncrisc_kernel_run_early(dispatch_core_processor_masks enables) {
+    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
+        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
+#else
+        // Attempt the start the NCRISC if it's already ready. If not, we'll
+        // load CBs and then start it in start_ncrisc_kernel_run.
+        if (mailboxes->slave_sync.dm1 == RUN_SYNC_MSG_WAITING_FOR_RESET) {
+            reset_ncrisc_to_kernel();
+            have_reset_ncrisc_to_kernel = true;
+        }
+
+#endif
+    }
 }
 
 inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
 #ifdef NCRISC_FIRMWARE_KERNEL_SPLIT
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+        if (have_reset_ncrisc_to_kernel) {
+            // start_ncrisc_kernel_run_early already started the kernel.
+            have_reset_ncrisc_to_kernel = false;
+            return;
+        }
+        WAYPOINT("WRW");
         // The NCRISC behaves badly if it jumps from L1 to IRAM, so instead halt it and then reset it to the IRAM
         // address it provides.
         while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_WAITING_FOR_RESET);
-        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
-        volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-        cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
-        assert_just_ncrisc_reset();
-        // Wait a bit to ensure NCRISC has time to actually reset (otherwise it
-        // may just continue where it left off). This wait value was chosen
-        // empirically.
-        riscv_wait(5);
-        deassert_all_reset();
+        WAYPOINT("WRD");
+        reset_ncrisc_to_kernel();
     }
 #endif
 }
@@ -378,6 +398,11 @@ int main() {
             if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
+                // mailboxes->slave_sync.dm1 should always be RUN_SYNC_MSG_DONE at this point.
+                mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_RESET_READ_PTR;
+                while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_DONE) {
+                    invalidate_l1_cache();
+                }
                 // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently guaranteed
                 // to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid value.
                 // For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn is not issued.
@@ -404,10 +429,15 @@ int main() {
             // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
                 mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_LOAD;
+                // On wormhole when the kernel has NCRISC enabled, mailboxes->slave_sync.dm1 shouldn't be touched from
+                // now until start_ncrisc_kernel_run, as it's now controlled by NCRISC.
+            } else {
+                // Signal the NCRISC to go onto the next launch message slot.
+                mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
             }
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
-            uint32_t kernel_config_base =
-                firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
+            uint32_t kernel_config_base = firmware_config_init(
+                mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0, launch_msg_rd_ptr);
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
@@ -444,7 +474,6 @@ int main() {
             start_ncrisc_kernel_run_early(enables);
 
             // Run the BRISC kernel
-            WAYPOINT("R");
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
                 uint32_t end_cb_index = launch_msg_address->kernel_config.max_local_cb_end_index;
                 setup_local_cb_read_write_interfaces(cb_l1_base, 0, end_cb_index, true, true, false);
@@ -456,6 +485,7 @@ int main() {
                 barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
+                WAYPOINT("R");
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 (*kernel_address)((uint32_t)kernel_address);
@@ -479,6 +509,7 @@ int main() {
                     barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 }
                 start_ncrisc_kernel_run(enables);
+                WAYPOINT("I");  // idle
                 wait_for_go_message();
             }
             WAYPOINT("D");
