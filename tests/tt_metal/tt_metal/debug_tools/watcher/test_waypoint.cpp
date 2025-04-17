@@ -192,7 +192,8 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
                     virtual_core.y,
                     waypoint,
                     // TODO(#17275): Rework risc counts & masks into HAL and generalize this test.
-                    (device->arch() == ARCH::BLACKHOLE) ? waypoint : "   X");
+                    // Active eth core only has one available erisc to test on.
+                    (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : "   X");
                 if (device->arch() == ARCH::BLACKHOLE) {
                     expected += fmt::format("rmsg:***|** h_id:0 smsg:* k_id:{}", k_id_s);
                 } else {
