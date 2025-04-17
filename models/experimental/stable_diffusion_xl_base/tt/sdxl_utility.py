@@ -86,4 +86,174 @@ def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, a
     dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype
     tt_weights = ttnn.from_torch(weights, dtype)
     tt_bias = ttnn.from_torch(bias, dtype) if bias is not None else None
-    return compute_config, conv_config, tt_weights, tt_bias
+
+    conv_params = {
+        "input_channels": tt_weights.shape[1],
+        "output_channels": tt_weights.shape[0],
+        "kernel_size": (tt_weights.shape[2], tt_weights.shape[3]),
+    }
+
+    return compute_config, conv_config, tt_weights, tt_bias, conv_params
+
+
+def prepare_split_conv_params(
+    device, weights, bias, split_in, split_out, dtype, act_dtype=ttnn.bfloat16, act_block_h_override=0
+):
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    conv_config = ttnn.Conv2dConfig(
+        dtype=act_dtype,
+        weights_dtype=dtype,
+        shard_layout=None,
+        input_channels_alignment=32,
+        deallocate_activation=True,
+        enable_act_double_buffer=False,
+        enable_split_reader=False,
+        enable_subblock_padding=False,
+        reshard_if_not_optimal=True,
+        act_block_w_div=1,
+        act_block_h_override=act_block_h_override,
+        preprocess_weights_on_device=True,
+        always_preprocess_weights=True,
+        transpose_shards=True,
+    )
+
+    Cout, Cin, _, _ = weights.shape
+    Cout_split = Cout // split_out
+    Cin_split = Cin // split_in
+
+    if split_out > 1:
+        weight_chunks = list(torch.split(weights, Cout_split, 0))
+    else:
+        weight_chunks = [weights]
+
+    for i in range(len(weight_chunks)):
+        weight_chunks[i] = torch.split(weight_chunks[i], Cin_split, 1)
+
+    tt_weights = [
+        [
+            ttnn.from_torch(
+                weight,
+                dtype=ttnn.float32,
+            )
+            for weight in weights_Cout_split
+        ]
+        for weights_Cout_split in weight_chunks
+    ]
+
+    if bias is not None:
+        if split_in > 1:
+            bias_chunks = list(torch.split(bias, Cin_split, 3))
+        else:
+            bias_chunks = [bias]
+
+        tt_bias = [
+            ttnn.from_torch(
+                bias,
+                dtype=ttnn.float32,
+            )
+            for bias in bias_chunks
+        ]
+    else:
+        tt_bias = None
+
+    conv_params = [
+        [
+            {
+                "input_channels": tt_w.shape[1],
+                "output_channels": tt_w.shape[0],
+                "kernel_size": (tt_w.shape[2], tt_w.shape[3]),
+            }
+            for tt_w in tt_w_out
+        ]
+        for tt_w_out in tt_weights
+    ]
+    return compute_config, conv_config, tt_weights, tt_bias, conv_params
+
+
+def split_conv2d(
+    device,
+    hidden_states,
+    input_shape,
+    conv_weights,
+    conv_bias,
+    split_in,
+    split_out,
+    compute_config,
+    conv_config,
+    conv_params,
+    stride,
+    padding,
+    dilation,
+    groups,
+):
+    assert hidden_states.layout == ttnn.ROW_MAJOR_LAYOUT, "Input tensor must be in ROW_MAJOR layout"
+
+    B, C, H, W = input_shape
+
+    if split_in > 1:
+        hidden_states_split = ttnn.split(hidden_states, C // split_in, 3)
+        hidden_states.deallocate(True)
+    else:
+        hidden_states_split = [hidden_states]
+
+    outputs = []
+    device_weights = []
+    device_bias = []
+
+    for idx_out in range(split_out):
+        device_weights.append([])
+
+        for idx_in in range(split_in):
+            [intermediate, [Hout, Wout], [d_w, d_b]] = ttnn.conv2d(
+                input_tensor=hidden_states_split[idx_in],
+                weight_tensor=conv_weights[idx_out][idx_in],
+                in_channels=conv_params[idx_out][idx_in]["input_channels"],
+                out_channels=conv_params[idx_out][idx_in]["output_channels"],
+                device=device,
+                bias_tensor=conv_bias[idx_out],
+                kernel_size=conv_params[idx_out][idx_in]["kernel_size"],
+                stride=stride,
+                padding=padding,
+                dilation=dilation,
+                batch_size=B,
+                input_height=H,
+                input_width=W,
+                conv_config=conv_config,
+                compute_config=compute_config,
+                groups=groups,
+                memory_config=None,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
+
+            device_weights[idx_out].append(d_w)
+            if idx_in == 0:
+                device_bias.append(d_b)
+
+            if idx_in == 0:
+                dram_intermediate = ttnn.to_memory_config(intermediate, ttnn.DRAM_MEMORY_CONFIG)
+                intermediate.deallocate(True)
+            else:
+                dram_intermediate = ttnn.add(dram_intermediate, intermediate, output_tensor=dram_intermediate)
+                intermediate.deallocate(True)
+
+        if dram_intermediate.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+            dram_intermediate = ttnn.to_memory_config(dram_intermediate, ttnn.DRAM_MEMORY_CONFIG)
+        outputs.append(dram_intermediate)
+    H, W = Hout, Wout
+    C = conv_params[0][0]["output_channels"] * split_out
+
+    if len(outputs) > 1:
+        output = ttnn.concat(outputs, dim=-1)
+        for output_slice in outputs:
+            output_slice.deallocate(True)
+    else:
+        output = outputs[0]
+
+    return output, [C, H, W], [device_weights, device_bias]

@@ -23,7 +23,7 @@
 #include "allocator_types.hpp"
 #include "assert.hpp"
 #include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "device.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"

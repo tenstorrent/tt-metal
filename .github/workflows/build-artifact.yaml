@@ -248,7 +248,7 @@ jobs:
       - name: 🐍 Build wheel
         if: ${{ inputs.build-wheel }}
         run: |
-          nice -n 19 python3 -m build
+          nice -n 19 python3 -m build --wheel
 
       - name: Publish ccache summary
         run: |

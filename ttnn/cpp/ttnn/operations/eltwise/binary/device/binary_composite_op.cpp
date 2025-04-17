@@ -107,18 +107,43 @@ Tensor _isclose(
     return result;
 }
 
-// minimum(a,b) = a - (a - b > 0 )*(a-b)
 Tensor ExecuteMinimum::invoke(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_diff = ttnn::subtract(input_a, input_b, std::nullopt, output_mem_config);
-    Tensor result = ttnn::where(t_diff, input_b, input_a);
-    return result;
+    QueueId queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::UnaryWithParam> post_activations,
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return BinaryOperationSfpu<operations::binary::BinaryOpType::MINIMUM>::invoke(
+        queue_id,
+        input_tensor_a,
+        input_tensor_b,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
 }
 
 Tensor ExecuteMinimum::invoke(
-    const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<
-        ttnn::operations::unary::UnaryOpType::MINIMUM>::invoke(ttnn::DefaultQueueId, input_a, value, output_mem_config);
+    QueueId queue_id,
+    const Tensor& input_a,
+    const float value,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::UnaryWithParam> post_activations,
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::MINIMUM>::
+        invoke(ttnn::DefaultQueueId, input_a, value, memory_config, optional_output_tensor);
 }
 
 Tensor ExecuteMaximum::invoke(

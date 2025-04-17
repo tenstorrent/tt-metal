@@ -13,7 +13,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "gmock/gmock.h"
 #include <tt-metalium/shape.hpp>
