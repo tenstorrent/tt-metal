@@ -40,21 +40,20 @@ def test_ci_dispatch(model_weights):
         os.environ["HF_MODEL"] = model_weights
         os.environ["TT_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
 
+    list_of_test_files = [
+        "models/tt_transformers/tests/test_embedding.py",
+        "models/tt_transformers/tests/test_rms_norm.py",
+        "models/tt_transformers/tests/test_mlp.py",
+        "models/tt_transformers/tests/test_attention.py",
+        "models/tt_transformers/tests/test_attention_prefill.py",
+        "models/tt_transformers/tests/test_decoder.py",
+        "models/tt_transformers/tests/test_decoder_prefill.py",
+    ]
     # Pass the exit code of pytest to proper keep track of failures during runtime
-    exit_code = pytest.main(
-        [
-            "models/tt_transformers/tests/test_embedding.py",
-            "models/tt_transformers/tests/test_rms_norm.py",
-            "models/tt_transformers/tests/test_mlp.py",
-            "models/tt_transformers/tests/test_attention.py",
-            "models/tt_transformers/tests/test_attention_prefill.py",
-            "models/tt_transformers/tests/test_decoder.py",
-            "models/tt_transformers/tests/test_decoder_prefill.py",
-        ]
-        + ["-x"]  # Fail if one of the tests fails
-    )
-    if exit_code == pytest.ExitCode.TESTS_FAILED:
-        pytest.fail(
-            f"One or more CI dispatch tests failed for {model_weights}. Please check the log above for more info",
-            pytrace=False,
-        )
+    for test_file in list_of_test_files:
+        exit_code = pytest.main([test_file])
+        if exit_code == pytest.ExitCode.TESTS_FAILED:
+            pytest.fail(
+                f"CI dispatch test {test_file} failed for {model_weights}. Please check the log above for more info",
+                pytrace=False,
+            )
