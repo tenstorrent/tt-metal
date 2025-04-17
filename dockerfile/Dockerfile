@@ -34,7 +34,7 @@ RUN mkdir -p /tmp/boost \
     && ./b2 install --prefix=/usr/local \
     && rm -rf /tmp/boost
 
-ARG FMT_VERSION=11.0.1
+ARG FMT_VERSION=11.1.4
 RUN mkdir -p /tmp/fmt \
     && wget -O /tmp/fmt/fmt-${FMT_VERSION}.tar.gz "https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz" \
     && tar -xzf /tmp/fmt/fmt-${FMT_VERSION}.tar.gz -C /tmp/fmt --strip-components=1 \
