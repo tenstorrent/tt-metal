@@ -55,7 +55,6 @@ struct AllReduceAsync {
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
         mesh_device(mesh_device) {}
-
     // Add attributes method for reflection
     auto attributes() const {
         using tt::stl::reflection::Attribute;

@@ -44,6 +44,7 @@ namespace tt_metal {
 static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
+
 distributed::AnyBuffer get_control_buffer_view(
     IDevice* device, uint32_t address, uint32_t size, CoreCoord logical_worker_core) {
     auto shard_parameters = ShardSpecBuffer({logical_worker_core}, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
@@ -88,12 +89,11 @@ void DeviceProfiler::readRiscProfilerResults(
 
     HalProgrammableCoreType CoreType;
     int riscCount;
-    CoreCoord logical_worker_core;
+
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(worker_core, device_id)) {
         CoreType = HalProgrammableCoreType::TENSIX;
         riscCount = 5;
-        logical_worker_core = soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
     } else {
         auto active_eth_cores =
             tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
@@ -120,12 +120,13 @@ void DeviceProfiler::readRiscProfilerResults(
         // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
         // generic API to read from an address instead of a buffer. (#15015)
         control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE / sizeof(uint32_t));
-
+        auto logical_worker_core =
+            soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
         auto control_buffer_view = get_control_buffer_view(
             device,
             reinterpret_cast<uint64_t>(profiler_msg->control_vector),
             kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-            logical_worker_core);
+            CoreCoord(logical_worker_core.x, logical_worker_core.y));
         issue_fd_read_from_profiler_buffer(control_buffer_view, device, control_buffer);
     } else {
         control_buffer = tt::llrt::read_hex_vec_from_core(
@@ -316,11 +317,13 @@ void DeviceProfiler::readRiscProfilerResults(
     if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
         // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
         // generic API to read from an address instead of a buffer. (#15015)
+        auto logical_worker_core =
+            soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
         auto control_buffer_view = get_control_buffer_view(
             device,
             reinterpret_cast<uint64_t>(profiler_msg->control_vector),
             kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE,
-            logical_worker_core);
+            CoreCoord(logical_worker_core.x, logical_worker_core.y));
         issue_fd_write_to_profiler_buffer(control_buffer_view, device, control_buffer_reset);
     } else {
         tt::llrt::write_hex_vec_to_core(

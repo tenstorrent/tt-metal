@@ -70,7 +70,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     tt::tt_metal::Program program{};
     // auto mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
-
     const bool enable_persistent_fabric_mode = true;
     IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
