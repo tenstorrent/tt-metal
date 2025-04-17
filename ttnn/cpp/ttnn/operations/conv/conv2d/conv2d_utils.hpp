@@ -163,6 +163,18 @@ shard_or_reshard_tensor_if_required(
     bool is_mm_conv,
     bool auto_shard);
 
+MemoryConfig get_input_memory_config(
+    const Conv2dConfig& conv_config,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t output_height,
+    uint32_t output_width,
+    const CoreCoord& compute_grid_size,
+    Layout input_layout,
+    bool is_mm_conv);
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 
 }  // namespace operations::conv
