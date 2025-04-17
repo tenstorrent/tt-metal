@@ -276,37 +276,29 @@ class TtLlamaAttention(LightweightModule):
         # print("done matmul")
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
-        xqkv_reduced = self.tt_ccl.line_all_reduce(
-            xqkv_fused_sharded,
-            cluster_axis=1,
-            num_links=3,
-            memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
-            dtype=ttnn.bfloat16,
-        )
-
-        ttnn.deallocate(xqkv_fused_sharded)
-
-        # print("done all reduce")
-
         ###
         # Reshape and rotary embeddings
         ###
         (
+            xqkv_reduced,
             q_heads_pre_rot_1BQD,
             k_heads_pre_rot_1BKD,
             v_heads_1BKD,
-        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
-            xqkv_reduced,
+        ) = self.tt_ccl.line_all_reduce_create_heads(
+            xqkv_fused_sharded,
+            cluster_axis=1,
+            num_links=3,
             num_heads=self.n_local_heads,
+            memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
             num_kv_heads=self.n_local_kv_heads,
-            memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
-            overlap_qk_coregrid=False,
+            qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
             batch_offset=self.batch_offset_tt_tensor,
-            slice_size=self.slice_size,
+            slice_size=8,
+            dtype=ttnn.bfloat16,
         )
 
         # print("done create qkv heads")
-
+        ttnn.deallocate(xqkv_fused_sharded)
         ttnn.deallocate(xqkv_reduced)
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
