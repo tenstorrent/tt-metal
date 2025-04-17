@@ -16,6 +16,7 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sliding_window_infra.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_conv2d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common_test_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_generic_op.cpp
 )
 
 set(TTNN_CCL_UNIT_TESTS_SRC
@@ -59,6 +60,7 @@ add_executable(
     ${CMAKE_CURRENT_SOURCE_DIR}/multi_thread/test_ccl_multi_cq_multi_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multi_thread/test_utils.cpp
 )
+# add_executable(ttnn_test_generic_op ${CMAKE_CURRENT_SOURCE_DIR}/test_generic_op.cpp)
 
 target_link_libraries(
     test_ccl_multi_cq_multi_device
@@ -76,3 +78,4 @@ setup_ttnn_test_target(unit_tests_ttnn_tensor)
 setup_ttnn_test_target(test_multi_device)
 setup_ttnn_test_target(galaxy_unit_tests_ttnn)
 setup_ttnn_test_target(test_ccl_multi_cq_multi_device)
+# setup_ttnn_test_target(ttnn_test_generic_op)

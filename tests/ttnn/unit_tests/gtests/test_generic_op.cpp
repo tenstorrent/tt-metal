@@ -10,17 +10,17 @@
 #include <tt-metalium/constants.hpp>
 
 #include "logger.hpp"
+#include "ttnn_test_fixtures.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/generic/generic_op/generic_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
-namespace ttnn {
 
-void test_matmul(tt::tt_metal::IDevice* device) {
-    tt::log_info(tt::LogTest, "Running {}", __func__);
+namespace ttnn::operations::generic::test {
 
+TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     // =================
     // Matmul original and generic test
     tt::log_info(tt::LogTest, "Running matmul original test");
@@ -33,8 +33,8 @@ void test_matmul(tt::tt_metal::IDevice* device) {
         {B_original, 1, Mt_original * tt::constants::TILE_HEIGHT, Kt_original * tt::constants::TILE_WIDTH});
     ttnn::Shape shapeb(
         {B_original, 1, Kt_original * tt::constants::TILE_HEIGHT, Nt_original * tt::constants::TILE_WIDTH});
-    Tensor input_tensor_a = ttnn::random::random(shapea).to_layout(Layout::TILE).to_device(device);
-    Tensor input_tensor_b = ttnn::random::random(shapeb).to_layout(Layout::TILE).to_device(device);
+    Tensor input_tensor_a = ttnn::random::random(shapea).to_layout(Layout::TILE).to_device(this->device_);
+    Tensor input_tensor_b = ttnn::random::random(shapeb).to_layout(Layout::TILE).to_device(this->device_);
 
     Tensor golden = ttnn::matmul(input_tensor_a, input_tensor_b);
 
@@ -65,7 +65,7 @@ void test_matmul(tt::tt_metal::IDevice* device) {
 
     ttnn::Shape cshape = output.get_logical_shape();  // C=A*B, N1MK*11KN->N1MN
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = this->device_->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t c_batch_size = get_batch_size(cshape);
@@ -227,14 +227,12 @@ void test_matmul(tt::tt_metal::IDevice* device) {
 
     auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), output_tensor, 1e-1f, 1e-5f);
 
-    TT_FATAL(allclose, "Error");
+    ASSERT_TRUE(allclose);
 }
 
-void test_eltwise_sfpu(tt::tt_metal::IDevice* device) {
+TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     const std::map<std::string, std::string> sfpu_defines = {
         {"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}};
-
-    tt::log_info(tt::LogTest, "Running {}", __func__);
 
     uint32_t num_tiles = 4;
     uint32_t src_bank_id = 0;
@@ -245,14 +243,15 @@ void test_eltwise_sfpu(tt::tt_metal::IDevice* device) {
     ttnn::MemoryConfig dram_memory_config = ttnn::MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
-    Tensor device_input_tensor = input_tensor.to_layout(Layout::TILE).to_device(device, dram_memory_config);
+    Tensor device_input_tensor = input_tensor.to_layout(Layout::TILE).to_device(this->device_, dram_memory_config);
     Tensor device_output_tensor = tt::tt_metal::create_device_tensor(
         ttnn::TensorSpec(
             device_input_tensor.get_logical_shape(),
             ttnn::TensorLayout(
-                device_input_tensor.get_dtype(), ttnn::PageConfig(device_input_tensor.get_layout()), device_input_tensor.memory_config())),
-        device_input_tensor.device()
-    );
+                device_input_tensor.get_dtype(),
+                ttnn::PageConfig(device_input_tensor.get_layout()),
+                device_input_tensor.memory_config())),
+        device_input_tensor.device());
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.get_dtype());
     bool is_dram_input = device_input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -276,20 +275,23 @@ void test_eltwise_sfpu(tt::tt_metal::IDevice* device) {
     };
 
     const std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)is_dram_input};
-    const std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CBIndex::c_16, (std::uint32_t)is_dram_input};
+    const std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t)tt::CBIndex::c_16, (std::uint32_t)is_dram_input};
     const std::vector<uint32_t> read_rt_args = {device_input_tensor.buffer()->address(), num_tiles, src_bank_id};
     const std::vector<uint32_t> write_rt_args = {device_output_tensor.buffer()->address(), num_tiles, dst_bank_id};
 
     ttnn::operations::generic::data_movement_attributes_t reader_attributes = {
         .core_spec = device_cores,
-        .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        .kernel_path =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args),
         .runtime_args_per_core = {{core, read_rt_args}},
     };
 
     ttnn::operations::generic::data_movement_attributes_t writer_attributes = {
         .core_spec = device_cores,
-        .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        .kernel_path =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         .config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args),
         .runtime_args_per_core = {{core, write_rt_args}},
     };
@@ -297,18 +299,20 @@ void test_eltwise_sfpu(tt::tt_metal::IDevice* device) {
     ttnn::operations::generic::compute_attributes_t compute_attributes = {
         .core_spec = device_cores,
         .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-        .config = {
-            .math_approx_mode = false,
-            .compile_args = {num_tiles, 1},
-            .defines = sfpu_defines,
-        },
+        .config =
+            {
+                .math_approx_mode = false,
+                .compile_args = {num_tiles, 1},
+                .defines = sfpu_defines,
+            },
     };
 
     ttnn::operations::generic::program_attributes_t program_attributes = {
-        .circular_buffer_attributes = {
-            {tt::CBIndex::c_0, input_cb_attributes},
-            {tt::CBIndex::c_16, output_cb_attributes},
-        },
+        .circular_buffer_attributes =
+            {
+                {tt::CBIndex::c_0, input_cb_attributes},
+                {tt::CBIndex::c_16, output_cb_attributes},
+            },
         .data_movement_attributes = {reader_attributes, writer_attributes},
         .compute_attributes = {compute_attributes},
     };
@@ -318,18 +322,7 @@ void test_eltwise_sfpu(tt::tt_metal::IDevice* device) {
 
     auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), device_output.cpu());
 
-    TT_FATAL(allclose, "Error");
-
+    ASSERT_TRUE(allclose);
 }
-}  // namespace ttnn
 
-int main(int argc, char** argv) {
-    constexpr int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
-
-    ttnn::test_eltwise_sfpu(device);
-    ttnn::test_matmul(device);
-
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Failed to close device");
-    return 0;
-}
+}  // namespace ttnn::operations::generic::test
