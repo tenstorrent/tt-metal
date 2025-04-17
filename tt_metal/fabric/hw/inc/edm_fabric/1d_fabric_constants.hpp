@@ -6,7 +6,6 @@
 
 #include "dataflow_api.h"
 
-// #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
 #include <array>
