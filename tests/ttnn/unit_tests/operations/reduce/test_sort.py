@@ -40,7 +40,7 @@ def test_sort_output_shape(shape, dim, descending, device):
     assert list(ttnn_sort_indices.shape) == shape
 
     if len(shape) == 0 or len(shape) == 1:
-        torch_sort_values == ttnn.to_torch(ttnn_sort_values)
+        assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
     else:
         assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
@@ -79,6 +79,6 @@ def test_sort_output_shape_prealocated_output(shape, dim, descending, device):
     assert list(ttnn_sort_indices.shape) == shape
 
     if len(shape) == 0 or len(shape) == 1:
-        torch_sort_values == ttnn.to_torch(ttnn_sort_values)
+        assert torch_sort_values == ttnn.to_torch(ttnn_sort_values)
     else:
         assert_with_pcc(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
