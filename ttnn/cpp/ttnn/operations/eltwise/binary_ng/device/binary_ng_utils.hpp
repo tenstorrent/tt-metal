@@ -50,6 +50,7 @@ struct OpConfig {
         DIV,
         POWER,
         RSUB,
+        GCD,
         LEFT_SHIFT,
         RIGHT_SHIFT,
         BITWISE_AND,
