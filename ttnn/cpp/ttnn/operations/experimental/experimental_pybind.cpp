@@ -11,6 +11,7 @@
 #include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/cumprod/cumprod_pybind.hpp"
+#include "ttnn/operations/experimental/reduction/cumsum/cumsum_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_pybind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_pybind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_pybind.hpp"
@@ -95,6 +96,8 @@ void py_module(py::module& module) {
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
 
     reduction::detail::bind_reduction_sort_operation(module);
+
+    reduction::detail::bind_cumsum_operation(module);
 
     // CCL ops
     auto m_experimental_ccl =
