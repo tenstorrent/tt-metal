@@ -130,7 +130,11 @@ inline void calculate_comp_unary_int(int scalar) {
         if constexpr (COMP_MODE == SfpuType::unary_ne) {
             v_if(v != scalar) { val = 1; }
             v_endif;
-            dst_reg[0] = val;
+        }
+        // a[i] == scalar
+        else if constexpr (COMP_MODE == SfpuType::unary_eq) {
+            v_if(v == scalar) { val = 1; }
+            v_endif;
         }
         dst_reg[0] = val;
         dst_reg++;

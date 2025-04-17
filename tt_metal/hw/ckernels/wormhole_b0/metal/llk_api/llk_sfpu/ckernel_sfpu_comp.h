@@ -144,6 +144,23 @@ inline void calculate_comp_unary_int(int scalar) {
             }
             v_endif;
         }
+        // a[i] == scalar
+        else if constexpr (COMP_MODE == SfpuType::unary_eq) {
+            v_if(v >= 0) {
+                v_if(v == scalar) { val = 1; }
+                v_endif;
+            }
+            v_else {
+                v_if(s < 0) {
+                    vInt xor_val = reinterpret<vInt>(sfpi::abs(reinterpret<vFloat>(v))) ^ -s;
+                    v_if(xor_val == 0) { val = 1; }
+                    v_endif;
+                }
+                v_else { val = 0; }
+                v_endif;
+            }
+            v_endif;
+        }
         dst_reg[0] = val;
         dst_reg++;
     }
