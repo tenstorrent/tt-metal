@@ -8,10 +8,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include "ttnn/decorators.hpp"
-
-using tt::tt_metal::CoreCoord;
-using tt::tt_metal::CoreRangeSet;
 namespace ttnn::operations::generic {
 
 struct circular_buffer_attributes_t {

@@ -7,28 +7,16 @@
 #include <tt_metal/api/tt-metalium/work_split.hpp>
 #include <tt_metal/api/tt-metalium/host_api.hpp>
 #include <tt_metal/api/tt-metalium/assert.hpp>
-
-#include "kernel_types.hpp"
-#include "ttnn/operations/generic/generic_op/generic_op.hpp"
+#include <tt-metalium/constants.hpp>
 
 #include "logger.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/generic/generic_op/generic_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/tensor/types.hpp"
-
-using tt::tt_metal::DataType;
-using tt::tt_metal::IDevice;
-
-using tt::tt_metal::Layout;
-using tt::tt_metal::Tensor;
-
-using tt::constants::TILE_HEIGHT;
-using tt::constants::TILE_HW;
-using tt::constants::TILE_WIDTH;
-
-using namespace ttnn::operations::generic;
+namespace ttnn {
 
 void test_matmul(tt::tt_metal::IDevice* device) {
     tt::log_info(tt::LogTest, "Running {}", __func__);
@@ -41,8 +29,10 @@ void test_matmul(tt::tt_metal::IDevice* device) {
     uint32_t Nt_original = 4;
     uint32_t B_original = 3;
 
-    ttnn::Shape shapea({B_original, 1, Mt_original * TILE_HEIGHT, Kt_original * TILE_WIDTH});
-    ttnn::Shape shapeb({B_original, 1, Kt_original * TILE_HEIGHT, Nt_original * TILE_WIDTH});
+    ttnn::Shape shapea(
+        {B_original, 1, Mt_original * tt::constants::TILE_HEIGHT, Kt_original * tt::constants::TILE_WIDTH});
+    ttnn::Shape shapeb(
+        {B_original, 1, Kt_original * tt::constants::TILE_HEIGHT, Nt_original * tt::constants::TILE_WIDTH});
     Tensor input_tensor_a = ttnn::random::random(shapea).to_layout(Layout::TILE).to_device(device);
     Tensor input_tensor_b = ttnn::random::random(shapeb).to_layout(Layout::TILE).to_device(device);
 
@@ -53,7 +43,8 @@ void test_matmul(tt::tt_metal::IDevice* device) {
     // Parameters for matmul call - copy paste from matmul_multi_core in bmm_op_multi_core.cpp
     bool bcast_batch = false;
 
-    ttnn::Shape output_shape = ttnn::Shape{B_original, 1, Mt_original * TILE_HEIGHT, Nt_original * TILE_WIDTH};
+    ttnn::Shape output_shape =
+        ttnn::Shape{B_original, 1, Mt_original * tt::constants::TILE_HEIGHT, Nt_original * tt::constants::TILE_WIDTH};
     auto output = tt::tt_metal::create_device_tensor(
         output_shape,
         input_tensor_a.get_dtype(),
@@ -78,7 +69,7 @@ void test_matmul(tt::tt_metal::IDevice* device) {
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t c_batch_size = get_batch_size(cshape);
-    auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
+    auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / tt::constants::TILE_HW;
     auto
         [num_cores,
          all_cores,
@@ -95,9 +86,9 @@ void test_matmul(tt::tt_metal::IDevice* device) {
     // MN = MK*KN
     const auto &ashape = input_tensor_a.get_logical_shape(), bshape = input_tensor_b.get_logical_shape();
     uint32_t B = get_batch_size(ashape);
-    uint32_t Mt = ashape[-2] / TILE_HEIGHT;
-    uint32_t Kt = ashape[-1] / TILE_WIDTH;
-    uint32_t Nt = bshape[-1] / TILE_WIDTH;
+    uint32_t Mt = ashape[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t Kt = ashape[-1] / tt::constants::TILE_WIDTH;
+    uint32_t Nt = bshape[-1] / tt::constants::TILE_WIDTH;
     uint32_t KtNt = Kt * Nt;
     uint32_t MtKt = Mt * Kt;
     uint32_t MtNt = Mt * Nt;
@@ -166,41 +157,37 @@ void test_matmul(tt::tt_metal::IDevice* device) {
     };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt
         // for simplicity
 
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_args_group_2 = {
-            1,                                 // B
-            1,                                 // Mt
-            Kt,                                // Kt
-            num_output_tiles_per_core_group_2  // Nt
-        };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set
-            // Nt for simplicity
+    TT_FATAL(
+        !core_group_2.ranges().empty(),
+        "Core group 2 for matmul generic test is empty. We should never hit this case.");
 
-        program_attributes.compute_attributes = {
-            {
-                .core_spec = core_group_1,
-                .kernel_path = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
-                .config =
-                    {
-                        .math_fidelity = math_fidelity,
-                        .compile_args = compute_args_group_1,
-                    },
-            },
-            {
-                .core_spec = all_device_cores_set,
-                .kernel_path = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
-                .config =
-                    {
-                        .math_fidelity = math_fidelity,
-                        .compile_args = compute_args_group_2,
-                    },
-            }};
+    std::vector<uint32_t> compute_args_group_2 = {
+        1,                                 // B
+        1,                                 // Mt
+        Kt,                                // Kt
+        num_output_tiles_per_core_group_2  // Nt
+    };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set
+        // Nt for simplicity
 
-    } else {
-        TT_FATAL(
-            false,
-            "Core group 2 for matmul generic test is empty. Purpose of the test is to test generic op "
-            "with multiple core groups, so we should never hit this case.");
-    }
+    program_attributes.compute_attributes = {
+        {
+            .core_spec = core_group_1,
+            .kernel_path = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
+            .config =
+                {
+                    .math_fidelity = math_fidelity,
+                    .compile_args = compute_args_group_1,
+                },
+        },
+        {
+            .core_spec = all_device_cores_set,
+            .kernel_path = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
+            .config =
+                {
+                    .math_fidelity = math_fidelity,
+                    .compile_args = compute_args_group_2,
+                },
+        }};
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -253,7 +240,7 @@ void test_eltwise_sfpu(tt::tt_metal::IDevice* device) {
     uint32_t src_bank_id = 0;
     uint32_t dst_bank_id = 0;
 
-    auto shape = ttnn::Shape{1, num_tiles, TILE_HEIGHT, TILE_WIDTH};
+    auto shape = ttnn::Shape{1, num_tiles, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     Tensor input_tensor = ttnn::random::random(shape, DataType::BFLOAT16);
     ttnn::MemoryConfig dram_memory_config = ttnn::MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -334,13 +321,14 @@ void test_eltwise_sfpu(tt::tt_metal::IDevice* device) {
     TT_FATAL(allclose, "Error");
 
 }
+}  // namespace ttnn
 
 int main(int argc, char** argv) {
     constexpr int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    test_eltwise_sfpu(device);
-    test_matmul(device);
+    ttnn::test_eltwise_sfpu(device);
+    ttnn::test_matmul(device);
 
     TT_FATAL(tt::tt_metal::CloseDevice(device), "Failed to close device");
     return 0;

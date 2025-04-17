@@ -34,12 +34,11 @@ GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create
 std::tuple<GenericOpDeviceOperation::operation_attributes_t, GenericOpDeviceOperation::tensor_args_t>
 GenericOpDeviceOperation::invoke(
     const std::vector<Tensor>& io_tensors, const operation_attributes_t& operation_attributes) {
-    if (io_tensors.empty()) {
-        throw std::invalid_argument("io_tensors must contain at least one tensor.");
-    }
-    if (io_tensors.size() < 2) {
-        throw std::invalid_argument("io_tensors must contain at least one input tensor and one output tensor.");
-    }
+    TT_FATAL(
+        io_tensors.size() >= 2,
+        "io_tensors must contain at least one input tensor and one output tensor, got {}.",
+        io_tensors.size());
+
     return {operation_attributes, tensor_args_t{.io_tensors = io_tensors}};
 }
 

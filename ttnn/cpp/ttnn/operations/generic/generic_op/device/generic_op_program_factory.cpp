@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <variant>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -16,13 +15,9 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-
     tt::tt_metal::Program program{};
 
     // create circular buffers
-    std::map<uint8_t, tt::tt_metal::CBHandle> cb_handles;
     for (const auto& [buffer_index, circular_buffer_attributes] : operation_attributes.circular_buffer_attributes) {
         tt::DataFormat resolved_data_format;
         if (std::holds_alternative<tt::DataFormat>(circular_buffer_attributes.data_format)) {
@@ -42,7 +37,7 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
         //     cb_config.set_globally_allocated_address(*tensor_args.io_tensors[circular_buffer_attributes.set_globally_allocated_address.value()].buffer());
         // }
 
-        cb_handles[buffer_index] = tt::tt_metal::CreateCircularBuffer(program, circular_buffer_attributes.core_spec, cb_config);
+        tt::tt_metal::CreateCircularBuffer(program, circular_buffer_attributes.core_spec, cb_config);
     }
 
     // create data movement kernels

@@ -4,16 +4,11 @@
 
 #pragma once
 
-#include <cstdint>
-#include <optional>
-#include <unordered_map>
 #include <variant>
 #include "ttnn/decorators.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
 #include "ttnn/operations/generic/generic_op/generic_op_types.hpp"
 
 namespace ttnn::operations::generic {

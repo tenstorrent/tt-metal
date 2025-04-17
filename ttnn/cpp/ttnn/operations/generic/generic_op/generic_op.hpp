@@ -5,12 +5,9 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include <unordered_map>
 #include "generic_op_types.hpp"
 
 namespace ttnn::operations::generic {
-
-enum CBIndex : std::uint8_t;
 
 struct GenericOp {
     static Tensor invoke(
