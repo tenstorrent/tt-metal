@@ -63,7 +63,12 @@ struct Typecast {
         }
         if (input.device()->arch() == tt::ARCH::GRAYSKULL) {
             return ttnn::experimental::typecast(
-                queue_id, input, output_dtype, memory_config_arg, optional_output_tensor);
+                queue_id,
+                input,
+                output_dtype,
+                memory_config_arg,
+                std::optional<CoreRangeSet>{},
+                optional_output_tensor);
         }
         DataType input_dtype = input.get_dtype();
         return detail::copy_impl(

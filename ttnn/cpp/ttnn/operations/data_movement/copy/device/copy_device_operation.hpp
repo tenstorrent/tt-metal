@@ -18,6 +18,7 @@ enum class CopyOpParallelizationStrategy { MULTI_CORE };
 struct CopyDeviceOperation {
     const tt::tt_metal::MemoryConfig output_mem_config;
     const tt::tt_metal::DataType output_dtype;
+    const std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
 
     void validate_with_output_tensors(
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
@@ -33,5 +34,11 @@ struct CopyDeviceOperation {
 
 tt::tt_metal::operation::ProgramWithCallbacks copy_multi_core(
     const Tensor& input, const Tensor& output, bool backwards = false);
+
+tt::tt_metal::operation::ProgramWithCallbacks copy_multi_core_with_sub_core_grids(
+    const Tensor& input,
+    const Tensor& output,
+    const tt::tt_metal::CoreRangeSet& sub_core_grids,
+    bool backwards = false);
 
 }  // namespace ttnn::operations::data_movement

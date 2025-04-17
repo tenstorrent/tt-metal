@@ -30,6 +30,7 @@ void py_bind_typecast(py::module& module) {
             "input_tensors", "Input tensors to typecast", "List of Tensors", "Yes"
             "dtype", "datatype of typecast", "Datatype", "Yes"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "No"
+            "sub_core_grids", "Subcore grids to use for typecast", "CoreRangeSet", "No"
     )doc";
 
     bind_registered_operation(
@@ -41,11 +42,15 @@ void py_bind_typecast(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const ttnn::DataType dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
                const std::optional<ttnn::Tensor>& optional_output_tensor,
-               QueueId queue_id) { return self(queue_id, input_tensor, dtype, memory_config, optional_output_tensor); },
+               QueueId queue_id) {
+                return self(queue_id, input_tensor, dtype, memory_config, sub_core_grids, optional_output_tensor);
+            },
             py::arg("input_tensor").noconvert(),
             py::arg("dtype").noconvert(),
             py::arg("memory_config") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt,
             py::arg("optional_output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }

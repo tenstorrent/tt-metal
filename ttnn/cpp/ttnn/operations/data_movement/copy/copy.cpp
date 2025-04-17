@@ -17,7 +17,7 @@ namespace ttnn::operations::data_movement {
 
 ttnn::Tensor CopyOperation::invoke(QueueId queue_id, const Tensor& src_tensor, const Tensor& dst_tensor) {
     operation::run(
-        CopyDeviceOperation{dst_tensor.memory_config(), dst_tensor.get_dtype()},
+        CopyDeviceOperation{dst_tensor.memory_config(), dst_tensor.get_dtype(), std::nullopt},
         {src_tensor, dst_tensor},
         {},
         {},
@@ -36,7 +36,7 @@ ttnn::Tensor AssignOperation::invoke(
     std::optional<const DataType> output_dtype,
     std::optional<Tensor> optional_output_tensor) {
     return operation::run(
-               CopyDeviceOperation{output_mem_config, output_dtype.value_or(input.get_dtype())},
+               CopyDeviceOperation{output_mem_config, output_dtype.value_or(input.get_dtype()), std::nullopt},
                {input},
                {},
                {std::move(optional_output_tensor)},
@@ -51,7 +51,11 @@ ttnn::Tensor AssignOperation::invoke(
 
 ttnn::Tensor AssignOperation::invoke(QueueId queue_id, const Tensor& input_a, const Tensor& input_b) {
     operation::run(
-        CopyDeviceOperation{input_b.memory_config(), input_b.get_dtype()}, {input_a, input_b}, {}, {}, queue_id);
+        CopyDeviceOperation{input_b.memory_config(), input_b.get_dtype(), std::nullopt},
+        {input_a, input_b},
+        {},
+        {},
+        queue_id);
     return input_b;
 }
 
