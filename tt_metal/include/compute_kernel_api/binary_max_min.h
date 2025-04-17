@@ -17,7 +17,7 @@ namespace ckernel {
 
 // clang-format off
 /**
- * Performs an elementwise maximum operation on inputs at idst0, idst1: y = x0 > x1.
+ * Performs an elementwise maximum operation on inputs at idst0, idst1: y = max(x0, x1).
  * Output overwrites first operand in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
@@ -44,7 +44,7 @@ ALWI void binary_max_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max
 
 // clang-format off
 /**
- * Performs an elementwise minimum operation on inputs at idst0, idst1: y = x0 < x1.
+ * Performs an elementwise minimum operation on inputs at idst0, idst1: y = min(x0, x1).
  * Output overwrites first operand in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
