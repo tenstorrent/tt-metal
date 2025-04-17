@@ -105,7 +105,7 @@ def test_segformer_model(
         ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, [batch_size, height, width, 16], [0, 0, 0, 0], 0)
     elif num_channels > 16 and num_channels % 32 != 0:
         ttnn_input_tensor = ttnn.pad(
-            ttnn_input_tensor, [batch_size, height, width, num_channels + (32 - num_channels % 32)], [0, 0, 0, 0], 0
+            ttnn_input_tensor, [batch_size, height, width, (num_channels + 31) // 32 * 32], [0, 0, 0, 0], 0
         )
 
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=ttnn.L1_MEMORY_CONFIG)
