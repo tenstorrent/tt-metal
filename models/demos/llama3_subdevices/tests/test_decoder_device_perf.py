@@ -63,7 +63,7 @@ perf_targets = {
     "AllGatherAsync_0": {
         "op_name": "AllGatherAsync_SDPA",
         "kernel_duration": 11745.923611111111,
-        "op_to_op": 907.4444444444445,
+        "op_to_op": 2040.7777777777778,
         "non-overlapped-dispatch-time": 3470.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
