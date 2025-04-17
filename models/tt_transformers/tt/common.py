@@ -118,11 +118,11 @@ def preprocess_inputs_prefill(
     decoding_pos = []
     prefill_lens = []
 
-    # Always prefill the nearest power of 2 for each user. This means that the majority of cases we will prefill more tokens than needed.
+    prefill_seq_len = max_prompt_len
+    # Always prefill to max prompt len so we can stack them together
     # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
     for i, encoded in enumerate(encoded_prompts):
         # Prefill size is nearest power of 2
-        prefill_seq_len = max(2 ** math.ceil(math.log(len(encoded), 2)), 128)
 
         # Initial prefill tensors full of pad tokens
         input_tokens_prefill_i = torch.full((1, prefill_seq_len), 0, dtype=torch.int32)

@@ -314,6 +314,10 @@ class ModelArgs:
         # Decoder
         "DECODE_RESIDUAL",
         "OUTPUT_MM",
+        # MoE
+        "GATE_W_LAYOUT",
+        "GATE_WEIGHTS",
+        "GATE_MM_OUTPUT",
     )
 
     LOCAL_LLAMA_PARAMS = {
@@ -558,6 +562,43 @@ class ModelArgs:
             )
 
             # Configure data precision and math fidelity for tensors and kernels
+
+            self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+
+            # Mixtral
+            self.model_config["PREFILL_MLP_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            # end mixtral
+
+            precision_setting_lookup = {
+                PrecisionSetting.BFP4: ttnn.bfloat4_b,
+                PrecisionSetting.BFP8: ttnn.bfloat8_b,
+                PrecisionSetting.BF16: ttnn.bfloat16,
+                None: None,  # this signals that original dtype should be used
+            }
+            for tensor_group, precision in self.optimizations.tensor_dtype_settings.items():
+                dtype = precision_setting_lookup[precision]
+                self.model_config[f"{tensor_group.value.upper()}_DTYPE"] = dtype
+            math_fidelity_setting_lookup = {
+                MathFidelitySetting.LOFI: self.compute_kernel_config_lofi,
+                MathFidelitySetting.HIFI2: self.compute_kernel_config_hifi2,
+                MathFidelitySetting.HIFI2_NA: self.compute_kernel_config_hifi2_na,
+                MathFidelitySetting.HIFI2_FP16: self.compute_kernel_config_hifi2_fp16,
+                MathFidelitySetting.HIFI4: self.compute_kernel_config_hifi4,
+            }
+            for op_group, math_fidelity in self.optimizations.op_fidelity_settings.items():
+                math_cfg = math_fidelity_setting_lookup[math_fidelity]
+                self.model_config[f"{op_group.value.upper()}_COMPUTE_KERNEL_CFG"] = math_cfg
+
             if self.optimizations is None:
                 self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
             self.model_config["DECODERS_OPTIMIZATIONS"] = self.optimizations
@@ -1417,6 +1458,8 @@ class ModelArgs:
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
+        # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
+        self.is_mixture_of_experts = False
         if self.dummy_weights:
             reference_model = Transformer(self)
             state_dict = reference_model.state_dict()
@@ -1433,6 +1476,8 @@ class ModelArgs:
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
+            # the model is a mixture-of-experts if we find any `.experts.` in the keys
+            self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
         keys_dict = list(state_dict.keys())[:]
