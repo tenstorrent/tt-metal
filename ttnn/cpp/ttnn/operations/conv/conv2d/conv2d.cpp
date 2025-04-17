@@ -148,7 +148,6 @@ Result conv2d_DRAM(
         dram_slice_config.num_slices < output_sliced_dim,
         " Number of slices should be less than the dimension being sliced in Conv2D DRAM Slicing");
 
-    uint32_t output_slice_size = div_up(output_sliced_dim, dram_slice_config.num_slices);
     ttnn::Tensor input_tensor_on_device;
     if (!is_tensor_on_device_or_multidevice(input_tensor)) {
         input_tensor_on_device = ttnn::operations::core::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
@@ -195,11 +194,22 @@ Result conv2d_DRAM(
     std::optional<MemoryConfig> input_memory_config = std::nullopt;
     uint32_t input_memory_config_slice_dim = 0;
 
-    for (uint32_t output_slice_dim_start = 0; output_slice_dim_start < output_sliced_dim;
-         output_slice_dim_start += output_slice_size) {
+    uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
+    uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
+
+    uint32_t slice_index = 0;
+    uint32_t output_slice_dim_start = 0;
+
+    while ((output_slice_dim_start < output_sliced_dim) && (slice_index < dram_slice_config.num_slices)) {
+        uint32_t output_slice_size = min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0);
         uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
         uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
+        log_info(
+            "Output Slice Start: {}, End: {}, Size: {}",
+            output_slice_dim_start,
+            output_slice_dim_end,
+            this_output_slice_dim);
         if (this_output_slice_dim == 0) {
             continue;
         }
@@ -278,6 +288,9 @@ Result conv2d_DRAM(
         }
         if (!first_run) {
             // After the first run, never preprocess weights.
+            TT_ASSERT(
+                conv_config.shard_layout.has_value(),
+                " Conv2D DRAM Slicing must have fixed a shard layout after the first run.");
             conv_config.always_preprocess_weights = false;
         }
         auto sliced_input_tensor = ttnn::slice(
@@ -338,6 +351,8 @@ Result conv2d_DRAM(
             std::array<uint32_t, 4>{1, 1, 1, 1});
 
         first_run = false;
+        output_slice_dim_start += output_slice_size;
+        slice_index++;
     }
 
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
