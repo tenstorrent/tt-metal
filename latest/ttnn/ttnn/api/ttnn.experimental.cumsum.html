@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.argmax &mdash; TT-NN  documentation</title>
+  <title>ttnn.experimental.cumsum &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.argmax.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.experimental.cumsum.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.prod" href="ttnn.prod.html" />
-    <link rel="prev" title="ttnn.var" href="ttnn.var.html" /> 
+    <link rel="next" title="ttnn.concat" href="ttnn.concat.html" />
+    <link rel="prev" title="ttnn.experimental.sort" href="ttnn.experimental.sort.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -76,11 +76,11 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.std.html">ttnn.std</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sum.html">ttnn.sum</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.var.html">ttnn.var</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.argmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.argmax.html">ttnn.argmax</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.prod.html">ttnn.prod</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.topk.html">ttnn.topk</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.sort.html">ttnn.experimental.sort</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.cumsum.html">ttnn.experimental.cumsum</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.experimental.cumsum</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
@@ -134,9 +134,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.argmax</li>
+      <li class="breadcrumb-item active">ttnn.experimental.cumsum</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.argmax.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.experimental.cumsum.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -144,48 +144,15 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-argmax">
-<h1>ttnn.argmax<a class="headerlink" href="#ttnn-argmax" title="Permalink to this heading"></a>
+  <section id="ttnn-experimental-cumsum">
+<h1>ttnn.experimental.cumsum<a class="headerlink" href="#ttnn-experimental-cumsum" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py data">
-<dt class="sig sig-object py" id="ttnn.argmax">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">argmax</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.argmax',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.reduction.argmax_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_create_golden_function.&lt;locals&gt;.golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.argmax" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.experimental.cumsum">
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">cumsum</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.experimental.cumsum',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.experimental.cumsum_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.experimental.cumsum" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Returns the indices of the maximum value of elements in the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor
-If no <code class="docutils literal notranslate"><span class="pre">dim</span></code> is provided, it will return the indices of maximum value of all elements in given <code class="docutils literal notranslate"><span class="pre">input</span></code>
-If no <code class="docutils literal notranslate"><span class="pre">keepdim</span></code> is provided, it will default to <cite>False</cite>.</p>
-<p>Currenly this op only support dimension-specific reduction on last dimension.</p>
-<p>Input tensor must have BFLOAT16 data type and ROW_MAJOR layout.</p>
-<p>Output tensor will have UINT32 data type.</p>
-<p>Equivalent pytorch code:</p>
-<div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="n">dim</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="n">keepdim</span><span class="p">)</span>
-</pre></div>
-</div>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor.</p>
-</dd>
-<dt class="field-even">Keyword Arguments<span class="colon">:</span>
-</dt>
-<dd class="field-even">
-<ul class="simple">
-<li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – dimension to reduce. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>keepdim</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to keep the reduced dimension. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
-</ul>
-</dd>
-<dt class="field-odd">Returns<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p><em>List of ttnn.Tensor</em> – the output tensor.</p>
-</dd>
-</dl>
+<p>ttnn.experimental.cumsum()</p>
 </dd>
 </dl>
 
@@ -196,8 +163,8 @@ If no <code class="docutils literal notranslate"><span class="pre">keepdim</span
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.var.html" class="btn btn-neutral float-left" title="ttnn.var" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.prod.html" class="btn btn-neutral float-right" title="ttnn.prod" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.experimental.sort.html" class="btn btn-neutral float-left" title="ttnn.experimental.sort" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.concat.html" class="btn btn-neutral float-right" title="ttnn.concat" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
