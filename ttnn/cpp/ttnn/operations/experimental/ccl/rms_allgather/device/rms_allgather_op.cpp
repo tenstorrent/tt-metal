@@ -363,6 +363,8 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program(
                     return frmsnorm_pre_multi_core_sharded(
                         a,
                         b,
+                        gamma,
+                        stats,
                         output_tensor,
                         this->eps,
                         program_config.compute_with_storage_grid_size,
@@ -404,6 +406,8 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program(
                 return frmsnorm_pre_multi_core_sharded(
                     a,
                     b,
+                    gamma,
+                    stats,
                     output_tensor,
                     this->eps,
                     grid_size,

@@ -77,6 +77,8 @@ void append_fabric_connection_rt_args(
 operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     const Tensor& a,                       // input
     const std::optional<const Tensor>& b,  // residual
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& stats,
     Tensor& output,
     float eps,
     CoreCoord compute_grid_size,
@@ -92,10 +94,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    bool enable_persistent_fabric_mode = true;
-    const uint32_t dim = 3;
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
+    bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
 
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
@@ -138,7 +139,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         num_targets_backward =
             line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
-        // TODO: Commonize
         num_targets_forward = tt::div_up(ring_size - 1, 2);
         num_targets_backward = ring_size - 1 - num_targets_forward;
         if (ring_index % 2 == 0) {
@@ -147,7 +147,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     }
 
     // Get worker cores, assuming 1 worker per link
-    uint32_t num_workers_per_link = 1;
     ShardSpec shard_spec = a.shard_spec().value();
     CoreRangeSet all_cores = shard_spec.grid;
     const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
@@ -162,9 +161,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = output_page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    uint32_t cb_num_pages =
-        (num_links == 1) +
-        1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -195,15 +191,20 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         }
     }
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat gamma_cb_data_format =
+        gamma.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype())
+                          : tt::DataFormat::Float16_b;
     // tile sizes
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
+    uint32_t gamma_single_tile_size = tt::tt_metal::detail::TileSize(gamma_cb_data_format);
     uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
     tt::log_debug("in_data_format: {}", in_data_format);
     tt::log_debug("out_data_format: {}", out_data_format);
     tt::log_debug("cb_data_format: {}", cb_data_format);
+    tt::log_debug("gamma_cb_data_format: {}", gamma_cb_data_format);
     tt::log_debug("math_fidelity: {}", math_fidelity);
     tt::log_debug("math_approx_mode: {}", math_approx_mode);
     tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
@@ -238,7 +239,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
     // Get all storage cores
     ShardSpec output_shard_spec = output.shard_spec().value();
-
     CoreRangeSet all_storage_cores = output_shard_spec.grid;
     CoreRangeSet all_worker_and_storage_cores = all_storage_cores.merge(a.shard_spec().value().grid);
     std::vector<uint32_t> storage_core_noc_x;
@@ -257,6 +257,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             storage_core_noc_y.back());
     }
 
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
+
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -265,6 +267,10 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     // post_all_gather_stats_block_tiles
     uint32_t post_all_gather_stats_block_tiles = 1;
     uint32_t num_distributed_devices = 1;
+    if (stats.has_value()) {
+        post_all_gather_stats_block_tiles = stats.value().get_padded_shape()[-1] / TILE_WIDTH;
+        num_distributed_devices = post_all_gather_stats_block_tiles;
+    }
 
     uint32_t in0_CB_tiles = in0_block_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
@@ -274,6 +280,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     uint32_t in2_CB_size = bfloat16_tile_size;
     // in3 - eps
     uint32_t in3_CB_size = bfloat16_tile_size;
+    // gamma
+    uint32_t in5_CB_size = in0_block_tiles * gamma_single_tile_size / 1;
     // itermediate buffers change later
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
@@ -284,13 +292,15 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
     uint32_t xmm2_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex2pe_CB_size = single_tile_size;
-    uint32_t stats_cb_size = 0;
-    uint32_t stats_reduced_cb_size = 0;
+    uint32_t stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
+    uint32_t stats_reduced_cb_size = single_tile_size;
     // output buffer size
     uint32_t out_CB_size;
-    out_CB_size = out_single_tile_size;
+    out_CB_size = in0_block_tiles * out_single_tile_size;
     uint32_t out_reshard_CB_size = out_CB_size;
-
+    if (!skip_write_back) {
+        out_reshard_CB_size = block_wt_resharded * out_single_tile_size;
+    }
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -301,7 +311,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     uint32_t num_cores_y = grid_size.y;
     uint32_t num_cores = num_cores_x * num_cores_y;
     uint32_t num_cores_all_to_all = 1;
-    uint32_t num_cores_all_to_all_second_stage = 0;
     uint32_t num_blocks_first_stage = num_blocks;
     uint32_t num_blocks_second_stage = 0;
     if (use_two_stage_reduce) {
@@ -313,10 +322,10 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     if (use_two_stage_reduce) {
         ex_external_CB_size = (num_blocks_first_stage + num_blocks_second_stage - 1) * single_tile_size;
     }
-    ex_external_CB_size = ex_external_CB_size;
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
 
     CoreCoord start_core = {0, 0};
+
     CoreRange sender_cores(start_core, start_core);
     CoreRangeSet all_to_all_cores;
     CoreRangeSet all_to_all_workers_except_sender;
@@ -401,12 +410,19 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_second_stage_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto post_reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+
+    // reader defines
+    std::map<string, string> reader_mcast_sender_defines;
+    std::map<string, string> reader_mcast_receiver_defines;
+    if (gamma.has_value()) {
+        reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
+        reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
+    }
+
     // Create circular buffers
 
     // in1 sharded
-
-    CBHandle cb_in1 = 0;
-    CBHandle cb_add_out = 0;
 
     // in2 scaler
     uint32_t in2_cb_index = tt::CBIndex::c_0;
@@ -460,7 +476,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     // out
     uint32_t cb_to_allgather_writer = tt::CBIndex::c_7;
     tt::tt_metal::CircularBufferConfig output_cb_config =
-        tt::tt_metal::CircularBufferConfig(out_CB_size, {{cb_to_allgather_writer, out_data_format}})
+        tt::tt_metal::CircularBufferConfig(out_single_tile_size, {{cb_to_allgather_writer, out_data_format}})
             .set_page_size(cb_to_allgather_writer, out_single_tile_size);
     CBHandle cb_output = 0;
     cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
@@ -478,6 +494,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
     uint32_t add_out_cb_index = tt::CBIndex::c_9;
     uint32_t in1_cb_index = tt::CBIndex::c_10;
+
+    CBHandle cb_in1 = 0;
+    CBHandle cb_add_out = 0;
 
     if (b) {
         tt::tt_metal::CircularBufferConfig add_out_cb_config =
@@ -987,9 +1006,14 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
     IDevice* device = a.device();
+    Program program = Program();
 
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    ShardSpec shard_spec = a.shard_spec().value();
+    CoreRangeSet all_cores = shard_spec.grid;
+    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -1020,7 +1044,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
         }
     }
 
-    tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format =
         gamma.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype())
@@ -1048,9 +1071,8 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     uint32_t Kt = K / TILE_WIDTH;
     // block
     uint32_t block_w = block_wt * TILE_WIDTH;
-    uint32_t block_h = 1 * TILE_HEIGHT;
+    uint32_t block_h = TILE_HEIGHT;
     uint32_t num_blocks = 0;
-    ShardSpec shard_spec = a.shard_spec().value();
 
     auto bbox = shard_spec.grid.bounding_box();
     CoreCoord grid_size = {bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1};
@@ -1070,8 +1092,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
 
     // Get all storage cores
     ShardSpec output_shard_spec = output.shard_spec().value();
-    bool output_row_wise = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-
     CoreRangeSet all_storage_cores = output_shard_spec.grid;
     CoreRangeSet all_worker_and_storage_cores = all_storage_cores.merge(a.shard_spec().value().grid);
     std::vector<uint32_t> storage_core_noc_x;
@@ -1097,7 +1117,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
-    uint32_t num_rows_per_all_to_all_worker = 1;
     uint32_t in0_block_tiles = block_wt;
     // post_all_gather_stats_block_tiles
     uint32_t post_all_gather_stats_block_tiles = 1;
@@ -1125,23 +1144,20 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
-    uint32_t xmm2_CB_size = in0_block_tiles * single_tile_size / 1;
+    uint32_t xmm2_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex2pe_CB_size = single_tile_size;
-    uint32_t stats_cb_size = 0;
-    uint32_t stats_reduced_cb_size = 0;
-    stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
-    stats_reduced_cb_size = single_tile_size;
+    uint32_t stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
+    uint32_t stats_reduced_cb_size = single_tile_size;
     // output buffer size
     uint32_t out_CB_size;
     out_CB_size = in0_block_tiles * out_single_tile_size;
     uint32_t out_reshard_CB_size = out_CB_size;
     if (!skip_write_back) {
-        out_reshard_CB_size = block_wt_resharded * 1 * out_single_tile_size;
+        out_reshard_CB_size = block_wt_resharded * out_single_tile_size;
     }
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = Program();
     // define core ranges
     bool use_mcast = num_blocks > 1;
 
@@ -1149,14 +1165,12 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     uint32_t num_cores_y = grid_size.y;
     uint32_t num_cores = num_cores_x * num_cores_y;
     uint32_t num_cores_all_to_all = 1;
-    uint32_t num_cores_all_to_all_second_stage = 0;
     uint32_t num_blocks_first_stage = num_blocks;
     uint32_t num_blocks_second_stage = 0;
     if (use_two_stage_reduce) {
         num_blocks_first_stage = num_cores_x;
-        num_cores_all_to_all_second_stage = num_cores_y;
         num_cores_all_to_all = num_cores_y;
-        num_blocks_second_stage = num_cores_all_to_all_second_stage;
+        num_blocks_second_stage = num_cores_y;
     }
     // change tt::CBIndex external size
     if (use_two_stage_reduce) {
@@ -1165,7 +1179,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
 
     CoreCoord start_core = {0, 0};
-    CoreRangeSet all_cores = shard_spec.grid;
+
     CoreRange sender_cores(start_core, start_core);
     CoreRangeSet all_to_all_cores;
     CoreRangeSet all_to_all_workers_except_sender;
@@ -1247,7 +1261,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
         not_all_to_all_workers = applyStartOffset(not_all_to_all_workers, grid_offset.value());
     }
     // Mcast args
-    auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto post_reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
     std::map<string, string> reader_mcast_sender_defines;
     std::map<string, string> reader_mcast_receiver_defines;
@@ -1349,17 +1363,15 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             .set_globally_allocated_address(*stats.value().buffer());
     auto cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
 
-    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
-
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
-        (std::uint32_t)reduce_sender_semaphore_id,
+        (std::uint32_t)post_reduce_sender_semaphore_id,
         (std::uint32_t)num_blocks,
         (std::uint32_t)single_tile_size,
         (std::uint32_t)cb_stats_reduced_index,
         (std::uint32_t)ex_global_cb_index};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
-        (std::uint32_t)reduce_sender_semaphore_id, ex_global_cb_index};
+        (std::uint32_t)post_reduce_sender_semaphore_id, ex_global_cb_index};
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
