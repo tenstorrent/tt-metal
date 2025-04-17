@@ -189,8 +189,8 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
     auto src2_buffer = input_tensor2.buffer();
     auto dst2_buffer = cache_tensor2.buffer();
 
-    bool src_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool dst_is_dram = dst1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool src_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src1_cb_index,

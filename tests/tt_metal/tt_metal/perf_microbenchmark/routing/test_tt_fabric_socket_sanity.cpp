@@ -36,7 +36,6 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
 #include "routing_test_common.hpp"
-#include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
@@ -263,7 +262,7 @@ int main(int argc, char** argv) {
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =
-            std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
             "tt_fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
         auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(tg_mesh_graph_desc_path.string());
 
@@ -381,7 +380,8 @@ int main(int argc, char** argv) {
             device_router_map[device.first] = device_router_phys_cores;
 
             gk_phys_core = (device.second->worker_core_from_logical_core(gk_core));
-            uint32_t gk_noc_offset = tt_metal::hal_ref.noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
+            uint32_t gk_noc_offset =
+                tt_metal::MetalContext::instance().hal().noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
 
             std::vector<uint32_t> router_compile_args = {
                 (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
@@ -682,7 +682,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

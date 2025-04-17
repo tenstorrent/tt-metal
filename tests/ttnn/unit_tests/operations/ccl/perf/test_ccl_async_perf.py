@@ -139,6 +139,9 @@ def test_all_gather_async_tg(
         num_all_gather_instances=replication_factor,
         cluster_axis=0,
         use_all_gather_async=True,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
         trace_mode=True,
     )
 

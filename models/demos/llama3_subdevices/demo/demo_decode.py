@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 5
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 355, "max": 375}, 10: {"min": 180, "max": 200}, 80: {"min": 40, "max": 44}}
+TSU_THRESHOLDS = {1: {"min": 360, "max": 380}, 10: {"min": 195, "max": 215}, 80: {"min": 43, "max": 47}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -640,14 +640,7 @@ def run_llama3_demo(
 )
 @pytest.mark.parametrize(  # Worker size is selected to give 120kB ringbuffer size
     "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 23887872,
-            "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872, "worker_l1_size": 1344544}],
     indirect=True,
 )
 def test_llama_demo(
