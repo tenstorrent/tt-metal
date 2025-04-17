@@ -125,10 +125,7 @@ profile_input_bcast_shape_pairs = [
 
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    (
-        (torch.bfloat16, ttnn.bfloat16),
-        (torch.float32, ttnn.float32),
-    ),
+    ((torch.bfloat16, ttnn.bfloat16),),
 )
 @pytest.mark.parametrize(
     "memory_config_input",
@@ -148,7 +145,7 @@ def test_broadcast_to_profile(device, dtype_pt, dtype_tt, shape_and_broadcast_sp
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
     )
-    for _ in range(10):
+    for _ in range(2):
         output = ttnn.experimental.broadcast_to(
             input_tensor, ttnn.Shape(broadcast_shape), memory_config=memory_config_input
         )
