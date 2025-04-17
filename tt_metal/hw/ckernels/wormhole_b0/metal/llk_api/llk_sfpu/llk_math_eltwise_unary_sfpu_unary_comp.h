@@ -14,6 +14,13 @@ namespace ckernel {
 
 // Unary Not equal
 template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_unary_ne_int32(
+    uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_comp_unary_int<APPROXIMATE, SfpuType::unary_ne>, dst_index, vector_mode, param0);
+}
+
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_unary_ne_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unary_ne, APPROXIMATE>();
 }
