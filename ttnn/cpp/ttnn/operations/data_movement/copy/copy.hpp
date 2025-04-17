@@ -23,6 +23,7 @@ struct AssignOperation {
         const Tensor& input,
         const MemoryConfig& output_mem_config,
         std::optional<const DataType> output_dtype = std::nullopt,
+        // const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static ttnn::Tensor invoke(
