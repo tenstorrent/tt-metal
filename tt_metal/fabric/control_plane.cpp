@@ -27,7 +27,6 @@
 #include "core_coord.hpp"
 #include "fabric_host_interface.h"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
 #include "logger.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_graph.hpp"
@@ -338,10 +337,18 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
     std::string mesh_graph_desc_filename = std::filesystem::path(mesh_graph_desc_file).filename().string();
     if (mesh_graph_desc_filename == "tg_mesh_graph_descriptor.yaml") {
         // Add the N150 MMIO devices
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({0});
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({1});
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({2});
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({3});
+        auto eth_coords_per_chip =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
+        std::unordered_map<int, chip_id_t> eth_coord_y_for_gateway_chips = {};
+        for (const auto [chip_id, eth_coord] : eth_coords_per_chip) {
+            if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(chip_id) == BoardType::N150) {
+                eth_coord_y_for_gateway_chips[eth_coord.y] = chip_id;
+            }
+        }
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({eth_coord_y_for_gateway_chips[3]});
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({eth_coord_y_for_gateway_chips[2]});
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({eth_coord_y_for_gateway_chips[1]});
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({eth_coord_y_for_gateway_chips[0]});
 
         nw_chip_physical_id = this->get_physical_chip_id_from_eth_coord({0, 3, 7, 0, 1});
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/4);
@@ -670,7 +677,7 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                     physical_chip_id, eth_chan);
 
             TT_ASSERT(
-                tt_metal::hal_ref.get_dev_size(
+                tt_metal::MetalContext::instance().hal().get_dev_size(
                     tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG) ==
                     sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 "ControlPlane: Fabric router config size mismatch");
@@ -684,7 +691,7 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                 (void*)&fabric_router_config,
                 sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 tt_cxy_pair(physical_chip_id, virtual_eth_core),
-                tt_metal::hal_ref.get_dev_addr(
+                tt_metal::MetalContext::instance().hal().get_dev_addr(
                     tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG),
                 false);
         }

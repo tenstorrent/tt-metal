@@ -101,6 +101,10 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
+            --cap-add=ALL
+            --security-opt seccomp=unconfined
+            --ulimit nproc=65536:65536
+            --ulimit nofile=65536:65536
           install_wheel: true
           run_args: |
             source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh

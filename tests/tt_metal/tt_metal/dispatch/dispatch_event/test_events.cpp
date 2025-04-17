@@ -24,7 +24,6 @@
 #include "gtest/gtest.h"
 #include "impl/debug/watcher_server.hpp"
 #include <tt-metalium/logger.hpp>
-#include "rtoptions.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
@@ -146,7 +145,8 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
 // Negative test. Host syncing on a future event that isn't actually issued.
 // Ensure that expected hang is seen, which indicates event sync feature is working properly.
 TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
-    tt::llrt::RunTimeOptions::get_instance().set_test_mode_enabled(true);  // Required for finish hang breakout.
+    tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(
+        true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);
@@ -177,7 +177,8 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang)
 TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventHang) {
     // Skip this test until #7216 is implemented.
     GTEST_SKIP();
-    tt::llrt::RunTimeOptions::get_instance().set_test_mode_enabled(true);  // Required for finish hang breakout.
+    tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(
+        true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);

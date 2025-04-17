@@ -40,13 +40,14 @@ BuildEnvManager& BuildEnvManager::get_instance() {
 BuildEnvManager::BuildEnvManager() {
     // Initialize build_state_indices_
     uint32_t index = 0;
-    uint32_t programmable_core_type_count = hal_ref.get_programmable_core_type_count();
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
     build_state_indices_.resize(programmable_core_type_count);
     for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
-        uint32_t processor_class_count = hal_ref.get_processor_classes_count(programmable_core);
+        uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
         build_state_indices_[programmable_core].resize(processor_class_count);
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-            uint32_t processor_types_count = hal_ref.get_processor_types_count(programmable_core, processor_class);
+            uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
             build_state_indices_[programmable_core][processor_class] = {index, processor_types_count};
             index += processor_types_count;
         }
@@ -124,7 +125,7 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
                 (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis())
                  << (harvesting_map_bits + num_hw_cq_bits)) |
                 (static_cast<uint32_t>(num_hw_cqs) << harvesting_map_bits);
-    if (not hal_ref.is_coordinate_virtualization_enabled()) {
+    if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across
         // devices with different cores harvested.
         build_key |= tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
@@ -145,7 +146,8 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_i
         DispatchMemMap::get(dispatch_core_type, num_hw_cqs).get_dispatch_message_addr_start();
 
     // Prepare the container for build states
-    uint32_t num_build_states = hal_ref.get_num_risc_processors();
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t num_build_states = hal.get_num_risc_processors();
     std::vector<std::shared_ptr<JitBuildState>> build_states(num_build_states);
 
     // Helper lambda to create a build state based on the core type and processor info.
@@ -182,7 +184,7 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_i
                         .processor_id = processor_class,
                         .is_fw = is_fw,
                         .dispatch_message_addr = dispatch_message_addr,
-                        .is_cooperative = hal_ref.get_eth_fw_is_cooperative()});
+                        .is_cooperative = hal.get_eth_fw_is_cooperative()});
                 break;
             }
             case HalProgrammableCoreType::IDLE_ETH: {
@@ -203,15 +205,15 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_i
 
     // Loop through programmable core types and their processor classes/types.
     uint32_t index = 0;
-    uint32_t programmable_core_type_count = hal_ref.get_programmable_core_type_count();
+    uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
     for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
         HalProgrammableCoreType core_type = magic_enum::enum_value<HalProgrammableCoreType>(programmable_core);
-        uint32_t processor_class_count = hal_ref.get_processor_classes_count(programmable_core);
+        uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
             auto compute_proc_class = magic_enum::enum_cast<HalProcessorClassType>(processor_class);
             bool is_compute_processor =
                 compute_proc_class.has_value() and compute_proc_class.value() == HalProcessorClassType::COMPUTE;
-            uint32_t processor_types_count = hal_ref.get_processor_types_count(programmable_core, processor_class);
+            uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
             for (uint32_t processor_type = 0; processor_type < processor_types_count; processor_type++) {
                 build_states[index++] =
                     create_jit_build_state(core_type, processor_class, processor_type, is_compute_processor);

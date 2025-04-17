@@ -15,7 +15,6 @@
 #include "mesh_graph.hpp"
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
