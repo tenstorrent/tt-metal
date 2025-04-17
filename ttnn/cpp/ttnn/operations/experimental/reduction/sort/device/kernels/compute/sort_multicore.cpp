@@ -17,7 +17,61 @@
 // this can only be removed once that's fixed
 int32_t topk_replay_init = 0;
 namespace NAMESPACE {
+/*
+This sorting algorithm is based on Bitonic Merge Sort and operates on input data arranged in tiles.
 
+The algorithm processes the data such that the dimension to be sorted becomes the last dimension of the tensor.
+From the perspective of tile arrangement, sorting is performed row by row in a matrix-like structure.
+
+### Overview:
+1. **Tile Initialization**:
+    - A full row of tiles (size `Wt`) is read from DRAM into L1 memory.
+    - Corresponding tiles containing the initial data indices are also generated.
+
+2. **Sorting Mechanism**:
+    - The core of the sorting is performed using `ckernel::topk_local_sort`, which:
+      - Sorts two input tiles in-place.
+      - Updates the indices of the data to reflect the new order.
+    - Since `ckernel::topk_local_sort` operates on columns, an additional transposition step is required.
+    - The number of tiles in the `Wt` dimension must be a multiple of 64 (2 * Tile_Width (32)) to ensure compatibility.
+
+3. **Bitonic Sequence Formation**:
+    - The function `sort_Wt_tiles_row_to_bitonic_sequence`:
+      - Sorts pairs of tiles alternately in ascending and descending order.
+      - Produces a set of sorted tile pairs with alternating sorting directions.
+
+4. **Bitonic Merge Sort**:
+    - The tiles are further sorted in stages to ensure the entire row is sorted.
+    - At each stage, tile indices are calculated, and tiles are sorted pairwise.
+    - This process continues until all tiles in the row are sorted.
+
+5. **Multicore Calculation**:
+    - Multicore parallelism is enabled by assigning each row of tiles (`Wt`) to a separate core.
+    - If the number of rows (`Ht`) exceeds the number of available cores, the workload is distributed such that some
+cores process multiple rows.
+    - This ensures efficient utilization of all cores and minimizes idle time during computation.
+
+6. **Final Steps**:
+    - Once sorted, the tiles are transposed back to the desired dimension.
+    - The sorted data is then written back to DRAM.
+
+### Example:
+- Input: A 64x128 matrix, represented as 2x4 tiles: T0, T1, T2, T3
+                                                    T4, T5, T6, T7
+- Sorting (ascending order):
+0. Distributing workload across cores:
+   - Core 0 processes T0, T1, T2, T3
+   - Core 1 processes T4, T5, T6, T7
+Calculation of each row:
+  1. **Pairwise Sorting**:
+      - T0 and T1 are sorted as a pair in ascending order.
+      - T2 and T3 are sorted as a pair in descending order.
+  2. **Sorting Across Pairs**:
+      - **Stage 1**: T0 and T2 are sorted in ascending order, and T1 and T3 are sorted in ascending order.
+      - **Stage 2**: T0 and T1 are sorted in ascending order, and T2 and T3 are sorted in ascending order.
+  3. **Data Saving**:
+      - The tiles are now fully sorted along the desired dimension and ready to be saved.
+ */
 void MAIN {
     // Runtime args
     const uint32_t core_loop_count = get_arg_val<uint32_t>(0);
