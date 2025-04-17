@@ -63,7 +63,7 @@ perf_targets = {
     "AllGatherAsync_0": {
         "op_name": "AllGatherAsync_SDPA",
         "kernel_duration": 11745.923611111111,
-        "op_to_op": 907.4444444444445,
+        "op_to_op": 2040.7777777777778,
         "non-overlapped-dispatch-time": 3470.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
@@ -132,16 +132,16 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.1,
         "dispatch_duration_relative_margin": 0.1,
     },
-    "AllReduceAsync_0": {
-        "op_name": "AllReduceAsync_QKV",
-        "kernel_duration": 12133.347222222223,
-        "op_to_op": 609.0,
-        "non-overlapped-dispatch-time": 8351.9,
+    "AllReduceCreateQkvHeads_0": {
+        "op_name": "AllReduce_Fuse_Createheads",
+        "kernel_duration": 14541.059027777777,
+        "op_to_op": 667.0,
+        "non-overlapped-dispatch-time": 7932.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
     },
-    "AllReduceAsync_1": {
+    "AllReduceAsync_0": {
         "op_name": "AllReduceAsync_DO",
         "kernel_duration": 21736.76736111111,
         "op_to_op": 626.5555555555555,
@@ -150,7 +150,7 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    "AllReduceAsync_2": {
+    "AllReduceAsync_1": {
         "op_name": "AllReduceAsync_FF2",
         "kernel_duration": 22341.23263888889,
         "op_to_op": 637.1111111111111,
@@ -176,15 +176,6 @@ perf_targets = {
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
-    },
-    "NLPCreateHeadsDecodeDeviceOperation_0": {
-        "op_name": "CreateHeads",
-        "kernel_duration": 9503.777777777777,
-        "op_to_op": 845.6666666666666,
-        "non-overlapped-dispatch-time": 9122.6,
-        "kernel_duration_relative_margin": 0.03,
-        "op_to_op_duration_relative_margin": 0.1,
-        "dispatch_duration_relative_margin": 0.1,
     },
     "RotaryEmbeddingLlamaFusedQK_0": {
         "op_name": "RotaryEmbeddingLlamaFusedQK",
