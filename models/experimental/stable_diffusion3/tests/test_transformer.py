@@ -3,16 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+
 import pytest
 import torch
 import ttnn
 
 from ..reference.transformer import SD3Transformer2DModel
 from ..tt.transformer import TtSD3Transformer2DModel, TtSD3Transformer2DModelParameters
-from ..tt.utils import from_torch, assert_quality
-from models.utility_functions import (
-    nearest_32,
-)
+from ..tt.utils import assert_quality
 
 
 @pytest.mark.parametrize(
