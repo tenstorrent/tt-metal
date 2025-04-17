@@ -279,6 +279,7 @@ class TtLlamaAttention(LightweightModule):
         ###
         # Reshape and rotary embeddings
         ###
+        cluster_axis = 1
         (
             xqkv_reduced,
             q_heads_pre_rot_1BQD,
@@ -286,10 +287,12 @@ class TtLlamaAttention(LightweightModule):
             v_heads_1BKD,
         ) = ttnn.experimental.all_reduce_create_qkv_heads(
             xqkv_fused_sharded,
-            self.tt_ccl.persistent_buffers[1][self.tt_ccl.buffer_idx[1]],
-            cluster_axis=1,
+            self.tt_ccl.persistent_buffers[cluster_axis][self.tt_ccl.buffer_idx[cluster_axis]],
+            cluster_axis=cluster_axis,
             mesh_device=self.tt_ccl.mesh_device,
-            multi_device_global_semaphore=self.tt_ccl.gather_semaphore_handles[1][self.tt_ccl.gather_idx[1]],
+            multi_device_global_semaphore=self.tt_ccl.gather_semaphore_handles[cluster_axis][
+                self.tt_ccl.gather_idx[cluster_axis]
+            ],
             num_heads=self.n_local_heads,
             memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
             topology=ttnn.Topology.Linear,
