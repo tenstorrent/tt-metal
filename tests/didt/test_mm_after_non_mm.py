@@ -144,24 +144,6 @@ def test_ff1_matmul(
     else:
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
 
-    start_core = ttnn.CoreCoord(0, 0)
-    end_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
-    core_range = ttnn.CoreRange(start_core, end_core)
-
-    in0_block_shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet(
-            {
-                core_range,
-            }
-        ),
-        [
-            128,
-            576,
-        ],
-        ttnn.ShardOrientation.ROW_MAJOR,
-        False,
-    )
-
     # Initialize matmul configurations
     out_subblock_h = 1
     out_subblock_w = 8
@@ -201,7 +183,6 @@ def test_ff1_matmul(
     in0_shape = [1, 1, 32 * per_core_M * compute_grid.y, 576 * compute_grid.x]
     in1_shape = [1, 1, 576 * compute_grid.x, 32 * per_core_N * compute_grid.x]
 
-    # in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, in0_block_shard_spec)
     in0_mem_config = ttnn.create_sharded_memory_config(
         in0_shape,
         ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x),
