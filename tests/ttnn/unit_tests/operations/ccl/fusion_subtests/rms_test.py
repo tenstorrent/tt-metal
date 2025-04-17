@@ -457,6 +457,5 @@ def run_rms_fuse_impl(
         logger.info(output)
         if not passing:
             mesh_device.reset_sub_device_stall_group()
-            teardown_fabric_interface(mesh_device)
         assert passing
     mesh_device.reset_sub_device_stall_group()
