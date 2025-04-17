@@ -43,7 +43,5 @@ namespace ttnn::prim {
 
 constexpr auto ttml_cross_entropy_fw = ttnn::register_operation<
     "ttnn::prim::ttml_cross_entropy_fw",
-    ttml::metal::ops::cross_entropy_fw::device::
-        CrossEntropyForwardDeviceOperation>();  // create class which calls methods from
-                                                // CrossEntropyForwardDeviceOperation
+    ttml::metal::ops::cross_entropy_fw::device::CrossEntropyForwardDeviceOperation>();
 }  // namespace ttnn::prim

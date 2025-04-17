@@ -9,9 +9,7 @@
 namespace ttml::metal::ops::cross_entropy_fw {
 
 ttnn::Tensor CrossEntropyForwardOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Tensor& target_tensor) {
-    auto result /*ttnn::Tensor*/ = ttnn::prim::ttml_cross_entropy_fw(
-        input_tensor, target_tensor);  // logits : model output (B, 1, S, D), target : ground truth (B, 1, S, D)
-    // resulut shape (B, 1, S, 1) - will change this later
+    auto result = ttnn::prim::ttml_cross_entropy_fw(input_tensor, target_tensor);
     return result;
 }
 }  // namespace ttml::metal::ops::cross_entropy_fw

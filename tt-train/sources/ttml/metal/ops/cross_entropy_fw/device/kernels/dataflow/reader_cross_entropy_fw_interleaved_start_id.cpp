@@ -21,14 +21,11 @@ void kernel_main() {
     constexpr uint32_t cb_target_idx = tt::CBIndex::c_1;
     constexpr uint32_t cb_mask_idx = tt::CBIndex::c_2;
     constexpr uint32_t cb_max_mask_idx = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_4;
+    constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_4;  // used for reduction
 
-    constexpr uint32_t cb_zero_scaler = tt::CBIndex::c_11;
-
-    constexpr uint32_t num_input_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t block_size = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt = get_compile_time_arg_val(2);
-    constexpr uint32_t mask_w = get_compile_time_arg_val(3);
+    constexpr uint32_t block_size = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+    constexpr uint32_t mask_w = get_compile_time_arg_val(2);
 
     constexpr uint32_t onetile = 1U;
 #ifdef DO_MASK_W
@@ -40,9 +37,6 @@ void kernel_main() {
     // generate scaler and mask tile
     cb_reserve_back(cb_scaler_idx, onetile);
     uint16_t* scaler_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_scaler_idx));  // write scalar tile
-
-    cb_reserve_back(cb_zero_scaler, onetile);
-    uint16_t* zero_scaler_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_zero_scaler));  // write scalar tile
 
     uint16_t* mask_ptr = nullptr;
     uint16_t* max_mask_ptr = nullptr;
@@ -59,15 +53,13 @@ void kernel_main() {
     for (uint32_t face = 0; face < 4; ++face) {
         uint32_t offset = (face & 1U) << 4U;
         for (uint32_t h = 0; h < 16; ++h) {
-            for (uint32_t w = 0; w < 16; ++w, ++mask_ptr, ++max_mask_ptr, ++scaler_ptr, ++zero_scaler_ptr) {
+            for (uint32_t w = 0; w < 16; ++w) {
                 if constexpr (do_mask_w) {
-                    *mask_ptr = (offset + w < mask_w) ? one : zero;  // how to create the proper mask?
-                    *max_mask_ptr = (offset + w < mask_w) ? zero : minus_inf;
+                    *mask_ptr++ = (offset + w < mask_w) ? one : zero;  // how to create the proper mask?
+                    *max_mask_ptr++ = (offset + w < mask_w) ? zero : minus_inf;
                 }
 
-                *scaler_ptr = one;
-                *zero_scaler_ptr = zero;
-                // *zero_scaler_ptr++ = zero;
+                *scaler_ptr++ = one;
             }
         }
     }
@@ -76,8 +68,6 @@ void kernel_main() {
         cb_push_back(cb_max_mask_idx, onetile);
     }
     cb_push_back(cb_scaler_idx, onetile);
-
-    cb_push_back(cb_zero_scaler, onetile);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     const DataFormat data_format = get_dataformat(cb_input_idx);
@@ -93,6 +83,7 @@ void kernel_main() {
         // start_row is the number of rows already processed in other cores
         uint32_t idx = (start_row + i) * Wt;  // (take already processed rows + current row)*Wt(number of tiles in row)
 
+#ifdef EVERYTHING_FITS_IN_L1
         // read input buffer
         cb_reserve_back(cb_input_idx, Wt);  // reserve Wt tiles in input buffer ==  wait until cb will has Wt tiles
         uint32_t l1_write_addr = get_write_ptr(cb_input_idx);  // get the address of the first tile in the input buffer
@@ -116,5 +107,54 @@ void kernel_main() {
         }
         noc_async_read_barrier();         // wait until all tiles are read
         cb_push_back(cb_target_idx, Wt);  // push the tile to the back of the target buffer
+#else
+        // read input buffer by blocks to calculate max value in row
+        for (uint32_t j = 0; j < Wt; j += block_size) {
+            cb_reserve_back(cb_input_idx, block_size);
+            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
+                l1_write_addr += tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_input_idx, block_size);
+        }
+
+        // read input buffer by blocks to calculate sum(exp(x - max(x))) in row
+        for (uint32_t j = 0; j < Wt; j += block_size) {
+            cb_reserve_back(cb_input_idx, block_size);
+            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
+                l1_write_addr += tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_input_idx, block_size);
+        }
+
+        // read input and target buffers by blocks to final calculation
+        for (uint32_t j = 0; j < Wt; j += block_size) {
+            cb_reserve_back(cb_input_idx, block_size);
+            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
+                l1_write_addr += tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_input_idx, block_size);
+
+            // read block_size tiles from target buffer
+            {
+                cb_reserve_back(cb_target_idx, block_size);
+                uint32_t l1_target_write_addr = get_write_ptr(cb_target_idx);
+                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                    noc_async_read_tile(idx + j + block_idx, target_address_generator, l1_target_write_addr);
+                    l1_target_write_addr += tile_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_target_idx, block_size);
+            }
+        }
+#endif
     }
 }

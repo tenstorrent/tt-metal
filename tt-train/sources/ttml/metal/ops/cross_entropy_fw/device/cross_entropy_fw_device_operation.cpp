@@ -20,7 +20,6 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_hit(
 
 void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // the same validation as rmsnorm
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
@@ -72,23 +71,20 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
 
 CrossEntropyForwardDeviceOperation::spec_return_value_t CrossEntropyForwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto input_logical_shape = tensor_args.input.get_logical_shape();
-    // input_logical_shape[-1] = 1; // <- set the last dimension to 1
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->get_tensor_spec();
     }
-
+    auto input_logical_shape = tensor_args.input.get_logical_shape();
     input_logical_shape[-1] = 1;
     return ttnn::TensorSpec(
-        ttnn::Shape(input_logical_shape),  // <- shape of the output tensor (B, 1, S, D) todo: change
-                                           // to (B, 1, S, 1)
+        ttnn::Shape(input_logical_shape),
         tt::tt_metal::TensorLayout(
             tensor_args.input.get_dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
 }
 
 CrossEntropyForwardDeviceOperation::tensor_return_value_t CrossEntropyForwardDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    tensor_return_value_t output_tensor;  // <- ttnn::Tensor
+    tensor_return_value_t output_tensor;
 
     spec_return_value_t output_specs = compute_output_specs(args, tensor_args);
 
@@ -103,8 +99,6 @@ CrossEntropyForwardDeviceOperation::tensor_return_value_t CrossEntropyForwardDev
 
 tt::stl::hash::hash_t CrossEntropyForwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // to do: compute program hash based on input tensor shape
-    // the same as rmsnorm
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.get_logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);

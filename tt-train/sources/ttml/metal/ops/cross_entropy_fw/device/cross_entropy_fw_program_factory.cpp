@@ -42,15 +42,16 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
 
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumMaxValueTiles = 1U;
-constexpr uint32_t kNumOutputTiles = 1U;
 constexpr uint32_t kMaxValueBeforeReductionTiles = 1U;
 constexpr uint32_t kNumMaxValueAfterReductionTiles = 1U;
 constexpr uint32_t kNumExpSumBeforeReductionTiles = 1U;
 constexpr uint32_t kNumExpSumAfterReductionTiles = 1U;
 constexpr uint32_t kNumScalerTiles = 1U;  // used it to reduction ???
 constexpr uint32_t kNumOutputBeforeReductionTiles = 1U;
+constexpr uint32_t kNumOutputTiles = 1U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
+const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
 
 uint32_t get_block_size(uint32_t num_inner) {
     const uint32_t max_block_size = 4U;  // 4 is the maximum block size for enabled fp32 dest acc
@@ -232,8 +233,8 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
 
     // mask_w - this mask used to avoid calculation of extra data(data which will be added to create full tile 32x32)??
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;  // <- width index of first trash value in tile
-    std::cout << "[PROGRAM FACTORY]: MASK_W: " << mask_w << std::endl;
-    std::cout << "[PROGRAM FACTORY]: Wt: " << Wt << std::endl;
+    // std::cout << "[PROGRAM FACTORY]: MASK_W: " << mask_w << std::endl;
+    // std::cout << "[PROGRAM FACTORY]: Wt: " << Wt << std::endl;
     // compile arguments
     uint32_t block_size = get_block_size(Wt);
 
@@ -246,14 +247,29 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
 
     // TODO: add calculation of required  memory and check if it fits in L1
     // then add possibility to kernels to process data by blocks
+    uint32_t twice_block_size = 2U * block_size;
+
     const uint32_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
     const uint64_t mask_scaler_maxmask_memory =
         (kNumMaskTiles + kNumScalerTiles + kNumMaskTiles) * bfloat16_single_tile_size_bytes;
+    const uint64_t output_memory = (kNumOutputBeforeReductionTiles + kNumOutputTiles) * bfloat16_single_tile_size_bytes;
+    const uint64_t max_value_memory =
+        (kNumMaxValueAfterReductionTiles + kMaxValueBeforeReductionTiles) * bfloat16_single_tile_size_bytes;
+    const uint64_t exp_sum_memory =
+        (kNumExpSumBeforeReductionTiles + kNumExpSumAfterReductionTiles) * float32_single_tile_size_bytes;
+    const uint64_t input_memory = 2U * Wt * bfloat16_single_tile_size_bytes;
 
-    const uint32_t num_input_tiles = Wt;
-    const uint32_t num_target_tiles = Wt;
+    // Total L1 memory required
+    const uint64_t required_L1_in_bytes =
+        input_memory + mask_scaler_maxmask_memory + max_value_memory + exp_sum_memory + output_memory;
+    // Is everything fits in L1
+    const bool everything_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
+
+    const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
+
+    const uint32_t num_target_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
@@ -319,15 +335,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         kOutputCbIndex,
         data_format,
         bfloat16_single_tile_size_bytes,
-        2 * block_size);  // create twice block_size variable
-
-    auto cb_zero_scaler = create_circular_buffer(
-        program,
-        all_cores,
-        tt::CBIndex::c_11,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        kNumOutputBeforeReductionTiles);
+        kNumOutputTiles);  // create twice block_size variable it looks like I need 1 tile here
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -353,11 +361,16 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
 
     // configure defines
     std::map<std::string, std::string> defines;
-
     // define whether I need mask or not
     if (mask_w != 0) {
         defines[kMaskWDefineKey] = "1";
     }
+
+    // define whether everything fits in L1 or not
+    if (everything_fits_in_l1) {
+        defines[kEverythingFitsInL1DefineKey] = "1";
+    }
+
     // setup defines for reduce
     // Compute kernel does not compile without these defines
     // LLK reduction uses define values as default template parameters
@@ -368,7 +381,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     kernels.reader = create_reader_kernel(
         program,
         all_cores,
-        /* reader_compile_args */ {num_input_tiles, block_size, Wt, mask_w},
+        /* reader_compile_args */ {block_size, Wt, mask_w},
         defines,
         kReaderKernelPath);
 
