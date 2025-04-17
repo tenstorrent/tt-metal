@@ -43,30 +43,36 @@ test_bounds = {
     },
 }
 
-test_bounds = {
-    0: {
-        "riscv_1": {"latency": {"lower": 500, "upper": 1100}, "bandwidth": 0.06},
-        "riscv_0": {"latency": {"lower": 400, "upper": 900}, "bandwidth": 0.07},
-    },
-    1: {
-        "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
-        "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.29},
-    },
-    2: {
-        "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
-        "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
-    },
-    3: {
-        "riscv_1": {"latency": {"lower": 4100, "upper": 4200}, "bandwidth": 0.06},
-        "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.59},
-    },
-}
-
 def run_dm_tests(profile, verbose, gtest_filter, plot, report):
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
 
     # Profile tests
     if profile or not os.path.exists(log_file_path) or gtest_filter:
+        profile_dm_tests(verbose=verbose, gtest_filter=gtest_filter)
+
+    # Gather analysis stats
+    dm_stats = gather_analysis_stats(log_file_path, verbose=verbose)
+
+    # Print stats if explicitly requested
+    if verbose:
+        print_stats(dm_stats)
+
+    # Plot results
+    if plot:
+        plot_dm_stats(dm_stats)
+
+    # Export results to csv
+    if report:
+        export_dm_stats_to_csv(dm_stats)
+
+    # Check performance (TODO: enable assertions)
+    performance_check(dm_stats, verbose=verbose)
+
+    logger.info("Data movement tests completed.")
+
+
+def profile_dm_tests(verbose=False, gtest_filter=None):
+    if verbose:
         profile_dm_tests(verbose=verbose, gtest_filter=gtest_filter)
 
     # Gather analysis stats
