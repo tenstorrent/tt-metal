@@ -42,12 +42,16 @@ def permute_reshape(hidden_states, shape=(0, 2, 1), reshape=True):
     return hidden_states
 
 
+ttnn_weights_bias_map = {}
+conv1d_out_channels_map = {}
+
+
 def ttnn_conv1d(
     device,
     tt_input_tensor,
-    weights,
     conv_params,
-    bias,
+    base_addr=None,
+    state_dict=None,
     *,
     output_dtype=ttnn.bfloat16,
     weights_dtype=ttnn.bfloat8_b,
@@ -64,9 +68,22 @@ def ttnn_conv1d(
     reallocate_halo=False,
     reshard=False,
 ):
-    weights = ttnn.from_torch(weights, dtype=ttnn.float32)
-    bias = ttnn.from_torch(bias.unsqueeze(0).unsqueeze(0).unsqueeze(0), dtype=ttnn.float32)
+    assert base_addr is not None
+    assert state_dict is not None
+    if f"{base_addr}.weight" not in ttnn_weights_bias_map:
+        ttnn_weights_bias_map[f"{base_addr}.weight"] = ttnn.from_torch(
+            state_dict[f"{base_addr}.weight"], dtype=ttnn.float32
+        )
+        conv1d_out_channels_map[f"{base_addr}"] = state_dict[f"{base_addr}.weight"].shape[0]
 
+    if f"{base_addr}.bias" not in ttnn_weights_bias_map:
+        ttnn_weights_bias_map[f"{base_addr}.bias"] = ttnn.from_torch(
+            state_dict[f"{base_addr}.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0), dtype=ttnn.float32
+        )
+    weights = ttnn_weights_bias_map[f"{base_addr}.weight"]
+    bias = ttnn_weights_bias_map[f"{base_addr}.bias"]
+
+    out_channels = conv1d_out_channels_map[f"{base_addr}"]
     conv_config = ttnn.Conv1dConfig(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
@@ -93,7 +110,7 @@ def ttnn_conv1d(
         input_tensor=tt_input_tensor,
         weight_tensor=weights,
         in_channels=tt_input_tensor.shape[-1],
-        out_channels=weights.shape[0],
+        out_channels=out_channels,
         device=device,
         bias_tensor=bias,
         kernel_size=1,
@@ -113,7 +130,6 @@ def ttnn_conv1d(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-
     return tt_output_tensor
 
 
@@ -176,9 +192,9 @@ def squeezebert_attention(
     mixed_query_layer = ttnn_conv1d(
         device,
         hidden_states,
-        nn.Parameter(state_dict[f"{base_addr}query.weight"]),
         conv_params=[1, 0],
-        bias=nn.Parameter(state_dict[f"{base_addr}query.bias"]),
+        base_addr=f"{base_addr}query",
+        state_dict=state_dict,
     )
     mixed_query_layer = ttnn.to_device(mixed_query_layer, device)
     mixed_query_layer = ttnn.permute(mixed_query_layer, (0, 2, 1))
@@ -186,9 +202,9 @@ def squeezebert_attention(
     mixed_key_layer = ttnn_conv1d(
         device,
         hidden_states,
-        nn.Parameter(state_dict[f"{base_addr}key.weight"]),
         conv_params=[1, 0],
-        bias=nn.Parameter(state_dict[f"{base_addr}key.bias"]),
+        base_addr=f"{base_addr}key",
+        state_dict=state_dict,
     )
     mixed_key_layer = ttnn.to_device(mixed_key_layer, device)
     mixed_key_layer = ttnn.permute(mixed_key_layer, (0, 2, 1))
@@ -196,9 +212,9 @@ def squeezebert_attention(
     mixed_value_layer = ttnn_conv1d(
         device,
         hidden_states,
-        nn.Parameter(state_dict[f"{base_addr}value.weight"]),
         conv_params=[1, 0],
-        bias=nn.Parameter(state_dict[f"{base_addr}value.bias"]),
+        base_addr=f"{base_addr}value",
+        state_dict=state_dict,
     )
     mixed_value_layer = ttnn.to_device(mixed_value_layer, device)
     mixed_value_layer = ttnn.permute(mixed_value_layer, (0, 2, 1))
