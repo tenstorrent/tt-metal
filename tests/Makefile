@@ -7,9 +7,9 @@ BUILD_DIR ?=build
 
 RMDIR := rm -rf
 
-# Tool paths
-GXX=$(TOOL_PATH)/riscv32-unknown-elf-g++
-OBJDUMP=$(TOOL_PATH)/riscv32-unknown-elf-objdump
+# Tool paths, mfc changing from 'unknown' to 'tt'
+GXX:=$(wildcard $(TOOL_PATH)/riscv32-*-elf-g++)
+OBJDUMP:=$(wildcard $(TOOL_PATH)/riscv32-*-elf-objdump)
 
 # GCC options
 OPTIONS_ALL=-O3 -mabi=ilp32 -std=c++20 -ffast-math -ftest-coverage
