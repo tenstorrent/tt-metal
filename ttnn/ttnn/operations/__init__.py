@@ -13,6 +13,6 @@ for loader, module_name, is_pkg in pkgutil.walk_packages(__path__):
     spec = loader.find_spec(module_name)
     _module = module_from_spec(spec)
     # Register the module in sys.modules before executing it
-    sys.modules[f"{__package__}.{module_name}"] = _module
+    sys.modules[f"{module_name}"] = _module
     spec.loader.exec_module(_module)
     globals()[module_name] = _module
