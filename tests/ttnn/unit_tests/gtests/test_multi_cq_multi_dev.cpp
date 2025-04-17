@@ -67,12 +67,6 @@ Tensor dispatch_ops_to_device(IDevice* dev, Tensor input_tensor, QueueId cq_id) 
 }
 
 TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
-    // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or
-        tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP();
-    }
-
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
@@ -134,12 +128,6 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
 }
 
 TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
-    // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or
-        tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP();
-    }
-
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
@@ -202,12 +190,6 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
 }
 
 TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
-    // 8 devices with 2 CQs. Enable this test on T3K only.
-    if (tt::tt_metal::GetNumAvailableDevices() < 8 or
-        tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP();
-    }
-
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
