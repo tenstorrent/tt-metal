@@ -66,7 +66,9 @@ std::map<std::string, std::string> get_defines(
         case BinaryOpType::EQ:
             defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst, input_dtype));
             break;
-        case BinaryOpType::NE: defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::NE:
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst, input_dtype));
+            break;
         case BinaryOpType::SQUARED_DIFFERENCE:
             defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "0", idst));
             break;

@@ -575,3 +575,39 @@ def test_unary_eqz_edge_case(input_shapes, device):
 
     pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
     assert pcc == 1
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([])),
+        (torch.Size([128])),
+        (torch.Size([64, 64])),
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("scalar", [-100, -54, -1, 0, 1, 13, 29])
+def test_unary_ne(input_shapes, scalar, device):
+    torch.manual_seed(213919)
+
+    # Generate a uniform range of values across the valid int32 range
+    num_elements = int(torch.prod(torch.tensor(input_shapes)).item())
+    uniform_values = torch.linspace(-2147483647, 2147483647, num_elements, dtype=torch.int32)
+
+    corner_cases = torch.tensor([0, 1, -1, 2147483647, -2147483647], dtype=torch.int32)
+    in_data = torch.cat([uniform_values, corner_cases])
+
+    in_data = in_data[-num_elements:].reshape(input_shapes)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.ne(input_tensor, scalar)
+    golden_function = ttnn.get_golden_function(ttnn.ne)
+    golden_tensor = golden_function(in_data, scalar)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+    assert pcc == 1
