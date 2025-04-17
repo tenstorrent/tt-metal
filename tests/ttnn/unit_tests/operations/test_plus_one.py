@@ -52,3 +52,26 @@ def test_plus_one_subdevice_nd(device, input_shape):
     )
     output_tensor = ttnn.to_torch(input_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize("w", [1, 4, 8, 32])
+def test_plus_one_subdevice_sharded(device, w):
+    sub_core_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
+    )
+    torch_input_tensor = torch.randint(32000, (sub_core_grid.num_cores(), w))
+    torch_output_tensor = torch_input_tensor + 1
+    input_shard_spec = ttnn.ShardSpec(sub_core_grid, (1, w), ttnn.ShardOrientation.ROW_MAJOR)
+    input_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.int32, device=device, memory_config=input_memory_config
+    )
+    ttnn.plus_one(input_tensor, sub_core_grids=sub_core_grid)
+    output_tensor = ttnn.to_torch(input_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
