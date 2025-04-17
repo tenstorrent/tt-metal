@@ -46,6 +46,7 @@ class TtnnPSA:
 
     def __call__(self, input_tensor):
         cv1 = self.cv1(input_tensor)
+        cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
         a = cv1[:, :, :, : cv1.shape[-1] // 2]
         b = cv1[:, :, :, cv1.shape[-1] // 2 :]
 
