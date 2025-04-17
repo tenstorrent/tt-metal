@@ -102,8 +102,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         processor_classes,
         mem_map_bases,
         mem_map_sizes,
-        false,
-        false};
+        false /*supports_cbs*/,
+        false /*supports_receiving_multicast_cmds*/};
 }
 
 }  // namespace tt::tt_metal::blackhole

@@ -122,7 +122,13 @@ HalCoreInfoType create_tensix_mem_map() {
     }
 
     return {
-        HalProgrammableCoreType::TENSIX, CoreType::WORKER, processor_classes, mem_map_bases, mem_map_sizes, true, true};
+        HalProgrammableCoreType::TENSIX,
+        CoreType::WORKER,
+        processor_classes,
+        mem_map_bases,
+        mem_map_sizes,
+        true /*supports_cbs*/,
+        true /*supports_receiving_multicast_cmds*/};
 }
 
 }  // namespace tt::tt_metal::wormhole

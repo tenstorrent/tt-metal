@@ -51,8 +51,8 @@ private:
     std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
-    bool supports_cbs_;
-    bool supports_receiving_multicast_cmds_;
+    bool supports_cbs_ = false;
+    bool supports_receiving_multicast_cmds_ = false;
 
 public:
     HalCoreInfoType(
