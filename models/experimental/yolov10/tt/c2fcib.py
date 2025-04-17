@@ -39,6 +39,8 @@ class TtnnC2fCIB:
 
     def __call__(self, input_tensor):
         cv1 = self.cv1(input_tensor)
+        if cv1.is_sharded():
+            cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
         x1 = cv1[:, :, :, : cv1.shape[-1] // 2]
         x2 = cv1[:, :, :, cv1.shape[-1] // 2 : cv1.shape[-1]]
 

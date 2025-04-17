@@ -35,12 +35,13 @@ class TtnnC2f:
 
         for m in self.m:
             out = m(y[-1])
-            y.append(ttnn.to_layout(out, ttnn.TILE_LAYOUT))
+            out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+            y.append(out)
 
         out = ttnn.concat(y, -1, memory_config=memory_config)
+        deallocate_tensors(x1, x2, *y, cv1)
+        out = ttnn.to_memory_config(out, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output = self.cv2(out)
-
-        deallocate_tensors(x1, x2, *y)
 
         return output

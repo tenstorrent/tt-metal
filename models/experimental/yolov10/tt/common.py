@@ -8,7 +8,8 @@ from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_
 
 
 def interleaved_to_sharded(x):
-    x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    if x.get_layout() == ttnn.TILE_LAYOUT:
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
     nhw = x.shape[0] * x.shape[1] * x.shape[2]
     num_cores = determine_num_cores(nhw, x.shape[2])
@@ -37,6 +38,7 @@ class TtYolov10Conv2D:
         config_override=None,
         auto_shard=False,
         deallocate_activation=False,
+        act_block_h_override=0,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -76,6 +78,7 @@ class TtYolov10Conv2D:
             activation=activation,
             enable_subblock_padding=False,
             output_layout=ttnn.TILE_LAYOUT,
+            act_block_h_override=act_block_h_override,
         )
         if auto_shard:
             self.conv_config.shard_layout = None
@@ -86,13 +89,11 @@ class TtYolov10Conv2D:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
         if "bias" in conv_pth:
-            bias = ttnn.from_device(conv_pth.bias)
-            self.bias = bias
+            self.bias = conv_pth.bias
         else:
             self.bias = None
 
-        weight = ttnn.from_device(conv_pth.weight)
-        self.weight = weight
+        self.weight = conv_pth.weight
 
     def __call__(self, x):
         if self.is_detect:
@@ -108,7 +109,7 @@ class TtYolov10Conv2D:
             input_height = self.conv.input_height
             input_width = self.conv.input_width
 
-        [x, [output_height, output_width]] = ttnn.conv2d(
+        [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -125,7 +126,7 @@ class TtYolov10Conv2D:
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,
-            return_weights_and_bias=False,
+            return_weights_and_bias=True,
         )
         return x
 
@@ -169,11 +170,6 @@ class Conv:
 
     def __call__(self, x):
         x = self.conv(x)
-
-        if self.enable_act:
-            if x.is_sharded():
-                x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-
         return x
 
 

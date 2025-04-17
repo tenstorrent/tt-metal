@@ -27,7 +27,8 @@ class TtnnCIB:
             device,
             parameters.cv1[2],
             self.conv_pt.cv1[2],
-            auto_shard=True,
+            use_1d_systolic_array=False,
+            # auto_shard=True,
         )
 
         self.conv3 = Conv(
@@ -48,6 +49,9 @@ class TtnnCIB:
         inputs = input_tensor
         conv0_out = self.conv0(input_tensor)
         conv1_out = self.conv1(conv0_out)
+        ttnn.deallocate(conv0_out)
+        if conv1_out.is_sharded():
+            conv1_out = ttnn.sharded_to_interleaved(conv1_out, ttnn.L1_MEMORY_CONFIG)
         conv2_out = self.conv2(conv1_out)
         conv3_out = self.conv3(conv2_out)
         conv4_out = self.conv4(conv3_out)
