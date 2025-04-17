@@ -99,6 +99,37 @@ class TtSD3Transformer2DModel:
         timestep: ttnn.Tensor,
         N: int,
         L: int,
+    ) -> list[ttnn.Tensor]:
+        batch_size = spatial.shape[0]
+        result = []
+
+        spatial_memory_config = spatial.memory_config()
+        spec_shape = spatial_memory_config.shard_spec.shape
+        spatial_memory_config.shard_spec.shape = [spec_shape[0] // batch_size, spec_shape[1]]
+
+        for i in range(batch_size):
+            spatial_i = ttnn.to_memory_config(spatial[i : i + 1], memory_config=spatial_memory_config)
+            out = self._call_with_batch_size_one(
+                spatial=spatial_i,
+                prompt=prompt[i : i + 1],
+                pooled_projection=pooled_projection[i : i + 1],
+                timestep=timestep[i : i + 1],
+                N=N,
+                L=L,
+            )
+            result.append(out)
+
+        return ttnn.concat(result)
+
+    def _call_with_batch_size_one(
+        self,
+        *,
+        spatial: ttnn.Tensor,
+        prompt: ttnn.Tensor,
+        pooled_projection: ttnn.Tensor,
+        timestep: ttnn.Tensor,
+        N: int,
+        L: int,
     ) -> ttnn.Tensor:
         spatial = self._pos_embed(spatial)
         # to avoid OOM inside the first transformer block
