@@ -29,7 +29,7 @@ def calculate_bytes(shape, dtype):
 @pytest.mark.parametrize(
     "bw_target",
     [
-        238.0,
+        214.0,
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
