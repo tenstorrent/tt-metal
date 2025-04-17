@@ -71,7 +71,10 @@ std::string get_macro_definition(UnaryOpType op_type) {
 }
 
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
-    UnaryOpType op_type, const std::vector<float>& params, const std::string& idst) {
+    UnaryOpType op_type,
+    const std::vector<float>& params,
+    const std::string& idst,
+    std::optional<DataType> input_dtype) {
     std::pair<std::string, std::string> op_init_and_name;
     TT_FATAL(is_parametrized_type(op_type), "operator should support at least one parameter", "Error");
     float param0 = params[0];
@@ -217,9 +220,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("div_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(1.0f / param0))};
             break;
         case UnaryOpType::UNARY_NE:
-            op_init_and_name = {
-                "unary_ne_tile_init();",
-                fmt::format("unary_ne_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+                op_init_and_name = {"unary_ne_tile_init();", fmt::format("unary_ne_tile_int32({}, {});", idst, param0)};
+            } else {
+                op_init_and_name = {
+                    "unary_ne_tile_init();",
+                    fmt::format("unary_ne_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
+
             break;
         case UnaryOpType::UNARY_GT:
             op_init_and_name = {
@@ -465,7 +475,7 @@ std::pair<string, string> get_op_init_and_func(
     const std::vector<float>& params,
     const std::string& idst,
     std::optional<DataType> input_dtype) {
-    return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst)
+    return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
                              : get_op_init_and_func_default(op_type, idst, input_dtype);
 }
 

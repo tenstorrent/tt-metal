@@ -9,10 +9,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,
 )
-from models.utility_functions import is_grayskull, skip_for_blackhole
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -36,9 +34,6 @@ from models.utility_functions import is_grayskull, skip_for_blackhole
     (ttnn.lt, ttnn.gt, ttnn.eq, ttnn.le, ttnn.ge, ttnn.ne, ttnn.logical_and, ttnn.logical_or, ttnn.logical_xor),
 )
 def test_binary_comp_ops(input_shapes, out_dtype, mem_configs, ttnn_function, device):
-    if is_grayskull():
-        pytest.skip("GS does not support fp32/uint32/uint16 data types")
-
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
 
@@ -59,7 +54,6 @@ def test_binary_comp_ops(input_shapes, out_dtype, mem_configs, ttnn_function, de
     assert are_equal
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -83,9 +77,6 @@ def test_binary_comp_ops(input_shapes, out_dtype, mem_configs, ttnn_function, de
     (ttnn.lt, ttnn.gt, ttnn.eq, ttnn.le, ttnn.ge, ttnn.ne, ttnn.logical_and, ttnn.logical_or, ttnn.logical_xor),
 )
 def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function, device):
-    if is_grayskull():
-        pytest.skip("GS does not support fp32/uint32/uint16 data types")
-
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
 
@@ -106,7 +97,6 @@ def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function
     assert are_equal
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -141,9 +131,6 @@ def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function
     ),
 )
 def test_binary_comp_ops_scalar(input_shapes, scalar, out_dtype, mem_configs, ttnn_function, device):
-    if is_grayskull():
-        pytest.skip("GS does not support fp32/uint32/uint16 data types")
-
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
 
     cq_id = 0
