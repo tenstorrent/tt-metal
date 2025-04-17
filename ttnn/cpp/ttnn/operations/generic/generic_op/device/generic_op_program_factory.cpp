@@ -86,31 +86,6 @@ void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-
-    // Not needed yet.
-    // const auto& input_tensor = tensor_args.io_tensors.front();
-    // auto& output_tensor = tensor_args.io_tensors.back();
-
-    // auto src_buffer = input_tensor.buffer();
-    // auto dst_buffer = output_tensor.buffer();
-
-    // for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-    //     CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-    //     {
-    //         auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-    //         runtime_args[0] = src_buffer->address();
-    //     }
-
-    //     {
-    //         auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-    //         runtime_args[0] = dst_buffer->address();
-    //     }
-    // }
-}
+    tensor_return_value_t& tensor_return_value) {}
 
 }  // namespace ttnn::operations::generic
