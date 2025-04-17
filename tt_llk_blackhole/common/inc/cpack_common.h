@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -14,6 +15,8 @@
 
 namespace ckernel::packer
 {
+using DataFormatType = std::underlying_type_t<DataFormat>;
+
 constexpr uint replay_buf_offset = 16; // split replay buffer usage between fpu/sfpu
                                        // fist 16 for sfpu, next 16 for fpu
 constexpr uint32_t NUM_PACKERS = 1;    // Number of packers
@@ -164,7 +167,9 @@ inline void set_packer_strides(const uint pack_src_format, const uint pack_dst_f
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
-    uint x_stride = (uint)(pack_src_format & 0x3) == (uint)DataFormat::Float32 ? 4 : (uint)(pack_src_format & 0x3) == (uint)DataFormat::Float16 ? 2 : 1;
+    uint x_stride = (uint)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float32)   ? 4
+                    : (uint)(pack_src_format & 0x3) == static_cast<DataFormatType>(DataFormat::Float16) ? 2
+                                                                                                        : 1;
     uint y_stride = FACE_C_DIM * x_stride;
     uint w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride;
 
@@ -211,7 +216,7 @@ inline void set_packer_config(const uint pack_src_format, const uint pack_dst_fo
     }
 
     config.f.exp_section_size =
-        ((pack_output_dst_format == (uint)DataFormat::Lf8) || (pack_output_dst_format == (uint)DataFormat::Int8))
+        ((pack_output_dst_format == static_cast<DataFormatType>(DataFormat::Lf8)) || (pack_output_dst_format == static_cast<DataFormatType>(DataFormat::Int8)))
             ? 0
             : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
 
@@ -261,16 +266,24 @@ inline void set_packer_config(const uint pack_src_format, const uint pack_dst_fo
     // cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+3]=config.val[3];
 
     dest_rd_ctrl_u dest_rd_ctrl;
-    dest_rd_ctrl.val                              = 0;
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = (pack_output_src_format == (uint)DataFormat::Int8) | (pack_output_src_format == (uint)DataFormat::Int32) |
-                                                    (pack_output_src_format == (uint)DataFormat::Float32) | (is_fp32_dest_acc_en ? 1 : 0);
-    if (pack_dst_format == (uint)DataFormat::UInt8)
+    dest_rd_ctrl.val = 0;
+
+    bool is_32b_format = pack_output_src_format == static_cast<DataFormatType>(DataFormat::Int32) ||
+                         pack_output_src_format == static_cast<DataFormatType>(DataFormat::UInt32) ||
+                         pack_output_src_format == static_cast<DataFormatType>(DataFormat::Float32);
+    bool is_int8_format =
+        pack_output_src_format == static_cast<DataFormatType>(DataFormat::Int8) || pack_output_src_format == static_cast<DataFormatType>(DataFormat::UInt8);
+
+    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
+    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
+
+    if (pack_dst_format == static_cast<DataFormatType>(DataFormat::UInt8))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
     }
 
     // Round to 10 bit mantissa from fp32 dest
-    if (is_fp32_dest_acc_en && (pack_output_src_format == (uint)DataFormat::Float16))
+    if (is_fp32_dest_acc_en && (pack_output_src_format == static_cast<DataFormatType>(DataFormat::Float16)))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
@@ -303,15 +316,23 @@ inline void reconfig_packer_data_format(
     TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2);
 
     dest_rd_ctrl_u dest_rd_ctrl;
-    dest_rd_ctrl.val                              = 0;
-    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = (pack_output_src_format == (uint)DataFormat::Int8) | (pack_src_format == (uint)DataFormat::Int32) |
-                                                    (pack_src_format == (uint)DataFormat::Float32) | (is_fp32_dest_acc_en ? 1 : 0);
-    if (pack_dst_format == (uint)DataFormat::UInt8)
+    dest_rd_ctrl.val = 0;
+
+    bool is_32b_format = pack_output_src_format == static_cast<DataFormatType>(DataFormat::Int32) ||
+                         pack_output_src_format == static_cast<DataFormatType>(DataFormat::UInt32) ||
+                         pack_output_src_format == static_cast<DataFormatType>(DataFormat::Float32);
+    bool is_int8_format =
+        pack_output_src_format == static_cast<DataFormatType>(DataFormat::Int8) || pack_output_src_format == static_cast<DataFormatType>(DataFormat::UInt8);
+
+    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = is_32b_format || is_fp32_dest_acc_en;
+    dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_int8     = !(is_fp32_dest_acc_en || is_32b_format) && is_int8_format;
+
+    if (pack_dst_format == static_cast<DataFormatType>(DataFormat::UInt8))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
     }
     // Round to 10 bit mantissa from fp32 dest
-    if (is_fp32_dest_acc_en && (pack_output_src_format == (uint)DataFormat::Float16))
+    if (is_fp32_dest_acc_en && (pack_output_src_format == static_cast<DataFormatType>(DataFormat::Float16)))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
@@ -324,7 +345,8 @@ inline void reconfig_packer_data_format(
     {
         TTI_WRCFG(p_gpr_pack::EXP0_SEC_SIZE_BFP, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
     }
-    else if ((pack_output_dst_format == (uint)DataFormat::Lf8) || (pack_output_dst_format == (uint)DataFormat::Int8))
+    else if (
+        (pack_output_dst_format == static_cast<DataFormatType>(DataFormat::Lf8)) || (pack_output_dst_format == static_cast<DataFormatType>(DataFormat::Int8)))
     {
         TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
     }
@@ -378,7 +400,7 @@ inline void configure_pack(
     t6_mutex_acquire(mutex::REG_RMW);
 
     // Set Fp8 E4M3 mode for packer
-    if ((pack_dst_format & 0x1F) == (uint)DataFormat::Fp8_e4m3)
+    if ((pack_dst_format & 0x1F) == static_cast<DataFormatType>(DataFormat::Fp8_e4m3))
     {
         cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(1);
     }
