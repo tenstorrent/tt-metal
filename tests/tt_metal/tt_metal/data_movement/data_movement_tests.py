@@ -412,7 +412,7 @@ if __name__ == "__main__":
         "-g",
         "--gtest-filter",
         dest="gtest_filter",
-        help="Filter for gtest tests to run. If not set, all tests are run.",
+        help="Filter for gtest tests to run. If not set and profile flag is set, all tests are run.",
     )
     parser.add_argument("--plot", action="store_true", help="Export profiling plots to a .png file.")
     parser.add_argument("-r", "--report", action="store_true", help="Export profiling results to a .csv file.")
