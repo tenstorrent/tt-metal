@@ -17,9 +17,10 @@
 
 namespace tt::tt_fabric {
 
-bool is_1d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
+bool is_tt_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
     return fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D ||
-           fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING;
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING ||
+           fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
 }
 
 bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
@@ -27,13 +28,13 @@ bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
            fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
 }
 
-Topology get_1d_topology(tt::tt_metal::FabricConfig fabric_config) {
+Topology get_tt_fabric_topology(tt::tt_metal::FabricConfig fabric_config) {
     switch (fabric_config) {
         case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
+        case tt::tt_metal::FabricConfig::FABRIC_2D_PUSH: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_metal::FabricConfig::DISABLED:
         case tt::tt_metal::FabricConfig::FABRIC_2D:
-        case tt::tt_metal::FabricConfig::FABRIC_2D_PUSH:
         case tt::tt_metal::FabricConfig::CUSTOM:
             TT_THROW("Unsupported fabric config for 1D: {}", magic_enum::enum_name(fabric_config));
     }
@@ -68,7 +69,7 @@ std::vector<chan_id_t> get_ordered_fabric_eth_chans(chip_id_t chip_id, const std
 
 void set_routing_mode(uint16_t routing_mode) {
     // override for forced routing mode
-    if (routing_mode != ROUTING_MODE_UNDEFINED) {
+    if (routing_mode == ROUTING_MODE_UNDEFINED) {
         return;
     }
 
@@ -114,13 +115,13 @@ void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
         "Invalid dimension {}. Supported dimensions are 1, 2, or 3",
         dimension);
 
-    uint16_t mode = (dimension == 1 ? ROUTING_MODE_1D : dimension == 2 ? ROUTING_MODE_2D : ROUTING_MODE_3D);
+    uint16_t mode = (dimension == 3 ? ROUTING_MODE_3D : 0);
     if (topology == Topology::Ring) {
-        mode |= ROUTING_MODE_RING;
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_RING);
     } else if (topology == Topology::Linear) {
-        mode |= ROUTING_MODE_LINE;
+        mode |= (ROUTING_MODE_1D | ROUTING_MODE_LINE);
     } else if (topology == Topology::Mesh) {
-        mode |= ROUTING_MODE_MESH;
+        mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
     }
 
     mode |= ROUTING_MODE_LOW_LATENCY;

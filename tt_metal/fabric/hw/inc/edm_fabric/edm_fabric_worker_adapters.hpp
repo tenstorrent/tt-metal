@@ -116,7 +116,7 @@ struct WorkerToFabricEdmSenderImpl {
                 : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_connection_handshake_l1_id)),
         edm_worker_location_info_addr(edm_worker_location_info_addr),
         edm_buffer_index_addr(
-            connected_to_persistent_fabric ? edm_buffer_index_id
+            connected_to_persistent_fabric ? edm_buffer_index_id  // this is slot index. for 8 slots it goes from 0 - 15
                                            : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_buffer_index_id)),
         from_remote_buffer_slot_rdptr_ptr(from_remote_buffer_slot_rdptr_ptr),
         worker_teardown_addr(worker_teardown_addr),

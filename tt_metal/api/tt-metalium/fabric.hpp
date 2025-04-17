@@ -20,7 +20,7 @@ class Program;
 
 namespace tt::tt_fabric {
 
-tt::tt_fabric::FabricEriscDatamoverConfig get_1d_fabric_config();
+tt::tt_fabric::FabricEriscDatamoverConfig get_tt_fabric_config();
 
 // Used to get the run-time args for estabilishing connection with the fabric router.
 // The API appends the connection specific run-time args to the set of exisiting

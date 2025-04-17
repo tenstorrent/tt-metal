@@ -31,12 +31,13 @@ class Program;
 namespace tt::tt_fabric {
 
 // TODO: We should store this somewhere instead of constantly regenerating
-tt::tt_fabric::FabricEriscDatamoverConfig get_1d_fabric_config() {
-    constexpr std::size_t edm_buffer_size =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
-        sizeof(tt::tt_fabric::PacketHeader);
+tt::tt_fabric::FabricEriscDatamoverConfig get_tt_fabric_config() {
     tt::tt_metal::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
-    Topology topology = get_1d_topology(fabric_config);
+    Topology topology = get_tt_fabric_topology(fabric_config);
+    uint32_t payload_size_bytes =
+        topology == Topology::Mesh ? tt::tt_fabric::FabricEriscDatamoverBuilder::default_mesh_packet_payload_size_bytes
+                                   : tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
+    std::size_t edm_buffer_size = payload_size_bytes + sizeof(tt::tt_fabric::PacketHeader);
     return tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology);
 }
 
@@ -87,7 +88,7 @@ void append_fabric_connection_rt_args(
 
     auto fabric_router_channel = get_ordered_fabric_eth_chans(src_chip_id, candidate_ethernet_cores.value())[link_idx];
 
-    const auto& edm_config = get_1d_fabric_config();
+    const auto& edm_config = get_tt_fabric_config();
     CoreCoord fabric_router_virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
             src_chip_id, fabric_router_channel);

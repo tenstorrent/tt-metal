@@ -11,6 +11,7 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 // clang-format on
 
@@ -20,6 +21,7 @@ tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(t
 
 constexpr uint32_t target_address = get_compile_time_arg_val(2);
 constexpr bool mcast_mode = get_compile_time_arg_val(3);
+constexpr bool is_2d_fabric = get_compile_time_arg_val(4);
 
 inline void setup_connection_and_headers(
     tt::tt_fabric::WorkerToFabricEdmSender& connection,
@@ -29,11 +31,12 @@ inline void setup_connection_and_headers(
     uint32_t packet_payload_size_bytes) {
     // connect to edm
     connection.open();
-
-    if constexpr (mcast_mode) {
-        packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(hops)});
-    } else {
-        packet_header->to_chip_unicast(static_cast<uint8_t>(hops));
+    if constexpr (!is_2d_fabric) {
+        if constexpr (mcast_mode) {
+            packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(hops)});
+        } else {
+            packet_header->to_chip_unicast(static_cast<uint8_t>(hops));
+        }
     }
 
     packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
@@ -57,7 +60,7 @@ inline void send_packet(
     connection.wait_for_empty_write_slot();
     connection.send_payload_without_header_non_blocking_from_address(
         source_l1_buffer_address, packet_payload_size_bytes);
-    connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(tt::tt_fabric::PacketHeader));
+    connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
 inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }
@@ -72,6 +75,10 @@ void kernel_main() {
     uint32_t num_packets = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t rx_noc_encoding = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t outgoing_dir = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t my_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t dst_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t ew_dim = get_arg_val<uint32_t>(rt_args_idx++);
 
     uint64_t noc_dest_addr = get_noc_addr_helper(rx_noc_encoding, target_address);
 
@@ -107,6 +114,16 @@ void kernel_main() {
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
         fwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
+        zero_l1_buf((uint32_t*)packet_header_buffer_address, sizeof(PACKET_HEADER_TYPE));
+
+        if constexpr (is_2d_fabric) {
+            fabric_set_unicast_route(
+                (LowLatencyMeshPacketHeader*)packet_header_buffer_address,
+                (eth_chan_directions)outgoing_dir,
+                my_dev_id,
+                dst_dev_id,
+                ew_dim);
+        }
 
         setup_connection_and_headers(
             fwd_fabric_connection, fwd_packet_header, unicast_hops, noc_dest_addr, packet_payload_size_bytes);

@@ -11,6 +11,7 @@
 #include "tt_fabric.h"
 #include "tt_fabric_interface.h"
 #include "eth_chan_noc_mapping.h"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include <type_traits>
 
 namespace tt::tt_fabric {
@@ -360,6 +361,97 @@ void fabric_set_unicast_route(
 }
 
 void fabric_set_mcast_route(low_latency_packet_header_t* packet_header, eth_chan_directions direction, uint32_t hops) {
+    fabric_set_route<true>(packet_header, (eth_chan_directions)direction, 0, hops);
+}
+
+template <bool mcast = false>
+void fabric_set_route(
+    LowLatencyMeshPacketHeader* packet_header,
+    eth_chan_directions direction,
+    uint32_t start_hop,
+    uint32_t num_hops,
+    bool terminate = false) {
+    uint32_t local_packet = 0;
+    uint32_t forward_packet = 0;
+    uint32_t value = 0;
+    switch (direction) {
+        case eth_chan_directions::EAST:
+            local_packet = tt_low_latency_routing_vector::FORWARD_WEST;
+            forward_packet = tt_low_latency_routing_vector::FORWARD_EAST;
+            break;
+        case eth_chan_directions::WEST:
+            local_packet = tt_low_latency_routing_vector::FORWARD_EAST;
+            forward_packet = tt_low_latency_routing_vector::FORWARD_WEST;
+            break;
+        case eth_chan_directions::NORTH:
+            local_packet = tt_low_latency_routing_vector::FORWARD_SOUTH;
+            forward_packet = tt_low_latency_routing_vector::FORWARD_NORTH;
+            break;
+        case eth_chan_directions::SOUTH:
+            local_packet = tt_low_latency_routing_vector::FORWARD_NORTH;
+            forward_packet = tt_low_latency_routing_vector::FORWARD_SOUTH;
+            break;
+        default: ASSERT(false);
+    }
+
+    uint8_t* route_vector = packet_header->route_buffer;
+    uint32_t local_val;
+    uint32_t forward_val;
+    uint32_t end_hop = start_hop + num_hops;
+    for (uint32_t i = start_hop; i < end_hop; i++) {
+        if constexpr (mcast) {
+            forward_val = i == end_hop - 1 ? 0 : forward_packet;
+            local_val = local_packet;
+        } else {
+            forward_val = terminate ? (i == end_hop - 1 ? 0 : forward_packet) : forward_packet;
+            local_val = terminate ? (i == end_hop - 1 ? local_packet : 0) : 0;
+        }
+        route_vector[i] = local_val | forward_val;
+    }
+    packet_header->routing_fields.value = 0;
+}
+
+void fabric_set_unicast_route(
+    LowLatencyMeshPacketHeader* packet_header,
+    eth_chan_directions outgoing_direction,
+    uint16_t my_dev_id,
+    uint16_t dst_dev_id,
+    uint16_t ew_dim) {
+    if (outgoing_direction == eth_chan_directions::EAST || outgoing_direction == eth_chan_directions::WEST) {
+        uint32_t ew_hops = my_dev_id < dst_dev_id ? dst_dev_id - my_dev_id : my_dev_id - dst_dev_id;
+        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, ew_hops, true);
+    } else {
+        // First hop is north/south. Calculate the number of required hops before turning east/west
+        uint32_t ns_hops = 0;
+        uint32_t target_dev = dst_dev_id;
+        uint32_t target_col = 0;
+
+        while (target_dev >= ew_dim) {
+            target_dev -= ew_dim;
+            target_col++;
+        }
+        uint32_t my_col = 0;
+        uint32_t my_dev = my_dev_id;
+        while (my_dev >= ew_dim) {
+            my_dev -= ew_dim;
+            my_col++;
+        }
+        ns_hops = target_col > my_col ? target_col - my_col : my_col - target_col;
+        // determine the east/west hops
+        uint32_t turn_direction = my_dev < target_dev ? eth_chan_directions::EAST : eth_chan_directions::WEST;
+        uint32_t ew_hops = (my_dev < target_dev) ? target_dev - my_dev : my_dev - target_dev;
+        if (ew_hops) {
+            ns_hops--;
+            ew_hops++;
+        }
+        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, ns_hops, ew_hops == 0);
+        if (ew_hops) {
+            fabric_set_route(packet_header, (eth_chan_directions)turn_direction, ns_hops, ew_hops, true);
+        }
+    }
+}
+
+void fabric_set_mcast_route(LowLatencyMeshPacketHeader* packet_header, eth_chan_directions direction, uint32_t hops) {
     fabric_set_route<true>(packet_header, (eth_chan_directions)direction, 0, hops);
 }
 

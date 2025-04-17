@@ -36,7 +36,7 @@
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
 
-TEST_F(Fabric1DFixture, TestUnicastRaw) {
+void RunTestUnicastRaw(BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
@@ -46,15 +46,30 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
     chip_id_t not_used_1;
     chip_id_t not_used_2;
-    // Find a device with a neighbour in the East direction
-    bool connection_found = find_device_with_neighbor_in_direction(
-        src_mesh_chip_id, dst_mesh_chip_id, not_used_1, not_used_2, RoutingDirection::E);
-    if (!connection_found) {
+    // Find a device num_hops away in specified direction.
+    std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
+    std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>> end_mesh_chip_ids_by_dir;
+    chip_id_t src_physical_device_id;
+    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
+    fabric_hops[direction] = num_hops;
+    // Find a device with enough neighbours in the specified directions
+    if (!fixture->find_device_with_neighbor_in_multi_direction(
+            src_mesh_chip_id,
+            end_mesh_chip_ids_by_dir,
+            src_physical_device_id,
+            physical_end_device_ids_by_dir,
+            fabric_hops)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
-    chip_id_t src_physical_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(src_mesh_chip_id);
-    chip_id_t dst_physical_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(dst_mesh_chip_id);
+    chip_id_t dst_physical_device_id = physical_end_device_ids_by_dir[direction][num_hops - 1];
+    dst_mesh_chip_id = end_mesh_chip_ids_by_dir[direction][num_hops - 1];
+
+    tt::log_info(tt::LogTest, "mesh/chip ids {}", end_mesh_chip_ids_by_dir[direction]);
+    tt::log_info(tt::LogTest, "physical device ids {}", physical_end_device_ids_by_dir[direction]);
+    tt::log_info(tt::LogTest, "Src MeshId {} ChipId {}", src_mesh_chip_id.first, src_mesh_chip_id.second);
+    tt::log_info(tt::LogTest, "Dst MeshId {} ChipId {}", dst_mesh_chip_id.first, dst_mesh_chip_id.second);
+    tt::log_info(tt::LogTest, "Dst Device is {} hops in direction: {}", num_hops, direction);
 
     // get a port to connect to
     std::set<chan_id_t> eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
@@ -64,6 +79,8 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     }
 
     auto edm_port = *(eth_chans.begin());
+    auto edm_direction =
+        control_plane->get_eth_chan_direction(src_mesh_chip_id.first, src_mesh_chip_id.second, edm_port);
     CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
         src_physical_device_id, edm_port);
 
@@ -75,12 +92,14 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     auto receiver_noc_encoding =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
+    const auto edm_config = get_tt_fabric_config();
+    uint32_t is_2d_fabric = edm_config.topology == Topology::Mesh;
+
     // test parameters
     uint32_t packet_header_address = 0x25000;
     uint32_t source_l1_buffer_address = 0x30000;
-    uint32_t packet_payload_size_bytes = 4096;
+    uint32_t packet_payload_size_bytes = edm_config.topology == Topology::Mesh ? 2048 : 4096;
     uint32_t num_packets = 10;
-    uint32_t num_hops = 1;
     uint32_t test_results_address = 0x100000;
     uint32_t test_results_size_bytes = 128;
     uint32_t target_address = 0x30000;
@@ -88,8 +107,16 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
 
     // common compile time args for sender and receiver
     std::vector<uint32_t> compile_time_args = {
-        test_results_address, test_results_size_bytes, target_address, 0 /* mcast_mode */
-    };
+        test_results_address,
+        test_results_size_bytes,
+        target_address,
+        0 /* mcast_mode */,
+        edm_config.topology == Topology::Mesh};
+
+    std::map<string, string> defines = {};
+    if (is_2d_fabric) {
+        defines["FABRIC_2D"] = "";
+    }
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
@@ -100,7 +127,13 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
+            .compile_args = compile_time_args,
+            .defines = defines});
+
+    auto mesh_shape = control_plane->get_physical_mesh_shape(src_mesh_chip_id.first);
+    tt::log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
+    tt::log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
+    tt::log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
 
     std::vector<uint32_t> sender_runtime_args = {
         packet_header_address,
@@ -109,21 +142,24 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
         num_packets,
         receiver_noc_encoding,
         time_seed,
+        edm_direction,
+        src_mesh_chip_id.second,
+        dst_mesh_chip_id.second,
+        mesh_shape[1],
         num_hops};
 
     // append the EDM connection rt args
-    const auto edm_config = get_1d_fabric_config();
-
+    const auto sender_channel = edm_config.topology == Topology::Mesh ? edm_direction : 0;
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
         .edm_noc_y = edm_eth_core.y,
-        .edm_buffer_base_addr = edm_config.sender_channels_base_address[0],
-        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[0],
-        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[0],
-        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[0],
-        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[0],
+        .edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel],
+        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel],
+        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel],
+        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[sender_channel],
+        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[sender_channel],
         .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[0],
+        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[sender_channel],
         .persistent_fabric = true};
 
     auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
@@ -155,10 +191,10 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Launch sender and receiver programs and wait for them to finish
-    this->RunProgramNonblocking(receiver_device, receiver_program);
-    this->RunProgramNonblocking(sender_device, sender_program);
-    this->WaitForSingleProgramDone(sender_device, sender_program);
-    this->WaitForSingleProgramDone(receiver_device, receiver_program);
+    fixture->RunProgramNonblocking(receiver_device, receiver_program);
+    fixture->RunProgramNonblocking(sender_device, sender_program);
+    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+    fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the status and packets processed by sender and receiver
     std::vector<uint32_t> sender_status;
@@ -459,6 +495,8 @@ TEST_F(Fabric1DFixture, TestMCastConnAPI) {
     EXPECT_EQ(sender_bytes, left_recv_bytes);
     EXPECT_EQ(left_recv_bytes, right_recv_bytes);
 }
+
+TEST_F(Fabric1DFixture, TestUnicastRaw) { RunTestUnicastRaw(this, 1); }
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

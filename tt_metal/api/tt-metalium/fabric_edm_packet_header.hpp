@@ -514,13 +514,35 @@ public:
     }
 };
 
+struct LowLatencyMeshRoutingFields {
+    static constexpr uint32_t FIELD_WIDTH = 8;
+    static constexpr uint32_t FIELD_MASK = 0b1111;
+    static constexpr uint32_t NOOP = 0b0000;
+    static constexpr uint32_t FORWARD_EAST = 0b0001;
+    static constexpr uint32_t FORWARD_WEST = 0b0010;
+    static constexpr uint32_t FORWARD_NORTH = 0b0100;
+    static constexpr uint32_t FORWARD_SOUTH = 0b1000;
+    static constexpr uint32_t WRITE_AND_FORWARD_EW = 0b0011;
+    static constexpr uint32_t WRITE_AND_FORWARD_NS = 0b1100;
+    uint32_t value;
+};
+
+struct LowLatencyMeshPacketHeader : public PacketHeaderBase<LowLatencyMeshPacketHeader> {
+    LowLatencyMeshRoutingFields routing_fields;
+    uint8_t route_buffer[32];
+    inline void to_chip_unicast_impl(uint8_t distance_in_hops) {}
+    inline void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
+
+    inline void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
+    inline void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
+};
+
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
 static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");
 // Host code still hardcoded to sizeof(PacketHeader) so we need to keep this check
 static_assert(
     sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 32B");
-
-static constexpr size_t header_size_bytes = sizeof(PacketHeader);
+static_assert(sizeof(LowLatencyMeshPacketHeader) == 64, "sizeof(LowLatencyPacketHeader) is not equal to 64B");
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
@@ -535,12 +557,14 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
 #if ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
+
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
 #else
 #define PACKET_HEADER_TYPE tt::tt_fabric::PacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::RoutingFields
 #endif
+
 #elif (                                                              \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
@@ -548,7 +572,8 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
 #define PACKET_HEADER_TYPE packet_header_t
 #else  // ROUTING_MODE_PUSH as default
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
-#define PACKET_HEADER_TYPE low_latency_packet_header_t
+#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyMeshPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
 #else
 #define PACKET_HEADER_TYPE packet_header_t
 #endif
