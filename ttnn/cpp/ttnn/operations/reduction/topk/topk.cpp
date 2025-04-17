@@ -28,7 +28,9 @@ std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
         std::forward<Tuple>(tuple));
 }
 
-uint32_t get_nearest_supported_k_value(uint32_t k) { return 32 * ((k + 31) / 32); }
+uint32_t get_nearest_supported_k_value(uint32_t k) {
+    return tt::constants::TILE_WIDTH * tt::div_up(k, tt::constants::TILE_WIDTH);
+}
 
 Tensor perform_transpose(
     const Tensor& input_tensor, const bool is_dim_last_idx, const int8_t dim1 = -1, const int8_t dim2 = -1) {

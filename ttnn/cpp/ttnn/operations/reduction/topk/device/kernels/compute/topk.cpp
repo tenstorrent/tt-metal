@@ -41,11 +41,11 @@ FORCE_INLINE void pack_results(uint32_t cb0, uint32_t cb1, uint32_t base_offset,
     }
 }
 
-FORCE_INLINE void pop_and_transpose(uint32_t cb, uint32_t base_offset, uint32_t num_tiles_to_pop = 2) {
+FORCE_INLINE void read_cb_and_transpose(uint32_t cb, uint32_t base_offset, bool get_two = true) {
     reconfig_data_format_srca(cb);
     transpose_wh_init_short(cb);
     transpose_wh_tile(cb, 0, base_offset + 0);
-    if (num_tiles_to_pop > 1) {
+    if (get_two) {
         transpose_wh_tile(cb, 1, base_offset + 1);
     }
 }
@@ -71,6 +71,7 @@ void MAIN {
     transpose_wh_init(input_val_cb_index, output_val_cb_index);
     transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
 
+    int end_phase = 5;  // The end phase of the local sort, based on topk_local_sort documentation
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         uint32_t ktiles_saved = 0;
 
@@ -78,13 +79,13 @@ void MAIN {
         cb_wait_front(input_val_cb_index, 2);
         cb_wait_front(input_ind_cb_index, 2);
 
-        pop_and_transpose(input_val_cb_index, 0);
-        pop_and_transpose(input_ind_cb_index, 2);
+        read_cb_and_transpose(input_val_cb_index, 0);
+        read_cb_and_transpose(input_ind_cb_index, 2);
 
         cb_pop_front(input_val_cb_index, 2);
         cb_pop_front(input_ind_cb_index, 2);
 
-        ckernel::topk_local_sort(0, (int)!largest, 5);
+        ckernel::topk_local_sort(0, (int)!largest, end_phase);
 
         cb_reserve_back(result_prep_val_cb_index, output_tiles);
         cb_reserve_back(result_prep_ind_cb_index, output_tiles);
@@ -101,6 +102,33 @@ void MAIN {
 
         release_dst();
 
+        /*
+        General explanation of the algorithm:
+        Insertion sort into buffer of K sorted tiles.
+        1. First, two tiles are read from input buffer, transposed and sorted.  Result is put into result_prep buffer
+        which stores up to (k+31)/32 tiles, this var is output_tiles. Lets assume for this explanation that k is 128.
+        Therefore number of result tiles is 4.  After first sort, 2 tiles will be added to result buffer (2 slots still
+        empty).
+        2. Count is set to 2 to acknowledge the first two tiles we consumed. ktiles_saved now equals 2 as well.
+        3. Subsequently, one tile at a time is read from input buffer, transposed, and sorted into the already sorted
+        buffer at result_prep using insertion sort.
+        4. The insertion sort is done by merging the new tile with the result buffer, from left to right.
+        5, Each iteration produces one more tile into the result_prep while keeping all tiles in result_prep sorted.
+        ktiles_saved will be 3, then 4, until ktiles_saved == output_tiles.
+        6. Once the number of tiles in result_prep is equal to output_tiles, 4 in this case, new tiles will no longer be
+        added to result_prep, but rather just discarded.
+        7. After going through all input tiles, the result_prep buffer is then transposed and packed into the output
+        buffer for write-out.
+
+        One last note about the result_prep buffer, it is double-buffer with size of 2*output_tiles which is important.
+        To maintain insertion sort logic, after each new tile is sorted, we read out from one half of the buffer, and
+        store results into second half of buffer.  Therefore, we must always proceed forward to the beginning of each
+        half buffer after each insertion, so a new tile is sorting starting from left most tile. Even if result_prep
+        buffer is not full of tiles yet, we must move front and back pointers one full rotation of output_tiles forward
+        (that's why incr changes). Once result_prep buffer is full, no extra adjustment for increment is needed and incr
+        will just be 1.
+        */
+
         for (uint32_t count = 2; count < Wt; count++) {
             // pop next input tile and transpose into intermediate buffer
             cb_wait_front(input_val_cb_index, 1);
@@ -111,8 +139,8 @@ void MAIN {
 
             acquire_dst();
 
-            pop_and_transpose(input_val_cb_index, 0, 1);
-            pop_and_transpose(input_ind_cb_index, 1, 1);
+            read_cb_and_transpose(input_val_cb_index, 0, false);
+            read_cb_and_transpose(input_ind_cb_index, 1, false);
             pack_results(transposed_val_cb_index, transposed_ind_cb_index, 0, 2);
 
             release_dst();
@@ -161,7 +189,7 @@ void MAIN {
                 copy_tile(transposed_ind_cb_index, 0, 3);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_local_sort(0, (int)!largest, 5);
+                ckernel::topk_local_sort(0, (int)!largest, end_phase);
 
                 cb_reserve_back(result_prep_val_cb_index, incr);
                 cb_reserve_back(result_prep_ind_cb_index, incr);

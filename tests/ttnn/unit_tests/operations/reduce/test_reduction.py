@@ -204,7 +204,9 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
 
 
 @pytest.mark.parametrize("dim1", [1])
-@pytest.mark.parametrize("dim2", [65000])  # also check 128256 for OXMIQ <- will need topk_local_sort to handle uint32_t
+@pytest.mark.parametrize(
+    "dim2", [65000]
+)  # Need to resolve issue #20294 to verify 128256 for OXMIQ <- will need topk_local_sort to handle uint32_t
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("k", [32, 64, 128, 256, 512, 800, 1600, 3200])
 @pytest.mark.parametrize("largest", [True])
@@ -257,7 +259,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim3", [8])
 @pytest.mark.parametrize("dim4", [256])
 @pytest.mark.parametrize("dim5", [64])
-# @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4]) transpose cannot handle N-D tensor for all dims
+# @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4]) #transpose cannot handle N-D tensor for all dims
 @pytest.mark.parametrize("dim", [3, 4])
 @pytest.mark.parametrize("k", [17, 32, 64])
 @pytest.mark.parametrize("largest", [True])
