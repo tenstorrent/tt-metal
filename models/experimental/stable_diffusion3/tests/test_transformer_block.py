@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     ("model_name", "block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
     [
         ("large", 0, 2, 4096, 333),
-        # ("large", 23, 2, 4096, 333),
+        ("large", 37, 2, 4096, 333),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 716800}], indirect=True)
@@ -147,10 +147,11 @@ def test_transformer_block(
     tt_spatial_output_padded = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :embedding_dim]
     # tt_spatial_output_padded = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :embedding_dim]
 
-    tt_prompt_output_padded = ttnn.to_torch(
-        tt_prompt_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
-    )
-    tt_prompt_output_padded = tt_prompt_output_padded[:, :, 0:prompt_sequence_length, :embedding_dim]
+    if tt_prompt_output_padded is not None:
+        tt_prompt_output_padded = ttnn.to_torch(
+            tt_prompt_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
+        )
+        tt_prompt_output_padded = tt_prompt_output_padded[:, :, 0:prompt_sequence_length, :embedding_dim]
 
     assert (prompt_output is None) == (tt_prompt_output_padded is None)
     assert_quality(
