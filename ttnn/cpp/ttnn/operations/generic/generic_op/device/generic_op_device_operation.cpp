@@ -22,13 +22,13 @@ void GenericOpDeviceOperation::validate_on_program_cache_hit(
 GenericOpDeviceOperation::spec_return_value_t GenericOpDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // User has to do this. Just referencing last element (preallocated output tensor).
-    return tensor_args.io_tensors.back().get_tensor_spec();
+    return tensor_args.output_tensor.get_tensor_spec();
 }
 
 GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Don't create anything, user is passing output tensor.
-    return tensor_args.io_tensors.back();
+    return tensor_args.output_tensor;
 }
 
 std::tuple<GenericOpDeviceOperation::operation_attributes_t, GenericOpDeviceOperation::tensor_args_t>
@@ -36,10 +36,12 @@ GenericOpDeviceOperation::invoke(
     const std::vector<Tensor>& io_tensors, const operation_attributes_t& operation_attributes) {
     TT_FATAL(
         io_tensors.size() >= 2,
-        "io_tensors must contain at least one input tensor and one output tensor, got {}.",
+        "io_tensors must contain at least one input tensor and one output tensor, got {} tensors.",
         io_tensors.size());
 
-    return {operation_attributes, tensor_args_t{.io_tensors = io_tensors}};
+    // NOTE: The output tensor is the last one in the vector, the rest are input tensors
+    // Passing in output_tensors into tensor_args_t like this for clarity reasons.
+    return {operation_attributes, tensor_args_t{.io_tensors = io_tensors, .output_tensor = io_tensors.back()}};
 }
 
 }  // namespace ttnn::operations::generic
