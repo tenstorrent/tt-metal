@@ -80,15 +80,9 @@ def get_is_srcdir_build():
     return git_dir.exists()
 
 
-def get_arch_name():
-    return "any"
-
-
 def get_metal_local_version_scheme(metal_build_config, version):
-    arch_name = metal_build_config.arch_name
-
     if version.dirty:
-        return f"+g{version.node}.{arch_name}"
+        return f"+g{version.node}"
     else:
         return ""
 
@@ -98,17 +92,15 @@ def get_metal_main_version_scheme(metal_build_config, version):
     is_dirty = version.dirty
     is_clean_prod_build = (not is_dirty) and is_release_version
 
-    arch_name = metal_build_config.arch_name
-
     if is_clean_prod_build:
-        return version.format_with("{tag}+{arch_name}", arch_name=arch_name)
+        return version.format_with("{tag}")
     elif is_dirty and not is_release_version:
-        return version.format_with("{tag}.dev{distance}", arch_name=arch_name)
+        return version.format_with("{tag}.dev{distance}")
     elif is_dirty and is_release_version:
-        return version.format_with("{tag}", arch_name=arch_name)
+        return version.format_with("{tag}")
     else:
         assert not is_dirty and not is_release_version
-        return version.format_with("{tag}.dev{distance}+{arch_name}", arch_name=arch_name)
+        return version.format_with("{tag}.dev{distance}")
 
 
 def get_version(metal_build_config):
@@ -126,7 +118,6 @@ def get_from_precompiled_dir():
 
 @dataclass(frozen=True)
 class MetalliumBuildConfig:
-    arch_name = get_arch_name()
     from_precompiled_dir = get_from_precompiled_dir()
 
 
@@ -249,11 +240,6 @@ class CMakeBuild(build_ext):
         )
         copy_tree_with_patterns(source_dir / "ttnn/cpp", self.build_lib + "/ttnn/cpp", ttnn_cpp_patterns)
         copy_tree_with_patterns(source_dir / "tt_metal", self.build_lib + "/ttnn/tt_metal", tt_metal_patterns)
-
-        # Encode ARCH_NAME into package for later use so user doesn't have to provide
-        arch_name_file = self.build_lib + "/ttnn/.ARCH_NAME"
-        # should probably change to Python calls to write to a file descriptor instead of calling Linux tools
-        subprocess.check_call(f"echo {metal_build_config.arch_name} > {arch_name_file}", shell=True)
 
         # Move built final built _ttnn SO into appropriate location in ttnn Python tree in wheel
         assert len(self.extensions) == 1, f"Detected {len(self.extensions)} extensions, but should be only 1: ttnn"
