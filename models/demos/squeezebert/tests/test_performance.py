@@ -2,24 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import time
-import torch
+
 import pytest
+import torch
 import transformers
 from loguru import logger
-
-from models.utility_functions import is_grayskull
-from models.perf.perf_utils import prep_perf_report
-
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
 from models.demos.squeezebert.tt import ttnn_functional_squeezebert
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
-
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-)
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, is_grayskull
 
 
 def preprocess_inputs(

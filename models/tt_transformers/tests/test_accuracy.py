@@ -1,20 +1,18 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import bz2
-import pytest
-from loguru import logger
 import os
+from pathlib import Path
+
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.tt_transformers.tt.common import (
-    get_prefill_rot_mat,
-    PagedAttentionConfig,
-    preprocess_inputs_prefill,
-)
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, preprocess_inputs_prefill
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
-from pathlib import Path
 
 
 def get_accuracy_thresholds(base_model_name: str, device_name: str, optimizations: ModelOptimizations):

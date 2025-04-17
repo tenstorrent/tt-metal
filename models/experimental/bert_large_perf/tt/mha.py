@@ -2,20 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-from loguru import logger
 import math
 
+import pytest
 import torch
+from loguru import logger
 from transformers import BertForQuestionAnswering
+from tt_lib.fused_ops.softmax import softmax
+from tt_lib.utils import pad_activation, pad_weight
 
 import ttnn
-from tt_lib.utils import pad_activation, pad_weight
-from tt_lib.fused_ops.softmax import softmax
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):

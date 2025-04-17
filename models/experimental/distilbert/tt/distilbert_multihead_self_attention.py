@@ -2,17 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple, List
+from typing import List, Optional, Tuple
+
 import torch
 import torch.nn as nn
-
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
-import ttnn
 import tt_lib.fallback_ops as fallback_ops
+
+import ttnn
 from models.helper_funcs import Linear as TtLinear
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 class TtMultiHeadSelfAttention(nn.Module):

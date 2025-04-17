@@ -2,29 +2,31 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 from typing import List
-from tqdm import tqdm
+
 import torch
+from loguru import logger
+from tqdm import tqdm
+
 import ttnn
-from ttnn import ReplicateTensorToMesh
-from models.demos.tg.llama3_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
-from models.demos.tg.llama3_70b.tt.llama_embedding_galaxy import TtLlamaEmbedding_galaxy
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    freqs_to_rotation_matrix,
-    get_rotation_mat,
-    precompute_freqs,
-    get_rot_transformation_mat,
-    num_to_corerange,
-    gather_cos_sin,
     ShardTensor2dMesh,
+    freqs_to_rotation_matrix,
+    gather_cos_sin,
+    get_rot_transformation_mat,
+    get_rotation_mat,
+    num_to_corerange,
+    precompute_freqs,
 )
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
     tt_composite_sharded_all_reduce,
-    tt_sharded_distributed_rmsnorm,
     tt_distributed_rmsnorm,
+    tt_sharded_distributed_rmsnorm,
 )
+from models.demos.tg.llama3_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
+from models.demos.tg.llama3_70b.tt.llama_embedding_galaxy import TtLlamaEmbedding_galaxy
+from ttnn import ReplicateTensorToMesh
 
 
 def is_power_of_two(n):

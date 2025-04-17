@@ -4,17 +4,12 @@
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-    comp_pcc,
-    comp_allclose_and_pcc,
-)
+import ttnn
 from models.experimental.llama.tt.llama_decoder import TtLlamaDecoderLayer
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):

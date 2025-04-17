@@ -2,12 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
-import torch
-import ttnn
 from typing import Optional
+
+import torch
+import torch.nn as nn
+
+import ttnn
 from models.experimental.bert_tiny.tt.bert_encoder import TtBertencoder
-from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 class TtBert(nn.Module):

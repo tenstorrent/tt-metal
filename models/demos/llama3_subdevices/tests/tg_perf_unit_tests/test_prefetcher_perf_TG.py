@@ -4,14 +4,11 @@
 
 import pytest
 from loguru import logger
-import ttnn
 
+import ttnn
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
-from tests.ttnn.unit_tests.operations.test_prefetcher_TG import (
-    LLAMA_INPUT_SHAPES,
-    LLAMA_INPUT_DTYPES,
-)
+from tests.ttnn.unit_tests.operations.test_prefetcher_TG import LLAMA_INPUT_DTYPES, LLAMA_INPUT_SHAPES
 
 THRESHOLD = 2  # 2 GB/s
 TILE_BYTES = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}

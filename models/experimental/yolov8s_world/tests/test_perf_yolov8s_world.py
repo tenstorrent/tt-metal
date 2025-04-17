@@ -4,25 +4,27 @@
 
 import time
 
+import pytest
 import torch
 from loguru import logger
-import pytest
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.perf.perf_utils import prep_perf_report
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import is_wormhole_b0, run_for_wormhole_b0
-from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
+from models.experimental.yolov8s_world.reference import yolov8s_world
+from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
 from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
-    create_custom_preprocessor,
     attempt_load,
+    create_custom_preprocessor,
     move_to_device,
 )
-from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world import (
-    TtYOLOWorld,
+from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    is_wormhole_b0,
+    run_for_wormhole_b0,
 )
-from models.experimental.yolov8s_world.reference import yolov8s_world
 
 
 def get_expected_times(name):

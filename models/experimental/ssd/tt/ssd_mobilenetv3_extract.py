@@ -3,14 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from torch import nn
-import ttnn
 
-from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import (
-    TtMobileNetV3ConvLayer,
-)
-from models.experimental.ssd.tt.ssd_mobilenetv3_inverted_squeeze import (
-    TtMobileNetV3InvertedSqueeze,
-)
+import ttnn
+from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import TtMobileNetV3ConvLayer
+from models.experimental.ssd.tt.ssd_mobilenetv3_inverted_squeeze import TtMobileNetV3InvertedSqueeze
 
 
 class TtMobileNetV3extract(nn.Module):

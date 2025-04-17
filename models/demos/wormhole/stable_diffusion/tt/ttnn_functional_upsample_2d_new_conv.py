@@ -3,16 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from loguru import logger
+
 import ttnn
-
-
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     get_default_compute_config,
     permute_conv_parameters,
 )
-from loguru import logger
-
 
 config_override = {
     (320, 320, 64, 64): {"act_block_h": 64},

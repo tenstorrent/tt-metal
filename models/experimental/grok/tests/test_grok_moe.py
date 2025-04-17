@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import os
-import torch
+
 import pytest
+import torch
 from loguru import logger
 
 # Set Grok flags for CI, if CI environment is setup
@@ -13,16 +14,12 @@ if os.getenv("CI") == "true":
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
 
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
-
+from models.experimental.grok.reference.model import MoeBlock
 from models.experimental.grok.tt.grok_mlp import TtGrokMLP
 from models.experimental.grok.tt.grok_moe import TtMoeLayer
-from models.experimental.grok.reference.model import MoeBlock
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_allclose, comp_pcc
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 @pytest.mark.timeout(600)

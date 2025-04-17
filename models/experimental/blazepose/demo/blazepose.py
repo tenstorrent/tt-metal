@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from models.experimental.blazepose.demo.blazebase import BlazeDetector, BlazeBlock
+from models.experimental.blazepose.demo.blazebase import BlazeBlock, BlazeDetector
 
 
 class BlazePose(BlazeDetector):

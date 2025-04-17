@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
-import ttnn
 from typing import Optional
+
+import torch
+
+import ttnn
+from models.common.rmsnorm import RMSNorm
 from models.demos.wormhole.mistral7b.tt.mistral_attention import TtMistralAttention
 from models.demos.wormhole.mistral7b.tt.mistral_mlp import TtMistralMLP
-from models.common.rmsnorm import RMSNorm
 
 
 class TtTransformerBlock(torch.nn.Module):

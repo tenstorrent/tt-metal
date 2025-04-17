@@ -3,20 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import abstractmethod
+
 import pytest
-from loguru import logger
 import torch
+from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
+from tt_lib.utils import pad_activation, pad_weight
 
 import ttnn
-from models.experimental.bert.tt.embeddings import PytorchEmbeddings
-from models.experimental.bert.tt.bert_encoder import TtBertEncoder
 from models.experimental.bert.fused_ops.linear import Linear
-from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.experimental.bert.tt.bert_encoder import TtBertEncoder
+from models.experimental.bert.tt.embeddings import PytorchEmbeddings
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 class TtBertShared(torch.nn.Module):

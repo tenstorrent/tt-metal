@@ -4,9 +4,9 @@
 
 import torch.nn as nn
 
-from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
-from models.experimental.trocr.tt.trocr_configuration import TtTrOCRConfig
 import ttnn
+from models.experimental.trocr.tt.trocr_configuration import TtTrOCRConfig
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 class TtTrOCREmbedTokens(nn.Module):

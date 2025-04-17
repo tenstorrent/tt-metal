@@ -2,14 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 from typing import Optional, Tuple
 
+import torch.nn as nn
+
 import ttnn
-from models.utility_functions import torch_to_tt_tensor_rm
-from models.helper_funcs import Linear
 from models.experimental.trocr.tt.trocr_attention import TtTrOCRAttention
 from models.experimental.trocr.tt.trocr_configuration import TtTrOCRConfig
+from models.helper_funcs import Linear
+from models.utility_functions import torch_to_tt_tensor_rm
 
 
 class TtTrOCRDecoderLayer(nn.Module):

@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
 from torch import nn
+
+import ttnn
+from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 from models.utility_functions import is_grayskull
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
-from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 
 def transpose_for_scores(config, x, device, permute_tensor: bool):

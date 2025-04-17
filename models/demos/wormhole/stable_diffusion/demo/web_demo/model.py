@@ -2,30 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-from PIL import Image
-from loguru import logger
-from tqdm.auto import tqdm
 import os
+import random
 import string
 import time
-import random
 
+import torch
+from diffusers import AutoencoderKL, UNet2DConditionModel
+from loguru import logger
+from PIL import Image
+from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
-from diffusers import (
-    AutoencoderKL,
-    UNet2DConditionModel,
-)
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-)
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
+
+import ttnn
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
+from models.utility_functions import disable_persistent_kernel_cache
 
 
 def constant_prop_time_embeddings(timesteps, sample, time_proj):

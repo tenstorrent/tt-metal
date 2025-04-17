@@ -4,16 +4,16 @@
 
 import pytest
 import torch
-from transformers import BertForQuestionAnswering
 from loguru import logger
+from transformers import BertForQuestionAnswering
+from tt_lib.utils import pad_activation, pad_weight
 
 import ttnn
-from models.experimental.bert.tt.mha import TtMultiHeadAttentionModel
-from models.experimental.bert.tt.ffn import TtFeedForwardModel
 from models.experimental.bert.fused_ops.add_and_norm import AddAndNorm
 from models.experimental.bert.fused_ops.linear import Linear
-from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import comp_pcc, comp_allclose
+from models.experimental.bert.tt.ffn import TtFeedForwardModel
+from models.experimental.bert.tt.mha import TtMultiHeadAttentionModel
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 class TtBertEncoder(torch.nn.Module):

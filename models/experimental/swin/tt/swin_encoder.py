@@ -2,18 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from typing import Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
-
-
-from models.experimental.swin.tt.swin_stage import TtSwinStage
-from models.experimental.swin.tt.swin_patch_merging import TtSwinPatchMerging
-
-import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
-from dataclasses import dataclass
+import ttnn
+from models.experimental.swin.tt.swin_patch_merging import TtSwinPatchMerging
+from models.experimental.swin.tt.swin_stage import TtSwinStage
 
 
 @dataclass

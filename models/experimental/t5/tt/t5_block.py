@@ -5,13 +5,10 @@
 import torch
 from torch import nn
 
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
-from models.experimental.t5.tt.t5_layer_self_attention import TtT5LayerSelfAttention
 from models.experimental.t5.tt.t5_layer_cross_attention import TtT5LayerCrossAttention
 from models.experimental.t5.tt.t5_layer_ff import TtT5LayerFF
+from models.experimental.t5.tt.t5_layer_self_attention import TtT5LayerSelfAttention
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 class TtT5Block(nn.Module):

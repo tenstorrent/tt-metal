@@ -2,14 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
 import math
 
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
+import torch
+
+import ttnn
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 def gelu_new(x, device):

@@ -8,11 +8,7 @@ import torch
 
 import ttnn
 from models.demos.yolov4.common import image_to_tensor, load_image, load_torch_model
-from models.demos.yolov4.post_processing import (
-    load_class_names,
-    plot_boxes_cv2,
-    post_processing,
-)
+from models.demos.yolov4.post_processing import load_class_names, plot_boxes_cv2, post_processing
 from models.demos.yolov4.runner.runner import YOLOv4Runner
 from models.demos.yolov4.tt.model_preprocessing import create_yolov4_model_parameters
 from models.utility_functions import skip_for_grayskull

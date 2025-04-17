@@ -15,12 +15,9 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 import cv2
 import torch
 from loguru import logger
+
+from models.experimental.efficientnet.demo.demo_utils import download_images, load_imagenet_labels, preprocess
 from models.experimental.efficientnet.tt.efficientnet_model import reference_efficientnet_lite0
-from models.experimental.efficientnet.demo.demo_utils import (
-    load_imagenet_labels,
-    download_images,
-    preprocess,
-)
 
 
 def test_cpu_demo_lite0():

@@ -2,16 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+from typing import List, Optional
+
 import torch
 from torch import nn
-import ttnn
-import math
-from typing import (
-    List,
-    Optional,
-)
 
-from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
+import ttnn
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 class TtDefaultBoxGenerator(nn.Module):

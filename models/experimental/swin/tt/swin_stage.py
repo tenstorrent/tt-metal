@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Tuple
+
 import torch.nn as nn
 
-
-from models.experimental.swin.tt.swin_layer import TtSwinLayer
 import ttnn
+from models.experimental.swin.tt.swin_layer import TtSwinLayer
 
 
 class TtSwinStage(nn.Module):

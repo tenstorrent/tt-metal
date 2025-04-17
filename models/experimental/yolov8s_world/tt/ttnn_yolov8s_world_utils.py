@@ -2,31 +2,30 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 from pathlib import Path
 
 import torch
 import torch.nn as nn
-import math
 from loguru import logger
-
-import ttnn
 from ttnn.model_preprocessing import (
     ParameterDict,
     ParameterList,
-    preprocess_linear_weight,
-    preprocess_linear_bias,
     preprocess_layernorm_parameter,
+    preprocess_linear_bias,
+    preprocess_linear_weight,
 )
 
+import ttnn
 from models.experimental.yolov8s_world.reference.yolov8s_world import (
-    Conv,
-    C2f,
     SPPF,
+    C2f,
     C2fAttn,
-    WorldModel,
-    WorldDetect,
+    Conv,
     ImagePoolingAttn,
+    WorldDetect,
+    WorldModel,
 )
 
 

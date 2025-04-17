@@ -2,11 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import cast, Dict, List, Union
+from typing import Dict, List, Union, cast
 
 import torch
 import torch.nn as nn
-
 
 cfgs: Dict[str, List[Union[str, int]]] = {
     "A": [64, "M", 128, "M", 256, 256, "M", 512, 512, "M", 512, 512, "M"],

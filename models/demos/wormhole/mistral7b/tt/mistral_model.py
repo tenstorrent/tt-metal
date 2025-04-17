@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
+from typing import Optional
+
 import torch
 import torch.nn as nn
-from models.demos.wormhole.mistral7b.tt.mistral_decoder import TtTransformerBlock
-from models.common.rmsnorm import RMSNorm
+
 import ttnn
-from typing import Optional
+from models.common.rmsnorm import RMSNorm
+from models.demos.wormhole.mistral7b.tt.mistral_decoder import TtTransformerBlock
 
 
 class TtTransformer(nn.Module):

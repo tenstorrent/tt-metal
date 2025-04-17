@@ -2,12 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 from loguru import logger
-
 
 import ttnn
 from models.utility_functions import comp_pcc, skip_for_grayskull
-import torch
 
 
 def run_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_mem_config, out_mem_config):

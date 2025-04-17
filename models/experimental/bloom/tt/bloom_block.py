@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from functools import partial
+from typing import Optional, Tuple
+
 import torch
 
-import ttnn
-
-from functools import partial
 import models.experimental.bloom.tt.bloom_attention as bloom_attention
 import models.experimental.bloom.tt.bloom_mlp as bloom_mlp
-from typing import Optional, Tuple
+import ttnn
 from models.utility_functions import pad_by_zero
 
 

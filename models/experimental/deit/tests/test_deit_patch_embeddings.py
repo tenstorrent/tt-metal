@@ -6,14 +6,9 @@ import torch
 from loguru import logger
 from transformers import DeiTModel
 
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose_and_pcc,
-)
-
 from models.experimental.deit.tt.deit_config import DeiTConfig
-
 from models.experimental.deit.tt.deit_patch_embeddings import DeiTPatchEmbeddings
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 
 
 def test_deit_patch_embeddings_inference(device, pcc=0.99):

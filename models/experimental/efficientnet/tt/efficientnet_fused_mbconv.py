@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from typing import List, Optional, Callable
+from typing import Callable, List, Optional
 
+import torch
+
+import ttnn
 from models.experimental.efficientnet.tt.efficientnet_conv import TtEfficientnetConv2dNormActivation
 from models.experimental.efficientnet.tt.efficientnet_mbconv import _MBConvConfig
 

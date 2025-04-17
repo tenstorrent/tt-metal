@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import prepare_group_norm, get_default_compute_config
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import get_default_compute_config, prepare_group_norm
 
 
 class Attention:

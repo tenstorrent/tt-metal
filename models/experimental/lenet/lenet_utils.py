@@ -4,8 +4,9 @@
 
 import torch
 import torchvision.transforms as transforms
-from models.experimental.lenet.reference.lenet import LeNet5
 from PIL import Image
+
+from models.experimental.lenet.reference.lenet import LeNet5
 
 
 def load_torch_lenet(weka_path, num_classes):

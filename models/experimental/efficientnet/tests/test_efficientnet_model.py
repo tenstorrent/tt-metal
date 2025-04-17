@@ -3,16 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
 import torch
-from loguru import logger
 import torchvision
+from loguru import logger
 
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    comp_pcc,
-)
+import ttnn
 from models.experimental.efficientnet.tt.efficientnet_model import (
     efficientnet_b0,
     efficientnet_b1,
@@ -22,20 +17,21 @@ from models.experimental.efficientnet.tt.efficientnet_model import (
     efficientnet_b5,
     efficientnet_b6,
     efficientnet_b7,
-    efficientnet_v2_s,
-    efficientnet_v2_m,
-    efficientnet_v2_l,
-    reference_efficientnet_lite0,
-    reference_efficientnet_lite1,
-    reference_efficientnet_lite2,
-    reference_efficientnet_lite3,
-    reference_efficientnet_lite4,
     efficientnet_lite0,
     efficientnet_lite1,
     efficientnet_lite2,
     efficientnet_lite3,
     efficientnet_lite4,
+    efficientnet_v2_l,
+    efficientnet_v2_m,
+    efficientnet_v2_s,
+    reference_efficientnet_lite0,
+    reference_efficientnet_lite1,
+    reference_efficientnet_lite2,
+    reference_efficientnet_lite3,
+    reference_efficientnet_lite4,
 )
+from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor
 
 
 def make_input_tensor(imagenet_sample_input, resize=256, crop=224):

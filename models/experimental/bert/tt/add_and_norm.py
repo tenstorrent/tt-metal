@@ -3,18 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from loguru import logger
-
 import torch
+from loguru import logger
 from transformers import BertForQuestionAnswering
+from tt_lib.utils import pad_activation, pad_weight
 
 import ttnn
 from models.experimental.bert.fused_ops.add_and_norm import AddAndNorm
-from tt_lib.utils import pad_activation, pad_weight
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
+from models.utility_functions import comp_allclose, comp_pcc
 
 
 class TtAddAndNormModel(torch.nn.Module):

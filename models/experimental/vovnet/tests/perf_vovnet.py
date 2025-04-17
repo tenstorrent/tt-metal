@@ -4,10 +4,10 @@
 
 import timm
 import torch
-
 from loguru import logger
 
 from models.experimental.vovnet.tt.vovnet import vovnet_for_image_classification
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
     Profiler,
     disable_persistent_kernel_cache,
@@ -15,8 +15,6 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
-from models.perf.perf_utils import prep_perf_report
-
 
 BATCH_SIZE = 1
 

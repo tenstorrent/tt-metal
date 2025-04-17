@@ -2,29 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-import ttnn
 import evaluate
-
-from loguru import logger
+import pytest
+import torch
 from datasets import load_dataset
+from loguru import logger
+from transformers import AutoTokenizer
+from transformers import DistilBertForQuestionAnswering as HF_DistilBertForQuestionAnswering
 
+import ttnn
+from models.experimental.distilbert.tt.distilbert import distilbert_for_question_answering
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
     Profiler,
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
 )
-from models.perf.perf_utils import prep_perf_report
-
-from transformers import (
-    AutoTokenizer,
-    DistilBertForQuestionAnswering as HF_DistilBertForQuestionAnswering,
-)
-from models.experimental.distilbert.tt.distilbert import distilbert_for_question_answering
-
 
 BATCH_SIZE = 1
 

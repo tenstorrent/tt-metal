@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch.nn as nn
+from tt_lib.fallback_ops import fallback_ops
 
-
+import ttnn
 from models.experimental.lenet.lenet_utils import load_torch_lenet
 from models.utility_functions import torch2tt_tensor
-from tt_lib.fallback_ops import fallback_ops
 
 
 class TtLeNet5(nn.Module):

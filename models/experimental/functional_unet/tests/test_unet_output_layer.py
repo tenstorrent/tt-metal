@@ -3,16 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
 
+import ttnn
+from models.experimental.functional_unet.tests.common import verify_with_pcc
+from models.experimental.functional_unet.tt import unet_shallow_torch, unet_shallow_ttnn
 from models.experimental.functional_unet.tt.model_preprocessing import (
     create_unet_input_tensors,
     create_unet_model_parameters,
 )
-from models.experimental.functional_unet.tt import unet_shallow_torch
-from models.experimental.functional_unet.tt import unet_shallow_ttnn
-
-from models.experimental.functional_unet.tests.common import verify_with_pcc
 
 
 @pytest.mark.parametrize("batch, groups", [(1, 4)])

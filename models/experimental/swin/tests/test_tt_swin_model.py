@@ -2,21 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
-
-
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
-    comp_allclose,
-    comp_pcc,
-)
+from transformers import AutoFeatureExtractor, SwinModel
 
 from models.experimental.swin.tt.swin_model import TtSwinModel
-from transformers import SwinModel
-from transformers import AutoFeatureExtractor
+from models.utility_functions import comp_allclose, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(

@@ -1,17 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
-import ttnn
-from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDownsample2D
+import torch
 from diffusers import DiffusionPipeline
-from tests.ttnn.utils_for_testing import assert_with_pcc
+
+import ttnn
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import from_channel_last_ttnn, to_channel_last_ttnn
+from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDownsample2D
 from models.utility_functions import torch_random
-from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
-    to_channel_last_ttnn,
-    from_channel_last_ttnn,
-)
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(

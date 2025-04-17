@@ -2,28 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import warnings, torch, math
+import math
+import warnings
 from collections import OrderedDict
-from types import FunctionType
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Optional,
-    Tuple,
-    TypeVar,
-    Sequence,
-    List,
-    Mapping,
-    Union,
-)
 from dataclasses import dataclass
-from functools import partial
 from enum import Enum
-from torch import nn, Tensor
+from functools import partial
+from types import FunctionType
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TypeVar, Union
+
+import torch
+from torch import Tensor, nn
+from torch.hub import load_state_dict_from_url
 from torchvision.transforms import functional as F
 from torchvision.utils import _make_ntuple
-from torch.hub import load_state_dict_from_url
 
 
 class SqueezeExcitation(torch.nn.Module):

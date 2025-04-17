@@ -6,7 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -18,11 +17,7 @@ from loguru import logger
 
 from models.experimental.yolov5.reference.models.common import DetectMultiBackend
 from models.experimental.yolov5.tt.yolov5_concat import TtYolov5Concat
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    comp_pcc,
-)
+from models.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor
 
 
 def test_Yolov5_concat(device):

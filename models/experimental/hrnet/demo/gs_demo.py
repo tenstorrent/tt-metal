@@ -2,26 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 from loguru import logger
 from torchvision.utils import save_image
 
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
-
 from models.experimental.hrnet.tt.hrnet_model import hrnet_w18_small
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @pytest.mark.parametrize(
     "model_name",
     (("hrnet_w18_small"),),
 )
-def test_gs_demo(
-    device, imagenet_sample_input, imagenet_label_dict, model_name, reset_seeds
-):
+def test_gs_demo(device, imagenet_sample_input, imagenet_label_dict, model_name, reset_seeds):
     tt_model = hrnet_w18_small(device, multi_scale_output=True)
 
     tt_input = torch_to_tt_tensor_rm(imagenet_sample_input, device, put_on_device=False)

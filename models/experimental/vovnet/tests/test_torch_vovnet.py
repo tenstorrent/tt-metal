@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import timm
 import pytest
+import timm
 import torch
-
 from loguru import logger
 
 from models.experimental.vovnet.reference.vovnet import VoVNet
-from models.utility_functions import comp_pcc, comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 
 
 @pytest.mark.parametrize(

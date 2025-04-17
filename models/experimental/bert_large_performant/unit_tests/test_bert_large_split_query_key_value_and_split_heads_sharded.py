@@ -2,15 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-import ttnn
-
-from models.utility_functions import (
-    torch2tt_tensor,
-    comp_pcc,
-)
-import torch
 import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.utility_functions import comp_pcc, torch2tt_tensor
 
 
 @pytest.mark.parametrize(

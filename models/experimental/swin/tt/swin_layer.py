@@ -3,26 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
+from tt_lib.fallback_ops import fallback_ops
 
 import ttnn
-
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
-
+from models.experimental.swin.swin_utils import window_partition, window_reverse
 from models.experimental.swin.tt.swin_attention import TtSwinAttention
 from models.experimental.swin.tt.swin_intermediate import TtSwinIntermediate
 from models.experimental.swin.tt.swin_output import TtSwinOutput
-from models.experimental.swin.swin_utils import (
-    window_partition,
-    window_reverse,
-)
-
-import ttnn
-from tt_lib.fallback_ops import fallback_ops
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 class TtSwinLayer(nn.Module):

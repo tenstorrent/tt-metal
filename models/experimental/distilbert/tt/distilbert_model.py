@@ -2,19 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from typing import Optional, Tuple, Union
+
 import torch.nn as nn
 
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
-
 import ttnn
-from dataclasses import dataclass
-
 from models.experimental.distilbert.tt.distilbert_embedding import TtDistilBert_Embeddings
 from models.experimental.distilbert.tt.distilbert_transformer import TtTransformer
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
 @dataclass

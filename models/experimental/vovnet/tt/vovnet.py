@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import timm
-import ttnn
+import torch.nn as nn
 
+import ttnn
 from models.experimental.vovnet.tt.classifier_head import TtClassifierHead
 from models.experimental.vovnet.tt.conv_norm_act import TtConvNormAct
 from models.experimental.vovnet.tt.osa_stage import TtOsaStage

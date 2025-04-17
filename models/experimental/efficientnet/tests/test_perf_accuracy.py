@@ -2,28 +2,29 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-from loguru import logger
-import torchvision
-import pytest
-import evaluate
 import os
 import random
-from PIL import Image
-import torchvision.transforms as transforms
 
+import evaluate
+import pytest
+import torch
+import torchvision
+import torchvision.transforms as transforms
+from loguru import logger
+from PIL import Image
+
+import ttnn
+from models.experimental.efficientnet.tt.efficientnet_model import efficientnet_b0
+from models.perf.perf_utils import prep_perf_report
+from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES as labels_dict
 from models.utility_functions import (
+    disable_persistent_kernel_cache,
+    enable_persistent_kernel_cache,
+    profiler,
     torch2tt_tensor,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
-    profiler,
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
 )
-from models.perf.perf_utils import prep_perf_report
-from models.experimental.efficientnet.tt.efficientnet_model import efficientnet_b0
-from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES as labels_dict
 
 
 def make_input_tensor(imagenet_sample_input, resize=256, crop=224):

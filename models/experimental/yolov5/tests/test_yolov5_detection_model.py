@@ -13,20 +13,14 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import torch
-from loguru import logger
 from datasets import load_dataset
+from loguru import logger
 
 from models.experimental.yolov5.reference.models.common import DetectMultiBackend
 from models.experimental.yolov5.reference.utils.dataloaders import LoadImages
 from models.experimental.yolov5.reference.utils.general import check_img_size
-from models.experimental.yolov5.tt.yolov5_detection_model import (
-    yolov5s_detection_model,
-)
-
-from models.utility_functions import (
-    torch2tt_tensor,
-    comp_pcc,
-)
+from models.experimental.yolov5.tt.yolov5_detection_model import yolov5s_detection_model
+from models.utility_functions import comp_pcc, torch2tt_tensor
 
 
 def download_images(path, imgsz):

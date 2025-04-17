@@ -2,17 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-import ttnn
-
-from torchvision import models
+import torch
 from loguru import logger
-from models.utility_functions import comp_allclose
+from torchvision import models
 
+import ttnn
 from models.experimental.vgg.tt.vgg import vgg16
-from models.utility_functions import comp_pcc, torch_to_tt_tensor, unpad_from_zero
-
+from models.utility_functions import comp_allclose, comp_pcc, torch_to_tt_tensor, unpad_from_zero
 
 _batch_size = 1
 

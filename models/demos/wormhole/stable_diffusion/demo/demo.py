@@ -2,36 +2,31 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import json
-import torch
-import pytest
-import numpy as np
-from PIL import Image
-from loguru import logger
-from tqdm.auto import tqdm
-from datasets import load_dataset
 import os
 import time
 
+import numpy as np
+import pytest
+import torch
+from datasets import load_dataset
+from diffusers import AutoencoderKL, UNet2DConditionModel
+from loguru import logger
+from PIL import Image
+from torchmetrics.image.fid import FrechetInceptionDistance
+from torchmetrics.multimodal.clip_score import CLIPScore
+from torchvision.transforms import ToTensor
+from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
-from diffusers import (
-    AutoencoderKL,
-    UNet2DConditionModel,
-)
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    profiler,
-)
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
+
+import ttnn
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
-from torchvision.transforms import ToTensor
-from torchmetrics.multimodal.clip_score import CLIPScore
-from torchmetrics.image.fid import FrechetInceptionDistance
+from models.utility_functions import enable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path):
