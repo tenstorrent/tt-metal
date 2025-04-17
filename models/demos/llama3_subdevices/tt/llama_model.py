@@ -336,7 +336,7 @@ class TtTransformer(LightweightModule):
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
         tt_out = ttnn.argmax(
-            tt_logits, dim=3, keep_dim=True, use_multicore=True
+            tt_logits, dim=3, keepdim=True, use_multicore=True
         )  # TODO Add multicore support to batch > 1
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
