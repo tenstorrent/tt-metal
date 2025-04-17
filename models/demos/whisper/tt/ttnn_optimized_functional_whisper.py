@@ -494,7 +494,6 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device):
         conv_config=conv1d_config,
         compute_config=conv1d_compute_config,
     )
-    parameters.conv1.weight = weights_device
     input_embeds = ttnn.gelu(input_embeds)
     input_embeds = ttnn.sharded_to_interleaved(input_embeds)
 
@@ -516,7 +515,6 @@ def preprocess_encoder_inputs(config, input_features, *, parameters, device):
             conv_config=conv1d_config,
             compute_config=conv1d_compute_config,
         )
-        parameters.conv2.weight[i] = weights_device
         out_split = ttnn.sharded_to_interleaved(out_split)
         out_tensor_splits.append(out_split)
 

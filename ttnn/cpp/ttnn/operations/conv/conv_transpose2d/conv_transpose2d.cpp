@@ -5,6 +5,7 @@
 #include <optional>
 #include <utility>
 
+#include "tt-metalium/logger.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -278,11 +279,11 @@ Result conv_transpose2d(
         conv_config.enable_split_reader);
 
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
-    ttnn::Tensor weight_tensor_on_device = weight_tensor;
-    std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
+    std::optional<ttnn::Tensor> bias_tensor_on_device = std::nullopt;
     if (!weight_is_on_device) {
+        log_info("Preparing weights for conv_transpose2d");
         // prepare weights in desired layout and move to device
-        tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
+        tie(weight_tensor, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
             transform_weights_for_conv_transpose2d(weight_tensor, mirror_kernel),
             bias_tensor,
             conv_config.input_channels_alignment,
@@ -296,6 +297,9 @@ Result conv_transpose2d(
             opt_conv_op_block_config.act_block_h_ntiles,
             input_width,
             bias_tensor.has_value());
+        if (bias_tensor_on_device.has_value()) {
+            bias_tensor->get() = bias_tensor_on_device.value();
+        }
     }
     if (mm_conv) {
         input_tensor_post_tm = ttnn::to_layout(
@@ -316,8 +320,8 @@ Result conv_transpose2d(
         }
         Tensor matmul_output = ttnn::linear(
             input_tensor_post_tm,
-            weight_tensor_on_device,
-            bias_tensor_on_device,
+            weight_tensor,
+            bias_tensor.has_value() ? std::optional<ttnn::Tensor>(bias_tensor->get()) : std::nullopt,
             false,
             false,
             mm_output_memory_config,
@@ -328,13 +332,13 @@ Result conv_transpose2d(
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
 
-        return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        return {matmul_output, output_height, output_width, weight_tensor, bias_tensor};
     }
     // call conv micro op
     auto conv_output = optimized_conv_new(
         halo_output,
-        weight_tensor_on_device,
-        bias_tensor_on_device,
+        weight_tensor,
+        bias_tensor.has_value() ? std::optional<ttnn::Tensor>(bias_tensor->get()) : std::nullopt,
         sliding_window_config,
         out_channels,
         groups,
@@ -352,7 +356,7 @@ Result conv_transpose2d(
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
     }
-    return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+    return {conv_output, output_height, output_width, weight_tensor, bias_tensor};
 }
 
 Result ConvTranpose2dOperation::invoke(

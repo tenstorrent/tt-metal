@@ -209,7 +209,7 @@ class resnet50Bottleneck:
         # conv1 is 1x1 conv
         # print("Running conv1")
         module_input_height = input_height
-        out, [input_height, input_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
+        out, [input_height, input_width] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv1_weight_tensor,
             in_channels=self.conv1_input_channels,
