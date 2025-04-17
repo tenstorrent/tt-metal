@@ -67,8 +67,7 @@ inline void dprint_data_format(uint8_t data_format) {
 
 // Calculates dest row address based on logical row identifiers (tile_id, face_id, row_id)
 // and dest configuration.
-inline uint16_t get_dest_row_id(
-    uint16_t tile_id, uint16_t face_id, uint16_t row_id, bool is_float32, bool is_remap, bool is_swizzle) {
+inline uint16_t get_dest_row_id(uint16_t tile_id, uint16_t face_id, uint16_t row_id, bool is_float32) {
     uint16_t row = NUM_ROWS_PER_TILE * tile_id + NUM_ROWS_PER_FACE * face_id + row_id;
 
     #ifdef ARCH_WORMHOLE
@@ -156,20 +155,13 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 #endif
 
         bool is_float32 = data_format_reg_field_value == (uint32_t)DataFormat::Float32;
-        bool is_swizzled = false;
-        bool is_remapped = false;
-
-#ifdef ARCH_BLACKHOLE
-        is_remapped = READ_HW_CFG_0_REG_FIELD(DEST_ACCESS_CFG_remap_addrs) == 1;
-        is_swizzled = READ_HW_CFG_0_REG_FIELD(DEST_ACCESS_CFG_swizzle_32b) == 1;
-#endif
         // Print the contents
         DPRINT << FIXED() << SETW(WIDTH) << SETPRECISION(PRECISION);
         DPRINT << "Tile ID = " << tile_id << ENDL();
 
         for (int face_id = 0; face_id < NUM_FACES_PER_TILE; ++face_id) {
             for (int row_id = 0; row_id < NUM_ROWS_PER_FACE; ++row_id) {
-                uint16_t row = get_dest_row_id(tile_id, face_id, row_id, is_float32, is_remapped, is_swizzled);
+                uint16_t row = get_dest_row_id(tile_id, face_id, row_id, is_float32);
                 if (is_float32) {
                     dprint_tensix_dest_reg_row_float32(row);
                 } else {
