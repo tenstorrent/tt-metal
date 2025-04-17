@@ -139,9 +139,9 @@ def run_bloom_qa_inference(
         parameters=parameters,
         tokenizer=tokenizer,
         logits_processor=logits_processor,
+        attention_mask=attention_mask,
         num_heads=num_heads,
         num_tokens_to_decode=num_tokens_to_decode,
-        attention_mask=attention_mask,
         device=device,
     )
 
@@ -225,7 +225,6 @@ def run_bloom_qa_inference_squad(
 
     input_ids = bloom_inputs["input_ids"]
     attention_mask = bloom_inputs["attention_mask"]
-
     logits_processor = generation_utils.get_logits_processor(input_ids, config)
 
     generated_ids = generate(
@@ -285,7 +284,7 @@ def test_demo(
     device,
     use_program_cache,
     reset_seeds,
-    batch_size=8,
+    batch_size=4,
     num_tokens_to_decode=10,
 ):
     disable_persistent_kernel_cache()
@@ -314,7 +313,7 @@ def test_demo_squadv2(
     device,
     use_program_cache,
     reset_seeds,
-    batch_size=8,
+    batch_size=4,
     num_tokens_to_decode=10,
 ):
     disable_persistent_kernel_cache()
