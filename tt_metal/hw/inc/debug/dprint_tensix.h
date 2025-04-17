@@ -119,9 +119,8 @@ inline void dprint_tensix_dest_reg_row_float32(uint16_t row) {
 
     constexpr uint32_t RISCV_DEST_START_ADDR = 0xFFBD8000;
     uint32_t volatile    *dest_fp32  = (uint32_t volatile   *)RISCV_DEST_START_ADDR;
-    for (int i = 0; i < 8; ++i) {
-        rd_data[2 * i] = dest_fp32[2 * i + row * 16];
-        rd_data[2 * i + 1] = dest_fp32[2 * i + 1 + row * 16];
+    for (int i = 0; i < 16; ++i) {
+        rd_data[i] = dest_fp32[i + row * 16];
     }
 
 #endif
