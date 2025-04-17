@@ -26,6 +26,7 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.demos.qwen25_vl.tt.rope import RotarySetup
 
 
 def create_tt_model(
@@ -107,9 +108,22 @@ def create_tt_model(
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/demos/qwen25_vl/demo/sample_prompts/demo.json",  # single qwen demo prompt
             True,  # instruct mode
-            1,  # repeat_batches
+            1,  # repeat_batches to simulate multiple users (batch_size=1) with the same prompt
             4096,  # max_seq_len, allow for image tokens
-            1,  # batch_size
+            1,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users with the same prompt
+            8192,  # max_seq_len, allow for image tokens
+            2,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
@@ -120,6 +134,7 @@ def create_tt_model(
     ],
     ids=[
         "batch-1",  # latency
+        "batch-2",  # multi-user
     ],
 )
 @pytest.mark.parametrize(
@@ -232,6 +247,19 @@ def test_demo(
         dtype=ttnn.bfloat8_b,
         use_paged_kv_cache=paged_attention,
     )
+    # todo)) { clean up the model
+    # [INFO] One key aspect that Qwen's RoPE is different from Llama's RoPE is that it uses a different embedding for different users,
+    # while Llama's RoPE uses a single embedding for all users. This is because Qwen's RoPE output depends on the positions of the image tokens relatively the text tokens and different users may have different image tokens and/or text tokens.
+    model.rope_setup = RotarySetup(
+        mesh_device,
+        model_args.max_batch_size,
+        model_args.head_dim,
+        model_args.max_seq_len,
+        model_args.rope_theta,
+        model_args.rope_scaling_factor,
+        model_args.orig_context_len,
+    )
+    # } todo))
 
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
@@ -256,13 +284,14 @@ def test_demo(
         text = processor.apply_chat_template(input_prompts, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(input_prompts)
         inputs = processor(
-            text=[text],
+            text=[text] if not isinstance(text, list) else text,
             images=image_inputs,
             videos=video_inputs,
             padding=True,
             return_tensors="pt",
         )
         # Vision prefill
+        logger.info(f"Vision model prefill batch {batch_idx}")
         image_embeds = (
             visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
             if "pixel_values" in inputs
@@ -270,6 +299,7 @@ def test_demo(
         )
 
         # Prepare text + vision inputs for decoder model
+        logger.info(f"Prepare text + vision inputs for decoder model batch {batch_idx}")
         # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
         text_embeds = reference_model.model.embed_tokens(inputs.input_ids)
         input_embeds = merge_vision_tokens(inputs.input_ids, text_embeds, image_embeds, reference_model.config)

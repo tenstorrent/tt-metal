@@ -27,7 +27,7 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharded inputs");
     TT_FATAL(weights.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharded weights");
 
-    TT_FATAL(weights.get_padded_shape()[0] == 1 && weights.get_padded_shape()[1] == 1, "First two dimensions for the weights must be 1");
+    TT_FATAL(weights.get_padded_shape()[0] == 1 && weights.get_padded_shape()[1] == 1, "First two dimensions for the weights must be 1 but got {} and {}", weights.get_padded_shape()[0], weights.get_padded_shape()[1]);
     if (this->tilized) {
         TT_FATAL(a.get_padded_shape()[-1] % TILE_HEIGHT == 0, "Input tensor width {} must be a multiple of tile height {} to have the output tensor tilized", a.get_padded_shape()[-1], TILE_HEIGHT);
         TT_FATAL(weights.get_padded_shape()[-1] % TILE_WIDTH == 0, "Number of columns in table {} must be factor of tile width {}", weights.get_padded_shape()[-1], TILE_WIDTH);

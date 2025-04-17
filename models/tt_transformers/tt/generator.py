@@ -166,7 +166,7 @@ class Generator:
 
             tt_logits = self.model.ttnn_prefill_forward(
                 prefill_input,
-                rot_mats=rot_mats_prefill,
+                rot_mats=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill],
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,

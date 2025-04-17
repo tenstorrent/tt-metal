@@ -102,7 +102,9 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
         TT_FATAL(
             cos.get_logical_shape()[0] == 1 && cos.get_logical_shape()[1] == 1 &&
                 cos.get_logical_shape()[-1] == head_dim,
-            "Cos dims must match input dims");
+            "Cos dims must match input dims: cos.shape = {}, head_dim = {}",
+            cos.get_logical_shape(),
+            head_dim);
         TT_FATAL(
             input_tensor.memory_config().memory_layout == sin.memory_config().memory_layout,
             "Input tensor and sin tensor must have same memory layout");
