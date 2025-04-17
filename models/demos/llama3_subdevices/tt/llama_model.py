@@ -335,7 +335,9 @@ class TtTransformer(LightweightModule):
         )
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
-        tt_out = ttnn.argmax(tt_logits, dim=3, use_multicore=True)  # TODO Add multicore support to batch > 1
+        tt_out = ttnn.argmax(
+            tt_logits, dim=3, keepdim=True, use_multicore=True
+        )  # TODO Add multicore support to batch > 1
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
 
@@ -356,7 +358,7 @@ class TtTransformer(LightweightModule):
                     dims=(3, 1) if self.args.is_galaxy else (1, -1),
                     mesh_shape=self.args.cluster_shape,
                 ),
-            )[0, 0, 0, :B]
+            )[0, 0, :B, 0]
             return tt_out
 
         if self.args.num_devices > 1:

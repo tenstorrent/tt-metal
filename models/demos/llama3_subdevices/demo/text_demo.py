@@ -196,13 +196,13 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            128 * 1024,  # max_seq_len
-            1,  # batch_size
+            16 * 1024,  # max_seq_len
+            32,  # batch_size
             200,  # max_generated_tokens
-            True,  # paged_attention
+            False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
@@ -267,7 +267,7 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 25000000,
+            "trace_region_size": 62000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1344544,
@@ -304,9 +304,6 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
-
-    if is_ci_env and (optimizations == LlamaOptimizations.accuracy or not ci_only):
-        pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [32]:
