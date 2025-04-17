@@ -36,7 +36,7 @@
 
 #include "assert.hpp"
 #include "buffer.hpp"
-#include "buffer_types.hpp"
+#include "buffer_constants.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "dev_msgs.h"

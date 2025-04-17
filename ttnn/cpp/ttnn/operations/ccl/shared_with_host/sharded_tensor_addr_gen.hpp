@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <array>
 #include <bit>
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 
 /*
  *    ------   ATTENTION  ATTENTION  ATTENTION  ATTENTION  ATTENTION   ------
