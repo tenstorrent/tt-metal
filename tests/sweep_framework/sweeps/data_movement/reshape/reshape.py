@@ -21,7 +21,6 @@ TIMEOUT = 360
 random.seed(0)
 
 
-@lru_cache(maxsize=5000)
 def get_factors(i, s):
     factors = []
     for j in range(s, i + 1, s):
@@ -30,7 +29,7 @@ def get_factors(i, s):
     return factors
 
 
-# @lru_cache(maxsize=5000)
+@lru_cache(maxsize=10000)
 def gen_reshape_shape(input_shape, step=1):
     volume = 1
     for x in input_shape:
@@ -108,7 +107,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    rehape_shape = gen_reshape_shape(input_shape)
+    rehape_shape = gen_reshape_shape(tuple(input_shape))
     num_tries = 50
     i = 0
 
