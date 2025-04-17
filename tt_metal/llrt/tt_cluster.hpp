@@ -26,6 +26,7 @@
 #include "assert.hpp"
 #include "core_coord.hpp"
 #include "llrt/hal.hpp"
+#include "llrt/rtoptions.hpp"
 #include <umd/device/cluster.h>
 #include <umd/device/device_api_metal.h>
 #include <umd/device/tt_cluster_descriptor.h>
@@ -86,7 +87,7 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    Cluster();
+    Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
     ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
@@ -396,6 +397,11 @@ private:
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 
     uint32_t routing_info_addr_ = 0;
+
+    // Cluster depends on RunTimeOptions and Hal to set up, but they're all initialized/accessed by MetalContext, so
+    // keep a local reference for init.
+    const llrt::RunTimeOptions& rtoptions_;
+    const tt_metal::Hal& hal_;
 };
 
 }  // namespace tt

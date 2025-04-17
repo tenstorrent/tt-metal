@@ -11,7 +11,6 @@
 
 #include "core_config.h"
 #include "eth_l1_address_map.h"
-#include "hal_asserts.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -94,7 +93,14 @@ HalCoreInfoType create_active_eth_mem_map() {
         processor_classes[processor_class_idx] = processor_types;
     }
 
-    return {HalProgrammableCoreType::ACTIVE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
+    return {
+        HalProgrammableCoreType::ACTIVE_ETH,
+        CoreType::ETH,
+        processor_classes,
+        mem_map_bases,
+        mem_map_sizes,
+        false /*supports_cbs*/,
+        false /*supports_receiving_multicast_cmds*/};
 }
 
 }  // namespace tt::tt_metal::wormhole

@@ -36,7 +36,7 @@
 #include "llrt.hpp"
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_memory.h>
 #include "tt_metal/jit_build/build_env_manager.hpp"
@@ -249,8 +249,8 @@ bool send_over_eth(
         receiver_device->id(), receiver_core, args_1, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
 
     // TODO: this should be updated to use kernel api
-    uint32_t active_eth_index =
-        tt_metal::hal_ref.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    uint32_t active_eth_index = tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     auto sender_firmware_path = tt_metal::BuildEnvManager::get_instance()
                                     .get_firmware_build_state(sender_device->build_id(), active_eth_index, 0, 0)
                                     .get_target_out_path("");

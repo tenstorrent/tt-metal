@@ -20,7 +20,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/fabric_edm_packet_header.hpp>
@@ -34,7 +34,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 #include <tt-metalium/tile.hpp>

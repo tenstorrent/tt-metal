@@ -12,7 +12,7 @@
 
 #include "assert.hpp"
 #include "shape_base.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 

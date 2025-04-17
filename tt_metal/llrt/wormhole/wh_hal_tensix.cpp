@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
-#include <string>
 #include <vector>
 
 #include "assert.hpp"
@@ -122,7 +121,14 @@ HalCoreInfoType create_tensix_mem_map() {
         processor_classes[processor_class_idx] = processor_types;
     }
 
-    return {HalProgrammableCoreType::TENSIX, CoreType::WORKER, processor_classes, mem_map_bases, mem_map_sizes, true};
+    return {
+        HalProgrammableCoreType::TENSIX,
+        CoreType::WORKER,
+        processor_classes,
+        mem_map_bases,
+        mem_map_sizes,
+        true /*supports_cbs*/,
+        true /*supports_receiving_multicast_cmds*/};
 }
 
 }  // namespace tt::tt_metal::wormhole

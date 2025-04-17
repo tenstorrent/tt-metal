@@ -13,13 +13,13 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "llrt.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -190,7 +190,7 @@ TEST_F(DeviceFixtureWithL1Small, TestWidthShardReadWrite) {
 }
 
 TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite) {
-    if (tt::llrt::RunTimeOptions::get_instance().get_simulator_enabled()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << fmt::format("Skipping {} because it is not supported in simulator", __func__);
     }
 

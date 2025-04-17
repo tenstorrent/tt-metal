@@ -19,14 +19,14 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape2d.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tile.hpp>
 #include "impl/context/metal_context.hpp"

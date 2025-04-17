@@ -18,7 +18,7 @@
 
 #include "assert.hpp"
 #include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
@@ -29,7 +29,7 @@
 #include "mesh_workload.hpp"
 #include "tt-metalium/program.hpp"
 #include "shape2d.hpp"
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "trace_buffer.hpp"
 #include "tt_metal/common/thread_pool.hpp"
