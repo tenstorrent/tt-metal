@@ -361,8 +361,6 @@ private:
     }
 
 public:
-    AnyIterator() = delete;
-
     AnyIterator(const AnyIterator& other) { other.iterator_adaptor().uninitialized_copy_to(bytes); }
 
     AnyIterator(AnyIterator&& other) noexcept { other.iterator_adaptor().uninitialized_move_to(bytes); }
@@ -457,6 +455,9 @@ private:
         : std::enable_if<std::is_base_of_v<std::forward_iterator_tag, iterator_category>, enable_if_forward> {};
 
 public:
+    template <class TEnable = enable_if_forward, class = typename TEnable::type>
+    AnyIterator() noexcept : AnyIterator(static_cast<std::add_pointer_t<reference>>(nullptr)) {}
+
     template <class TEnable = enable_if_forward, class = typename TEnable::type>
     [[nodiscard]] AnyIterator operator++(int) {
         static_assert(std::is_same_v<TEnable, enable_if_forward>);
