@@ -29,7 +29,6 @@
 #include "dispatch/host_runtime_commands.hpp"
 #include "dprint_server.hpp"
 #include "event/dispatch.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include "program_device_map.hpp"
@@ -313,8 +312,9 @@ void HWCommandQueue::enqueue_read_from_core_l1(
 
     const HalProgrammableCoreType core_type = this->device_->get_programmable_core_type(virtual_core);
     TT_FATAL(
-        address + size_bytes <= hal_ref.get_dev_addr(core_type, HalL1MemAddrType::BASE) +
-                                    hal_ref.get_dev_size(core_type, HalL1MemAddrType::BASE),
+        address + size_bytes <=
+            tt::tt_metal::MetalContext::instance().hal().get_dev_addr(core_type, HalL1MemAddrType::BASE) +
+                tt::tt_metal::MetalContext::instance().hal().get_dev_size(core_type, HalL1MemAddrType::BASE),
         "Region to read from in L1 is out of bounds");
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
@@ -352,8 +352,9 @@ void HWCommandQueue::enqueue_write_to_core_l1(
 
     const HalProgrammableCoreType core_type = this->device_->get_programmable_core_type(virtual_core);
     TT_FATAL(
-        address + size_bytes <= hal_ref.get_dev_addr(core_type, HalL1MemAddrType::BASE) +
-                                    hal_ref.get_dev_size(core_type, HalL1MemAddrType::BASE),
+        address + size_bytes <=
+            tt::tt_metal::MetalContext::instance().hal().get_dev_addr(core_type, HalL1MemAddrType::BASE) +
+                tt::tt_metal::MetalContext::instance().hal().get_dev_size(core_type, HalL1MemAddrType::BASE),
         "Region to write to in L1 is out of bounds");
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);

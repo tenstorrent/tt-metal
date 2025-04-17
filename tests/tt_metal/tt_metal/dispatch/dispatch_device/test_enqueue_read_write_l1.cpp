@@ -16,8 +16,8 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicReadWriteL1) {
     const std::vector<uint32_t>& src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     const CoreCoord logical_core = {0, 0};
-    const DeviceAddr address =
-        hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
@@ -39,8 +39,8 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicReadL1) {
     const std::vector<uint32_t>& src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     const CoreCoord logical_core = {0, 0};
-    const DeviceAddr address =
-        hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
@@ -61,8 +61,8 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicWriteL1) {
     const std::vector<uint32_t>& src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     const CoreCoord logical_core = {0, 0};
-    const DeviceAddr address =
-        hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
@@ -83,8 +83,9 @@ TEST_F(CommandQueueSingleCardFixture, TestInvalidReadWriteAddressL1) {
     const std::vector<uint32_t>& src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     const CoreCoord logical_core = {0, 0};
-    const DeviceAddr address = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
-                               hal_ref.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) + 256;
+    const DeviceAddr address =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) + 256;
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
@@ -102,8 +103,8 @@ TEST_F(CommandQueueSingleCardFixture, TestInvalidReadWriteAddressL1) {
 }
 
 TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleTensixCoresL1) {
-    const DeviceAddr address =
-        hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t num_elements = 1000;
     const std::vector<uint32_t>& src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
@@ -139,8 +140,8 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleTensixCoresL1) {
 
 TEST_F(CommandQueueSingleCardFixture, TestReadWriteZeroElementsL1) {
     const CoreCoord logical_core = {0, 0};
-    const DeviceAddr address =
-        hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const std::vector<uint32_t>& src_data = {};
 
     for (IDevice* device : this->devices_) {
@@ -158,9 +159,10 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteZeroElementsL1) {
 
 TEST_F(CommandQueueSingleCardFixture, TestReadWriteEntireL1) {
     const CoreCoord logical_core = {0, 0};
-    const DeviceAddr address =
-        hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    const uint32_t size = hal_ref.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t size = MetalContext::instance().hal().get_dev_size(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t num_elements = size / sizeof(uint32_t);
     const std::vector<uint32_t>& src_data = generate_arange_vector(size);
 

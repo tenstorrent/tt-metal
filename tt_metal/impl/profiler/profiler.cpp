@@ -13,14 +13,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <functional>
 #include <iostream>
 
 #include "assert.hpp"
 #include "command_queue.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "llrt.hpp"
@@ -86,7 +84,7 @@ void DeviceProfiler::readRiscProfilerResults(
     const bool USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
     if (USE_FAST_DISPATCH) {
         if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
-            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
                 control_buffer = tt::llrt::read_hex_vec_from_core(
                     device_id,
                     worker_core,
@@ -300,7 +298,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
     if (USE_FAST_DISPATCH) {
         if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
-            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
                 tt::llrt::write_hex_vec_to_core(
                     device_id,
                     worker_core,
