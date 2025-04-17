@@ -601,7 +601,7 @@ void Cluster::write_core(
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, "LARGE_WRITE_TLB");
+    this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
@@ -617,7 +617,7 @@ void Cluster::read_core(
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes, "LARGE_READ_TLB");
+    this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
 }
 
 void Cluster::read_core(
@@ -635,7 +635,7 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
         tt::watcher_sanitize_host_noc_write(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {target.x, target.y}, addr, size_in_bytes);
     }
     tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
-    this->driver_->write_to_device(mem_ptr, size_in_bytes, target.chip, target_coord, addr, "REG_TLB");
+    this->driver_->write_to_device_reg(mem_ptr, size_in_bytes, target.chip, target_coord, addr);
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
@@ -650,7 +650,7 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
         tt::watcher_sanitize_host_noc_read(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {target.x, target.y}, addr, size_in_bytes);
     }
     tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
-    this->driver_->read_from_device(mem_ptr, target.chip, target_coord, addr, size_in_bytes, "REG_TLB");
+    this->driver_->read_from_device_reg(mem_ptr, target.chip, target_coord, addr, size_in_bytes);
 }
 
 void Cluster::write_sysmem(
@@ -692,7 +692,7 @@ void Cluster::dram_barrier(chip_id_t chip_id) const {
     for (uint32_t channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
         dram_channels.insert(channel);
     }
-    this->driver_->dram_membar(chip_id, "LARGE_WRITE_TLB", dram_channels);
+    this->driver_->dram_membar(chip_id, dram_channels);
 }
 
 // L1 barrier is used to implement host-to-device synchronization and should be used when all previous writes to L1 need
@@ -701,7 +701,7 @@ void Cluster::dram_barrier(chip_id_t chip_id) const {
 // binaries, metadata, and data to compute on are committed before launching kernels
 void Cluster::l1_barrier(chip_id_t chip_id) const {
     // Sets and resets L1 barrier of all tensix cores and ethernet cores
-    this->driver_->l1_membar(chip_id, "LARGE_WRITE_TLB");
+    this->driver_->l1_membar(chip_id);
 }
 
 uint32_t Cluster::get_num_host_channels(chip_id_t device_id) const {
