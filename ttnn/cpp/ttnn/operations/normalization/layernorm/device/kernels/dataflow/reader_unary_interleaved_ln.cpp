@@ -48,7 +48,10 @@ void kernel_main() {
     constexpr uint32_t blk = get_compile_time_arg_val(4);  // needed for correctness of softmax/LN kernels
 
     const InterleavedAddrGenFast<src0_is_dram> src_a = {
-        .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
+        .bank_base_address = src_addr,
+        .page_size = get_tile_size(cb_id_in0),
+        .data_format = get_dataformat(cb_id_in0),
+    };
 #ifdef FUSE_GAMMA
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
     const DataFormat gamma_data_format = get_dataformat(cb_id_gamma);
@@ -108,6 +111,6 @@ void kernel_main() {
             }  // wt loop
         }
 #endif
-        offs += Wt;
+        offs += Wt / 2;
     }  // ncht loop
 }

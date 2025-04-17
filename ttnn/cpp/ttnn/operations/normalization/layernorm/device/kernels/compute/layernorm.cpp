@@ -69,7 +69,6 @@ void MAIN {
 #endif
 
     cb_wait_front(cb_scaler, 1);  // comes from the reader
-    UNPACK(tt::compute::common::print_full_tile(cb_scaler));
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
     constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
@@ -127,6 +126,7 @@ void MAIN {
         cb_reserve_back(cb_ex, onetile);
         //        reduce_init_delta<false>(cb_x, cb_scaler, cb_ex);
         mm_init(cb_x, cb_scaler, cb_ex);
+        UNPACK(tt::compute::common::print_full_tile(cb_x, 0));
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
@@ -150,6 +150,7 @@ void MAIN {
             reconfig_data_format(cb_x, cb_ex);
         }
         cb_wait_front(cb_ex, 1);  // should have 1 tile
+                                  // UNPACK(tt::compute::common::print_full_tile(cb_ex));
         cb_reserve_back(cb_xmm, Wt);
         sub_bcast_cols_init_short(cb_x, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
@@ -203,6 +204,7 @@ void MAIN {
         mm_init(cb_xmm2, cb_scaler, cb_ex2);
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
+        reconfig_data_format(cb_xmm, cb_scaler);
         // cb_wait_front(cb_xmm, Wt);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // reduce

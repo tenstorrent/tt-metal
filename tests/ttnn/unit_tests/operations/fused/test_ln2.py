@@ -39,6 +39,13 @@ def run_layer_norm_tests(
 
     try:
         ref_value = aten.native_layer_norm.default(x, [768], weight, bias, epsilon)[0]
+        print(input_shape[0])
+        print(x.shape)
+        torch.set_printoptions(threshold=float("inf"))
+
+        print(x[0, :32, :32])
+        val = torch.mean(x, dim=-1, keepdim=True)
+        # print(val)
 
         tt_x = ttnn.from_torch(x, dtype=dtype[0], layout=dlayout[0], device=device)
         tt_weight = ttnn.from_torch(weight, dtype=dtype[0], layout=dlayout[0], device=device)
@@ -55,7 +62,7 @@ def run_layer_norm_tests(
 
     assert len(tt_result.shape) == len(ref_value.shape)
     assert tt_result.shape == ref_value.shape
-    # assert_with_pcc(ref_value, tt_result, 0.999)
+    assert_with_pcc(ref_value, tt_result, 0.999)
     pcc_passed, pcc_message = comp_pcc(ref_value, tt_result, 0.9998)
     print(pcc_passed)
 
@@ -63,9 +70,9 @@ def run_layer_norm_tests(
 test_sweep_args = [
     (
         [
-            "$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_input.csv",
-            "$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_weight.csv",
-            "$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_bias.csv",
+            "/localdev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_input.csv",
+            "/localdev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_weight.csv",
+            "/localdev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln1_bias.csv",
         ],
         [(1, 196, 768), (768), (768)],
         [ttnn.bfloat16],
@@ -73,13 +80,13 @@ test_sweep_args = [
         1e-6,
     ),
 ]
-for i in range(3, 25):
+for i in range(3, 4):
     test_sweep_args.append(
         (
             [
-                f"$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_input.csv",
-                f"$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_weight.csv",
-                f"$TT_METAL_HOME/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_bias.csv",
+                f"/localdev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_input.csv",
+                f"/localdev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_weight.csv",
+                f"/localdev/vsuresh/tt-metal/tests/ttnn/unit_tests/operations/fused/inputs/mixer_ln{i}_bias.csv",
             ],
             [(1, 196, 768), (768), (768)],
             [ttnn.bfloat16],
