@@ -655,7 +655,6 @@ def tt_sharded_distributed_rmsnorm(
     ln_sharded_progcfg,
     ln_sharded_stats_memcfg,
     tt_ccl=None,
-    output_mem_config=None,
 ):
     # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
@@ -691,7 +690,6 @@ def tt_sharded_distributed_rmsnorm(
         epsilon=epsilon,
         weight=gamma,
         stats=tt_stats,
-        memory_config=output_mem_config,
         is_pre=False,
     )
     ttnn.deallocate(tt_stats)

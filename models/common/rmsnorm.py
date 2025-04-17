@@ -49,7 +49,6 @@ class RMSNorm(LightweightModule):
         eps: float = 1e-05,
         sharded_program_config=None,
         sharded_output_config=None,
-        output_mem_config=None,
         ccl_topology=ttnn.Topology.Ring,
     ):
         super().__init__()
@@ -99,7 +98,6 @@ class RMSNorm(LightweightModule):
 
         self.sharded_output_config = sharded_output_config
         self.sharded_program_config = sharded_program_config
-        self.output_mem_config = output_mem_config
 
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,

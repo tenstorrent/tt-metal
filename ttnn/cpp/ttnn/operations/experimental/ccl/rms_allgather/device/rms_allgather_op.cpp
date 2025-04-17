@@ -388,10 +388,7 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program(
                         program_config.compute_with_storage_grid_size,
                         program_config.subblock_w,
                         program_config.block_w,
-                        this->compute_kernel_config,
-                        this->semaphore,
-                        this->ring_size,
-                        this->num_links);
+                        this->compute_kernel_config);
                 }
             } else {
                 TT_FATAL(false, "Program Config does not match");
