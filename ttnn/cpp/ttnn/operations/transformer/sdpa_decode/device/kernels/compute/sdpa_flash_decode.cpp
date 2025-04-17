@@ -100,6 +100,7 @@ void MAIN {
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
+    DPRINT << "H" << ENDL();
     // idle core
     // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates
     // an idle_core
@@ -116,13 +117,16 @@ void MAIN {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
+            // DPRINT << "H1" << ENDL();
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
             cb_wait_front(cb_index_id, 1);
+            // DPRINT << "H2" << ENDL();
             volatile uint32_t* index_addr_ptr;
             cb_get_tile(cb_index_id, 0, &index_addr_ptr);
             uint32_t cb_get_tile_offset = 4;  // Using cb_get_tile, the first 4 elements do not have the data
             cur_pos = index_addr_ptr[cb_get_tile_offset + (cur_batch / q_heads_parallel_factor)];
             cb_release_tile(cb_index_id);
+            DPRINT << cur_pos << ENDL();
         }
 
         if (cur_pos == UINT32_MAX) {
