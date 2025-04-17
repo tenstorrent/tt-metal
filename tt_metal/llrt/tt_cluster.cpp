@@ -1061,12 +1061,10 @@ void Cluster::release_ethernet_cores_for_fabric_routers() {
 
 std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(chip_id_t chip_id) const {
     std::set<tt_fabric::chan_id_t> fabric_ethernet_channels;
-    const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
-    for (const auto& [other_chip_id, eth_cores] : connected_chips) {
-        for (const auto& eth_core : eth_cores) {
-            if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
-                fabric_ethernet_channels.insert(this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core));
-            }
+    const auto& active_eth_cores = this->get_active_ethernet_cores(chip_id, false);
+    for (const auto& eth_core : active_eth_cores) {
+        if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
+            fabric_ethernet_channels.insert(this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core));
         }
     }
     return fabric_ethernet_channels;
