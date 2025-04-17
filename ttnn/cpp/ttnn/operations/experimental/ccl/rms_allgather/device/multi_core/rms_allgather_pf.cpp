@@ -620,7 +620,10 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         (std::uint32_t)ex_cb_partial2_index,
         (std::uint32_t)ex2_cb_index,
         (std::uint32_t)add_out_cb_index,
-        (std::uint32_t)ex_cb_external2_index};
+        (std::uint32_t)ex_cb_external2_index,
+        (std::uint32_t)post_reduce_sender_semaphore_id,
+        (std::uint32_t)cb_stats_reduced_index,
+        (std::uint32_t)ex_global_cb_index};
     std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -635,7 +638,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         (std::uint32_t)single_tile_size,
         (std::uint32_t)ex_cb_partial2_index,
         (std::uint32_t)ex2_cb_index,
-        (std::uint32_t)ex_cb_external2_index};
+        (std::uint32_t)ex_cb_external2_index,
+        (std::uint32_t)post_reduce_sender_semaphore_id,
+        (std::uint32_t)ex_global_cb_index};
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -650,7 +655,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         (std::uint32_t)single_tile_size,
         (std::uint32_t)ex_cb_partial2_index,
         (std::uint32_t)ex2_cb_index,
-        (std::uint32_t)ex_cb_external2_index};
+        (std::uint32_t)ex_cb_external2_index,
+        (std::uint32_t)post_reduce_sender_semaphore_id,
+        (std::uint32_t)ex_global_cb_index};
 
     std::vector<uint32_t> writer_compile_time_args = {
         1,  // Gets overwritten in not all to all workers
