@@ -163,4 +163,4 @@ class Attention:
             bias=self.out_bias,
         )
 
-        return hidden_states + input_tensor
+        return ttnn.add(hidden_states, input_tensor)

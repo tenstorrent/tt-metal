@@ -19,8 +19,8 @@ class ResnetBlock:
         out_channels,
         norm1_num_blocks=1,
         norm2_num_blocks=1,
-        conv1_channel_split_factors=(1, 1),
-        conv2_channel_split_factors=(1, 1),
+        conv1_in_channel_split_factor=1,
+        conv2_in_channel_split_factor=1,
     ):
         self.device = device
         self.in_channels = in_channels
@@ -50,8 +50,7 @@ class ResnetBlock:
             input_height,
             input_width,
             out_channels,
-            conv1_channel_split_factors[0],
-            conv1_channel_split_factors[1],
+            conv1_in_channel_split_factor,
         )
 
         # groupnorm 2
@@ -77,8 +76,7 @@ class ResnetBlock:
             input_height,
             input_width,
             out_channels,
-            conv2_channel_split_factors[0],
-            conv2_channel_split_factors[1],
+            conv2_in_channel_split_factor,
         )
 
         # conv shortcut
@@ -91,8 +89,7 @@ class ResnetBlock:
                 input_height,
                 input_width,
                 out_channels,
-                conv1_channel_split_factors[0],
-                conv1_channel_split_factors[1],
+                conv1_in_channel_split_factor,
                 kernel_size=1,
                 padding=0,
             )

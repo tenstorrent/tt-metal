@@ -17,7 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([1, 512, 64, 64]),
     ],
 )
-def test_upsample(
+def test_vae_attention(
     device,
     input_shape,
     use_program_cache,
