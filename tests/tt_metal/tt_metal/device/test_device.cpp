@@ -276,17 +276,17 @@ TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     EXPECT_TRUE(device->is_mmio_capable());
     CoreCoord logical_core(0, 0);
 
-    uint32_t base_l1_src_address =
-        device->allocator()->get_base_allocator_addr(HalMemType::L1) + hal_ref.get_alignment(HalMemType::L1);
+    uint32_t base_l1_src_address = device->allocator()->get_base_allocator_addr(HalMemType::L1) +
+                                   MetalContext::instance().hal().get_alignment(HalMemType::L1);
     // This is a slow dispatch test dispatch core type is needed to query DispatchMemMap
     uint32_t base_pcie_dst_address =
         DispatchMemMap::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
-        hal_ref.get_alignment(HalMemType::L1);
+        MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     uint32_t size_bytes = 2048 * 128;
     std::vector<uint32_t> src = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));
-    EXPECT_EQ(hal_ref.get_alignment(HalMemType::L1), 16);
-    uint32_t num_16b_writes = size_bytes / hal_ref.get_alignment(HalMemType::L1);
+    EXPECT_EQ(MetalContext::instance().hal().get_alignment(HalMemType::L1), 16);
+    uint32_t num_16b_writes = size_bytes / MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
 

@@ -102,8 +102,8 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    bool input_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
-    bool output_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? true : false;
+    bool input_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool output_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(input_is_dram),

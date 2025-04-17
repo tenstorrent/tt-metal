@@ -23,7 +23,6 @@
 
 #include "distributed.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
@@ -78,7 +77,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     };
     cb_buffer_ = distributed::AnyBuffer::create(cb_buffer_shard_config);
 
-    auto l1_alignment = hal_ref.get_alignment(HalMemType::L1);
+    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     // is_sender, receiver_val, fifo_start_addr, fifo_size, fifo_ptr, noc_xy coords, and pages_sent
     constexpr uint32_t num_config_elements = 7;
     uint32_t num_noc_xy_words = 2 * max_num_receivers_per_sender;

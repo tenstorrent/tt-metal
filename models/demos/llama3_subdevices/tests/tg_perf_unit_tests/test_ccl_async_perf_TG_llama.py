@@ -44,22 +44,23 @@ def test_ag_tg_llama_perf(
     profiler.end("run")
 
     # Get the measured performance
-    measured_min_us = results[cols[0]]["MIN"] / 1000
-    measured_max_us = results[cols[0]]["MAX"] / 1000
-    measured_avg_us = results[cols[0]]["AVG"] / 1000
-    measured_std_us = results[cols[0]]["STD"] / 1000
+    measured_min = results[cols[0]]["MIN"]
+    measured_max = results[cols[0]]["MAX"]
+    measured_avg = results[cols[0]]["AVG"]
+    measured_std = results[cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
 
     # Save the measurement
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ag_type}-min-us", measured_min_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ag_type}-max-us", measured_max_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ag_type}-avg-us", measured_avg_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ag_type}-std-us", measured_std_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ag_type}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ag_type}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ag_type}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ag_type}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"all_gather",
-        ml_model_name="llama70b-tg-ccl",
+        run_type=f"tg_llama_ops",
+        ml_model_name="llama70b-tg",
     )
 
     assert (
@@ -101,22 +102,23 @@ def test_ar_tg_llama_perf(
     profiler.end("run")
 
     # Get the measured performance
-    measured_min_us = results[cols[0]]["MIN"] / 1000
-    measured_max_us = results[cols[0]]["MAX"] / 1000
-    measured_avg_us = results[cols[0]]["AVG"] / 1000
-    measured_std_us = results[cols[0]]["STD"] / 1000
+    measured_min = results[cols[0]]["MIN"]
+    measured_max = results[cols[0]]["MAX"]
+    measured_avg = results[cols[0]]["AVG"]
+    measured_std = results[cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
 
     # Save the measurement
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_reduce-{ar_type}-min-us", measured_min_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_reduce-{ar_type}-max-us", measured_max_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_reduce-{ar_type}-avg-us", measured_avg_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_reduce-{ar_type}-std-us", measured_std_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ar_type}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ar_type}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ar_type}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-{ar_type}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"all_reduce",
-        ml_model_name="llama70b-tg-ccl",
+        run_type=f"tg_llama_ops",
+        ml_model_name="llama70b-tg",
     )
 
     assert (
@@ -153,22 +155,23 @@ def test_rms_perf(
     profiler.end("run")
 
     # Get the measured performance
-    measured_min_us = results[cols[0]]["MIN"] / 1000
-    measured_max_us = results[cols[0]]["MAX"] / 1000
-    measured_avg_us = results[cols[0]]["AVG"] / 1000
-    measured_std_us = results[cols[0]]["STD"] / 1000
+    measured_min = results[cols[0]]["MIN"]
+    measured_max = results[cols[0]]["MAX"]
+    measured_avg = results[cols[0]]["AVG"]
+    measured_std = results[cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
 
     # Save the measurement
-    benchmark_data.add_measurement(profiler, 0, step_name, f"rms-min-us", measured_min_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"rms-max-us", measured_max_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"rms-avg-us", measured_avg_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"rms-std-us", measured_std_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"rms_test",
-        ml_model_name="llama70b-tg-ccl",
+        run_type=f"tg_llama_ops",
+        ml_model_name="llama70b-tg",
     )
 
     assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
@@ -202,22 +205,23 @@ def test_fused_all_gather_concat_perf(
     profiler.end("run")
 
     # Get the measured performance
-    measured_min_us = results[cols[0]]["MIN"] / 1000
-    measured_max_us = results[cols[0]]["MAX"] / 1000
-    measured_avg_us = results[cols[0]]["AVG"] / 1000
-    measured_std_us = results[cols[0]]["STD"] / 1000
+    measured_min = results[cols[0]]["MIN"] / 1000
+    measured_max = results[cols[0]]["MAX"] / 1000
+    measured_avg = results[cols[0]]["AVG"] / 1000
+    measured_std = results[cols[0]]["STD"] / 1000
+    measured_avg_us = measured_avg / 1000
 
     logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
 
     # Save the measurement
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-concat_heads-min-us", measured_min_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-concat_heads-max-us", measured_max_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-concat_heads-avg-us", measured_avg_us)
-    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-concat_heads-std-us", measured_std_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-std", measured_std)
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"all_gather_concat_heads_fused",
-        ml_model_name="llama70b-tg-ccl",
+        run_type=f"tg_llama_ops",
+        ml_model_name="llama70b-tg",
     )
 
     assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"

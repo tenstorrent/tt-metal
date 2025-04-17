@@ -430,7 +430,7 @@ def run_qwen_demo(
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok)
         ttnn.deallocate(tt_out_rm)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
@@ -451,7 +451,7 @@ def run_qwen_demo(
             tt_out_gathered = tt_out
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True)
         ttnn.deallocate(tt_out_gathered)
-        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok)
         ttnn.deallocate(tt_out_rm)
         new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)

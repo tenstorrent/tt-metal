@@ -346,7 +346,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -388,7 +388,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilizeShortInit) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -417,7 +417,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilize) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -441,7 +441,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -469,7 +469,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilize) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {
@@ -493,7 +493,7 @@ TEST_F(DeviceFixture, TensixComputePackUntilizeShortInit) {
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
             // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
+            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
                 continue;
             }
             for (bool dst_full_sync_en : {true, false}) {

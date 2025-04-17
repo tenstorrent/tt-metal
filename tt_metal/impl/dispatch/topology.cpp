@@ -41,7 +41,6 @@
 #include "kernel_types.hpp"
 #include "metal_soc_descriptor.h"
 #include "tt-metalium/program.hpp"
-#include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -596,7 +595,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                 "N300/T3K expects devices in mmio/remote pairs.");
             std::vector<DispatchKernelNode> nodes_for_one_mmio;
             // TODO: Put this in a better place
-            if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+            if (tt_metal::MetalContext::instance().rtoptions().get_fd_fabric()) {
                 TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
                 // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
                 nodes_for_one_mmio = two_chip_arch_1cq_fabric;
@@ -998,6 +997,7 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
 void configure_2d_fabric_cores(IDevice* device) {
     std::vector<uint32_t> router_zero_buf(1, 0);
 
+    const auto& hal = MetalContext::instance().hal();
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
@@ -1010,7 +1010,7 @@ void configure_2d_fabric_cores(IDevice* device) {
         auto router_logical_core = device->logical_core_from_ethernet_core(virtual_eth_core);
         // initialize the semaphore
         auto fabric_router_sync_sem_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
         detail::WriteToDeviceL1(
             device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
     }

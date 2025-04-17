@@ -45,3 +45,5 @@ include = '^.*(ttnn|tests/scripts|tests/ttnn|tests/tt_eager/python_api_testing|t
 
 [tool.ruff]
 line-length = 120
+
+[tool.setuptools_scm]
