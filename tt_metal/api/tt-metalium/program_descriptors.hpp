@@ -19,12 +19,18 @@
 
 namespace tt::tt_metal {
 
+struct Tile;
 class Buffer;
 namespace experimental {
 class GlobalCircularBuffer;
 }  // namespace experimental
 
 struct TileDescriptor {
+    TileDescriptor() = default;
+    TileDescriptor(const Tile& tile);
+    TileDescriptor(uint32_t height, uint32_t width, bool transpose) :
+        height(height), width(width), transpose(transpose) {}
+
     uint32_t height = constants::TILE_HEIGHT;
     uint32_t width = constants::TILE_WIDTH;
     bool transpose = false;
@@ -46,7 +52,7 @@ struct CBDescriptor {
     FormatDescriptors remote_format_descriptors;
 
     Buffer* buffer = nullptr;
-    experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
+    const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
 };
 
 struct SemaphoreDescriptor {
@@ -118,6 +124,7 @@ struct ProgramDescriptor {
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
 
+    uint32_t add_semaphore(CoreRangeVector core_ranges, uint32_t initial_value, CoreType core_type = CoreType::WORKER);
     size_t calculate_program_hash() const;
 };
 
