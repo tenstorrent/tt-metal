@@ -129,7 +129,6 @@ struct WorkerToFabricEdmSenderImpl {
         edm_noc_y(edm_worker_y),
         data_noc_cmd_buf(data_noc_cmd_buf),
         sync_noc_cmd_buf(sync_noc_cmd_buf) {
-        setup_edm_noc_cmd_buf(data_noc_cmd_buf, sync_noc_cmd_buf);
         ASSERT(buffer_size_bytes > 0);
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             ASSERT(num_buffers_per_channel == EDM_NUM_BUFFER_SLOTS);
@@ -139,12 +138,13 @@ struct WorkerToFabricEdmSenderImpl {
         }
     }
 
-    FORCE_INLINE void setup_edm_noc_cmd_buf(uint8_t data_cmd_buf, uint8_t sync_cmd_buf) const {
-        uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, edm_to_local_chip_noc);
-        noc_async_write_one_packet_with_trid_set_state(edm_noc_addr, data_cmd_buf, edm_to_local_chip_noc);
+    template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index>
+    FORCE_INLINE void setup_edm_noc_cmd_buf() const {
+        uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, EDM_TO_DOWNSTREAM_NOC);
+        noc_async_write_one_packet_with_trid_set_state(edm_noc_addr, this->data_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC);
         const uint64_t noc_sem_addr =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr, edm_to_local_chip_noc);
-        noc_inline_dw_write_set_state(noc_sem_addr, 0xF, sync_cmd_buf, edm_to_local_chip_noc);
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr, EDM_TO_DOWNSTREAM_NOC);
+        noc_inline_dw_write_set_state(noc_sem_addr, 0xF, this->sync_noc_cmd_buf, EDM_TO_DOWNSTREAM_NOC);
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
@@ -217,11 +217,13 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
-    template <bool enable_ring_support>
+    template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC>
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
-        send_payload_from_address_with_trid_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING, enable_ring_support>(
-            source_address, size_bytes, trid);
+        send_payload_from_address_with_trid_impl<
+            EDM_IO_BLOCKING_MODE::NON_BLOCKING,
+            enable_ring_support,
+            EDM_TO_DOWNSTREAM_NOC>(source_address, size_bytes, trid);
     }
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
@@ -231,14 +233,17 @@ struct WorkerToFabricEdmSenderImpl {
     // for the read barrier to complete before returning, saving some cycles for advanced users.
     // !!! IMPORTANT !!!
     // Must be called alongside (before) open_finish().
-    template <bool posted = false>
+    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
         ASSERT(remote_buffer_index_addr > 0);
         noc_async_read(
-            remote_buffer_index_addr, reinterpret_cast<size_t>(this->buffer_slot_wrptr_ptr), sizeof(uint32_t));
+            remote_buffer_index_addr,
+            reinterpret_cast<size_t>(this->buffer_slot_wrptr_ptr),
+            sizeof(uint32_t),
+            WORKER_HANDSHAKE_NOC);
 
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
@@ -247,7 +252,10 @@ struct WorkerToFabricEdmSenderImpl {
             reinterpret_cast<size_t>(
                 edm_worker_location_info_addr + offsetof(tt::tt_fabric::EDMChannelWorkerLocationInfo, edm_rdptr));
         noc_async_read(
-            edm_rdptr_addr, reinterpret_cast<size_t>(this->from_remote_buffer_slot_rdptr_ptr), sizeof(uint32_t));
+            edm_rdptr_addr,
+            reinterpret_cast<size_t>(this->from_remote_buffer_slot_rdptr_ptr),
+            sizeof(uint32_t),
+            WORKER_HANDSHAKE_NOC);
         // TODO: Need to change byte enable to be word enable
         const uint64_t dest_edm_location_info_addr = dest_noc_addr_coord_only | edm_worker_location_info_addr;
         const uint64_t edm_teardown_semaphore_address_address =
@@ -256,13 +264,21 @@ struct WorkerToFabricEdmSenderImpl {
         const uint64_t connection_worker_xy_address =
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
         noc_inline_dw_write<false, posted>(
-            dest_edm_location_info_addr, reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr));
+            dest_edm_location_info_addr,
+            reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr),
+            0xf,
+            WORKER_HANDSHAKE_NOC);
         noc_inline_dw_write<false, posted>(
-            edm_teardown_semaphore_address_address, reinterpret_cast<size_t>(worker_teardown_addr));
-        noc_inline_dw_write<false, posted>(connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32());
+            edm_teardown_semaphore_address_address,
+            reinterpret_cast<size_t>(worker_teardown_addr),
+            0xf,
+            WORKER_HANDSHAKE_NOC);
+        noc_inline_dw_write<false, posted>(
+            connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32(), 0xf, WORKER_HANDSHAKE_NOC);
 
         const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write<false, posted>(edm_connection_handshake_noc_addr, open_connection_value);
+        noc_inline_dw_write<false, posted>(
+            edm_connection_handshake_noc_addr, open_connection_value, 0xf, WORKER_HANDSHAKE_NOC);
     }
 
     // Advanced usage API:
@@ -279,9 +295,9 @@ struct WorkerToFabricEdmSenderImpl {
         ASSERT(this->buffer_slot_wrptr < 20);
     }
 
-    template <bool posted = false>
+    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open() {
-        open_start<posted>();
+        open_start<posted, WORKER_HANDSHAKE_NOC>();
         open_finish();
     }
 
@@ -433,7 +449,7 @@ private:
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         post_send_payload_increment_pointers();
     }
-    template <EDM_IO_BLOCKING_MODE blocking_mode, bool enable_ring_support>
+    template <EDM_IO_BLOCKING_MODE blocking_mode, bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC>
     FORCE_INLINE void send_payload_from_address_with_trid_impl(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
@@ -446,12 +462,19 @@ private:
                 size_bytes,
                 this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
                 trid,
+                EDM_TO_DOWNSTREAM_NOC,
                 this->data_noc_cmd_buf);
         } else {
             send_chunk_from_address_with_trid<blocking_mode>(
-                source_address, 1, size_bytes, this->edm_buffer_addr, trid, this->data_noc_cmd_buf);
+                source_address,
+                1,
+                size_bytes,
+                this->edm_buffer_addr,
+                trid,
+                EDM_TO_DOWNSTREAM_NOC,
+                this->data_noc_cmd_buf);
         }
-        post_send_payload_increment_pointers<true, enable_ring_support>(edm_to_local_chip_noc);
+        post_send_payload_increment_pointers<true, enable_ring_support>(EDM_TO_DOWNSTREAM_NOC);
     }
 
     template <EDM_IO_BLOCKING_MODE blocking_mode>
