@@ -4,7 +4,6 @@
 
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_subdevices.tt.llama_common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
 from models.utility_functions import nearest_32
@@ -66,14 +65,14 @@ class TtLlamaRotarySetup(LightweightModule):
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
         self.sin_matrix = ttnn.from_torch(
             sin_matrix,
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
         self.core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
@@ -100,7 +99,7 @@ class TtLlamaRotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             memory_config=trans_mat_mem_config,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
         # TODO: Colman, should this be TILE_SIZE or head_dim? Why should it be different for prefill and decode?
@@ -111,7 +110,7 @@ class TtLlamaRotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
     def get_both_trans_mats(self):
@@ -143,7 +142,7 @@ class TtLlamaRotarySetup(LightweightModule):
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ShardTensor2dMesh(
+                mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.device,
                     dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
                     mesh_shape=list(self.device.shape),
@@ -158,7 +157,7 @@ class TtLlamaRotarySetup(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ShardTensor2dMesh(
+                mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.device,
                     dims=(None, 0) if (self.num_devices == 32 and batch > 1) else (None, None),
                     mesh_shape=list(self.device.shape),

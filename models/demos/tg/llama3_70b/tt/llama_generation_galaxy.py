@@ -8,7 +8,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL, ConcatMesh2DToTensor
+from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy as TtLlamaModel
+from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL
 from models.demos.tg.llama3_70b.tt.llama_common import upper_pad_sequence_length
 from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy as TtLlamaModel
 from models.demos.tg.llama3_70b.tt.model_config import get_model_config
@@ -127,6 +128,8 @@ class TtLlamaModelForGeneration:
     def _process_logits(self, tt_logits):
         logits = ttnn.to_torch(
             tt_logits,
-            mesh_composer=ConcatMesh2DToTensor(self.mesh_device, dims=(1, 3), cluster_shape=self.cluster_shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, mesh_shape=tuple(reversed(self.cluster_shape)), dims=(3, 1)
+            ),
         )
         return logits[:, 0:1, :, : self.params.vocab_size].float()
