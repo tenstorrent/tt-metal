@@ -18,18 +18,8 @@
 
 namespace tt::tt_metal {
 
-const DispatchMemMap& DispatchMemMap::get(
-    const CoreType& core_type, const uint32_t num_hw_cqs, const bool force_reinit_with_settings) {
-    auto& instance = get_instance();
-
-    if (num_hw_cqs > 0 && (core_type != instance.last_core_type || num_hw_cqs != instance.hw_cqs) ||
-        force_reinit_with_settings) {
-        instance.reset(core_type, num_hw_cqs);
-    }
-
-    TT_FATAL(
-        instance.hw_cqs > 0, "Command Queue is not initialized. Call DispatchMemMap::get with non zero num_hw_cqs.");
-    return instance;
+DispatchMemMap::DispatchMemMap(const CoreType& core_type, const uint32_t num_hw_cqs) {
+    this->reset(core_type, num_hw_cqs);
 }
 
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
@@ -113,11 +103,6 @@ uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const {
 uint8_t DispatchMemMap::get_dispatch_message_update_offset(uint32_t index) const {
     TT_ASSERT(index < tt::tt_metal::DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET);
     return index;
-}
-
-DispatchMemMap& DispatchMemMap::get_instance() {
-    static tt::stl::Indestructible<DispatchMemMap> instance;
-    return instance.get();
 }
 
 // Reset the instance using the settings for the core_type and num_hw_cqs.

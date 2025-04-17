@@ -36,6 +36,9 @@ void MetalContext::initialize(
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
+    // Need DispatchMemMap for both dispatch core types
+    dispatch_mem_map_[CoreType::WORKER] = std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs);
+    dispatch_mem_map_[CoreType::ETH] = std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
     tt_metal::DispatchSettings::initialize(*cluster_);
 
     // TODO: Move FW, fabric, dispatch init here
@@ -78,6 +81,16 @@ dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
 DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
     TT_FATAL(dispatch_query_manager_, "Trying to get dispatch_query_manager before intializing it.");
     return *dispatch_query_manager_;
+}
+
+const DispatchMemMap& MetalContext::dispatch_mem_map() const {
+    return dispatch_mem_map(dispatch_core_config_.get_core_type());
+}
+
+const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
+    TT_FATAL(dispatch_mem_map_, "Tried to get dispatch_mem_map before intializing it.");
+    TT_FATAL(dispatch_mem_map_.at(core_type), "Tried to get dispatch_mem_map for {} before intializing it.", core_type);
+    return *dispatch_mem_map_.at(core_type);
 }
 
 }  // namespace tt::tt_metal
