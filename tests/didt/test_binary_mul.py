@@ -57,7 +57,7 @@ class BinaryMulTest(OpTestBase):
         return ttnn.mul(
             self.activations,
             self.weights,
-            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU)] if self.gelu else None,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU)] if self.gelu else [],
         )
 
 
