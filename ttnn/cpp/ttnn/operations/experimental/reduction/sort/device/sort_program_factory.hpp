@@ -15,6 +15,7 @@
 namespace ttnn::operations::experimental::reduction::sort::program {
 using namespace tt::tt_metal;
 
+// Single core sort program factory
 struct SortProgramFactory {
     struct shared_variables_t {
         KernelHandle reader_kernel_id;
@@ -28,6 +29,7 @@ struct SortProgramFactory {
     static void override_runtime_arguments(
         cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
+
 // Multi core sort program factory - tile row by row parallelization
 struct SortProgramFactoryMulticore {
     struct shared_variables_t {

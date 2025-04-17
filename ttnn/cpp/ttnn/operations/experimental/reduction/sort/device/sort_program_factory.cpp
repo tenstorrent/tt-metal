@@ -279,8 +279,9 @@ SortProgramFactoryMulticore::cached_program_t SortProgramFactoryMulticore::creat
     // Kernels
     const std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_index,
-        index_tensor_cb_index,
+        index_tensor_output_cb_index,
         static_cast<uint32_t>(input_tensor_is_dram),
+        static_cast<uint32_t>(index_tensor_is_dram),
         Wt,
         Ht,
         total_number_of_cores,
@@ -294,13 +295,14 @@ SortProgramFactoryMulticore::cached_program_t SortProgramFactoryMulticore::creat
         program,
         reader_kernel_id,
         core_range,
-        {input_buffer->address(), all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+        {input_buffer->address(),
+         index_buffer->address(),
+         all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
 
     const std::vector<uint32_t> writer_compile_time_args = {
         value_tensor_cb_index,
-        index_tensor_output_cb_index,
+        index_tensor_cb_index,
         static_cast<uint32_t>(value_tensor_is_dram),
-        static_cast<uint32_t>(index_tensor_is_dram),
         Wt,
         Ht,
         total_number_of_cores,
@@ -314,9 +316,7 @@ SortProgramFactoryMulticore::cached_program_t SortProgramFactoryMulticore::creat
         program,
         writer_kernel_id,
         core_range,
-        {value_buffer->address(),
-         index_buffer->address(),
-         all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
+        {value_buffer->address(), all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
 
     const std::vector<uint32_t> compute_compile_time_args = {
         input_tensor_cb_index,
@@ -350,13 +350,13 @@ SortProgramFactoryMulticore::cached_program_t SortProgramFactoryMulticore::creat
                 const uint32_t new_loop_count = all_core_utilization_loop_count + 1;
                 const CoreCoord core = {core_x, core_y};
 
-                SetRuntimeArgs(program, reader_kernel_id, core, {input_buffer->address(), new_loop_count});
-
                 SetRuntimeArgs(
                     program,
-                    writer_kernel_id,
+                    reader_kernel_id,
                     core,
-                    {value_buffer->address(), index_buffer->address(), new_loop_count});
+                    {input_buffer->address(), index_buffer->address(), new_loop_count});
+
+                SetRuntimeArgs(program, writer_kernel_id, core, {value_buffer->address(), new_loop_count});
 
                 SetRuntimeArgs(program, compute_kernel_id, core, {new_loop_count});
 
