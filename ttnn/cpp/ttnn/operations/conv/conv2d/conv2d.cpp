@@ -433,7 +433,7 @@ Result conv2d_L1(
         // prepare weights in desired layout and move to device
 
         // TODO: Implement heuristic to decide if weights should be preprocessed on device.
-        if (conv_config.preprocess_weights_on_device == false) {
+        if (!conv_config.preprocess_weights_on_device) {
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
                 weight_tensor,
                 bias_tensor,

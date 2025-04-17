@@ -83,7 +83,6 @@ template struct ExecuteUnary<UnaryOpType::COS>;
 template struct ExecuteUnary<UnaryOpType::ERFINV>;
 template struct ExecuteUnary<UnaryOpType::EXP2>;
 template struct ExecuteUnary<UnaryOpType::EXPM1>;
-template struct ExecuteUnary<UnaryOpType::EQZ>;
 template struct ExecuteUnary<UnaryOpType::GEZ>;
 template struct ExecuteUnary<UnaryOpType::GTZ>;
 template struct ExecuteUnary<UnaryOpType::I0>;
@@ -97,6 +96,7 @@ template struct ExecuteUnary<UnaryOpType::LEZ>;
 template struct ExecuteUnary<UnaryOpType::LOG>;
 template struct ExecuteUnary<UnaryOpType::LOG10>;
 template struct ExecuteUnary<UnaryOpType::LOG2>;
+template struct ExecuteUnary<UnaryOpType::LOG1P>;
 template struct ExecuteUnary<UnaryOpType::LOGICAL_NOT_UNARY>;
 template struct ExecuteUnary<UnaryOpType::LTZ>;
 template struct ExecuteUnary<UnaryOpType::NEG>;
@@ -212,6 +212,15 @@ Tensor LogSigmoid::invoke(
         {UnaryWithParam(UnaryOpType::SIGMOID, {(int)VecMode::RC, false}), UnaryWithParam(UnaryOpType::LOG)},
         memory_config,
         optional_output_tensor);
+}
+
+Tensor Eqz::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::EQZ;
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor Unary_chain::invoke(
