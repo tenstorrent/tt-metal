@@ -31,8 +31,8 @@ class TtAttention(nn.Module):
 
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-            q_chunk_size=256,
-            k_chunk_size=256,
+            q_chunk_size=128,
+            k_chunk_size=128,
             exp_approx_mode=False,
         )
 
