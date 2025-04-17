@@ -16,7 +16,10 @@ ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& output_shape, const uint32_t)
 
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& output_shape);
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& output_shape);
+
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
+ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape);
+ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
 
 ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, const uint32_t n);
 ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape);

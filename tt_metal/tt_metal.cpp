@@ -31,7 +31,7 @@
 #include <utility>
 #include <variant>
 
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "circular_buffer_types.hpp"
 #include "data_types.hpp"
 #include "device.hpp"
