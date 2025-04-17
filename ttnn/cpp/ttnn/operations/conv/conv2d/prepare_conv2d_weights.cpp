@@ -1173,7 +1173,7 @@ ttnn::Tensor prepare_conv_weights(
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (weight_tensor.is_device_tensor() || conv_config.preprocess_weights_on_device) {
-        if (conv_config.preprocess_weights_on_device == false) {
+        if (!conv_config.preprocess_weights_on_device) {
             log_warning(
                 tt::LogOp,
                 "Conv2D prepare weights was invoked with device tensors, but the "
