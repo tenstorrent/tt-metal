@@ -2,16 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from typing import TYPE_CHECKING
 
-import os
 import pytest
 import torch
 import ttnn
 
 from ..reference import SD3Transformer2DModel
 from ..tt.transformer_block import TtTransformerBlock, TtTransformerBlockParameters
-from ..tt.utils import from_torch, assert_quality
+from ..tt.utils import assert_quality, from_torch
 
 if TYPE_CHECKING:
     from ..reference.transformer_block import TransformerBlock
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     ("model_name", "block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
     [
         ("large", 0, 2, 4096, 333),
-        #        ("large", 23, 2, 4096, 333),
+        # ("large", 23, 2, 4096, 333),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 716800}], indirect=True)
