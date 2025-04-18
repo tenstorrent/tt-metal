@@ -516,13 +516,13 @@ int main() {
         golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K, B);
 
         /* Input vector tilizing */
-        tilize(src0_vec, M, K);
-        tilize(src1_vec, K, N);
+        src0_vec = tilize_nfaces(src0_vec, M, K);
+        src1_vec = tilize_nfaces(src1_vec, K, N);
 
         /* Calling the MatMul host program. Read in result into a host vector */
         std::vector<bfloat16> result_vec(dram_buffer_C_size / sizeof(bfloat16));
         matmul_multicore_reuse_mcast(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
-        untilize(result_vec, M, N);
+        result_vec = untilize_nfaces(result_vec, M, N);
 
         log_info(tt::LogVerif, "Output vector of size {}", result_vec.size());
 

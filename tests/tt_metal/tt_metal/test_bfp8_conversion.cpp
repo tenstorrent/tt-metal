@@ -42,8 +42,8 @@ int main(int argc, char** argv) {
         std::vector<float> tiled_fp32_vec = convert_layout(
             tt::stl::MakeConstSpan(fp32_vec),
             shape_vec,
-            tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-            tests::utils::TensorLayoutType::TILED_NFACES);
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_NFACES);
 
         std::vector<uint32_t> packed_bfp8b_tile_vec_rm_in =
             pack_fp32_vec_as_bfp8_tiles(fp32_vec, /*row_major_input=*/true, /*is_exp_a=*/false);
@@ -61,13 +61,13 @@ int main(int argc, char** argv) {
         std::vector<float> tiled_to_rm_fp32_vec = convert_layout(
             tt::stl::MakeConstSpan(unpacked_bfp8b_tile_vec_tile_out),
             shape_vec,
-            tests::utils::TensorLayoutType::TILED_NFACES,
-            tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+            TensorLayoutType::TILED_NFACES,
+            TensorLayoutType::LIN_ROW_MAJOR);
         std::vector<float> rm_to_tiled_fp32_vec = convert_layout(
             tt::stl::MakeConstSpan(unpacked_bfp8b_tile_vec_rm_out),
             shape_vec,
-            tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-            tests::utils::TensorLayoutType::TILED_NFACES);
+            TensorLayoutType::LIN_ROW_MAJOR,
+            TensorLayoutType::TILED_NFACES);
 
         // Ensure that passing in row_major_input=true and row_major_output=true are inverses of row_major_input=false
         // and row_major_output=false yield the same result
