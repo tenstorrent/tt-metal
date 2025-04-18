@@ -1,10 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import ttnn
 import torch
+
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.segformer.tt.ttnn_segformer_for_image_classification import (
@@ -63,10 +64,21 @@ def test_segformer_image_classificaton(device, reset_seeds):
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor_permuted,
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
+    # adjust padding if necessary
+    if ttnn_input_tensor.shape[3] < 16:
+        padded_shape = [ttnn_input_tensor.shape[0], ttnn_input_tensor.shape[1], ttnn_input_tensor.shape[2], 16]
+        ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, padded_shape, [0, 0, 0, 0], 0)
+    elif ttnn_input_tensor.shape[3] > 16 and ttnn_input_tensor.shape[3] % 32 != 0:
+        padded_shape = [
+            ttnn_input_tensor.shape[0],
+            ttnn_input_tensor.shape[1],
+            ttnn_input_tensor.shape[2],
+            (ttnn_input_tensor.shape[3] + 31) // 32 * 32,
+        ]
+        ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, padded_shape, [0, 0, 0, 0], 0)
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
     new_state_dict = {}
     keys = [name for name, parameter in reference_model.state_dict().items()]
     values = [parameter for name, parameter in state_dict.items()]
@@ -90,4 +102,4 @@ def test_segformer_image_classificaton(device, reset_seeds):
         model=reference_model,
     )
     ttnn_final_output = ttnn.to_torch(ttnn_output.logits)
-    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.972)
+    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.968)

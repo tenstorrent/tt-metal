@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -88,9 +88,10 @@ def test_demo_semantic_segmentation(device):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             device=device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         ttnn_output = ttnn_model(
+            device,
             ttnn_input_tensor,
             output_attentions=None,
             output_hidden_states=None,
