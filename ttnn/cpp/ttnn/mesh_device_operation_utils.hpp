@@ -102,32 +102,26 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& t
     // that do not overlap.
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor) {
-            // Case 1: Current tensor is placed on a smaller set of coordinates than tensor_coordinates.
-            if (tensor.device_storage().specs.size() < tensor_coordinates.size()) {
-                tensor_coordinates = {};
+            if (tensor.device_storage().specs.size() != tensor_coordinates.size()) {
+                std::vector<ttnn::MeshCoordinate> tensor_mesh_coords;
                 std::transform(
                     tensor.device_storage().specs.begin(),
                     tensor.device_storage().specs.end(),
-                    std::back_inserter(tensor_coordinates),
+                    std::back_inserter(tensor_mesh_coords),
                     [](const auto& spec) { return spec.first; });
-
-                // std::vector<ttnn::MeshCoordinate> tensor_mesh_coords;
-                // std::transform(
-                //     tensor.device_storage().specs.begin(),
-                //     tensor.device_storage().specs.end(),
-                //     std::back_inserter(tensor_mesh_coords),
-                //     [](const auto& spec) { return spec.first; });
-                // TT_ASSERT(
-                //     is_subset_of(tensor_coordinates, tensor_mesh_coords),
-                //     "Tensors are placed on different MeshCoordinate ranges that do not intersect.");
-                // tensor_coordinates = std::move(tensor_mesh_coords);
+                if (tensor_mesh_coords.size() < tensor_coordinates.size()) {
+                    // Case 1: Current tensor is placed on a smaller set of coordinates than tensor_coordinates.
+                    TT_ASSERT(
+                        is_subset_of(tensor_coordinates, tensor_mesh_coords),
+                        "Tensors are placed on different MeshCoordinate ranges that do not intersect.");
+                    tensor_coordinates = std::move(tensor_mesh_coords);
+                } else {
+                    // Case 2: Current tensor is placed on a larger set of coordinates than tensor_coordinates.
+                    TT_ASSERT(
+                        is_subset_of(tensor_mesh_coords, tensor_coordinates),
+                        "Tensors are placed on different MeshCoordinate ranges that do not intersect.");
+                }
             }
-            // Case 2: Current tensor is placed on a larger set of coordinates than tensor_coordinates.
-            // if (tensor_coordinates.size() < tensor_mesh_coords.size()) {
-            //     TT_ASSERT(
-            //         is_subset_of(tensor_mesh_coords, tensor_coordinates),
-            //         "Tensors are placed on different MeshCoordinate ranges that do not intersect.");
-            // }
         },
         tensor_args);
     return tensor_coordinates;
