@@ -5,7 +5,7 @@
 import ttnn
 import math
 
-from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
+from models.experimental.yolov8x.tt.ttnn_yolov8x_utils import (
     ttnn_decode_bboxes,
 )
 from models.experimental.yolo_common.yolo_utils import (
@@ -46,7 +46,7 @@ def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensor
     return output
 
 
-class Conv:
+class TtConv:
     def __init__(
         self,
         device,
@@ -180,7 +180,7 @@ class Conv:
         return x, out_height, out_width
 
 
-class Bottleneck:
+class TtBottleneck:
     def __init__(
         self,
         device,
@@ -200,7 +200,7 @@ class Bottleneck:
         self.tilize = tilize
         self.shortcut = shortcut
         self.block_shard = block_shard
-        self.cv1 = Conv(
+        self.cv1 = TtConv(
             device,
             parameters,
             f"{self.path}.cv1",
@@ -210,7 +210,7 @@ class Bottleneck:
             deallocate_activation=deallocate_activation,
             output_layout=output_layout,
         )
-        self.cv2 = Conv(
+        self.cv2 = TtConv(
             device,
             parameters,
             f"{self.path}.cv2",
@@ -232,7 +232,7 @@ class Bottleneck:
         return ttnn.add(x, cv2, memory_config=ttnn.L1_MEMORY_CONFIG) if self.shortcut else cv2
 
 
-class C2f:
+class TtC2f:
     def __init__(
         self,
         device,
@@ -261,7 +261,7 @@ class C2f:
         self.deallocate_activation = deallocate_activation
         self.output_layout = output_layout
 
-        self.cv1 = Conv(
+        self.cv1 = TtConv(
             device,
             self.parameters,
             f"{self.path}.cv1",
@@ -272,7 +272,7 @@ class C2f:
             output_layout=self.output_layout,
         )
 
-        self.cv2 = Conv(
+        self.cv2 = TtConv(
             self.device,
             self.parameters,
             f"{self.path}.cv2",
@@ -287,7 +287,7 @@ class C2f:
         for i in range(self.n):
             self.tilize = i == 0
             self.bottleneck_modules.append(
-                Bottleneck(
+                TtBottleneck(
                     self.device,
                     self.parameters,
                     f"{self.path}.m.{i}",
@@ -332,7 +332,7 @@ class C2f:
         return x, out_h, out_w
 
 
-class SPPF:
+class TtSppf:
     def __init__(self, device, parameters, path, input_params, batch_size):
         self.device = device
         self.parameters = parameters
@@ -340,8 +340,8 @@ class SPPF:
         self.input_params = input_params
         self.batch_size = batch_size
 
-        self.cv1 = Conv(device, parameters, f"{path}.cv1", input_params=input_params[0], change_shard=True)
-        self.cv2 = Conv(device, parameters, f"{path}.cv2", input_params=input_params[1], change_shard=True)
+        self.cv1 = TtConv(device, parameters, f"{path}.cv1", input_params=input_params[0], change_shard=True)
+        self.cv2 = TtConv(device, parameters, f"{path}.cv2", input_params=input_params[1], change_shard=True)
 
     def __call__(self, x):
         cv1, out_h, out_w = self.cv1(x)
@@ -370,15 +370,15 @@ class SPPF:
         return x, out_h, out_w
 
 
-class DetectCv2:
+class TtDetectCv2:
     def __init__(self, device, parameters, path, input_params):
         self.device = device
         self.parameters = parameters
         self.path = path
         self.input_params = input_params
-        self.conv0 = Conv(device, parameters, f"{path}.0", input_params=input_params[0], bfloat8=True)
-        self.conv1 = Conv(device, parameters, f"{path}.1", input_params=input_params[1], bfloat8=True)
-        self.conv2 = Conv(
+        self.conv0 = TtConv(device, parameters, f"{path}.0", input_params=input_params[0], bfloat8=True)
+        self.conv1 = TtConv(device, parameters, f"{path}.1", input_params=input_params[1], bfloat8=True)
+        self.conv2 = TtConv(
             device,
             parameters,
             path,
@@ -396,13 +396,13 @@ class DetectCv2:
         return x, out_h, out_w
 
 
-class DFL:
+class TtDFL:
     def __init__(self, device, parameters, path, input_params):
         self.device = device
         self.parameters = parameters
         self.path = path
         self.input_params = input_params
-        self.conv = Conv(device, parameters, path, input_params, bfloat8=True, is_fused=False, change_shard=True)
+        self.conv = TtConv(device, parameters, path, input_params, bfloat8=True, is_fused=False, change_shard=True)
 
     def __call__(self, x, c1=16):
         b, _, a = x.shape
@@ -417,7 +417,7 @@ class DFL:
         return x
 
 
-class Detect:
+class TtDetect:
     def __init__(self, device, parameters, path, input_params, nc=80, ch=(320, 640, 640)):
         self.device = device
         self.parameters = parameters
@@ -432,10 +432,10 @@ class Detect:
         for i in range(nl):
             cv2_params = input_params["cv2_params"][i]["input_params"]
             cv3_params = input_params["cv3_params"][i]["input_params"]
-            self.detect_cv2_modules.append(DetectCv2(device, parameters, f"{path}.cv2.{i}", input_params=cv2_params))
-            self.detect_cv3_modules.append(DetectCv2(device, parameters, f"{path}.cv3.{i}", input_params=cv3_params))
+            self.detect_cv2_modules.append(TtDetectCv2(device, parameters, f"{path}.cv2.{i}", input_params=cv2_params))
+            self.detect_cv3_modules.append(TtDetectCv2(device, parameters, f"{path}.cv3.{i}", input_params=cv3_params))
 
-        self.dfl_module = DFL(
+        self.dfl_module = TtDFL(
             device, parameters, f"{path}.dfl", input_params=input_params["dfl_params"]["input_params"]
         )
 
@@ -470,7 +470,7 @@ class Detect:
         return [ttnn.concat((dbox, ttnn.sigmoid(cls)), dim=1), x]
 
 
-class DetectionModel:
+class TtDetectionModel:
     def __init__(self, device, parameters, res=(640, 640), batch_size=1, reg_max=16):
         self.device = device
         self.parameters = parameters
@@ -540,14 +540,10 @@ class DetectionModel:
             },
         }
 
-        self.conv_0 = Conv(
-            device,
-            parameters,
-            "model.0",
-            input_params=[3, 2, 1, 80, 3],
-            act_block_h=True,
+        self.conv_0 = TtConv(
+            device, parameters, "model.0", input_params=[3, 2, 1, 80, 3], act_block_h=True, deallocate_activation=True
         )
-        self.conv_1 = Conv(
+        self.conv_1 = TtConv(
             device,
             parameters,
             "model.1",
@@ -555,7 +551,7 @@ class DetectionModel:
             act_block_h=True,
             block_shard=True,
         )
-        self.c2f_2 = C2f(
+        self.c2f_2 = TtC2f(
             device,
             parameters,
             "model.2",
@@ -563,14 +559,14 @@ class DetectionModel:
             shortcut=True,
             input_params=c2f_configs["model.2"]["input_params"],
         )
-        self.conv_3 = Conv(
+        self.conv_3 = TtConv(
             device,
             parameters,
             "model.3",
             input_params=[3, 2, 1, 320, 160],
             deallocate_activation=False,
         )
-        self.c2f_4 = C2f(
+        self.c2f_4 = TtC2f(
             device,
             parameters,
             "model.4",
@@ -578,8 +574,8 @@ class DetectionModel:
             shortcut=True,
             input_params=c2f_configs["model.4"]["input_params"],
         )
-        self.conv_5 = Conv(device, parameters, "model.5", input_params=[3, 2, 1, 640, 320], block_shard=True)
-        self.c2f_6 = C2f(
+        self.conv_5 = TtConv(device, parameters, "model.5", input_params=[3, 2, 1, 640, 320], block_shard=True)
+        self.c2f_6 = TtC2f(
             device,
             parameters,
             "model.6",
@@ -589,8 +585,8 @@ class DetectionModel:
             change_shard=True,
             input_params=c2f_configs["model.6"]["input_params"],
         )
-        self.conv_7 = Conv(device, parameters, "model.7", input_params=[3, 2, 1, 640, 640], block_shard=True)
-        self.c2f_8 = C2f(
+        self.conv_7 = TtConv(device, parameters, "model.7", input_params=[3, 2, 1, 640, 640], block_shard=True)
+        self.c2f_8 = TtC2f(
             device,
             parameters,
             "model.8",
@@ -600,10 +596,10 @@ class DetectionModel:
             block_shard=True,
             input_params=c2f_configs["model.8"]["input_params"],
         )
-        self.sppf_9 = SPPF(
+        self.sppf_9 = TtSppf(
             device, parameters, "model.9", input_params=sppf_configs["input_params"], batch_size=self.batch_size
         )
-        self.c2f_12 = C2f(
+        self.c2f_12 = TtC2f(
             device,
             parameters,
             "model.12",
@@ -613,7 +609,7 @@ class DetectionModel:
             block_shard=True,
             input_params=c2f_configs["model.12"]["input_params"],
         )
-        self.c2f_15 = C2f(
+        self.c2f_15 = TtC2f(
             device,
             parameters,
             "model.15",
@@ -621,8 +617,8 @@ class DetectionModel:
             shortcut=False,
             input_params=c2f_configs["model.15"]["input_params"],
         )
-        self.conv_16 = Conv(device, parameters, "model.16", input_params=[3, 2, 1, 320, 320], block_shard=True)
-        self.c2f_18 = C2f(
+        self.conv_16 = TtConv(device, parameters, "model.16", input_params=[3, 2, 1, 320, 320], block_shard=True)
+        self.c2f_18 = TtC2f(
             device,
             parameters,
             "model.18",
@@ -630,8 +626,8 @@ class DetectionModel:
             shortcut=False,
             input_params=c2f_configs["model.18"]["input_params"],
         )
-        self.conv_19 = Conv(device, parameters, "model.19", input_params=[3, 2, 1, 640, 640], block_shard=True)
-        self.c2f_21 = C2f(
+        self.conv_19 = TtConv(device, parameters, "model.19", input_params=[3, 2, 1, 640, 640], block_shard=True)
+        self.c2f_21 = TtC2f(
             device,
             parameters,
             "model.21",
@@ -640,7 +636,7 @@ class DetectionModel:
             input_params=c2f_configs["model.21"]["input_params"],
             change_shard=True,
         )
-        self.detect_22 = Detect(device, parameters, "model.22", detect_config)
+        self.detect_22 = TtDetect(device, parameters, "model.22", detect_config)
 
     def __call__(self, x):
         conv_0, out_h, out_w = self.conv_0(x)
@@ -742,12 +738,12 @@ class DetectionModel:
         return x
 
 
-class YOLOv8xModel:
+class TtYolov8xModel:
     def __init__(self, device, parameters, res=(640, 640), batch_size=1):
         self.device = device
         self.parameters = parameters
         self.res = res
-        self.detection_model = DetectionModel(device, parameters, res, batch_size)
+        self.detection_model = TtDetectionModel(device, parameters, res, batch_size)
 
     def __call__(self, x):
         return self.detection_model(x)
