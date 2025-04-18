@@ -294,6 +294,11 @@ class TtLinear:
         weight = self._weight
         bias = self._bias
 
+        # there is a correctness issue with tensors of shape Mx1x1xN, squeeze them to Mx1xN
+        squeeze = len(x.shape) == 4 and x.shape[1] == 1 and x.shape[2] == 1
+        if squeeze:
+            x = x.reshape([x.shape[0], 1, x.shape[-1]])
+
         output = ttnn.linear(
             x,
             weight,
@@ -309,6 +314,9 @@ class TtLinear:
 
         if deallocate:
             ttnn.deallocate(x)
+
+        if squeeze:
+            output = output.reshape([output.shape[0], 1, 1, output.shape[-1]])
 
         return output
 
