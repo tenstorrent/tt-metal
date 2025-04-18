@@ -12,17 +12,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode runtime
 
-# Set up virtual environment
-ENV PYTHON_ENV_DIR=/opt/venv
-RUN python3 -m venv $PYTHON_ENV_DIR
-
-# Ensure the virtual environment is used for all Python-related commands
-ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
-ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
-
-# Ensure the virtual environment is activated on shell startup
-RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
-
 #############################################################
 
 FROM base AS ci-build
@@ -226,6 +215,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Set up virtual environment
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN python3 -m venv $PYTHON_ENV_DIR
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
 # Numpy needed for tt-train to build
 RUN python3 -m pip install --no-cache-dir build numpy setuptools
 
@@ -300,6 +300,17 @@ RUN [ "$UBUNTU_VERSION" != "24.04" ] \
 #############################################################
 
 FROM base AS release
+
+# Set up virtual environment
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN python3 -m venv $PYTHON_ENV_DIR
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 RUN mkdir -p /etc && \
     echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
