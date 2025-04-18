@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import ttnn
 import torch.nn as nn
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
 from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
@@ -41,9 +42,11 @@ class TtCrossAttnDownBlock2D(nn.Module):
         for resnet, attn in tt_blocks:
             hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
             hidden_states = attn.forward(hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states)
-            output_states = output_states + (hidden_states,)
+            residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            output_states = output_states + (residual,)
 
         if self.downsamplers is not None:
             hidden_states, [C, H, W] = self.downsamplers.forward(hidden_states, [B, C, H, W])
-            output_states = output_states + (hidden_states,)
+            residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            output_states = output_states + (residual,)
         return hidden_states, [C, H, W], output_states

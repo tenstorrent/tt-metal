@@ -186,19 +186,6 @@ TEST_F(LaunchOperationT3000Test, UnevenTensor) {
             ttnn::MeshCoordinate{0, 1}));
 }
 
-TEST_F(LaunchOperationT3000Test, MismatchedTensorsThrow) {
-    const TensorSpec tensor_spec = TensorSpec(
-        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    auto full_tensor = tt::tt_metal::allocate_tensor_on_mesh(tensor_spec, mesh_device_.get());
-    auto uneven_tensor = make_tensor_with_num_shards(tensor_spec, 2, mesh_device_.get());
-
-    std::vector<Tensor> tensor_args = {full_tensor, uneven_tensor};
-
-    EXPECT_ANY_THROW(
-        ttnn::device_operation::mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args));
-    EXPECT_ANY_THROW(ttnn::device_operation::mesh_device_operation_utils::extract_tensor_coordinates(tensor_args));
-}
-
 TEST_F(LaunchOperationT3000Test, FilterTensorShards) {
     const TensorSpec tensor_spec = TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));

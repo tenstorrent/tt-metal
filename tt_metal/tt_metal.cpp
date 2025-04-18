@@ -31,7 +31,7 @@
 #include <utility>
 #include <variant>
 
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "circular_buffer_types.hpp"
 #include "data_types.hpp"
 #include "device.hpp"
@@ -386,7 +386,8 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const std::vector<uint32_t>& /*l1_bank_remap*/,
     const size_t worker_l1_size,
     bool init_profiler,
-    bool use_max_eth_core_count_on_all_devices) {
+    bool use_max_eth_core_count_on_all_devices,
+    bool initialize_fabric_and_dispatch_fw) {
     // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
     // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
@@ -400,7 +401,8 @@ std::map<chip_id_t, IDevice*> CreateDevices(
         {},
         worker_l1_size,
         init_profiler,
-        use_max_eth_core_count_on_all_devices);
+        use_max_eth_core_count_on_all_devices,
+        initialize_fabric_and_dispatch_fw);
 
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, IDevice*> ret_devices;
@@ -786,7 +788,6 @@ void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile
             not_done_cores.insert(physical_core);
         }
     }
-    // Wait for all cores to be done
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
     if (dump_device_profile_results) {
         DumpDeviceProfileResults(device, program);

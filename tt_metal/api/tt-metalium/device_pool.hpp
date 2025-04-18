@@ -51,7 +51,8 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
         bool init_profiler = true,
-        bool use_max_eth_core_count_on_all_devices = false) noexcept;
+        bool use_max_eth_core_count_on_all_devices = false,
+        bool initialize_fabric_and_dispatch_fw = true) noexcept;
 
     tt_metal::IDevice* get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
@@ -62,6 +63,7 @@ public:
     void unregister_worker_thread_for_device(tt_metal::IDevice* device);
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
     void init_profiler() const;
+    void initialize_fabric_and_dispatch_fw() const;
 
 private:
     ~DevicePool();
@@ -72,6 +74,9 @@ private:
     size_t worker_l1_size;
     std::vector<uint32_t> l1_bank_remap;
     bool using_fast_dispatch;
+    bool init_profiler_ = true;
+    bool initialize_fabric_and_dispatch_fw_ = false;
+
     std::mutex lock;
     // TODO replace std::vector<std::unique_ptr<IDevice>> with stl::SlotMap<v1::DeviceKey, Device> when removing v0
     std::vector<std::unique_ptr<tt_metal::IDevice>> devices;

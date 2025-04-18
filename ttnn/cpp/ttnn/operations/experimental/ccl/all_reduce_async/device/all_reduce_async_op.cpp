@@ -92,22 +92,22 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     const auto mesh_view = this->mesh_device->get_view();
     std::vector<IDevice*> devices =
         (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
-    uint32_t num_devices = devices.size();
+
     IDevice* target_device =
         input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = 0;
-    for (uint32_t i = 0; i < devices.size(); ++i) {
+    for (uint32_t i = 0; i < ring_size; ++i) {
         if (devices.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
                 backward_device = devices.at(i - 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(num_devices - 1);
+                backward_device = devices.at(ring_size - 1);
             }
-            if (i != num_devices - 1) {
+            if (i != ring_size - 1) {
                 forward_device = devices.at(i + 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
                 forward_device = devices.at(0);
@@ -138,6 +138,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     return all_reduce_async_minimal_multi_core_with_workers(
         input_tensors[0],
         input_tensors[1],
+        target_device,
         forward_device,
         backward_device,
         output_tensors[0],
@@ -147,8 +148,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         device_index,
         this->topology,
         this->semaphore,
-        this->sub_device_id,
-        this->enable_persistent_fabric_mode);
+        this->sub_device_id);
 }
 
 tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -183,50 +183,25 @@ Tensor all_reduce_async_impl(
     const std::optional<DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     const auto mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    std::vector<Tensor> output_tensors = {
-        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()})};
-
-    tt::tt_metal::operation::launch_op(
-        [num_preferred_links,
-         dtype,
-         memory_config,
-         cluster_axis,
-         num_devices,
-         topology,
-         multi_device_global_semaphore,
-         subdevice_id,
-         enable_persistent_fabric_mode,
-         mesh_device = &mesh_device](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor = input_tensors.at(0);
-            const auto& buffer_tensor = input_tensors.at(1);
-
-            return tt::tt_metal::operation::run(
-                ttnn::AllReduceAsync{
-                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-                    num_devices,
-                    dtype.value_or(input_tensor.get_dtype()),
-                    memory_config.value_or(input_tensor.memory_config()),
-                    topology,
-                    multi_device_global_semaphore,
-                    subdevice_id,
-                    enable_persistent_fabric_mode,
-                    cluster_axis,
-                    mesh_device},
-                {input_tensor, buffer_tensor});
-        },
-        {input_tensor, buffer_tensor},
-        output_tensors);
-    return output_tensors.at(0);
+    return tt::tt_metal::operation::run(
+               ttnn::AllReduceAsync{
+                   num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+                   num_devices,
+                   dtype.value_or(input_tensor.get_dtype()),
+                   memory_config.value_or(input_tensor.memory_config()),
+                   topology,
+                   multi_device_global_semaphore,
+                   subdevice_id,
+                   cluster_axis,
+                   &mesh_device},
+               {input_tensor, buffer_tensor})
+        .at(0);
 }
 }  // namespace
 
@@ -240,20 +215,18 @@ Tensor all_reduce_async(
     const std::optional<DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     return all_reduce_async_impl(
         input_tensor,
         buffer_tensor,
         cluster_axis,
-        mesh_device,
+        *(input_tensor.mesh_device()),
         topology,
         multi_device_global_semaphore,
         dtype,
         memory_config,
         num_preferred_links,
-        subdevice_id,
-        enable_persistent_fabric_mode);
+        subdevice_id);
 }
 
 std::vector<Tensor> all_reduce_async(
@@ -266,8 +239,7 @@ std::vector<Tensor> all_reduce_async(
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -281,8 +253,7 @@ std::vector<Tensor> all_reduce_async(
             dtype,
             memory_config,
             num_preferred_links,
-            subdevice_id,
-            enable_persistent_fabric_mode));
+            subdevice_id));
     }
     return output_tensors;
 }

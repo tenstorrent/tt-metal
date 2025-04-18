@@ -10,10 +10,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
-)
 
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     SUB_DEVICE_CRS,
@@ -198,7 +194,6 @@ def run_reduce_scatter_test(
         tt_input_tensors_list.append(tt_input)
         tt_intermediate_tensors_list.append(tt_intermediate)
 
-    enable_persistent_fabric = True
     ccl_sub_device_crs = subdevice_shard_cores_grid if use_regular_grid is not None else SUB_DEVICE_CRS
     worker_sub_device = ttnn.SubDevice(
         [
@@ -207,13 +202,8 @@ def run_reduce_scatter_test(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-        mesh_device,
-        [worker_sub_device],
-        0,
-        0,
-        enable_persistent_fabric,
-    )
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -275,7 +265,6 @@ def run_reduce_scatter_test(
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
     mesh_device.reset_sub_device_stall_group()
-    teardown_fabric_interface(mesh_device)
 
     passed = True
     first_failed_tensor_index = None
@@ -296,12 +285,10 @@ def run_reduce_scatter_test(
             failed_indices = torch.where(tt_torch_tensor != output_tensor_goldens_list[tensor_index])
             break
 
-    for i in range(num_devices_scatter * num_devices_fracture):
-        logger.info(f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries")
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+    logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
+    assert (
+        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
+    ), f"Device {i} has {mesh_device.num_program_cache_entries()} program cache entries"
 
     if not passed:
         logger.info(f"Failed indices: {failed_indices}")
@@ -309,7 +296,15 @@ def run_reduce_scatter_test(
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90000, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True
+    "device_params",
+    [
+        {
+            "trace_region_size": 90000,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
@@ -350,7 +345,11 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     )
 
 
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "mesh_device",
@@ -391,13 +390,21 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90000, "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}], indirect=True
+    "device_params",
+    [
+        {
+            "trace_region_size": 90000,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True, False])
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        (1, 2),
+        (8, 4),  # TODO: Once fabric can be initialized on a SubMesh, revert to (1, 2)
     ],
     indirect=True,
 )
@@ -416,8 +423,8 @@ def test_fabric_reduce_scatter_regular_grid_2_dev(
         pytest.skip("Not TG!")
 
     dim = 3
-    num_devices_scatter = 2
-    num_devices_fracture = 1
+    num_devices_scatter = 4
+    num_devices_fracture = 8
     num_cores = input_grid[0] * input_grid[1]
     num_iters = 30
 
@@ -441,13 +448,21 @@ def test_fabric_reduce_scatter_regular_grid_2_dev(
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 90000, "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}], indirect=True
+    "device_params",
+    [
+        {
+            "trace_region_size": 90000,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        (1, 4),
+        (8, 4),  # TODO: Once fabric can be initialized on a SubMesh, revert to (1, 4)
     ],
     indirect=True,
 )
@@ -467,7 +482,7 @@ def test_fabric_reduce_scatter_regular_grid_4_dev(
 
     dim = 3
     num_devices_scatter = 4
-    num_devices_fracture = 1
+    num_devices_fracture = 8
     num_cores = input_grid[0] * input_grid[1] - 5  # test padding
     num_iters = 30
 

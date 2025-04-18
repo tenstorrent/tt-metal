@@ -34,6 +34,7 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores);
 
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minimal_multi_core_with_workers(
     const std::vector<Tensor>& input_tensors,
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     std::vector<Tensor>& output_tensors,
@@ -44,7 +45,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode,
     const uint32_t num_q_heads,
     const uint32_t num_kv_heads,
     const uint32_t head_dim);

@@ -7,7 +7,7 @@
 #include <iterator>
 #include <memory>
 
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "gtest/gtest.h"
 #include "ttnn/operations/ccl/common/types/sharding_common.hpp"
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))

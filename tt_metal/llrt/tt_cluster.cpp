@@ -361,6 +361,10 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coord
     return user_chip_ethernet_coordinates;
 }
 
+std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_all_chip_ethernet_coordinates() const {
+    return this->cluster_desc_->get_chip_locations();
+}
+
 size_t Cluster::number_of_user_devices() const {
     if (this->cluster_type_ == ClusterType::TG) {
         const auto& chips = this->cluster_desc_->get_all_chips();
@@ -601,7 +605,7 @@ void Cluster::write_core(
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, "LARGE_WRITE_TLB");
+    this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
@@ -617,7 +621,7 @@ void Cluster::read_core(
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes, "LARGE_READ_TLB");
+    this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
 }
 
 void Cluster::read_core(
@@ -635,7 +639,7 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
         tt::watcher_sanitize_host_noc_write(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {target.x, target.y}, addr, size_in_bytes);
     }
     tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
-    this->driver_->write_to_device(mem_ptr, size_in_bytes, target.chip, target_coord, addr, "REG_TLB");
+    this->driver_->write_to_device_reg(mem_ptr, size_in_bytes, target.chip, target_coord, addr);
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
@@ -650,7 +654,7 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
         tt::watcher_sanitize_host_noc_read(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {target.x, target.y}, addr, size_in_bytes);
     }
     tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
-    this->driver_->read_from_device(mem_ptr, target.chip, target_coord, addr, size_in_bytes, "REG_TLB");
+    this->driver_->read_from_device_reg(mem_ptr, target.chip, target_coord, addr, size_in_bytes);
 }
 
 void Cluster::write_sysmem(
@@ -692,7 +696,7 @@ void Cluster::dram_barrier(chip_id_t chip_id) const {
     for (uint32_t channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
         dram_channels.insert(channel);
     }
-    this->driver_->dram_membar(chip_id, "LARGE_WRITE_TLB", dram_channels);
+    this->driver_->dram_membar(chip_id, dram_channels);
 }
 
 // L1 barrier is used to implement host-to-device synchronization and should be used when all previous writes to L1 need
@@ -701,7 +705,7 @@ void Cluster::dram_barrier(chip_id_t chip_id) const {
 // binaries, metadata, and data to compute on are committed before launching kernels
 void Cluster::l1_barrier(chip_id_t chip_id) const {
     // Sets and resets L1 barrier of all tensix cores and ethernet cores
-    this->driver_->l1_membar(chip_id, "LARGE_WRITE_TLB");
+    this->driver_->l1_membar(chip_id);
 }
 
 uint32_t Cluster::get_num_host_channels(chip_id_t device_id) const {
@@ -1002,7 +1006,9 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
         const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
         for (const auto& [other_chip_id, eth_cores] : connected_chips) {
             for (const auto& eth_core : eth_cores) {
-                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::BI_DIR_TUNNELING and
+                const auto& routing_info = this->device_eth_routing_info_.at(chip_id).at(eth_core);
+                if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or
+                     routing_info == EthRouterMode::FABRIC_ROUTER) and
                     skip_reserved_tunnel_cores) {
                     continue;
                 }
@@ -1061,12 +1067,27 @@ void Cluster::release_ethernet_cores_for_fabric_routers() {
 
 std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(chip_id_t chip_id) const {
     std::set<tt_fabric::chan_id_t> fabric_ethernet_channels;
-    const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
-    for (const auto& [other_chip_id, eth_cores] : connected_chips) {
-        for (const auto& eth_core : eth_cores) {
-            if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
-                fabric_ethernet_channels.insert(this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core));
-            }
+    const auto& active_eth_cores = this->get_active_ethernet_cores(chip_id, false);
+    for (const auto& eth_core : active_eth_cores) {
+        if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
+            fabric_ethernet_channels.insert(this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core));
+        }
+    }
+    return fabric_ethernet_channels;
+}
+
+std::vector<CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest(
+    chip_id_t src_id, chip_id_t dst_id) const {
+    std::vector<CoreCoord> fabric_ethernet_channels;
+    const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(src_id);
+    TT_FATAL(
+        connected_chips.find(dst_id) != connected_chips.end(),
+        "Dst Chip {} is not connected to Src Chip {}",
+        dst_id,
+        src_id);
+    for (const auto& eth_core : connected_chips.at(dst_id)) {
+        if (this->device_eth_routing_info_.at(src_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
+            fabric_ethernet_channels.push_back(eth_core);
         }
     }
     return fabric_ethernet_channels;

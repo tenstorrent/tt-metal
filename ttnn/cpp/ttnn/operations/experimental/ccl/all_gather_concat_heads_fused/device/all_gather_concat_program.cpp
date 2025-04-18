@@ -16,6 +16,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/fabric.hpp>
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
@@ -45,28 +46,10 @@ struct llama_config {
     uint32_t num_semaphore_ranges = 3;
 };
 
-void append_fabric_connection_rt_arguments(
-    const std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>& connection,
-    const CoreCoord& core,
-    tt::tt_metal::Program& program,
-    std::vector<uint32_t>& writer_rt_args) {
-    writer_rt_args.push_back(connection.has_value());
-    if (connection.has_value()) {
-        auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
-        auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
-        auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
-        append_worker_to_fabric_edm_sender_rt_args(
-            connection.value(),
-            sender_worker_flow_control_semaphore_id,
-            sender_worker_teardown_semaphore_id,
-            sender_worker_buffer_index_semaphore_id,
-            writer_rt_args);
-    }
-}
-
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const Tensor& input_tensor,
     const Tensor& temp_tensor,
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -77,15 +60,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool enable_persistent_fabric_mode,
     const uint32_t num_heads) {
     tt::tt_metal::Program program{};
+    ttnn::MeshDevice* mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
-    TT_FATAL(
-        enable_persistent_fabric_mode,
-        "only persistent fabric mode is supported for all_gather_concat_llama_post_binary_matmul");
 
-    IDevice* device = input_tensor.device();
     TensorSpec output_intermediate_tensor_spec = temp_tensor.tensor_spec();
     auto output_interm_padded_shape = output_intermediate_tensor_spec.padded_shape();
 
@@ -94,18 +73,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        target_device->id(),
         is_first_chip,
         is_last_chip);
-
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
-        ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device,
-            forward_device.value_or(nullptr),
-            backward_device.value_or(nullptr),
-            &program,
-            enable_persistent_fabric_mode,
-            num_links);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
@@ -205,7 +175,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
@@ -262,8 +232,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     std::vector<uint32_t> noc_y_coords;
     noc_y_coords.reserve(in_num_cores);
     for (uint32_t i = 0; i < in_num_cores; ++i) {
-        noc_x_coords.push_back(device->worker_core_from_logical_core(in_cores_vec[i]).x);
-        noc_y_coords.push_back(device->worker_core_from_logical_core(in_cores_vec[i]).y);
+        noc_x_coords.push_back(mesh_device->worker_core_from_logical_core(in_cores_vec[i]).x);
+        noc_y_coords.push_back(mesh_device->worker_core_from_logical_core(in_cores_vec[i]).y);
     }
 
     // create concat semaphore for each link
@@ -411,7 +381,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     std::vector<uint32_t> nlp_local_core_x;
     std::vector<uint32_t> nlp_local_core_y;
     for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
-        auto this_core = device->worker_core_from_logical_core(input_cores_vec[k]);
+        auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[k]);
         nlp_local_core_x.push_back(this_core.x);
         nlp_local_core_y.push_back(this_core.y);
     }
@@ -437,14 +407,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         for (uint32_t i = input_tile_id_start / input_tensor_shard_num_pages;
              i < (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages;
              i++) {
-            auto this_core = device->worker_core_from_logical_core(input_cores_vec[i]);
+            auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
         }
         for (uint32_t i = input_tile_id_start / output_interm_tensor_shard_num_pages;
              i < (input_tile_id_end + output_interm_tensor_shard_num_pages - 1) / output_interm_tensor_shard_num_pages;
              i++) {
-            auto this_core = device->worker_core_from_logical_core(output_cores_this_device[i]);
+            auto this_core = mesh_device->worker_core_from_logical_core(output_cores_this_device[i]);
             output_tensor_cores_x.push_back(this_core.x);
             output_tensor_cores_y.push_back(this_core.y);
         }
@@ -461,19 +431,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
         if (link == 0) {
             // drain sync core is the first worker core
-            drain_sync_core = device->worker_core_from_logical_core(core);
+            drain_sync_core = mesh_device->worker_core_from_logical_core(core);
             TT_ASSERT(drain_sync_core.x == 19 && drain_sync_core.y == 18, "This op should run on a TG machine");
         }
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
-            !forward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
-            !backward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
@@ -534,8 +494,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         std::vector<uint32_t> mcast_end_y;
 
         for (const auto& range : sem_mcast_ranges.ranges()) {
-            auto start_core = device->worker_core_from_logical_core(range.start_coord);
-            auto end_core = device->worker_core_from_logical_core(range.end_coord);
+            auto start_core = mesh_device->worker_core_from_logical_core(range.start_coord);
+            auto end_core = mesh_device->worker_core_from_logical_core(range.end_coord);
             if (writer_noc == tt::tt_metal::NOC::NOC_1) {
                 std::swap(start_core, end_core);
             }
@@ -556,8 +516,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        append_fabric_connection_rt_arguments(forward_fabric_connection, core, program, writer_rt_args);
-        append_fabric_connection_rt_arguments(backward_fabric_connection, core, program, writer_rt_args);
+
+        writer_rt_args.push_back(forward_device.has_value());
+        if (forward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                target_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+        }
+        writer_rt_args.push_back(backward_device.has_value());
+        if (backward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                target_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+        }
+
         writer_rt_args[0] = writer_rt_args.size();
         uint32_t in_tile_offset_by_batch =
             link < face_h ? link * sub_tile_line_bytes : (link + face_h) * sub_tile_line_bytes;
@@ -587,7 +557,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         std::array<uint32_t, 8> kernel_core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
         std::array<uint32_t, 8> kernel_core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
         for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
-            auto this_core = device->worker_core_from_logical_core(input_cores_vec[k]);
+            auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[k]);
             input_cores_x.push_back(this_core.x);
             input_cores_y.push_back(this_core.y);
             TT_ASSERT(

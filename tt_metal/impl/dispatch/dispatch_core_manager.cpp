@@ -35,10 +35,7 @@ const tt_cxy_pair& dispatch_core_manager::prefetcher_core(chip_id_t device_id, u
 
 bool dispatch_core_manager::is_prefetcher_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.prefetcher.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.prefetcher.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::prefetcher_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
@@ -54,10 +51,7 @@ const tt_cxy_pair& dispatch_core_manager::prefetcher_d_core(chip_id_t device_id,
 
 bool dispatch_core_manager::is_prefetcher_d_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.prefetcher_d.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.prefetcher_d.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::mux_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
@@ -76,10 +70,7 @@ const tt_cxy_pair& dispatch_core_manager::mux_core(chip_id_t device_id, uint16_t
 
 bool dispatch_core_manager::is_mux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.mux.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.mux.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::mux_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
@@ -110,10 +101,7 @@ const tt_cxy_pair& dispatch_core_manager::demux_core(chip_id_t device_id, uint16
 
 bool dispatch_core_manager::is_demux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.demux.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.demux.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::demux_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
@@ -182,10 +170,7 @@ const tt_cxy_pair& dispatch_core_manager::completion_queue_writer_core(
 bool dispatch_core_manager::is_completion_queue_writer_core_allocated(
     chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.completion_queue_writer.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.completion_queue_writer.has_value();
 }
 
 const tt_cxy_pair& dispatch_core_manager::dispatcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
@@ -208,10 +193,7 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_core(chip_id_t device_id, u
 
 bool dispatch_core_manager::is_dispatcher_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
-    if (assignment.dispatcher.has_value()) {
-        return true;
-    }
-    return false;
+    return assignment.dispatcher.has_value();
 }
 
 bool dispatch_core_manager::is_dispatcher_s_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {

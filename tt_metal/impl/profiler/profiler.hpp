@@ -223,6 +223,11 @@ public:
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 };
 
+distributed::AnyBuffer get_control_buffer_view(
+    IDevice* device, uint32_t address, uint32_t size, CoreCoord logical_worker_core);
+
+void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data);
+
 }  // namespace tt_metal
 
 }  // namespace tt

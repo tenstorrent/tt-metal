@@ -8,10 +8,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
-)
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
@@ -24,7 +20,6 @@ def run_with_trace(
     dim,
     num_links,
     output_mem_config,
-    enable_persistent_fabric,
     multi_device_global_semaphore,
     num_iter=20,
     subdevice_id=None,
@@ -45,7 +40,6 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=all_gather_topology,
         subdevice_id=subdevice_id,
-        enable_persistent_fabric_mode=enable_persistent_fabric,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -67,7 +61,6 @@ def run_with_trace(
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
                 subdevice_id=subdevice_id,
-                enable_persistent_fabric_mode=enable_persistent_fabric,
             )
         ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
         ttnn.synchronize_device(mesh_device)
@@ -86,7 +79,6 @@ def run_with_trace(
             memory_config=output_mem_config,
             topology=all_gather_topology,
             subdevice_id=subdevice_id,
-            enable_persistent_fabric_mode=enable_persistent_fabric,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -139,7 +131,6 @@ def run_concat_fuse_impl(
     warmup_iters=0,
     profiler=BenchmarkProfiler(),
 ):
-    enable_persistent_fabric = True
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
     # Use Async mode based on test input config
@@ -159,14 +150,8 @@ def run_concat_fuse_impl(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-        mesh_device,
-        [worker_sub_device],
-        0,
-        0,
-        enable_persistent_fabric,
-        wrap_fabric_around_mesh=True,
-    )
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
@@ -225,12 +210,10 @@ def run_concat_fuse_impl(
         input_tensors = torch.chunk(output_tensor, num_devices, dim)
         tt_input_tensors = []
         for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(
-                ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
-            )
+            tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
             logger.info(f"using device {mesh_device.get_devices()[i].id()}")
 
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -253,13 +236,11 @@ def run_concat_fuse_impl(
         zeros_tensor = torch.zeros(output_shape).bfloat16()
         tt_intermediate_tensors = []
         for i in range(4):
-            tt_intermediate_tensor = (
-                ttnn.Tensor(zeros_tensor, input_dtype)
-                .to(layout)
-                .to(mesh_device.get_devices()[i], intermediate_mem_config)
-            )
+            tt_intermediate_tensor = ttnn.Tensor(zeros_tensor, input_dtype).to(layout)
             tt_intermediate_tensors.append(tt_intermediate_tensor)
-        intermediate_tensor_mesh = ttnn.aggregate_as_tensor(tt_intermediate_tensors)
+        intermediate_tensor_mesh = ttnn.aggregate_as_tensor(tt_intermediate_tensors).to(
+            mesh_device, intermediate_mem_config
+        )
         intermediate_tensors_list.append(intermediate_tensor_mesh)
     tt_out_tensor_list = []
 
@@ -272,7 +253,6 @@ def run_concat_fuse_impl(
             dim,
             num_links,
             output_mem_config,
-            enable_persistent_fabric,
             multi_device_global_semaphore=ccl_semaphore_handles[0],
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
@@ -294,7 +274,6 @@ def run_concat_fuse_impl(
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
-                enable_persistent_fabric_mode=enable_persistent_fabric,
             )
             tt_out_tensor_list.append(tt_out_tensor)
 
@@ -321,8 +300,6 @@ def run_concat_fuse_impl(
                 passed = False
 
     mesh_device.reset_sub_device_stall_group()
-    teardown_fabric_interface(mesh_device)
-    print("teardown done\n")
 
     if not passed:
         assert eq, f"{i} FAILED: {output}"

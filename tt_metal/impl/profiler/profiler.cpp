@@ -45,6 +45,39 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
 
+distributed::AnyBuffer get_control_buffer_view(
+    IDevice* device, uint32_t address, uint32_t size, CoreCoord logical_worker_core) {
+    auto shard_parameters = ShardSpecBuffer({logical_worker_core}, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    auto mesh_device = device->get_mesh_device();
+    auto buffer_config = ShardedBufferConfig(
+        {mesh_device ? mesh_device.get() : device,
+         size,
+         size,
+         BufferType::L1,
+         TensorMemoryLayout::HEIGHT_SHARDED,
+         shard_parameters});
+    return distributed::AnyBuffer::create(buffer_config, address);
+}
+
+void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data) {
+    if (auto mesh_device = device->get_mesh_device()) {
+        auto device_coord = mesh_device->get_view().find_device(device->id());
+        WriteShard(mesh_device->mesh_command_queue(), buffer.get_mesh_buffer(), data, device_coord, true);
+    } else {
+        EnqueueWriteBuffer(device->command_queue(), *(buffer.get_buffer()), data, true);
+    }
+}
+
+void issue_fd_read_from_profiler_buffer(
+    distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& host_data) {
+    if (auto mesh_device = device->get_mesh_device()) {
+        auto device_coord = mesh_device->get_view().find_device(device->id());
+        distributed::ReadShard(mesh_device->mesh_command_queue(), host_data, buffer.get_mesh_buffer(), device_coord);
+    } else {
+        EnqueueReadBuffer(device->command_queue(), *(buffer.get_buffer()), host_data.data(), true);
+    }
+}
+
 void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
     const CoreCoord& worker_core,
@@ -57,6 +90,7 @@ void DeviceProfiler::readRiscProfilerResults(
     HalProgrammableCoreType CoreType;
     int riscCount;
 
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(worker_core, device_id)) {
         CoreType = HalProgrammableCoreType::TENSIX;
         riscCount = 5;
@@ -81,12 +115,26 @@ void DeviceProfiler::readRiscProfilerResults(
             worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
-    std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
-        device_id,
-        worker_core,
-        reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-        kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
-
+    std::vector<uint32_t> control_buffer;
+    if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
+        // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
+        // generic API to read from an address instead of a buffer. (#15015)
+        control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE / sizeof(uint32_t));
+        auto logical_worker_core =
+            soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+        auto control_buffer_view = get_control_buffer_view(
+            device,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+            CoreCoord(logical_worker_core.x, logical_worker_core.y));
+        issue_fd_read_from_profiler_buffer(control_buffer_view, device, control_buffer);
+    } else {
+        control_buffer = tt::llrt::read_hex_vec_from_core(
+            device_id,
+            worker_core,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+    }
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
         return;
@@ -266,9 +314,21 @@ void DeviceProfiler::readRiscProfilerResults(
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
     control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
     control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
-
-    tt::llrt::write_hex_vec_to_core(
-        device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+    if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
+        // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
+        // generic API to read from an address instead of a buffer. (#15015)
+        auto logical_worker_core =
+            soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+        auto control_buffer_view = get_control_buffer_view(
+            device,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE,
+            CoreCoord(logical_worker_core.x, logical_worker_core.y));
+        issue_fd_write_to_profiler_buffer(control_buffer_view, device, control_buffer_reset);
+    } else {
+        tt::llrt::write_hex_vec_to_core(
+            device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+    }
 }
 
 void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
@@ -740,14 +800,7 @@ void DeviceProfiler::dumpResults(
                     tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
                 }
             } else {
-                if (auto mesh_buffer = output_dram_buffer.get_mesh_buffer()) {
-                    auto mesh_device = mesh_buffer->device();
-                    auto device_coord = mesh_device->get_view().find_device(device->id());
-                    distributed::ReadShard(
-                        mesh_device->mesh_command_queue(), profile_buffer, mesh_buffer, device_coord);
-                } else {
-                    EnqueueReadBuffer(device->command_queue(), *output_dram_buffer_ptr, profile_buffer, true);
-                }
+                issue_fd_read_from_profiler_buffer(output_dram_buffer, device, profile_buffer);
             }
         } else {
             if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {

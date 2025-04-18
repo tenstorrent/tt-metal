@@ -27,12 +27,13 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config,
     // New Parameters
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    ttnn::ccl::Topology topology,
+    ::ttnn::ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
@@ -85,7 +86,7 @@ struct RMSAllGather {
         ttnn::operations::normalization::LayerNormProgramConfig program_config,
         const DeviceComputeKernelConfig compute_kernel_config,
         std::optional<DataType> dtype,
-        ttnn::ccl::Topology topology,
+        ::ttnn::ccl::Topology topology,
         const bool is_pre,
         const uint32_t num_links,
         const uint32_t ring_size,

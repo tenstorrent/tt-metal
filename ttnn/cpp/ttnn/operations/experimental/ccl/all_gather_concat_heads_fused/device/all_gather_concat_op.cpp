@@ -48,22 +48,6 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
         "Unsupported input shape, should be [1, 8, 32, 128]!");
 }
 
-static void validate_output_tensor_alloc(const std::vector<Tensor>& output_tensors) {
-    for (const auto& output_tensor : output_tensors) {
-        const auto& buffers = output_tensor.buffers();
-        const auto first_address = buffers.front()->address();
-        TT_FATAL(
-            std::all_of(
-                buffers.begin(),
-                buffers.end(),
-                [&first_address](const auto& buffer) {
-                    return buffer != nullptr && buffer->address() == first_address;
-                }),
-            "Output buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
-            "different addresses across devices.");
-    }
-}
-
 std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     auto input_shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
@@ -110,25 +94,24 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
 
     const auto& input_tensor = input_tensors[0];
-    const auto& mesh_view = input_tensor.mesh_device()->get_view();
+    auto mesh_device = input_tensor.mesh_device();
+    const auto& mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    const auto coordinate = mesh_view.find_device(input_tensor.device()->id());
-    std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
-                                                        : mesh_view.get_devices_on_row(coordinate[0]);
-
-    uint32_t num_devices = devices.size();
+    const auto target_device = mesh_device->get_device(mesh_coord);
+    std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coord[1])
+                                                        : mesh_view.get_devices_on_row(mesh_coord[0]);
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == input_tensor.device()) {
+    for (uint32_t i = 0; i < this->ring_size; ++i) {
+        if (devices.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
                 backward_device = devices.at(i - 1);
             }
-            if (i != num_devices - 1) {
+            if (i != this->ring_size - 1) {
                 forward_device = devices.at(i + 1);
             }
         }
@@ -139,6 +122,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
     return all_gather_concat_llama_sharded(
         input_tensors[0],
         input_tensors[1],
+        target_device,
         forward_device,
         backward_device,
         output_tensors[0],
@@ -149,7 +133,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
         this->topology,
         this->semaphore,
         this->sub_device_id,
-        this->enable_persistent_fabric_mode,
         this->num_heads);
 }
 
@@ -189,13 +172,11 @@ Tensor all_gather_concat(
     const std::optional<uint32_t> num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     TT_FATAL(
         topology == ttnn::ccl::Topology::Linear,
         "This all_gather API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
-    auto devices = input_tensor.get_workers();
     uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     int32_t rank = input_tensor.get_logical_shape().rank();
@@ -208,46 +189,19 @@ Tensor all_gather_concat(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    // create this semaphore for all cores since we don't know which core will be used for teardown draining
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-
-    tt::tt_metal::operation::launch_op(
-        [gather_dim,
-         mesh_view,
-         cluster_axis,
-         num_links,
-         num_devices,
-         memory_config,
-         devices,
-         topology,
-         global_semaphore,
-         sub_device_id,
-         enable_persistent_fabric_mode,
-         num_heads](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor = input_tensors.at(0);
-            const auto& buffer_tensor = input_tensors.at(1);
-            return tt::tt_metal::operation::run(
-                ttnn::AllGatherConcat{
-                    gather_dim,
-                    num_links.value_or(1),
-                    num_devices,
-                    memory_config.value_or(input_tensor.memory_config()),
-                    topology,
-                    global_semaphore,
-                    sub_device_id,
-                    enable_persistent_fabric_mode,
-                    num_heads,
-                    cluster_axis},
-                {input_tensor, buffer_tensor});
-        },
-        {input_tensor, buffer_tensor},
-        output_tensors);
-    return output_tensors.at(0);
+    return tt::tt_metal::operation::run(
+               ttnn::AllGatherConcat{
+                   gather_dim,
+                   num_links.value_or(1),
+                   num_devices,
+                   memory_config.value_or(input_tensor.memory_config()),
+                   topology,
+                   global_semaphore,
+                   sub_device_id,
+                   num_heads,
+                   cluster_axis},
+               {input_tensor, buffer_tensor})
+        .at(0);
 }
 
 }  // namespace ccl

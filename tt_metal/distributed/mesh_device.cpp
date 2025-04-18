@@ -144,7 +144,8 @@ MeshDevice::ScopedDevices::ScopedDevices(
         {},
         worker_l1_size,
         /*init_profiler*/ false,
-        /*use_max_eth_core_count_on_all_devices*/ true);
+        /*use_max_eth_core_count_on_all_devices*/ true,
+        /* initialize_fabric_and_dispatch_fw */ false);
 
     for (auto device_id : device_ids) {
         devices_.push_back(opened_devices_.at(device_id));
@@ -219,7 +220,9 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     for (auto device : root_devices) {
         dynamic_cast<Device*>(device)->mesh_device = mesh_device;
     }
+    // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     DevicePool::instance().init_profiler();
+    DevicePool::instance().initialize_fabric_and_dispatch_fw();
     return mesh_device;
 }
 
@@ -252,8 +255,9 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
         result[device_ids[i]] = submeshes[i];
     }
+    // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     DevicePool::instance().init_profiler();
-
+    DevicePool::instance().initialize_fabric_and_dispatch_fw();
     return result;
 }
 
@@ -693,6 +697,11 @@ SystemMemoryManager& MeshDevice::sysmem_manager() {
 CommandQueue& MeshDevice::command_queue(size_t cq_id) {
     TT_THROW("command_queue() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->command_queue(cq_id);
+}
+
+bool MeshDevice::dispatch_firmware_active() const {
+    return validate_and_get_reference_value(
+        scoped_devices_->root_devices(), [](const auto& device) { return device->dispatch_firmware_active(); });
 }
 
 // Trace management

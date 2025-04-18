@@ -48,6 +48,22 @@ else()
     message(FATAL_ERROR "SFPI binaries for ${CMAKE_HOST_SYSTEM_PROCESSOR}-${CMAKE_HOST_SYSTEM_NAME} not available")
 endif()
 
+# Transcode the SFPI version to a JSON file
+set(SFPI_VERSION_JSON_PATH "${PROJECT_BINARY_DIR}/sfpi-version.json")
+
+add_custom_command(
+    OUTPUT
+        ${SFPI_VERSION_JSON_PATH}
+    COMMAND
+        ${CMAKE_COMMAND} -DOUTPUT_FILE=${SFPI_VERSION_JSON_PATH} -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate-sfpi-json.cmake
+    DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/sfpi-version.cmake
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate-sfpi-json.cmake
+    COMMENT "Regenerating SFPI version JSON file"
+    VERBATIM
+)
+
 foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
     set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
@@ -245,6 +261,7 @@ add_custom_target(
     DEPENDS
         ${PREPROCESSED_LD_FILES}
         ${PREPROCESSED_O_FILES}
+        ${SFPI_VERSION_JSON_PATH}
 )
 
 add_library(hw INTERFACE)
