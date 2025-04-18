@@ -29,6 +29,7 @@ class TtLinearParameters:
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
         shard_dim: int = None,
+        unsqueeze_bias: bool = False,
     ) -> TtLinearParameters:
         if "bias" in state:
             bias = state["bias"].unsqueeze(0)
@@ -68,6 +69,11 @@ class TtLinearParameters:
                         bias = bias.reshape(bias_h, bias_w_mult, hidden_dim)
                         bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_pad), mode="constant", value=0)
                         bias = bias.reshape(bias_h, bias_w_mult * hidden_dim_new)
+
+        if unsqueeze_bias:
+            # TODO: Once the issue is resolved, remove this workaround for https://github.com/tenstorrent/tt-metal/issues/16599
+            bias = bias.unsqueeze(0)
+
         return cls(
             weight=from_torch(
                 weight.transpose(0, 1),
@@ -176,6 +182,7 @@ class TtLinearParameters:
         num_chunks: int,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        unsqueeze_bias: bool = False,
     ) -> TtLinearParameters:
         if "bias" in state:
             torch_bias = state["bias"].unsqueeze(0)
@@ -219,6 +226,10 @@ class TtLinearParameters:
                             torch_bias, pad=(0, hidden_dim_pad), mode="constant", value=0
                         )
                         torch_bias = torch_bias.reshape(bias_h, bias_w_mult * hidden_dim_new)
+
+        if unsqueeze_bias:
+            # TODO: Once the issue is resolved, remove this workaround for https://github.com/tenstorrent/tt-metal/issues/16599
+            torch_bias = torch_bias.unsqueeze(0)
 
         def shuffle_chunks(tensor):
             # Given torch tensor with output features in the last dimension,
