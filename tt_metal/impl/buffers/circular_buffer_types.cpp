@@ -108,9 +108,6 @@ CircularBufferConfig& CircularBufferConfig::set_total_size(uint32_t total_size) 
 #endif
         }
     }
-    if (total_size == 0) {
-        TT_THROW("Total size for circular buffer must be non-zero!");
-    }
     this->total_size_ = total_size;
     return *this;
 }
@@ -150,9 +147,6 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
                 this->buffer_size_);
         }
 #endif
-    }
-    if (total_size == 0) {
-        TT_THROW("Total size for circular buffer must be non-zero!");
     }
     this->total_size_ = total_size;
     return *this;
