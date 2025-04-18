@@ -76,7 +76,7 @@ done
 ub_runtime_packages()
 {
     UB_RUNTIME_LIST=(\
-     libpython3 \
+     python3-dev \
      python3-pip \
      python3-venv \
      libhwloc-dev \
