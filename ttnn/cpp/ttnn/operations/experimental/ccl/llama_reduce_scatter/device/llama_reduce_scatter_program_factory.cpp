@@ -294,7 +294,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
             }
         }
     }
-
     uint32_t num_links = operation_attributes.num_links;
 
     std::string device_order = detail::device_order_array_string(ring_size, ring_index);

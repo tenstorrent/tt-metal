@@ -2111,7 +2111,6 @@ void run_ring_all_gather_with_persistent_fabric(
     // Initialize MeshDevice with 1D Fabric
     Fabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
     test_fixture.mesh_device_->reshape(MeshShape(1, 8));
-
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
