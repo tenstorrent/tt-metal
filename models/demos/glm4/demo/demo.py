@@ -4,8 +4,10 @@
 from dataclasses import dataclass, replace
 import os
 import json
+import sys
 import torch
 import torch.nn.functional as F
+import ttnn
 
 from time import time
 import pytest
@@ -16,10 +18,50 @@ from models.utility_functions import skip_for_grayskull  # Keep generic utilitie
 # Removed Llama reference imports
 from transformers import AutoTokenizer  # Use HF AutoTokenizer for GLM-4
 
+# Replace this import with our own implementation
+# from transformers.generation.utils import top_k_top_p_filtering
+
 # GLM-4 specific imports
 from models.demos.glm4.tt.model import Glm4Transformer
 from models.demos.glm4.tt.model_config import Glm4ModelArgs
 from models.demos.glm4.tt.load_weights import load_and_process_glm4_state_dict
+
+
+# Our own implementation of top_k_top_p_filtering
+def top_k_top_p_filtering(logits, top_k=0, top_p=1.0, filter_value=-float("Inf"), min_tokens_to_keep=1):
+    """Filter a distribution of logits using top-k and/or nucleus (top-p) filtering.
+
+    Args:
+        logits: logits distribution shape (batch size, vocabulary size)
+        top_k: keep only top k tokens with highest probability (top-k filtering)
+        top_p: keep the top tokens with cumulative probability >= top_p (nucleus filtering)
+        filter_value: value to use for filtered tokens
+        min_tokens_to_keep: minimum number of tokens to keep
+
+    Returns:
+        filtered logits
+    """
+    if top_k > 0:
+        # Remove all tokens with a probability less than the last token of the top-k
+        indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+        logits = logits.masked_fill(indices_to_remove, filter_value)
+
+    if top_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+
+        # Remove tokens with cumulative probability above the threshold
+        sorted_indices_to_remove = cumulative_probs > top_p
+
+        # Shift the indices to the right to keep also the first token above the threshold
+        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 0] = 0
+
+        # Scatter sorted tensors to original indexing
+        indices_to_remove = sorted_indices_to_remove.scatter(dim=-1, index=sorted_indices, src=sorted_indices_to_remove)
+        logits = logits.masked_fill(indices_to_remove, filter_value)
+
+    return logits
 
 
 # Add a helper function to check mesh device compatibility instead of importing from Llama
@@ -29,11 +71,16 @@ def check_mesh_device(mesh_device, model_config=None):
         logger.warning("No mesh device provided!")
         return
 
-    # Any GLM-4 specific device checks can go here
-    device_count = getattr(mesh_device, "device_count", 0)
-    logger.info(f"Using {device_count} device(s)")
+    # Check number of devices
+    num_devices = getattr(mesh_device, "get_num_devices", lambda: getattr(mesh_device, "device_count", 0))()
+    logger.info(f"Using {num_devices} device(s)")
 
     # Add any model-specific checks based on model_config if needed
+    if model_config and "NUM_DEVICES" in model_config:
+        assert num_devices >= model_config["NUM_DEVICES"], (
+            f"Requires at least {model_config['NUM_DEVICES']} devices to run, but only {num_devices} available",
+        )
+
     return True
 
 
@@ -197,7 +244,19 @@ def run_demo(args: DemoArgs):
     generator_output = build_generator(model_args, tt_args)
     model, tokenizer = generator_output["model"], generator_output["tokenizer"]
 
+    # Load prompts
     tokenized, prompts = load_prompts_file(model_args, data_args, tokenizer)
+
+    # If skip_model_load is true, we won't have a model to run
+    # In this case, just log our progress and return early
+    if model_args.skip_model_load or model is None:
+        logger.info("Model loading was skipped. Displaying prompts that would be processed:")
+        for i, prompt in enumerate(prompts[:5]):  # Show first 5 prompts
+            logger.info(f"Prompt {i+1}: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
+        if len(prompts) > 5:
+            logger.info(f"... and {len(prompts) - 5} more prompts")
+        logger.info("Skip model loading test completed successfully")
+        return
 
     # Run decode
     with torch.no_grad():
@@ -344,7 +403,7 @@ def load_prompts_file(model_args: ModelArgs, data_args: DataArgs, tokenizer):
     """Load prompts from file and tokenize"""
     try:
         with open(data_args.prompts_file, "r") as f:
-            prompts = json.load(f)
+            prompts_data = json.load(f)
     except FileNotFoundError:
         logger.error(f"Prompts file not found: {data_args.prompts_file}")
         raise
@@ -352,30 +411,53 @@ def load_prompts_file(model_args: ModelArgs, data_args: DataArgs, tokenizer):
         logger.error(f"Invalid JSON in prompts file: {data_args.prompts_file}")
         raise
 
-    # TODO: Adapt tokenization based on GLM-4's requirements (chat vs text, special tokens)
+    # Extract prompts from data structure
     if data_args.chat:
-        # Assuming GLM-4 uses a specific chat template/encoding via tokenizer's apply_chat_template
-        # This might need adjustment based on the exact tokenizer usage for GLM-4
-        try:
-            # Example: Use apply_chat_template if available and suitable
-            # tokenized = [tokenizer.apply_chat_template(p, add_generation_prompt=True, tokenize=True) for p in prompts]
-            # Fallback to simple encoding if template isn't the right approach here
-            tokenized = [
-                tokenizer.encode(p["prompt"] if isinstance(p, dict) else p, add_special_tokens=True) for p in prompts
-            ]  # Adjust based on prompt format
-            logger.warning("Chat tokenization might require specific GLM-4 template handling.")
-        except Exception as e:
-            logger.error(f"Failed during chat tokenization: {e}")
-            raise
+        # Chat prompts should be a list of dicts with a 'prompt' key containing message objects
+        # The message objects should be a list of dicts with 'role' and 'content' keys
+        prompt_texts = []
+        for p in prompts_data:
+            if isinstance(p, dict) and "prompt" in p:
+                messages = p["prompt"]
+                if messages and isinstance(messages, list):
+                    # Use the tokenizer's chat template if available
+                    try:
+                        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                        prompt_texts.append(text)
+                    except Exception as e:
+                        logger.error(f"Failed to apply chat template: {e}. Using raw content instead.")
+                        # Fallback: just use the last user message
+                        user_messages = [m for m in messages if m.get("role") == "user"]
+                        if user_messages:
+                            prompt_texts.append(user_messages[-1].get("content", ""))
+                        else:
+                            logger.warning(f"No user message found in chat prompt: {messages}")
+                            prompt_texts.append("")
+            else:
+                logger.warning(f"Unexpected chat prompt format: {p}")
+                prompt_texts.append("")
+    else:
+        # Text prompts should be a list of dicts with a 'prompt' key
+        prompt_texts = []
+        for p in prompts_data:
+            if isinstance(p, dict) and "prompt" in p:
+                prompt_texts.append(p["prompt"])
+            else:
+                logger.warning(f"Unexpected text prompt format: {p}")
+                # Try to use the item directly if it's a string
+                if isinstance(p, str):
+                    prompt_texts.append(p)
+                else:
+                    prompt_texts.append("")
 
-    else:  # Simple text completion
+    # Now tokenize the prompts
+    tokenized = []
+    for text in prompt_texts:
         try:
-            # Default encode: add BOS but not EOS for generation start
-            tokenized = [tokenizer.encode(p, add_special_tokens=True, return_tensors=None) for p in prompts]
-            # Verify BOS/EOS handling for GLM-4 - might need adjustment
-            # Example: some models require explicit BOS, others add it automatically
+            tokens = tokenizer.encode(text, add_special_tokens=True, return_tensors=None)
+            tokenized.append(tokens)
         except Exception as e:
-            logger.error(f"Failed during text tokenization: {e}")
+            logger.error(f"Failed to tokenize prompt: {e}")
             raise
 
     # Truncate prompts if sample_len is provided
@@ -388,10 +470,10 @@ def load_prompts_file(model_args: ModelArgs, data_args: DataArgs, tokenizer):
             f"Prompts file contains {len(tokenized)} prompts, but max batch size is {model_args.max_batch_size}. Using first {model_args.max_batch_size} prompts."
         )
         tokenized = tokenized[: model_args.max_batch_size]
-        prompts = prompts[: model_args.max_batch_size]
+        prompt_texts = prompt_texts[: model_args.max_batch_size]
 
     logger.info(f"Loaded and tokenized {len(tokenized)} prompts.")
-    return tokenized, prompts
+    return tokenized, prompt_texts
 
 
 def initialize_inputs(tokenizer, prompt_tokens, bsz, total_len):
@@ -758,6 +840,33 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
         return next_token
 
 
+# Add string_similarity_score function to replace the Llama import
+def string_similarity_score(expected, actual):
+    """Calculate similarity score between expected and actual text outputs.
+    A simple implementation that returns 1.0 for exact match, 0.0 otherwise.
+
+    Args:
+        expected: List of expected output strings or dicts with 'output' key
+        actual: List of actual generated output strings
+
+    Returns:
+        List of similarity scores (0.0-1.0) for each pair
+    """
+    scores = []
+    for i in range(min(len(expected), len(actual))):
+        # Handle both list of strings and list of dicts with 'output' key
+        exp = expected[i]["output"] if isinstance(expected[i], dict) else expected[i]
+        act = actual[i]
+        # Simple exact matching for now
+        score = 1.0 if exp.strip() == act.strip() else 0.0
+        scores.append(score)
+
+    # Pad with zeros if lengths don't match
+    scores.extend([0.0] * (len(expected) - len(scores)))
+
+    return scores
+
+
 # --- Pytest Integration ---
 # TODO: Adapt parameters and marks for GLM-4 testing environment
 
@@ -770,7 +879,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), 1  # Use a default value instead of ttnn.get_device_ids()
         )
     ],
     indirect=["mesh_device"],
@@ -920,7 +1029,96 @@ def test_Glm4Model_demo(
     logger.info("GLM-4 model demo test completed successfully")
 
 
-# TODO: Add main block if script needs to be runnable directly
-# if __name__ == "__main__":
-#    pass
-#    # Add argparse or simplified setup to run without pytest
+# Main block for direct execution without pytest
+if __name__ == "__main__":
+    import argparse
+    import ttnn
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="GLM-4 Demo")
+
+    # Model arguments
+    parser.add_argument(
+        "--model-name",
+        type=str,
+        default=os.environ.get("GLM4_MODEL_NAME", "THUDM/glm-4-9b-chat"),
+        help="GLM-4 model name/identifier",
+    )
+    parser.add_argument(
+        "--weights-dir",
+        type=str,
+        default=os.environ.get("GLM4_WEIGHTS_DIR", ""),
+        help="Path to model weights directory",
+    )
+    parser.add_argument(
+        "--tokenizer-path", type=str, default=os.environ.get("GLM4_TOKENIZER_PATH", ""), help="Path/name for tokenizer"
+    )
+    parser.add_argument("--skip-model-load", action="store_true", help="Skip loading model weights (for testing)")
+    parser.add_argument("--num-layers", type=int, default=None, help="Override number of transformer layers")
+
+    # Generation arguments
+    parser.add_argument(
+        "--prompts-file",
+        type=str,
+        default="models/demos/glm4/demo/data/sample_text_prompts.json",
+        help="Path to JSON file with prompts",
+    )
+    parser.add_argument("--chat", action="store_true", help="Use chat prompts instead of text prompts")
+    parser.add_argument("--max-tokens", type=int, default=128, help="Maximum number of tokens to generate")
+    parser.add_argument("--top-p", type=float, default=1.0, help="Top-p sampling parameter")
+    parser.add_argument("--top-k", type=int, default=1, help="Top-k sampling parameter (1 for greedy)")
+    parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature")
+    parser.add_argument("--ground-truth", type=str, default=None, help="Path to ground truth file for validation")
+
+    # TT arguments
+    parser.add_argument("--decode-only", action="store_true", help="Skip prefill, do decode only")
+    parser.add_argument("--max-batch-size", type=int, default=8, help="Maximum batch size")
+    parser.add_argument("--max-seq-len", type=int, default=2048, help="Maximum sequence length")
+
+    # Parse arguments
+    args = parser.parse_args()
+
+    # Create TT device
+    try:
+        device_ids = ttnn.get_device_ids()
+        if device_ids:
+            tt_device = ttnn.device.create_device(device_ids)
+            if hasattr(tt_device, "enable_async"):
+                tt_device.enable_async(True)
+            logger.info(f"Created TT device with {len(device_ids)} devices")
+        else:
+            logger.error("No TT devices found")
+            sys.exit(1)
+    except Exception as e:
+        logger.error(f"Failed to create TT device: {e}")
+        sys.exit(1)
+
+    # Create demo args
+    demo_args = construct_arg(
+        # Model args
+        implementation="tt",
+        model_name=args.model_name,
+        ckpt_dir=args.weights_dir if args.weights_dir else args.model_name,
+        tokenizer_path=args.tokenizer_path if args.tokenizer_path else args.model_name,
+        skip_model_load=args.skip_model_load,
+        num_layers=args.num_layers,
+        max_seq_len=args.max_seq_len,
+        max_kv_context_len=args.max_seq_len,
+        max_batch_size=args.max_batch_size,
+        # TT args
+        mesh_device=tt_device,
+        decode_only=args.decode_only,
+        # Data/generation args
+        max_output_tokens=args.max_tokens,
+        prompts_file=args.prompts_file,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        temperature=args.temperature,
+        chat=args.chat,
+        ground_truth=args.ground_truth,
+        print_output_as_generated=True,
+        print_output_at_end=True,
+    )
+
+    # Run demo
+    run_demo(demo_args)
