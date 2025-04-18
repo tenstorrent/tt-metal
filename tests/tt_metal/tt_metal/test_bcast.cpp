@@ -200,8 +200,8 @@ int main(int argc, char** argv) {
                     tiled_bcast_values = convert_layout<uint16_t>(
                         ref_bcast_values_with_tile_padding,
                         ref_bcast_shape_with_tile_padding,
-                        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-                        tests::utils::TensorLayoutType::TILED_NFACES);
+                        TensorLayoutType::LIN_ROW_MAJOR,
+                        TensorLayoutType::TILED_NFACES);
                     TT_FATAL(tiled_bcast_values[0] == bcast_1value16, "Error");
                     num_bcast_tiles = NC;
                     // restore ref values and shape to 1
@@ -226,8 +226,8 @@ int main(int argc, char** argv) {
                     tiled_bcast_values = convert_layout<uint16_t>(
                         ref_bcast_values_with_tile_padding,
                         ref_bcast_shape_with_tile_padding,
-                        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-                        tests::utils::TensorLayoutType::TILED_NFACES);
+                        TensorLayoutType::LIN_ROW_MAJOR,
+                        TensorLayoutType::TILED_NFACES);
                     num_bcast_tiles = NC * Wt;
                     // restore values and shape to W
                 } else if (bcast_dim == BcastDim::W) {
@@ -245,8 +245,8 @@ int main(int argc, char** argv) {
                     tiled_bcast_values = convert_layout<uint16_t>(
                         ref_bcast_values_with_tile_padding,
                         ref_bcast_shape_with_tile_padding,
-                        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-                        tests::utils::TensorLayoutType::TILED_NFACES);
+                        TensorLayoutType::LIN_ROW_MAJOR,
+                        TensorLayoutType::TILED_NFACES);
                     num_bcast_tiles = NC * Ht;
                 }
 
@@ -351,20 +351,14 @@ int main(int argc, char** argv) {
                 // recover a linear view of input vector for consumption by gold_ function
                 auto u16_src0_vec = u16_from_u32_vector(src0_vec);
                 vector<uint16_t> src_linear = convert_layout<uint16_t>(
-                    u16_src0_vec,
-                    shape,
-                    tests::utils::TensorLayoutType::TILED_NFACES,
-                    tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+                    u16_src0_vec, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
                 vector<uint16_t> gold_added = gold_bcast_op(
                     src_linear, shape, ref_bcast_values, bcast_dim, bcast_op);  // result is uint16_t untilized
 
                 // Tilize from row major and convert to pairs (uint32_t)
                 vector<uint32_t> shapeR{shape[0], shape[1], shape[2], shape[3]};
                 auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
-                    gold_added,
-                    shapeR,
-                    tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-                    tests::utils::TensorLayoutType::TILED_NFACES));
+                    gold_added, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES));
 
                 pass &= packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
                 if (!pass) {

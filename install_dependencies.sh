@@ -76,10 +76,12 @@ done
 ub_runtime_packages()
 {
     UB_RUNTIME_LIST=(\
+     python3-dev \
      python3-pip \
      python3-venv \
      libhwloc-dev \
      libnuma-dev \
+     libatomic1 \
      libc++-17-dev \
      libc++abi-17-dev \
      libstdc++6 \

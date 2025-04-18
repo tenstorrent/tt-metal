@@ -425,8 +425,8 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     std::vector<uint16_t> src_linear = convert_layout<uint16_t>(
         u16_src0_vec,
         test_config.shape,
-        tests::utils::TensorLayoutType::TILED_NFACES,
-        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
+        TensorLayoutType::LIN_ROW_MAJOR,
         PhysicalSize{tile_H, tile_W});
     std::vector<uint16_t> gold_reduced = test_config.golden_function(
         src_linear, test_config.shape, scaler, uint8_t(test_config.reduce_type), true);  // result is uint16_t untilized
@@ -435,8 +435,8 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
         gold_reduced,
         test_config.result_shape,
-        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-        tests::utils::TensorLayoutType::TILED_NFACES,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
         PhysicalSize{tile_H, tile_W}));
 
     bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
