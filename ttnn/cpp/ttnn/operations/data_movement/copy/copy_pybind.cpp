@@ -113,6 +113,7 @@ void py_bind_assign(py::module& module) {
             py::kw_only(),
             py::arg("memory_config"),
             py::arg("dtype") = std::nullopt,
+            // py::arg("sub_core_grids") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
         ttnn::pybind_overload_t{
