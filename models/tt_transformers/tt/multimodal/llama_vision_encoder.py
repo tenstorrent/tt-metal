@@ -208,17 +208,12 @@ class TtLlamaVisionEncoder(LightweightModule):
         ntok += 1
 
         # apply position embeddings
-        # NOTE! After class embedding, x is padded tilized tensor. Reshapes fail for padded tilized tensors, so do the reshape in row-major
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok, dim))
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.positional_embedding(x, ar)
 
         # BUG: layernorm takes 4d tensor -> 3d??
         x = self.ln_pre(x)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok, dim))  # BUG: required for above note
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         npad, attn_mask = 0, None
 
         # NOTE: We need to do this padding because it creates a funky attention mask
@@ -236,31 +231,22 @@ class TtLlamaVisionEncoder(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (1, bsz * num_concurrent_media, -1, dim))
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         x, int_x = self.transformer(x, return_intermediate=self.return_intermediate, mask=attn_mask)
 
         x = self.ln_post(x)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok + npad, dim))
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.post_tile_pos_embed(x, ar)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (1, bsz * num_concurrent_media, num_chunks * (ntok + npad), dim))
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.global_transformer(x, mask=attn_mask)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok + npad, dim))
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.slice(x, (0, 0, 0, 0), (bsz * num_concurrent_media, num_chunks, ntok, dim))
 
         # adding back intermediate layer outputs
         # NOTE: We cannot do 5-dim tensors. It should be find to send back 4-dim as long as calling code knows.
         # NOTE: I can't correctly stack and reshape int_x because of ttnn page size limitations.
         # NOTE: this means I will have to modify calling code to know that int_x is not shuffled
-
         int_x = [ttnn.reshape(ix, (bsz * num_concurrent_media, num_chunks, ntok + npad, dim)) for ix in int_x]
         int_x = [ttnn.slice(ix, (0, 0, 0, 0), (bsz * num_concurrent_media, num_chunks, ntok, dim)) for ix in int_x]
         x = ttnn.concat(

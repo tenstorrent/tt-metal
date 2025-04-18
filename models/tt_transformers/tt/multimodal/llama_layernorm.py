@@ -4,7 +4,6 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
 
@@ -30,7 +29,10 @@ class TtLayerNorm(LightweightModule):
             state_dict[f"{state_dict_prefix}weight"].unsqueeze(0).view(1, 1, dim).expand([1, SHARD_HEIGHT, dim])
         )
         torch_bias = state_dict[f"{state_dict_prefix}bias"].unsqueeze(0).view(1, 1, dim).expand([1, SHARD_HEIGHT, dim])
-        cache_name = None if weight_cache_path is None else weight_cache_path / state_dict_prefix
+        if weight_cache_path is None:
+            cache_name = lambda *_: None
+        else:
+            cache_name = lambda suffix: weight_cache_path / (state_dict_prefix + f"{suffix}")
 
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
         self.weight = ttnn.as_tensor(
@@ -39,7 +41,7 @@ class TtLayerNorm(LightweightModule):
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
-            cache_file_name=cache_name / "weight",
+            cache_file_name=cache_name("weight"),
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 
@@ -49,7 +51,7 @@ class TtLayerNorm(LightweightModule):
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
-            cache_file_name=cache_name / "bias",
+            cache_file_name=cache_name("bias"),
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 

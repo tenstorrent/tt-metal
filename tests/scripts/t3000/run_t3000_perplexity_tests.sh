@@ -133,10 +133,18 @@ run_t3000_llama3_perplexity_tests_t3000() {
   llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct/
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
 
   for MESH_DEVICE in T3K; do
-    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
+    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
+    done
+
+    # 70B and 90B tests has the same configuration between `-k "attention-accuracy"` and `-k "attention-performance"` so we only run one of them
+    for LLAMA_DIR in "$llama70b" "$llama90b"; do
+      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k "attention-accuracy" --timeout=3600 ; fail+=$?
     done
   done
 
