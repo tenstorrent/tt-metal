@@ -4,7 +4,7 @@
 
 
 import ttnn
-from models.experimental.functional_yolov8x.tests.yolov8x_test_infra import create_test_infra
+from models.experimental.yolov8x.tests.yolov8x_test_infra import create_test_infra
 
 try:
     from tracy import signpost

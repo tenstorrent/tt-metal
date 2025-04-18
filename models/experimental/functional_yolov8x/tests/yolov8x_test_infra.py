@@ -1,103 +1,30 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-import sys
 import ttnn
 import torch
-import torch.nn as nn
 from loguru import logger
-from pathlib import Path
+from ultralytics import YOLO
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8xModel
-from models.experimental.functional_yolov8x.reference import yolov8x_utils
-from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
-
+from models.experimental.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel
+from models.experimental.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
 from models.utility_functions import (
     is_wormhole_b0,
     divup,
 )
 
-try:
-    sys.modules["ultralytics"] = yolov8x_utils
-    sys.modules["ultralytics.nn.tasks"] = yolov8x_utils
-    sys.modules["ultralytics.nn.modules.conv"] = yolov8x_utils
-    sys.modules["ultralytics.nn.modules.block"] = yolov8x_utils
-    sys.modules["ultralytics.nn.modules.head"] = yolov8x_utils
-
-except KeyError:
-    logger.info("models.experimental.functional_yolov8x.reference.yolov8x_utils not found.")
-
-
-class Ensemble(nn.ModuleList):
-    def __init__(self):
-        super(Ensemble, self).__init__()
-
-    def forward(self, x, augment=False):
-        y = []
-        for module in self:
-            y.append(module(x, augment)[0])
-        y = torch.cat(y, 1)
-        return y, None
-
-
-def attempt_download(file, repo="ultralytics/assets"):
-    tests = Path(__file__).parent.parent / "reference"
-    file_path = tests / Path(str(file).strip().replace("'", "").lower())
-
-    if not file_path.exists():
-        name = "yolov8x.pt"
-        msg = f"{file_path} missing, try downloading from https://github.com/{repo}/releases/"
-        try:
-            url = f"https://github.com/{repo}/releases/download/v8.3.0/{name}"
-            logger.info(f"Downloading {url} to {file_path}...")
-            torch.hub.download_url_to_file(url, file_path)
-
-            assert file_path.exists() and file_path.stat().st_size > 1e6, f"Download failed for {name}"
-        except Exception as e:
-            logger.info(f"Error downloading from GitHub: {e}. Trying secondary source...")
-
-            url = f"https://storage.googleapis.com/{repo}/ckpt/{name}"
-            logger.info(f"Downloading {url} to {file_path}...")
-            os.system(f"curl -L {url} -o {file_path}")
-
-            if not file_path.exists() or file_path.stat().st_size < 1e6:
-                file_path.unlink(missing_ok=True)
-                logger.info(f"ERROR: Download failure for {msg}")
-            else:
-                logger.info(f"Download succeeded from secondary source!")
-    return file_path
-
-
-def attempt_load(weights, map_location=None):
-    model = Ensemble()
-    for w in weights if isinstance(weights, list) else [weights]:
-        weight_path = attempt_download(w)
-        logger.info("Loading weights from:", weight_path)
-        ckpt = torch.load(weight_path, map_location=map_location)
-        model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
-    for m in model.modules():
-        if isinstance(m, (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU)):
-            m.inplace = True
-        elif isinstance(m, nn.Upsample):
-            m.recompute_scale_factor = None
-    if len(model) == 1:
-        return model[-1]
-    else:
-        for k in ["names", "stride"]:
-            setattr(model, k, getattr(model[-1], k))
-        return model
-
 
 def load_torch_model():
-    torch_model = attempt_load("yolov8x.pt", map_location="cpu")
+    torch_model = YOLO("yolov8x.pt")
+    torch_model = torch_model.model
+    torch_model.eval()
     return torch_model
 
 
 def load_ttnn_model(device, torch_model):
     state_dict = torch_model.state_dict()
     parameters = custom_preprocessor(device, state_dict)
-    ttnn_model = YOLOv8xModel(device=device, parameters=parameters)
+    ttnn_model = TtYolov8xModel(device=device, parameters=parameters)
     return ttnn_model
 
 
@@ -121,11 +48,11 @@ class Yolov8TestInfra:
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
         self.tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
         self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
-        self.torch_output_tensor = torch_model(self.torch_input_tensor)
+        self.torch_output_tensor = torch_model(self.torch_input_tensor)[0]
 
     def run(self):
         # input_tensor = ttnn.to_device(self.input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-        self.output_tensor = self.ttnn_yolov8_model(self.input_tensor)
+        self.output_tensor = self.ttnn_yolov8_model(self.input_tensor)[0]
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None):
         if is_wormhole_b0():
@@ -174,15 +101,15 @@ class Yolov8TestInfra:
 
     def validate(self, output_tensor=None):
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        output_tensor = ttnn.to_torch(self.output_tensor[0])
+        output_tensor = ttnn.to_torch(self.output_tensor)
 
         valid_pcc = 0.978
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=valid_pcc)
+        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
 
         logger.info(f"Yolov8x batch_size={self.batch_size}, PCC={self.pcc_message}")
 
     def dealloc_output(self):
-        ttnn.deallocate(self.output_tensor[0])
+        ttnn.deallocate(self.output_tensor)
 
 
 def create_test_infra(
