@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import torch
 import ttnn
 from models.experimental.stable_diffusion3.tt.linear import TtLinear, TtLinearParameters
 
@@ -15,9 +16,6 @@ from .patch_embedding import TtPatchEmbed, TtPatchEmbedParameters
 from .substate import indexed_substates, substate
 from .timestep_embedding import TtCombinedTimestepTextProjEmbeddings, TtCombinedTimestepTextProjEmbeddingsParameters
 from .transformer_block import TtTransformerBlock, TtTransformerBlockParameters, chunk_device_tensors, chunk_time
-
-if TYPE_CHECKING:
-    import torch
 
 
 @dataclass
@@ -66,6 +64,20 @@ class TtSD3Transformer2DModelParameters:
         )
 
 
+class ShardingProjection:
+    def __init__(self, *, dim: int, device: ttnn.MeshDevice) -> None:
+        params = TtLinearParameters.from_torch(
+            dict(weight=torch.eye(dim)),
+            dtype=ttnn.bfloat8_b,
+            device=device,
+            shard_dim=-1,
+        )
+        self._projection = TtLinear(params)
+
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        return self._projection(x)
+
+
 class TtSD3Transformer2DModel:
     def __init__(
         self,
@@ -90,6 +102,9 @@ class TtSD3Transformer2DModel:
 
         self._patch_size = parameters.pos_embed.patch_size
 
+        # TODO: get dimensions from other parameters
+        self._sharding = ShardingProjection(dim=2432, device=device)
+
     def __call__(
         self,
         *,
@@ -113,11 +128,13 @@ class TtSD3Transformer2DModel:
         prompt = ttnn.unsqueeze(prompt, 1)
         assert prompt.shape[-2] % 32 == 0
 
-        num_devices = self.mesh_device.get_num_devices()
-        spatial_slices = chunk_device_tensors(spatial, num_devices)
-        prompt_slices = chunk_device_tensors(prompt, num_devices)
-        spatial = ttnn.aggregate_as_tensor(spatial_slices[::-1])
-        prompt = ttnn.aggregate_as_tensor(prompt_slices[::-1])
+        spatial = self._sharding(spatial)
+        prompt = self._sharding(prompt)
+        # num_devices = self.mesh_device.get_num_devices()
+        # spatial_slices = chunk_device_tensors(spatial, num_devices)
+        # prompt_slices = chunk_device_tensors(prompt, num_devices)
+        # spatial = ttnn.aggregate_as_tensor(spatial_slices[::-1])
+        # prompt = ttnn.aggregate_as_tensor(prompt_slices[::-1])
 
         for i, block in enumerate(self._transformer_blocks, start=1):
             spatial, prompt_out = block(
