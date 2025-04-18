@@ -272,6 +272,10 @@ void launch_on_worker_thread(
     if (is_program_cache_enabled) {
         program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
         program_cache_hit = program_cache.contains(program_hash);
+        if (!program_cache_hit && !program_cache.cache_misses_allowed()) {
+            auto op_name = get_operation_name<device_operation_t>(operation_attributes);
+            TT_THROW("Device operation \"{}\": program cache miss occurred, but cache misses are forbidden", op_name);
+        }
     }
 
     log_operation<device_operation_t>(

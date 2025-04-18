@@ -90,6 +90,10 @@ uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_typ
     return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
 }
 
+void IDevice::allow_program_cache_misses() { this->get_program_cache().allow_cache_misses(); }
+
+void IDevice::forbid_program_cache_misses() { this->get_program_cache().forbid_cache_misses(); }
+
 Device::Device(Device&& other) = default;
 Device& Device::operator=(Device&& other) = default;
 
