@@ -171,7 +171,10 @@ class TtTransformerBlock:
         # spatial_scaled = ttnn.to_memory_config(spatial_scaled, ttnn.DRAM_MEMORY_CONFIG)
         # ttnn.deallocate(spatial_scaled)
 
-        prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
+        prompt_scaled = prompt + prompt_shift
+        # TODO: The previous line should really be the following line, but there is an issue with
+        # access to uninitialized memory related to prompt_scale:
+        # prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
 
         spatial_scaled = ttnn.all_gather(spatial_scaled, dim=-1)
         prompt_scaled = ttnn.all_gather(prompt_scaled, dim=-1)
