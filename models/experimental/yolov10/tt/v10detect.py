@@ -96,8 +96,10 @@ class TtnnV10Detect:
         )
         self.dfl = Conv(device, parameters.dfl, self.conv_pt.dfl, is_dfl=True)
 
-        self.anchors = conv_pt.anchors
-        self.strides = conv_pt.strides
+        self.anchors = ttnn.to_device(conv_pt.anchors, device=device)
+        self.strides = ttnn.to_device(conv_pt.strides, device=device)
+        self.anchors = ttnn.to_memory_config(self.anchors, memory_config=ttnn.L1_MEMORY_CONFIG)
+        self.strides = ttnn.to_memory_config(self.strides, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     def __call__(self, y1, y2, y3):
         x1 = self.cv2_0_0(y1)
@@ -158,23 +160,20 @@ class TtnnV10Detect:
         c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
         c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
         c1, c2 = c[:, :2, :], c[:, 2:4, :]
-        anchor, strides = self.anchors, self.strides
-        anchor = ttnn.to_memory_config(anchor, memory_config=ttnn.L1_MEMORY_CONFIG)
-        strides = ttnn.to_memory_config(strides, memory_config=ttnn.L1_MEMORY_CONFIG)
         c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
         c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
-        c1 = anchor - c1
-        c2 = anchor + c2
+        c1 = self.anchors - c1
+        c2 = self.anchors + c2
 
         z = concat(1, False, c1, c2)
 
-        z = ttnn.multiply(z, strides)
+        z = ttnn.multiply(z, self.strides)
         yb = ttnn.permute(yb, (0, 2, 1))
         yb = ttnn.sigmoid_accurate(yb)
         z = ttnn.to_layout(z, layout=ttnn.ROW_MAJOR_LAYOUT)
         yb = ttnn.to_layout(yb, layout=ttnn.ROW_MAJOR_LAYOUT)
         output = concat(1, False, z, yb)
 
-        deallocate_tensors(c, c1, c2, anchor, strides, yb, z)
+        deallocate_tensors(c, c1, c2, yb, z)
 
         return output
