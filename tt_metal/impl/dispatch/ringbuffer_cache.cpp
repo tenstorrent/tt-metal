@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/dispatch/dispatch_prefetcher_ringbuffer.hpp"
+#include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 
 template <int CACHE_BLOCK_SIZE, int CACHE_SIZE>
 void RingbufferCacheManager::add_manager_entry(uint16_t pgm_id, uint32_t offset, uint32_t length, int idx) {
@@ -43,6 +43,7 @@ std::optional<std::pair<bool, uint32_t>> RingbufferCacheManager::is_cached(uint1
         return std::nullopt;  // cannot fit in cache
     }
 
+    uint32_t cache_offset;
     int next_block_offset = this->manager_.next_block_offset;
     size_t oldest_idx = this->manager_.oldest_idx;
     int oldest_block_offset = this->manager_.entry[oldest_idx].offset;
@@ -51,11 +52,11 @@ std::optional<std::pair<bool, uint32_t>> RingbufferCacheManager::is_cached(uint1
         // cache is not full, but we need to check if there is enough space
         if (free_space_to_end >= required_space) {
             add_manager_entry(pgm_id, next_block_offset, required_space);
-            return {false, next_block_offset};
+            cache_offset = next_block_offset;
         } else if (oldest_block_offset > required_space) {
             // cache is not full, but must wraparound for sufficient space
             add_manager_entry(pgm_id, 0, required_space);
-            return {false, 0};
+            cache_offset = 0;
         } else {
             // cache is full, need to invalidate oldest entry(ies)
             size_t available_space = oldest_block_offset;
@@ -65,7 +66,7 @@ std::optional<std::pair<bool, uint32_t>> RingbufferCacheManager::is_cached(uint1
                 invalidate_manager_entry();
             }
             add_manager_entry(pgm_id, 0, required_space);
-            return {false, 0};
+            cache_offset = 0;
         }
     } else {  // oldest_block_offset >= next_block_offset
         if (free_space_to_end >= required_space) {
@@ -76,7 +77,7 @@ std::optional<std::pair<bool, uint32_t>> RingbufferCacheManager::is_cached(uint1
                 invalidate_manager_entry();
             }
             add_manager_entry(pgm_id, next_block_offset, required_space);
-            return {false, next_block_offset};
+            cache_offset = next_block_offset;
         } else {
             // cache is not full, but must wraparound for sufficient space. We will invalidate some intermediate entries
             // while possibly leaving older entries intact
@@ -93,16 +94,9 @@ std::optional<std::pair<bool, uint32_t>> RingbufferCacheManager::is_cached(uint1
                 // this means we freed up the oldest cache entry, and must upate the oldest_idx
                 this->manager_.oldest_idx = wrap_idx;
             }
-            return {false, 0};
+            cache_offset = 0;
         }
     }
 
-    {
-        // cache is full, need to invalidate oldest entry
-        this->manager_.entry[oldest_idx].offset = next_block_offset;
-        this->manager_.entry[oldest_idx].length = required_space;
-        this->valid_[pgm_id] = oldest_idx;
-        this->oldest_idx = (this->oldest_idx + 1) % cache_size_;
-        return {false, next_block_offset};
-    }
+    return {false, cache_offset};
 }

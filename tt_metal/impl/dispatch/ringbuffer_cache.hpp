@@ -54,7 +54,7 @@ private:
     static_assert(valid_width_ > 11, "valid_width must be greater than 11 bits to cover all program ids");
 
     /*! @brief cache manager entry */
-    struct PrefetcherRingbufferManagerEntry {
+    struct RingbufferCacheManagerEntry {
         uint32_t offset : offset_width_;    // offset in ringbuffer
         uint32_t length : length_width_;    // length of the program in blocks
         uint32_t valid_idx : valid_width_;  // index into the valid_ array
@@ -62,7 +62,7 @@ private:
 
     /*! @brief cache manager  */
     struct {
-        std::array<PrefetcherRingbufferManagerEntry, CACHE_SIZE> entry;
+        std::array<RingbufferCacheManagerEntry, CACHE_SIZE> entry;
         // the following indexes are for the ringbuffer manager, not the ringbuffer
         uint16_t oldest_idx{0};  // update this whenever an entry is evicted from cache
         uint16_t next_idx{0};    // update this whenever an entry is added to cache
