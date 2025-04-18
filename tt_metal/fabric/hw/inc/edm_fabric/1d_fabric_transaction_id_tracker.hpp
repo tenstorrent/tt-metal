@@ -84,11 +84,21 @@ struct WriteTransactionIdTracker {
     }
     FORCE_INLINE bool transaction_flushed(tt::tt_fabric::BufferIndex buffer_index) const {
         auto trid = this->get_buffer_slot_trid(buffer_index);
-        return ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_local_chip_noc, trid);
+        if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+            return ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_local_chip_noc, trid);
+        } else {
+            return ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_downstream_noc, trid) &&
+                   ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_local_chip_noc, trid);
+        }
     }
     FORCE_INLINE void all_buffer_slot_transactions_acked() const {
         for (uint8_t trid = OFFSET_PARAM; trid < INVALID_TRID; ++trid) {
-            noc_async_write_barrier_with_trid(trid, tt::tt_fabric::edm_to_local_chip_noc);
+            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
+                noc_async_write_barrier_with_trid(trid, tt::tt_fabric::edm_to_local_chip_noc);
+            } else {
+                noc_async_write_barrier_with_trid(trid, tt::tt_fabric::edm_to_downstream_noc);
+                noc_async_write_barrier_with_trid(trid, tt::tt_fabric::edm_to_local_chip_noc);
+            }
         }
     }
 

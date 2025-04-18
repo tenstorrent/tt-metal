@@ -104,11 +104,7 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 )
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-        }
-    ],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
 def test_tt_model_acc(
