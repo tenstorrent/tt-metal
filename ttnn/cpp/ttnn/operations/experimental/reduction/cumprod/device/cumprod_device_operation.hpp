@@ -36,9 +36,9 @@ struct CumprodDeviceOperation {
 
     struct SingleCoreCumprodProgramFactory {
         static constexpr uint32_t CB_NUM_TILES{2};
-        enum class CumprodCB : std::underlying_type_t<tt::CBIndex> { SRC, ACC, DST, CB_COUNT };
+        enum class CumprodCB : std::underlying_type_t<tt::CBIndex> { SRC = 0, DST = 1, ONE = 16, ACC = 24 };
 
-        static constexpr std::array<const char*, static_cast<uint32_t>(CumprodCB::CB_COUNT)> KERNEL_PATHS{
+        static constexpr std::array<const char*, 3> KERNEL_PATHS{
             "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/dataflow/cumprod_sc_reader.cpp",
             "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/compute/cumprod_single_core.cpp",
             "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/dataflow/cumprod_sc_writer.cpp"};
@@ -62,14 +62,22 @@ struct CumprodDeviceOperation {
             tensor_return_value_t& tensor_return_value);
 
         static CBHandle create_cb(
-            Program& program, const DataType& dtype, const CumprodCB& cumprod_cb, const CoreCoord& core);
+            Program& program,
+            const DataType& dtype,
+            const CumprodCB& cumprod_cb,
+            const CoreCoord& core,
+            const uint32_t& tiles_num);
 
         static KernelHandle create_kernel(
             Program& program,
+            const char* kernel_path,
             const CoreCoord& core,
-            const CumprodCB& cumprod_cb,
             const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
             const std::vector<uint32_t>& runtime_args = {});
+
+        static uint32_t calc_phi(const Shape& input_shape, const int32_t& dim);
+        static uint32_t calc_plo(const Shape& input_shape, const int32_t& dim);
+        static uint32_t calc_htwt(const Shape& input_shape);
     };
 
     using program_factory_t = std::variant<SingleCoreCumprodProgramFactory>;
@@ -89,9 +97,9 @@ struct CumprodDeviceOperation {
 
     static invocation_result_t invoke(
         const Tensor& input_tensor,
-        const int32_t dim,
-        const std::optional<DataType>& dtype,
-        const std::optional<Tensor>& optional_out,
+        const int32_t& dim,
+        std::optional<DataType>& dtype,
+        std::optional<Tensor>& optional_out,
         const MemoryConfig& memory_config,
         const QueueId& queue_id = DefaultQueueId);
 };

@@ -62,8 +62,8 @@ void bind_cumprod_operation(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
-               const std::optional<DataType>& dtype,
-               const std::optional<Tensor>& optional_out,
+               std::optional<DataType>& dtype,
+               std::optional<Tensor>& optional_out,
                const std::optional<MemoryConfig>& memory_config,
                const QueueId& queue_id = DefaultQueueId) {
                 return self(input_tensor, dim, dtype, optional_out, memory_config, queue_id);
