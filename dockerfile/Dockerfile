@@ -300,7 +300,7 @@ RUN [ "$UBUNTU_VERSION" != "24.04" ] \
 
 #############################################################
 
-FROM dev AS release
+FROM base AS release
 
 RUN mkdir -p /etc && \
     echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
