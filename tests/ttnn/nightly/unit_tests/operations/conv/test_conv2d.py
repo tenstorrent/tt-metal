@@ -12,6 +12,7 @@ from models.utility_functions import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
+from ttnn.operations.conv2d import get_torch_act_func_from_string
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -55,26 +56,6 @@ def randomize_torch_tensor(torch_tensor_map, tensor_shape):
         torch_tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
-
-
-def get_torch_act_func_from_string(act_string):
-    act_func_map = {
-        "relu": torch.nn.functional.relu,
-        "silu": torch.nn.functional.silu,
-        "mish": torch.nn.functional.mish,
-        "sigmoid": torch.nn.functional.sigmoid,
-        "sigmoid_approx": torch.nn.functional.sigmoid,
-        "tanh": torch.nn.functional.tanh,
-        "log": torch.log,
-        "softplus": torch.nn.functional.softplus,
-        "gelu": torch.nn.functional.gelu,
-        "sqrt": torch.sqrt,
-    }
-    if act_string == "":
-        return None
-    if act_string in act_func_map:
-        return act_func_map[act_string]
-    raise RuntimeError(f"Activation function {act_string} not supported")
 
 
 def run_conv(
