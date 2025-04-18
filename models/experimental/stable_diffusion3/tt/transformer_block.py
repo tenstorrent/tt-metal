@@ -74,12 +74,14 @@ class TtTransformerBlockParameters:
                 dtype=dtype,
                 device=device,
                 num_chunks=spatial_time_embed_chunks,
+                unsqueeze_bias=True,
             ),
             prompt_time_embed=TtLinearParameters.from_torch_time_embed(
                 substate(state, "norm1_context.linear"),
                 dtype=dtype,
                 device=device,
                 num_chunks=prompt_time_embed_chunks,
+                unsqueeze_bias=True,
             ),
             # spatial_time_embed=TtLinearParameters.from_torch(
             #     substate(state, "norm1.linear"),
