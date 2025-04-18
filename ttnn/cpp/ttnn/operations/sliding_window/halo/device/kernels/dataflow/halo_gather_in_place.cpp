@@ -247,27 +247,6 @@ void kernel_main() {
     }
     cb_wait_front(in_cb_id, in_npages);
 
-<<<<<<< HEAD
-    // make sure untilized data is available
-    // for wide tensors a temp CB must be used due to implementation of the untilize LLK function vs pack_untilize
-    if (untilize_temp_cb_id && local_config_cb_id) {
-        for (uint32_t i = 0; i < tile_rows; ++i) {
-            cb_wait_front(untilize_temp_cb_id, tile_cols);
-            cb_reserve_back(in_cb_id, tile_cols);
-
-            const uint32_t in_l1_addr = get_write_ptr(in_cb_id);
-            const uint64_t in_l1_noc_addr = get_noc_addr(my_noc_x, my_noc_y, in_l1_addr);
-            noc_async_write(untilize_temp_l1_addr, in_l1_noc_addr, TILE_SIZE_BYTES * tile_cols);
-            noc_async_write_barrier();
-
-            cb_push_back(in_cb_id, tile_cols);
-            cb_pop_front(untilize_temp_cb_id, tile_cols);
-        }
-    }
-    cb_wait_front(in_cb_id, in_npages);
-
-=======
->>>>>>> bd96783548 (#0: multicast)
     if constexpr (remote_config_cb_id && remote_temp_cb_id) {
         const uint32_t temp_base_l1_addr = get_write_ptr(remote_temp_cb_id);
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
