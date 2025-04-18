@@ -90,7 +90,7 @@ static void dispatch_1d_fabric_on_mesh(
         num_rows > 0 ^ num_cols > 0,
         "Either num_rows or num_cols (but not both) must be greater than 0 when running 1D fabric on mesh BW test");
 
-    Run1DFabricPacketSendTest(test_specs, test_params.params);
+    Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_specs, test_params.params);
 }
 
 static void dispatch_single_line_bw_test(
