@@ -28,14 +28,6 @@ class TTAddIndices(LightweightModule):
             self.indices_device_offsets[:, :, :, device_id * num_local_top_k : (device_id + 1) * num_local_top_k] = (
                 device_id * per_device_vocab_size
             )
-        self.tt_indices_device_offsets_uint16 = ttnn.from_torch(
-            self.indices_device_offsets,
-            device=self.mesh_device,
-            dtype=ttnn.uint16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
         self.tt_indices_device_offsets_int32 = ttnn.from_torch(
             self.indices_device_offsets,
             device=self.mesh_device,
@@ -44,36 +36,25 @@ class TTAddIndices(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.tt_indices_device_offsets_uint32 = ttnn.from_torch(
-            self.indices_device_offsets,
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
 
-        torch_output_tensor = torch.zeros(1, 1, 32, num_local_top_k * self.args.cluster_shape[0], dtype=torch.int64)
-        self.typecast_output = ttnn.from_torch(
-            torch_output_tensor,
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.TILE_LAYOUT,
+        self.sub_core_grids = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            ]
         )
 
     def forward(self, x: ttnn.Tensor):
-        # topk_indices_gathered_sharded_int32 = ttnn.typecast(x, dtype=ttnn.int32, output_tensor=self.typecast_output)
-        # topk_indices_gathered_sharded_uint32 = ttnn.to_memory_config(x, self.args.model_config["DECODE_SAMPLING_INPUT_MEMCFG"], dtype=ttnn.uint32)
-        topk_indices_gathered_sharded_int32 = ttnn.to_memory_config(
-            x, self.args.model_config["DECODE_SAMPLING_INPUT_MEMCFG"], dtype=ttnn.int32
+        topk_indices_gathered_sharded = ttnn.typecast(x, dtype=ttnn.uint32, sub_core_grids=self.sub_core_grids)
+        topk_indices_gathered_sharded = ttnn.typecast(
+            topk_indices_gathered_sharded, dtype=ttnn.int32, sub_core_grids=self.sub_core_grids
         )
-        ttnn.deallocate(x)
-        # topk_global_indices_uint16 = ttnn.add(self.tt_indices_device_offsets_uint16, x, dtype=ttnn.uint16)
-        topk_global_indices_int32 = ttnn.add(
-            self.tt_indices_device_offsets_int32, topk_indices_gathered_sharded_int32, dtype=ttnn.int32
-        )
-        # topk_global_indices_uint32 = ttnn.add(self.tt_indices_device_offsets_uint32, topk_indices_gathered_sharded_uint32, dtype=ttnn.uint32)
+
+        # ttnn.deallocate(x)
         breakpoint()
+        topk_global_indices_int32 = ttnn.add(
+            self.tt_indices_device_offsets_int32, topk_indices_gathered_sharded, dtype=ttnn.int32
+        )
         # ttnn.deallocate(topk_indices_gathered_sharded)
 
         return topk_global_indices_int32
