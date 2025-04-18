@@ -81,6 +81,7 @@ ub_runtime_packages()
      python3-venv \
      libhwloc-dev \
      libnuma-dev \
+     libatomic1 \
      libc++-17-dev \
      libc++abi-17-dev \
      libstdc++6 \
