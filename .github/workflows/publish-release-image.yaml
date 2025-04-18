@@ -46,7 +46,7 @@ jobs:
         id: generate-tag-name
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-release-amd64
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
@@ -97,6 +97,9 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
+      - name: Install Tools
+        run: |
+          apt-get update && apt-get install -y git
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:

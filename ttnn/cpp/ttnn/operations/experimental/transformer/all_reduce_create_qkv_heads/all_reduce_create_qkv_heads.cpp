@@ -52,7 +52,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllRed
         out_memory_config,
         num_preferred_links,
         worker_subdevice_id_opt,
-        true,
         head_dim,
         num_heads,
         num_kv_heads.value_or(1),
