@@ -108,9 +108,7 @@ jobs:
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-            python3 -m venv /opt/venv
-            source /opt/venv/bin/activate
-            cat tt_metal/python_env/requirements-dev.txt | xargs -n 1 -I {} sh -c 'pip install "{}" || echo "Failed: {}"'
+            pip install --index-url https://download.pytorch.org/whl/cpu torch==2.2.1+cpu numpy>=1.24.4,<2 pytest
             ${{ matrix.test_group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
