@@ -309,7 +309,7 @@ def test_demo(
         text = processor.apply_chat_template(input_prompts, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(input_prompts)
         inputs = processor(
-            text=[text] if not isinstance(text, list) else text,
+            text=text,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
             images=image_inputs,
             videos=video_inputs,
             padding=True,
