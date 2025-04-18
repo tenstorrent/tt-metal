@@ -14,7 +14,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     check_mesh_device,
     BASE_URL,
     should_skip_model_load,
-    ConcatMesh2DToTensor,
 )
 
 from models.utility_functions import (
@@ -145,7 +144,10 @@ def run_test_LlamaModel_end_to_end(
         tt_out = tt_model(tt_inp_emb, rot_mat, start_pos, attn_mask, mode=mode)
         # Retrieve output from device
         tt_out_cpu = ttnn.to_torch(
-            tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 3), cluster_shape=cluster_shape)
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, mesh_shape=tuple(reversed(cluster_shape)), dims=(3, 1)
+            ),
         )
 
         profiler.end(f"prefill_iteration_{iter_idx}")

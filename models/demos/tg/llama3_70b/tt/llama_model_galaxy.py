@@ -17,7 +17,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     get_rot_transformation_mat,
     num_to_corerange,
     gather_cos_sin,
-    ShardTensor2dMesh,
 )
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
@@ -142,7 +141,9 @@ class TtLlamaModel_galaxy:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(reversed(self.cluster_shape)), dims=(3, 2)
+            ),
             cache_file_name=self.cache_path / lm_head_cache_str,
         )
 
@@ -152,7 +153,9 @@ class TtLlamaModel_galaxy:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.mesh_device, (2, None), self.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(reversed(self.cluster_shape)), dims=(None, 2)
+            ),
             cache_file_name=self.cache_path / norm_sharded_cache_str,
         )
 
