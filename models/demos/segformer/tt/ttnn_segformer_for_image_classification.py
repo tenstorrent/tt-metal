@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -33,7 +33,9 @@ class TtSegformerForImageClassification:
         model=None,
     ) -> Union[Tuple, TtSegFormerImageClassifierOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        device = pixel_values.device()
         outputs = self.segformer(
+            device,
             pixel_values,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
