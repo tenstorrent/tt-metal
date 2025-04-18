@@ -5,18 +5,38 @@
 #include "sort.hpp"
 #include "device/sort_device_operation.hpp"
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
 namespace ttnn::operations::experimental::reduction::sort {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
+
+uint32_t next_power_of_two(uint32_t n) {
+    if (n <= 1) {
+        return 1;
+    }
+
+    // If n is already a power of two, return it
+    if ((n & (n - 1)) == 0) {
+        return n;
+    }
+
+    // Otherwise, compute the next power of two
+    uint32_t power = 1;
+    while (power < n) {
+        power <<= 1;
+    }
+    return power;
+}
 
 Tensor pre_sort_transform_tensor(
     const Tensor& input_tensor,
@@ -33,10 +53,27 @@ Tensor pre_sort_transform_tensor(
     const Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
     // If input is not rank 4 transorm it to 4D
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
-    // Add padding if needed
+    // Fill implicit tile padding with the appropriate value
     const Tensor padded_tensor = ttnn::fill_implicit_tile_padding(
         transformed_tensor, descending ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max());
-    return padded_tensor;
+
+    // Check for need of manual padding - Bitonic sort works on dataset that are the size of power of two - add manual
+    // padding if needed
+    const auto current_padded_shape = padded_tensor.get_padded_shape();
+    const auto last_dim = current_padded_shape[-1];
+    const auto padded_last_dim = next_power_of_two(last_dim);
+    if (padded_last_dim == last_dim) {
+        // If the last dimension is already a power of two, no padding is needed
+        return padded_tensor;
+    }
+    const Tensor padded_output_tensor = ttnn::pad(
+        padded_tensor,
+        tt::tt_metal::Array4D(
+            {current_padded_shape[0], current_padded_shape[1], current_padded_shape[2], padded_last_dim}),
+        tt::tt_metal::Array4D({0, 0, 0, 0}),
+        descending ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max());
+
+    return padded_output_tensor;
 }
 
 std::vector<Tensor> post_sort_transform_tensor(
@@ -48,6 +85,17 @@ std::vector<Tensor> post_sort_transform_tensor(
     const MemoryConfig& input_memory_config) {
     auto input_shape = input_tensor.get_padded_shape();
     const auto orig_rank = input_shape.rank();
+
+    // Check if manual padding was applied for the last dimension
+    const auto output_logical_shape = result[0].get_logical_shape();
+    if (output_logical_shape[-1] != original_lshape[-1]) {
+        const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        const ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        const ttnn::SmallVector<uint32_t> end_index = {
+            output_logical_shape[0], output_logical_shape[1], output_logical_shape[2], original_lshape[-1]};
+        result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
+        result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+    }
 
     if (orig_rank < 4) {
         result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
