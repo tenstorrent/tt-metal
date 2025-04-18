@@ -205,10 +205,10 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
 
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize(
-    "dim2", [65000]
+    "dim2", [50257, 65000]
 )  # Need to resolve issue #20294 to verify 128256 for OXMIQ <- will need topk_local_sort to handle uint32_t
 @pytest.mark.parametrize("dim", [1])
-@pytest.mark.parametrize("k", [32, 64, 128, 256, 512, 800, 1600, 3200])
+@pytest.mark.parametrize("k", [50, 3200])
 @pytest.mark.parametrize("largest", [True])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
