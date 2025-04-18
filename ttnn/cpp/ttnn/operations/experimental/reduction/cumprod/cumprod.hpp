@@ -22,9 +22,9 @@ struct CumprodOperation {
 
     static Tensor invoke(
         const Tensor& input_tensor,
-        const int32_t dim,
-        const std::optional<DataType>& input_dtype = std::nullopt,
-        const std::optional<Tensor>& optional_out = std::nullopt,
+        const int32_t& dim,
+        std::optional<DataType>& dtype,
+        std::optional<Tensor>& optional_out,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const QueueId& queue_id = DefaultQueueId);
 

@@ -13,6 +13,35 @@
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::reduction {
+
+uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::calc_plo(
+    const Shape& input_shape, const int32_t& dim) {
+    uint32_t PLo{1};
+    for (int32_t i{dim - 1}; i >= 0; --i) {
+        PLo *= input_shape[i];
+    }
+
+    return PLo;
+}
+
+uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::calc_phi(
+    const Shape& input_shape, const int32_t& dim) {
+    uint32_t PHi{1};
+    for (int32_t i{dim + 1}; i < input_shape.rank() - 2; ++i) {
+        PHi *= input_shape[i];
+    }
+
+    return PHi;
+}
+
+uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::calc_htwt(const Shape& input_shape) {
+    switch (input_shape.rank()) {
+        case 0: return 0;
+        case 1: return input_shape[0] / tt::constants::TILE_WIDTH;  // TODO(jbbieniekTT): ?
+        default: return input_shape[input_shape.rank() - 1] * input_shape[input_shape.rank() - 2] / 1024;
+    }
+}
+
 CumprodDeviceOperation::SingleCoreCumprodProgramFactory::cached_program_t
 CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -26,7 +55,7 @@ CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
     const auto& input_tensor{tensor_args.input_tensor};
     auto& output_tensor{tensor_return_value};
     const auto& input_shape{input_tensor.get_padded_shape()};
-    const auto& dim{operation_attributes.dim};
+    // const auto& dim{operation_attributes.dim};
 
     Program program{};
 
@@ -35,44 +64,63 @@ CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
     auto src_buffer{input_tensor.buffer()};
     auto dst_buffer{output_tensor.buffer()};
 
-    constexpr CoreCoord core{1, 1};
+    constexpr CoreCoord core{0, 0};
 
-    auto cb_src{create_cb(program, input_tensor.get_dtype(), CumprodCB::SRC, core)};
-    auto cb_acc{create_cb(program, output_tensor.get_dtype(), CumprodCB::ACC, core)};
-    auto cb_dst{create_cb(program, output_tensor.get_dtype(), CumprodCB::DST, core)};
+    auto cb_src{create_cb(program, input_tensor.get_dtype(), CumprodCB::SRC, core, 1)};
+    auto cb_acc{create_cb(program, input_tensor.get_dtype(), CumprodCB::ACC, core, 1)};
+    auto cb_one{create_cb(program, input_tensor.get_dtype(), CumprodCB::ONE, core, 1)};
+    auto cb_dst{create_cb(program, input_tensor.get_dtype(), CumprodCB::DST, core, 1)};
 
     const uint32_t src_is_dram{src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
     const uint32_t dst_is_dram{dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.get_dtype())};
-    const bool fp32_dest_acc_en{
-        (dst_cb_data_format == tt::DataFormat::Float32) || (dst_cb_data_format == tt::DataFormat::Int32) ||
-        (dst_cb_data_format == tt::DataFormat::UInt32)};
+    // const bool fp32_dest_acc_en{
+    //     (dst_cb_data_format == tt::DataFormat::Float32) || (dst_cb_data_format == tt::DataFormat::Int32) ||
+    //     (dst_cb_data_format == tt::DataFormat::UInt32)};
     const uint32_t height_tiles{input_shape[2] / constants::TILE_HEIGHT};
     const uint32_t width_tiles{input_shape[3] / constants::TILE_WIDTH};
 
-    const std::vector<uint32_t> compile_args{
-        src_is_dram,
-        dst_is_dram,
-        static_cast<uint32_t>(CumprodCB::SRC),
-        static_cast<uint32_t>(CumprodCB::ACC),
-        static_cast<uint32_t>(CumprodCB::DST),
-        input_shape[0],
-        input_shape[1],
-        height_tiles,
-        width_tiles};
+    const uint32_t input_rank{tensor_args.input_tensor.get_padded_shape().rank()};
+    const int32_t dim{
+        (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
 
-    const ReaderDataMovementConfig reader_config{compile_args};
+    // const std::vector<uint32_t> compile_args{
+    //     src_is_dram,
+    //     dst_is_dram,
+    //     static_cast<uint32_t>(CumprodCB::SRC),
+    //     static_cast<uint32_t>(CumprodCB::ACC),
+    //     static_cast<uint32_t>(CumprodCB::DST),
+    //     input_shape[0],
+    //     input_shape[1],
+    //     height_tiles,
+    //     width_tiles};
+
+    const ReaderDataMovementConfig reader_config{};
     const ComputeConfig compute_config{
-        .math_fidelity = MathFidelity::HiFi4,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .math_approx_mode = false,
-        .compile_args = compile_args};
-    const WriterDataMovementConfig writer_config{compile_args};
+        .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false, .compile_args = {}};
+    const WriterDataMovementConfig writer_config{};
 
-    auto cumprod_reader_kernel_id{create_kernel(program, core, CumprodCB::SRC, reader_config)};
-    auto cumprod_compute_sc_kernel_id{create_kernel(program, core, CumprodCB::ACC, compute_config)};
-    auto cumprod_writer_kernel_id{create_kernel(program, core, CumprodCB::DST, writer_config)};
+    const uint32_t tiles_per_row{tensor_args.input_tensor.get_padded_shape()[dim]};
+    const uint32_t num_rows{tensor_args.input_tensor.volume() / 1024 / tiles_per_row};
+    const uint32_t PHi{calc_phi(tensor_args.input_tensor.get_padded_shape(), dim)};
+    const uint32_t PLo{calc_plo(tensor_args.input_tensor.get_padded_shape(), dim)};
+    const uint32_t HtWt{calc_htwt(tensor_args.input_tensor.get_padded_shape())};
+
+    auto cumprod_reader_kernel_id{create_kernel(
+        program,
+        KERNEL_PATHS[0],
+        core,
+        reader_config,
+        {src_buffer->address(), num_rows, tiles_per_row, PHi, PLo, HtWt})};
+    auto cumprod_compute_sc_kernel_id{
+        create_kernel(program, KERNEL_PATHS[1], core, compute_config, {PHi * PLo * HtWt, tiles_per_row})};
+    auto cumprod_writer_kernel_id{create_kernel(
+        program,
+        KERNEL_PATHS[2],
+        core,
+        writer_config,
+        {dst_buffer->address(), num_rows, tiles_per_row, PHi, PLo, HtWt})};
 
     return {
         std::move(program),
@@ -87,48 +135,59 @@ void CumprodDeviceOperation::SingleCoreCumprodProgramFactory::override_runtime_a
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& program{cached_program.program};
-    const auto& cumprod_reader_kernel_id{cached_program.shared_variables.cumprod_reader_kernel_id};
-    const auto& cumprod_compute_kernel_id{cached_program.shared_variables.cumprod_compute_kernel_id};
-    const auto& cumprod_writer_kernel_id{cached_program.shared_variables.cumprod_writer_kernel_id};
+    // const auto& cumprod_reader_kernel_id{cached_program.shared_variables.cumprod_reader_kernel_id};
+    // const auto& cumprod_compute_kernel_id{cached_program.shared_variables.cumprod_compute_kernel_id};
+    // const auto& cumprod_writer_kernel_id{cached_program.shared_variables.cumprod_writer_kernel_id};
 
-    auto src_buffer{tensor_args.input_tensor.buffer()};
-    auto dst_buffer{tensor_return_value.buffer()};
+    // auto src_buffer{tensor_args.input_tensor.buffer()};
+    // auto dst_buffer{tensor_return_value.buffer()};
 
-    constexpr CoreCoord core{1, 1};
-    auto& reader_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
-    reader_runtime_args[0] = src_buffer->address();
-    reader_runtime_args[1] = dst_buffer->address();
-    auto& compute_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
-    compute_runtime_args[0] = src_buffer->address();
-    compute_runtime_args[1] = dst_buffer->address();
-    auto& writer_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
-    writer_runtime_args[0] = src_buffer->address();
-    writer_runtime_args[1] = dst_buffer->address();
+    // constexpr CoreCoord core{1, 1};
+    // const uint32_t tiles_per_row{tensor_args.input_tensor.get_padded_shape()[operation_attributes.dim]};
+    // const uint32_t num_rows{tensor_args.input_tensor.volume() / TILE_SIZE / tiles_per_row};
+    // auto& reader_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
+    // reader_runtime_args[0] = src_buffer->address();
+    // reader_runtime_args[1] = num_rows;
+    // reader_runtime_args[2] = tiles_per_row;
+    // reader_runtime_args[3] = calc_phi(tensor_args.input_tensor.get_padded_shape(), operation_attributes.dim);
+    // reader_runtime_args[4] = calc_plo(tensor_args.input_tensor.get_padded_shape(), operation_attributes.dim);
+    // reader_runtime_args[5] = calc_htwt(tensor_args.input_tensor.get_padded_shape());
+    // auto& compute_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
+    // compute_runtime_args[0] = num_rows;
+    // compute_runtime_args[1] = tiles_per_row;
+    // auto& writer_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
+    // writer_runtime_args[0] = dst_buffer->address();
+    // writer_runtime_args[1] = num_rows;
+    // writer_runtime_args[2] = tiles_per_row;
+    // writer_runtime_args[3] = calc_phi(tensor_args.input_tensor.get_padded_shape(), operation_attributes.dim);
+    // writer_runtime_args[4] = calc_plo(tensor_args.input_tensor.get_padded_shape(), operation_attributes.dim);
+    // writer_runtime_args[5] = calc_htwt(tensor_args.input_tensor.get_padded_shape());
 }
 
 CBHandle CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create_cb(
-    Program& program, const DataType& dtype, const CumprodCB& cumprod_cb, const CoreCoord& core) {
+    Program& program,
+    const DataType& dtype,
+    const CumprodCB& cumprod_cb,
+    const CoreCoord& core,
+    const uint32_t& num_tiles) {
     using tt::tt_metal::detail::TileSize;
     const uint32_t cb_id{static_cast<uint32_t>(cumprod_cb)};
     const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
     const uint32_t single_tile_size{TileSize(cb_data_format)};
-    const auto cb_config{CircularBufferConfig{CB_NUM_TILES * single_tile_size, {{cb_id, cb_data_format}}}.set_page_size(
+    const auto cb_config{CircularBufferConfig{num_tiles * single_tile_size, {{cb_id, cb_data_format}}}.set_page_size(
         cb_id, single_tile_size)};
     return CreateCircularBuffer(program, core, cb_config);
 }
 
 KernelHandle CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create_kernel(
     Program& program,
+    const char* kernel_path,
     const CoreCoord& core,
-    const CumprodCB& cumprod_cb,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
     const std::vector<uint32_t>& runtime_args) {
-    const uint32_t cb_id{static_cast<uint32_t>(cumprod_cb)};
-    const auto& path_to_kernel{KERNEL_PATHS[cb_id]};
+    auto kernel_id{CreateKernel(program, kernel_path, core, config)};
 
-    auto kernel_id{CreateKernel(program, path_to_kernel, core, config)};
-    // TODO(jbbieniekTT): make sure about this
-    // SetRuntimeArgs(program, kernel_id, core, runtime_args);
+    SetRuntimeArgs(program, kernel_id, core, runtime_args);
 
     return kernel_id;
 }

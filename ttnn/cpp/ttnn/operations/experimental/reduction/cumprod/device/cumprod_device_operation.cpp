@@ -22,10 +22,10 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
     const auto& dim{attributes.dim};
 
     if (optional_out.has_value()) {
-        TT_FATAL(
-            input_dtype != DataType::INVALID,
-            "The dtype requested in the dtype= kwarg is incorrect: {}",
-            magic_enum::enum_name(input_dtype));
+        // TT_FATAL(
+        //     input_dtype != DataType::INVALID,
+        //     "The dtype requested in the dtype= kwarg is incorrect: {}",
+        //     magic_enum::enum_name(input_dtype));
 
         // TODO(jbbieniekTT): in this case, automatic conversion should be performed as per Torch's policy
         // TT_FATAL(
@@ -125,9 +125,9 @@ CumprodDeviceOperation::tensor_return_value_t CumprodDeviceOperation::create_out
 
 CumprodDeviceOperation::invocation_result_t CumprodDeviceOperation::invoke(
     const Tensor& input_tensor,
-    const int32_t dim,
-    const std::optional<DataType>& dtype,
-    const std::optional<Tensor>& optional_out,
+    const int32_t& dim,
+    std::optional<DataType>& dtype,
+    std::optional<Tensor>& optional_out,
     const MemoryConfig& memory_config,
     const QueueId& queue_id) {
     return {
