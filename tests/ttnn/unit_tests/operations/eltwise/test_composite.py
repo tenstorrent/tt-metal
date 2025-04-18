@@ -378,6 +378,46 @@ def test_unary_composite_mish_ttnn(input_shapes, device):
     assert comp_pass
 
 
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 1, 102400, 32])),),
+)
+def test_unary_composite_mish_sharded_ttnn(input_shapes, device):
+    in_data1 = torch.Tensor(size=input_shapes).uniform_(-20, 100).to(torch.bfloat16)
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 7),
+            ),
+        }
+    )
+    n_cores = 64
+    N, H, W, C = in_data1.shape
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor1 = ttnn.from_torch(
+        in_data1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
+    output_tensor = ttnn.mish(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.mish)
+    golden_tensor = golden_function(in_data1)
+    output_tensor_tt = ttnn.to_torch(output_tensor)
+    diff = torch.abs(golden_tensor - output_tensor_tt)
+    max_atol = torch.max(diff)
+    print(f"Max absolute tolerance (atol): {max_atol.item()}")
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
