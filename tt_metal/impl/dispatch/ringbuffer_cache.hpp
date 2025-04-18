@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Prefetcher cache implementation, as a ringbuffer
+// Ringbuffer cache implementation
 
 #pragma once
 
@@ -14,17 +14,24 @@
 
 namespace tt::tt_metal {
 
-class PrefetcherRingbufferManager {
+/*! @brief Ringbuffer cache manager
+ *  This class manages the ringbuffer cache for the prefetcher.
+ *  It keeps track of the entries in the ringbuffer and their offsets.
+ *  The ringbuffer is divided into blocks of size cache_block_sizeB.
+ *  The cache manager keeps track of the entries in the ringbuffer and their offsets.
+ */
+template <int CACHE_BLOCK_SIZE, int CACHE_SIZE>
+class RingbufferCacheManager {
 public:
-    PrefetcherRingbufferManager() {
+    RingbufferCacheManager() {
         std::fill(this->valid_.begin(), this->valid_.end(), -1);
         // Initialize the cache manager entries
-        static_assert((cache_size_ & (cache_size_ - 1)) == 0, "Ringbuffer manager array size must be a power of 2");
+        static_assert((CACHE_SIZE & (CACHE_SIZE - 1)) == 0, "Ringbuffer manager array size must be a power of 2");
         std::fill(this->manager_.entry.begin(), this->manager_.entry.end(), 0);
-        this->manager_.entry[0].length = cache_size_;  // to get over the first allocation without special handling
+        this->manager_.entry[0].length = CACHE_SIZE;  // to get over the first allocation without special handling
     };
 
-    ~PrefetcherRingbufferManager() = default;
+    ~RingbufferCacheManager() = default;
 
     /*! @brief Check if the program is present in the ringbuffer
      *  Add a new entry to the ringbuffer manager if not present
@@ -41,11 +48,8 @@ public:
     // int32_t get_ringbuffer_offset (uint64_t pgm_id);
 
 private:
-    constexpr static size_t cache_block_sizeB_{1024};
-    constexpr static size_t cache_size_{
-        1024};  // number of cache blocks. cache_sizeB = cache_size * cache_block_sizeB = 1MB
-    constexpr static size_t offset_width_ = std::bit_width(cache_size_ - 1);
-    constexpr static size_t length_width_ = std::bit_width(cache_size_ - 1);
+    constexpr static size_t offset_width_ = std::bit_width(CACHE_SIZE - 1);
+    constexpr static size_t length_width_ = std::bit_width(CACHE_SIZE - 1);
     constexpr static size_t valid_width_ = CHAR_BIT * sizeof(uint32_t) - offset_width_ - length_width_;
     static_assert(valid_width_ > 11, "valid_width must be greater than 11 bits to cover all program ids");
 
@@ -58,7 +62,7 @@ private:
 
     /*! @brief cache manager  */
     struct {
-        std::array<PrefetcherRingbufferManagerEntry, cache_size_> entry;
+        std::array<PrefetcherRingbufferManagerEntry, CACHE_SIZE> entry;
         // the following indexes are for the ringbuffer manager, not the ringbuffer
         uint16_t oldest_idx{0};  // update this whenever an entry is evicted from cache
         uint16_t next_idx{0};    // update this whenever an entry is added to cache
