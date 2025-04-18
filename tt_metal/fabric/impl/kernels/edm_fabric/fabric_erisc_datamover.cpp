@@ -1468,6 +1468,7 @@ void kernel_main() {
                 local_handshake_master_eth_chan,
                 (uint32_t)termination_signal_ptr,
                 *termination_signal_ptr);
+            noc_async_write_barrier();
         }
     }
 
