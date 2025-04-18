@@ -95,6 +95,9 @@ static CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord
 
 // Helper function to convert noc coord -> virtual coord. TODO: Remove this once we fix code types.
 static CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
+        return coord;
+    }
     auto grid_size = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).grid_size;
     if (coord.x >= grid_size.x || coord.y >= grid_size.y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
