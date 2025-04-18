@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "generic_pools.hpp"
-
+#include <tt-metalium/buffer_constants.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -12,7 +12,7 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
-
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include <limits>
 
 namespace ttnn {
@@ -65,19 +65,27 @@ Tensor Pool2DOp<pool_type>::invoke(
                     (applied_shard_scheme.value() == TensorMemoryLayout::BLOCK_SHARDED),
                 "Only height, width, or block sharding strategies are supported.");
             shard_layout = applied_shard_scheme.value();
-        }
         parallel_config = conv::determine_parallel_config(
-            shard_layout,
-            batch_size,
-            channels,
-            output_shape[1],
-            output_shape[2],
-            channels,
-            input_tensor.device()->compute_with_storage_grid_size(),
-            ShardOrientation::ROW_MAJOR,
-            false,
-            false,
-            false);
+                                            shard_layout,
+                                            batch_size,
+                                            channels,
+                                            output_shape[1],
+                                            output_shape[2],
+                                            channels,
+                                            input_tensor.device()->compute_with_storage_grid_size(),
+                                            ShardOrientation::ROW_MAJOR,
+                                            false,
+                                            false,
+                                            false);
+                                        }
+        else { //auto-sharding
+            parallel_config = pool::determine_pool_config_for_auto_shard(
+                input_tensor,
+                sliding_window_config,
+                channels,
+                pool_type
+                );
+        }
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
