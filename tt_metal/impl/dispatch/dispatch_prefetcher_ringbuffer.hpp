@@ -2,82 +2,81 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Prefetcher ringbuffer implementation
+// Prefetcher cache implementation, as a ringbuffer
 
 #pragma once
 
 #include <cstdint>
 #include <array>
+#include <vector>
+#include <bit>
+#include <climits>
 
 namespace tt::tt_metal {
-
-#define PREFETCHER_MANAGER_SIZE_LOG2 20
-#define PREFETCHER_MANAGER_BLOCK_SIZE_LOG2 10
-#define PREFETCHER_MANAGER_BLOCK_SIZE (1 << PREFETCHER_MANAGER_BLOCK_SIZE_LOG2)                                   // 1KB
-#define PREFETCHER_MANAGER_NUM_BLOCKS (1 << (PREFETCHER_MANAGER_SIZE_LOG2 - PREFETCHER_MANAGER_BLOCK_SIZE_LOG2))  // 1MB
-constexpr int offset_width{
-    PREFETCHER_MANAGER_SIZE_LOG2 -
-    PREFETCHER_MANAGER_BLOCK_SIZE_LOG2};  // # of bits to represent offset in cache, in blocks
-constexpr int length_width{10};           // # of bits to represent amount of data in cache, in blocks
-constexpr int valid_width{offset_width};  // # of bits to represent valid table index, in blocks
-struct PrefetcherRingbufferManagerEntry {
-    uint32_t offset : offset_width;
-    uint32_t length : length_width;
-    uint32_t valid : valid_width;
-};
-static_assert(
-    (offset_width + length_width + valid_width) <= 8 * sizeof(uint32_t),
-    "PrefetcherRingbufferManagerEntry bitwidth sizes are ill defined");
 
 class PrefetcherRingbufferManager {
 public:
     PrefetcherRingbufferManager() {
         std::fill(this->valid_.begin(), this->valid_.end(), -1);
         // Initialize the cache manager entries
-        std::fill(this->mgr_.begin(), this->mgr_.end(), 0);
+        static_assert((cache_size_ & (cache_size_ - 1)) == 0, "Ringbuffer manager array size must be a power of 2");
+        std::fill(this->manager_.entry.begin(), this->manager_.entry.end(), 0);
+        this->manager_.entry[0].length = cache_size_;  // to get over the first allocation without special handling
     };
 
     ~PrefetcherRingbufferManager() = default;
 
-    /*! @brief  Transfer dram buffer to dispatcher L1
-     *  @return success/failure
+    /*! @brief Check if the program is present in the ringbuffer
+     *  Add a new entry to the ringbuffer manager if not present
+     *  @param pgm_id program id
+     *  @param lengthB size of program in bytes
+     *  @return std::pair of {bool, offset}, where bool::false indicates that the program was added
      */
-    // bool copy_dram_to_dispatcher_l1(PrefetchExecBufState exec_buf_state, uint32_t addr);
+    std::optional<std::pair<bool, uint32_t>> is_cached(uint16_t pgm_id, size_t lengthB);
+
+    /*! @brief if program is present in rb, then return its offset
+     *   @param pgm_id program id
+     *   @return offset of the program in ringbuffer, or -1 if not present
+     */
+    // int32_t get_ringbuffer_offset (uint64_t pgm_id);
 
 private:
-    /*! @brief base address of prefetcher L1 cache */
-    static constexpr uint32_t cache_base_addr_{0};
+    constexpr static size_t cache_block_sizeB_{1024};
+    constexpr static size_t cache_size_{
+        1024};  // number of cache blocks. cache_sizeB = cache_size * cache_block_sizeB = 1MB
+    constexpr static size_t offset_width_ = std::bit_width(cache_size_ - 1);
+    constexpr static size_t length_width_ = std::bit_width(cache_size_ - 1);
+    constexpr static size_t valid_width_ = CHAR_BIT * sizeof(uint32_t) - offset_width_ - length_width_;
+    static_assert(valid_width_ > 11, "valid_width must be greater than 11 bits to cover all program ids");
+
+    /*! @brief cache manager entry */
+    struct PrefetcherRingbufferManagerEntry {
+        uint32_t offset : offset_width_;    // offset in ringbuffer
+        uint32_t length : length_width_;    // length of the program in blocks
+        uint32_t valid_idx : valid_width_;  // index into the valid_ array
+    };
 
     /*! @brief cache manager  */
     struct {
-        std::array<PrefetcherRingbufferManagerEntry, PREFETCHER_MANAGER_NUM_BLOCKS> entry;
-        uint16_t oldest_idx_{0};
-        uint16_t next_idx_{0};
+        std::array<PrefetcherRingbufferManagerEntry, cache_size_> entry;
+        // the following indexes are for the ringbuffer manager, not the ringbuffer
+        uint16_t oldest_idx{0};  // update this whenever an entry is evicted from cache
+        uint16_t next_idx{0};    // update this whenever an entry is added to cache
+        // the following is saved for convenience
+        uint16_t next_block_offset{0};  // offset of the next block to allocate in ringbuffer
+        // the following is needed when allocations must wraparound
+        uint16_t zero_offset_idx{0};  // index in entry array for block zero allocation
     } manager_;
 
-    /*! @brief  */
-    std::array<int16_t, PREFETCHER_MANAGER_NUM_BLOCKS> valid_;
+    /*! @brief indexed by program id. Contains index to entry in cache manager if cache hit */
+    std::vector<int16_t> valid_;
 
-    bool is_data_in_cache(PrefetcherRingbufferManagerEntry& m) {
-        std::ptrdiff_t m_idx = &m - &mgr_[0];
-        // ASSERT (m_idx >= 0 && m_idx < PREFETCHER_MANAGER_NUM_BLOCKS);
-        int8_t val_id = valid_[m.valid];
-        return (valid_[m.valid] != -1);
+    void add_manager_entry(uint16_t pgm_id, uint32_t offset, uint32_t length, uint16_t idx);
+    void add_manager_entry(uint16_t pgm_id, uint32_t offset, uint32_t length) {
+        add_manager_entry(pgm_id, offset, length, this->manager_.next_idx);
     }
-
-    void set_data_in_cache(PrefetcherRingbufferManagerEntry& m) {
-        std::ptrdiff_t m_idx = &m - &mgr_[0];
-        // ASSERT (m_idx >= 0 && m_idx < PREFETCHER_MANAGER_NUM_BLOCKS);
-        uint32_t addr_d = this->base_addr_ + m.offset;
-    }
-
-    void read_data_from_cache_write_dispatcher(uint32_t cache_add, uint32_t size, uint32_t dispatcher_addr) {
-        std::ptrdiff_t m_idx = &m - &mgr_[0];
-        // ASSERT (m_idx >= 0 && m_idx < PREFETCHER_MANAGER_NUM_BLOCKS);
-        uint32_t addr_c = this->base_addr_ + m.offset;
-        this->dram_cache_map_[addr_d] = addr_c;
-        this->valid_[m.valid] = m_idx;
-    }
+    void invalidate_manager_entry(uint16_t idx);
+    void invalidate_manager_entry(void) { invalidate_manager_entry(this->manager_.oldest_idx); }
 };
 
 }  // namespace tt::tt_metal
