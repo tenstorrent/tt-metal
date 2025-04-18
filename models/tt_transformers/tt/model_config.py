@@ -275,6 +275,7 @@ class ModelArgs:
         "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama3.1-8B-Instruct",
         "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama3.2-11B-Vision-Instruct",
         "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama3.1-70B-Instruct",
+        "GLM4_9B_PARAMS": "models/tt_transformers/model_params/GLM-4-9B-0414",
     }
 
     def __init__(
@@ -313,7 +314,8 @@ class ModelArgs:
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         HF_MODEL = os.getenv("HF_MODEL")
-        assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
+        GLM_DIR = os.getenv("GLM_DIR")
+        assert not (LLAMA_DIR and HF_MODEL and GLM_DIR), "Only one of LLAMA_DIR, HF_MODEL, or GLM_DIR should be set"
         if LLAMA_DIR:
             if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
                 logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
@@ -323,6 +325,17 @@ class ModelArgs:
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
             self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
+        elif GLM_DIR:
+            if any([os.getenv("GLM_CKPT_DIR"), os.getenv("GLM_TOKENIZER_PATH")]):
+                logger.warning("GLM_DIR will override GLM_CKPT_DIR and GLM_TOKENIZER_PATH")
+            self.CKPT_DIR = GLM_DIR
+            self.TOKENIZER_PATH = GLM_DIR
+            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
+            if not self.CACHE_PATH:
+                self.CACHE_PATH = os.path.join(GLM_DIR, self.device_name)
+            self.model_name = os.path.basename(GLM_DIR)  # May be overridden by config
+            # GLM models need special handling for trust_remote_code
+            self.is_glm = True
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
@@ -331,10 +344,12 @@ class ModelArgs:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             self.model_name = HF_MODEL  # May be overridden by config
             self.from_hf_url = True
+            # Check if this is a GLM model from HF_MODEL name
+            self.is_glm = "GLM-4" in HF_MODEL
         else:
             assert (
                 False
-            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
+            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct, GLM_DIR to a GLM checkpoint directory, or LLAMA_DIR to a Meta-style checkpoint directory"
 
         if not dummy_weights and not HF_MODEL:
             # Assert if all folders and files exist
@@ -384,6 +399,8 @@ class ModelArgs:
                 local_params = "LLAMA3_2_11B_PARAMS"
             elif "3.1-70B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_70B_PARAMS"
+            elif "GLM-4-9B" in self.CKPT_DIR:
+                local_params = "GLM4_9B_PARAMS"
             else:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
@@ -405,6 +422,7 @@ class ModelArgs:
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "GLM-4-9B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -1192,7 +1210,9 @@ class ModelArgs:
         # Common params with different names between Meta and HF
         self.dim = params.get("dim", params.get("hidden_size"))
         self.n_heads = params.get("n_heads", params.get("num_attention_heads"))
-        self.n_kv_heads = params.get("n_kv_heads", params.get("num_key_value_heads"))
+        self.n_kv_heads = params.get(
+            "n_kv_heads", params.get("num_key_value_heads", self.n_heads)
+        )  # For models like GLM-4 that may not specify n_kv_heads
         self.n_layers = params.get("n_layers", params.get("num_hidden_layers"))
         self.full_model_n_layers = self.n_layers
         self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
@@ -1206,9 +1226,20 @@ class ModelArgs:
             self.ffn_dim_multiplier = None
             self.multiple_of = None
         else:
-            self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
-            self.multiple_of = params["multiple_of"]
+            self.ffn_dim_multiplier = params.get("ffn_dim_multiplier", 1.0)
+            self.multiple_of = params.get("multiple_of", 256)
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
+
+        # GLM-4 specific parameters
+        self.partial_rotary_factor = params.get("partial_rotary_factor", 1.0)  # Default to 1.0 (full RoPE)
+        self.attention_bias = params.get("attention_bias", False)  # Whether the model uses bias terms in attention
+
+        # Model architecture type identification
+        self.is_glm4 = False
+        if "model_type" in params:
+            self.is_glm4 = params["model_type"] == "glm"
+        elif "_name_or_path" in params:
+            self.is_glm4 = "glm-4" in params["_name_or_path"].lower()
 
         if "_name_or_path" in params:
             self.model_name = os.path.basename(params["_name_or_path"])
@@ -1226,6 +1257,7 @@ class ModelArgs:
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
+                "GLM-4-9B": 16,  # Add GLM-4 to the list
             }.get(self.base_model_name, 0)
 
             # Override MLP padding cores from env var
@@ -1243,7 +1275,7 @@ class ModelArgs:
                     self.hidden_dim = padded_hidden_dim
 
         # RoPE params
-        self.rope_theta = params.get("rope_theta")
+        self.rope_theta = params.get("rope_theta", 10000.0)
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
@@ -1321,21 +1353,59 @@ class ModelArgs:
             self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+        elif "GLM-4-9B" in checkpoint_dir:
+            self.model_name = "GLM-4-9B" + ("-0414" if self.instruct else "")
+            self.rope_scaling_factor = 8
         else:
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
         self.orig_context_len = 8192
 
     def _set_hf_params(self, checkpoint_dir):
-        if self.from_hf_url:
-            from transformers import AutoConfig
+        # Load the config.json file to get model parameters
+        config_path = os.path.join(checkpoint_dir, "config.json")
 
-            config = AutoConfig.from_pretrained(self.model_name).to_dict()
-        else:
-            config_file = os.path.join(checkpoint_dir, "config.json")
-            assert os.path.exists(config_file), f"config.json file not found at {config_file}"
-            with open(config_file, "r") as f:
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
                 config = json.load(f)
-        self._set_params_from_dict(config)
+
+            # Load weights for reference model
+            self.config = config
+
+            is_glm4 = False
+            partial_rotary_factor = 1.0
+
+            # Detect if this is a GLM-4 model
+            if config.get("model_type") == "glm4" or "GLM-4" in config.get("_name_or_path", ""):
+                is_glm4 = True
+                partial_rotary_factor = config.get("partial_rotary_factor", 0.5)
+                logger.info(f"Detected GLM-4 model with partial_rotary_factor={partial_rotary_factor}")
+
+            # Store GLM-4 specific parameters
+            self.is_glm4 = is_glm4
+            self.partial_rotary_factor = partial_rotary_factor
+
+            # Set params from the model config to our args
+            self.hf_model_config = config
+            self._set_params_from_dict(
+                {
+                    "hidden_size": config.get("hidden_size"),
+                    "dim": config.get("hidden_size"),
+                    "n_layers": config.get("num_hidden_layers"),
+                    "n_heads": config.get("num_attention_heads"),
+                    "n_kv_heads": config.get("num_key_value_heads", config.get("num_attention_heads")),
+                    "head_dim": config.get("hidden_size") // config.get("num_attention_heads"),
+                    "norm_eps": config.get("rms_norm_eps", config.get("layernorm_epsilon", None)),
+                    "rope_theta": config.get("rope_theta", 10000.0),
+                    "vocab_size": config.get("vocab_size"),
+                    "ffn_dim_multiplier": config.get("ffn_dim_multiplier"),
+                    "intermediate_size": config.get("intermediate_size"),
+                    "multiple_of": config.get("multiple_of", 1),
+                }
+            )
+        else:
+            # If there's no config.json, assume it's from TorchScript or safetensors
+            logger.warning(f"No config.json found in {checkpoint_dir}, using default HF params")
+            # TODO: Infer parameters from model structure
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1399,7 +1469,9 @@ class ModelArgs:
             if self.from_hf_url:
                 from transformers import AutoModelForCausalLM
 
-                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                # @TODO: quick hack to only use trust_remote_code for models that need it (like GLM-4)
+                trust_remote_code = self.is_glm
+                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, trust_remote_code=trust_remote_code)
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
@@ -1502,8 +1574,7 @@ class ModelArgs:
         of rows and the number of column tiles evenly divides into the number of columns
         """
         max_rows = 8
-        max_cols = 8
-        # TODO Improve configuration for BH (higher core grid than WH)
+        max_cols = 8  # TODO Improve configuration for BH (higher core grid than WH)
 
         # Find number of cols that evenly divides into the number of columns
         cols = None
@@ -1721,22 +1792,25 @@ class ModelArgs:
         )
 
     def create_tokenizer(self):
-        """Create and return a Tokenizer instance based on the checkpoint type."""
-        if self.checkpoint_type == CheckpointType.Meta:
-            # Use the Meta Tokenizer
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+        # Reference Meta implementation
+        from transformers import AutoTokenizer
 
-            return Tokenizer(self.tokenizer_path)
+        if os.getenv("HF_MODEL") and not os.path.exists(self.TOKENIZER_PATH):
+            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH, trust_remote_code=self.is_glm)
         else:
-            # Create a HuggingFace AutoTokenizer
-            from transformers import AutoTokenizer
+            tokenizer_file = self.TOKENIZER_PATH + "/tokenizer.model"
+            # GLM-4 uses a different tokenizer file name
+            if self.is_glm and not os.path.exists(tokenizer_file):
+                tokenizer_file = self.TOKENIZER_PATH + "/tokenizer.json"
 
-            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+            logger.info(f"Tokenizer file: {tokenizer_file}")
+            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH, trust_remote_code=self.is_glm)
 
-            # Add meta-compatible stop token list to the HF tokenizer
-            if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
-            return tokenizer
+        # Add meta-compatible stop token list to the HF tokenizer
+        if not "stop_tokens" in tokenizer.__dict__:
+            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+
+        return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
         if self.checkpoint_type == CheckpointType.Meta:

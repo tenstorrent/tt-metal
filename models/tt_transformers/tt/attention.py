@@ -48,6 +48,20 @@ class Attention(LightweightModule):
             max(self.max_batch_size // self.num_device_groups, 1) if self.TG else self.max_batch_size
         )
 
+        # Store the partial rotary factor for GLM-4 models
+        self.partial_rotary_factor = (
+            configuration.partial_rotary_factor if hasattr(configuration, "partial_rotary_factor") else 1.0
+        )
+
+        # Create our own transformation matrices if not provided, using partial_rotary_factor
+        if transformation_mats is None:
+            self.transformation_mats = {
+                "prefill": get_rot_transformation_mat(self.head_dim, partial_rotary_factor=self.partial_rotary_factor),
+                "decode": get_rot_transformation_mat(self.head_dim, partial_rotary_factor=self.partial_rotary_factor),
+            }
+        else:
+            self.transformation_mats = transformation_mats
+
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 

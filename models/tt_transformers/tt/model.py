@@ -46,6 +46,9 @@ class Transformer(LightweightModule):
             dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
         )
 
+        # Pass the partial_rotary_factor from the model args if GLM-4 model is detected
+        partial_rotary_factor = args.partial_rotary_factor if hasattr(args, "partial_rotary_factor") else 1.0
+
         self.rope_setup = RotarySetup(
             mesh_device,
             args.max_batch_size,
@@ -54,6 +57,7 @@ class Transformer(LightweightModule):
             args.rope_theta,
             args.rope_scaling_factor,
             args.orig_context_len,
+            partial_rotary_factor=partial_rotary_factor,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 

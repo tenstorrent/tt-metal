@@ -26,6 +26,7 @@ class RotarySetup(LightweightModule):
         scale_factor: float,  # use None to disable rope scaling
         orig_context_len: int,  # only used if scaling enabled
         datatype=ttnn.bfloat16,
+        partial_rotary_factor=1.0,  # Add partial_rotary_factor parameter with default 1.0
     ):
         super().__init__()
 
@@ -39,6 +40,9 @@ class RotarySetup(LightweightModule):
         else:
             self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
+
+        # Store partial rotary factor for use when creating matrices
+        self.partial_rotary_factor = partial_rotary_factor
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         cos_matrix, sin_matrix = compute_gather_cos_sin(
@@ -66,8 +70,10 @@ class RotarySetup(LightweightModule):
         )
 
         batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
-        # Generate the transformation matrix
-        trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
+        # Generate the transformation matrix - use partial_rotary_factor
+        trans_mat = get_rot_transformation_mat(
+            dhead=ttnn.TILE_SIZE, partial_rotary_factor=self.partial_rotary_factor
+        ).repeat(
             1,
             1,
             batch_size,
@@ -99,7 +105,10 @@ class RotarySetup(LightweightModule):
         )
 
         # TODO: Colman, should this be TILE_SIZE or head_dim? Why should it be different for prefill and decode?
-        prefill_trans_mat_torch = get_rot_transformation_mat(dhead=head_dim)
+        # Use partial_rotary_factor for prefill transformation matrix as well
+        prefill_trans_mat_torch = get_rot_transformation_mat(
+            dhead=head_dim, partial_rotary_factor=self.partial_rotary_factor
+        )
         self.transformation_mat_prefill = ttnn.from_torch(
             prefill_trans_mat_torch,
             device=device,

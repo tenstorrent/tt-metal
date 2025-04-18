@@ -63,6 +63,9 @@ def map_hf_to_meta_keys(loaded_weights):
         # Layer level mappings
         "input_layernorm.weight": "attention_norm.weight",
         "post_attention_layernorm.weight": "ffn_norm.weight",
+        # GLM-4 specific layer norm mappings
+        "post_self_attn_layernorm.weight": "post_attention_layernorm.weight",  # GLM-4 post-attention norm
+        "post_mlp_layernorm.weight": "post_mlp_layernorm.weight",  # GLM-4 post-MLP norm
         # Attention module mappings
         "self_attn.q_proj.weight": "attention.wq.weight",
         "self_attn.k_proj.weight": "attention.wk.weight",
@@ -90,6 +93,10 @@ def map_hf_to_meta_keys(loaded_weights):
         # Full path layer mappings
         "model.layers.{layer}.input_layernorm.weight": "layers.{layer}.attention_norm.weight",
         "model.layers.{layer}.post_attention_layernorm.weight": "layers.{layer}.ffn_norm.weight",
+        # GLM-4 specific layer norm mappings
+        "model.layers.{layer}.post_self_attn_layernorm.weight": "layers.{layer}.post_attention_layernorm.weight",
+        "model.layers.{layer}.post_mlp_layernorm.weight": "layers.{layer}.post_mlp_layernorm.weight",
+        # Attention module mappings
         "model.layers.{layer}.self_attn.q_proj.weight": "layers.{layer}.attention.wq.weight",
         "model.layers.{layer}.self_attn.k_proj.weight": "layers.{layer}.attention.wk.weight",
         "model.layers.{layer}.self_attn.v_proj.weight": "layers.{layer}.attention.wv.weight",
@@ -204,6 +211,85 @@ def split_hf_keys(loaded_weights):
             gate_tensor, up_tensor = torch.split(tensor, tensor.shape[0] // 2, dim=0)
             converted_weights[gate_key] = gate_tensor
             converted_weights[up_key] = up_tensor
+        # GLM-4 specific handling for combined projections
+        elif "self_attn.query_key_value" in key:
+            # GLM-4 style QKV handling - split into Q, K, V
+            q_key = key.replace("self_attn.query_key_value", "self_attn.q_proj")
+            k_key = key.replace("self_attn.query_key_value", "self_attn.k_proj")
+            v_key = key.replace("self_attn.query_key_value", "self_attn.v_proj")
+
+            # Get config from loaded weights to determine head dimensions
+            n_heads = None
+            n_kv_heads = None
+            head_dim = None
+
+            for config_key in loaded_weights.keys():
+                if (
+                    "config.json" in config_key
+                    or isinstance(loaded_weights[config_key], dict)
+                    and "model_type" in loaded_weights[config_key]
+                ):
+                    config = loaded_weights[config_key]
+                    if isinstance(config, dict):
+                        n_heads = config.get("num_attention_heads")
+                        n_kv_heads = config.get(
+                            "num_key_value_heads", n_heads
+                        )  # Default to same as n_heads if not specified
+                        head_dim = config.get("hidden_size") // n_heads if n_heads else None
+                    break
+
+            # Fallback if config information not found
+            if n_heads is None:
+                if len(tensor.shape) == 2:  # For weights
+                    head_dim = 128  # Common value for GLM models
+                    total_size = tensor.shape[0]
+                    n_heads = total_size // (3 * head_dim)  # Estimate based on tensor size
+                    n_kv_heads = n_heads
+                else:  # For bias
+                    # For bias we need to make an educated guess
+                    total_size = tensor.shape[0]
+                    # Assume equal split as fallback
+                    n_heads = total_size // 3
+                    n_kv_heads = n_heads
+                    head_dim = 1
+
+            # Calculate splitting sizes
+            if len(tensor.shape) == 2:  # For weights
+                q_size = n_heads * head_dim
+                k_size = n_kv_heads * head_dim
+                v_size = n_kv_heads * head_dim
+
+                # Sanity check
+                if q_size + k_size + v_size != tensor.shape[0]:
+                    # Adjust based on tensor size for safety
+                    total_size = tensor.shape[0]
+                    q_size = total_size // 3
+                    k_size = total_size // 3
+                    v_size = total_size - q_size - k_size
+            else:  # For bias
+                q_size = n_heads
+                k_size = n_kv_heads
+                v_size = n_kv_heads
+
+                # Sanity check
+                if q_size + k_size + v_size != tensor.shape[0]:
+                    # Adjust based on tensor size for safety
+                    total_size = tensor.shape[0]
+                    q_size = total_size // 3
+                    k_size = total_size // 3
+                    v_size = total_size - q_size - k_size
+
+            # Split into Q, K, V tensors
+            q_tensor, k_tensor, v_tensor = torch.split(tensor, [q_size, k_size, v_size], dim=0)
+
+            converted_weights[q_key] = q_tensor
+            converted_weights[k_key] = k_tensor
+            converted_weights[v_key] = v_tensor
+
+        # Handle post-layer norms for GLM-4 architecture
+        elif any(pattern in key for pattern in ["post_self_attn_layernorm", "post_mlp_layernorm"]):
+            # Map GLM-4 specific layer norms to standard format
+            converted_weights[key] = tensor
         else:
             # Keep all other weights unchanged
             converted_weights[key] = tensor

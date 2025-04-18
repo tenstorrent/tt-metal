@@ -246,12 +246,16 @@ def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, ori
 
 
 #  Add-Multiply method of rotary embeddings for prefill
-def get_rot_transformation_mat(dhead):
+def get_rot_transformation_mat(dhead, partial_rotary_factor=1.0):
     # ROPE op uses a single tile
     dhead = 32
     rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
+    # Apply rotary embeddings only to a fraction of the dimensions based on partial_rotary_factor
+    # Default is 1.0 which applies to all dimensions (original behavior)
+    rotary_dim = int(dhead * partial_rotary_factor)
+    # Only odd columns (0-indexed) get 1, even columns get -1 in the RoPE transformation matrix
+    rot_emb_matrix[..., torch.arange(0, rotary_dim, 2), torch.arange(1, rotary_dim + 1, 2)] = 1
+    rot_emb_matrix[..., torch.arange(1, rotary_dim, 2), torch.arange(0, rotary_dim, 2)] = -1
     return rot_emb_matrix
 
 
@@ -264,16 +268,34 @@ def get_single_rot_mat(
     scale_factor,
     orig_context_len,
     on_host=False,
+    partial_rotary_factor=1.0,
 ):
-    freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
+    # Calculate rotary dimension based on partial_rotary_factor
+    rotary_dim = int(dhead * partial_rotary_factor)
+
+    # Calculate frequencies only for the rotary dimensions
+    freqs_unscaled = 1.0 / (theta ** (torch.arange(0, rotary_dim, 2)[: (rotary_dim // 2)].float() / dhead))
     if scale_factor is not None:
         freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len)
     sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
+
+    # Initialize rotation matrices
     rot_matrix = torch.zeros(dhead, dhead)
-    rot_matrix[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
-    rot_matrix[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
-    rot_matrix[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
-    rot_matrix[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+    current_rot_mat = torch.zeros(dhead, dhead)
+
+    # Apply the rotary embeddings only to the dimensions defined by partial_rotary_factor
+    # For dimensions outside this range, use identity matrix (effectively no rotation)
+
+    # Apply to rotary dimensions
+    rot_matrix[torch.arange(0, rotary_dim, 2), torch.arange(0, rotary_dim, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(1, rotary_dim, 2), torch.arange(1, rotary_dim, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(0, rotary_dim, 2), torch.arange(1, rotary_dim, 2)] = -sin_freqs.clone()
+    rot_matrix[torch.arange(1, rotary_dim, 2), torch.arange(0, rotary_dim, 2)] = sin_freqs.clone()
+
+    # Apply identity for non-rotary dimensions
+    for i in range(rotary_dim, dhead):
+        rot_matrix[i, i] = 1.0
+
     rot_matrix = rot_matrix.transpose(-1, -2)
 
     # Support for start_pos different than 0
@@ -281,11 +303,16 @@ def get_single_rot_mat(
     if scale_factor is not None:
         freqs = apply_scaling(freqs, scale_factor, orig_context_len)
     sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
-    current_rot_mat = torch.zeros(dhead, dhead)
-    current_rot_mat[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
-    current_rot_mat[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
-    current_rot_mat[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
-    current_rot_mat[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+
+    # Apply to rotary dimensions with current position
+    current_rot_mat[torch.arange(0, rotary_dim, 2), torch.arange(0, rotary_dim, 2)] = cos_freqs.clone()
+    current_rot_mat[torch.arange(1, rotary_dim, 2), torch.arange(1, rotary_dim, 2)] = cos_freqs.clone()
+    current_rot_mat[torch.arange(0, rotary_dim, 2), torch.arange(1, rotary_dim, 2)] = -sin_freqs.clone()
+    current_rot_mat[torch.arange(1, rotary_dim, 2), torch.arange(0, rotary_dim, 2)] = sin_freqs.clone()
+
+    # Apply identity for non-rotary dimensions
+    for i in range(rotary_dim, dhead):
+        current_rot_mat[i, i] = 1.0
 
     return ttnn.from_torch(
         current_rot_mat.T.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
