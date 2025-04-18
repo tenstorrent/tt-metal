@@ -76,7 +76,7 @@ def test_transformer(
 
     torch.manual_seed(0)
     spatial = torch.randn((batch_size, 16, height // 8, width // 8))
-    prompt = torch.randn((batch_size, prompt_sequence_length, spatial_sequence_length))
+    prompt = torch.randn((batch_size, prompt_sequence_length, 4096))
     pooled_projection = torch.randn((batch_size, 2048))
     timestep = torch.randint(1000, (batch_size,), dtype=torch_dtype)
 
