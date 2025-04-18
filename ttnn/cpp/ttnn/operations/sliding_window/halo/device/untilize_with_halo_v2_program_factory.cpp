@@ -530,7 +530,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     CoreRangeSet rectangular_cores(rectangular_cores_set);
     CoreCoord noc_BR = is_block_sharded ? last_active_coord : core_id_to_noc_coords(rectangular_x * rectangular_y - 1);
 
-    // create semaphores
+    // create semaphore
     uint32_t semaphore_id = tt::tt_metal::CreateSemaphore(program, rectangular_cores, 0);
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
@@ -593,12 +593,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         rectangular_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
-
-    // std::vector<uint32_t> reader_rt_args;
-    // reader_rt_args.insert(reader_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
-    // reader_rt_args.insert(reader_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
-    // SetRuntimeArgs(program, reader_kernel_id0, all_cores, reader_rt_args);
-    // SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
     if (!capture_buffers) {
         padding_config_buffer = nullptr;
