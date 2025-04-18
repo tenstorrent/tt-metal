@@ -125,6 +125,7 @@ parameters = {
             [1, 512, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
             [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
             [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
+            [1, 32, 6, 6, 3, 3, 1, 1, 1, 1, 1, 1, False],  # partial grid on WH to use noop cores
         ],
     },
     "test_run_max_pool_block_shard": {
