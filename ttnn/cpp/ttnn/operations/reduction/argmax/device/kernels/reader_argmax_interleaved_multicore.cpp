@@ -264,7 +264,9 @@ void kernel_main() {
             noc_semaphore_set(start_sem_local_ptr, k + 1);
 
             if constexpr (num_cores > 1) {
-                noc_semaphore_set_multicast_loopback_src(start_sem_local_addr, start_sem_noc_addr0, num_cores0);
+                if (k > 0) {
+                    noc_semaphore_set_multicast_loopback_src(start_sem_local_addr, start_sem_noc_addr0, num_cores0);
+                }
 
                 if (num_cores1 > 0) {
                     noc_semaphore_set_multicast(start_sem_local_addr, start_sem_noc_addr1, num_cores1);
@@ -275,7 +277,9 @@ void kernel_main() {
         }
 
         // Wait to start
-        noc_semaphore_wait(start_sem_local_ptr, k + 1);
+        if (k > 0) {
+            noc_semaphore_wait(start_sem_local_ptr, k + 1);
+        }
 
         find_argmax_for_core<src_is_dram, reduce_all>(
             /*inner_dim_units=*/inner_dim_units,
