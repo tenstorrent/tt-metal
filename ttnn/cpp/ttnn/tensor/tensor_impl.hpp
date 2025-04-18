@@ -105,8 +105,8 @@ inline std::vector<T> convert_layout_row_major_to_tile(
     return convert_layout(
         tt::stl::MakeConstSpan(data_to_convert),
         shape,
-        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
-        tests::utils::TensorLayoutType::TILED_NFACES,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
         tile_shape,
         face_shape,
         transpose_within_face,
@@ -124,8 +124,8 @@ inline std::vector<T> convert_layout_tile_to_row_major(
     return convert_layout(
         tt::stl::MakeConstSpan(data_to_convert),
         shape,
-        tests::utils::TensorLayoutType::TILED_NFACES,
-        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+        TensorLayoutType::TILED_NFACES,
+        TensorLayoutType::LIN_ROW_MAJOR,
         tile_shape,
         face_shape,
         transpose_within_face,

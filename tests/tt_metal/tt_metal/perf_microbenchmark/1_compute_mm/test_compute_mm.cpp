@@ -51,7 +51,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
-#include "tests/tt_metal/test_utils/tilization.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
@@ -136,14 +135,6 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
     uint32_t l1_unreserved_base);
 
 std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val);
-
-namespace test {
-template <typename T>
-std::vector<T> tilize(std::vector<T> data, int rows, int cols);
-
-template <typename T>
-std::vector<T> untilize(std::vector<T> data, int rows, int cols);
-}  // namespace test
 
 template <typename T>
 std::vector<T> get_row_slice(std::vector<T> data, int start_row_index, int num_rows, int rows, int cols);
@@ -431,14 +422,16 @@ int main(int argc, char** argv) {
         if (single_core) {
             if (dtype == 1) {
                 // in0
-                auto activations_tilized = test::tilize(tensor_in0_fp16.get_values(), M, K);
-                auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
+                auto activations_tilized = tilize_swizzled(tensor_in0_fp16.get_values(), M, K);
+                auto activations_tile_layout =
+                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
                 vector<uint32_t> activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
                 input_buffer0 = create_and_transfer_data_sharded_cb(device, activations, Mt, Kt);
 
                 // in1
-                auto identity_tilized = test::tilize(tensor_in1_fp16.get_values(), K, N);
-                auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
+                auto identity_tilized = tilize_swizzled(tensor_in1_fp16.get_values(), K, N);
+                auto weights_tile_layout =
+                    convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 input_buffer1 = create_and_transfer_data_sharded_cb(device, weights, Kt, Nt);
 
@@ -455,12 +448,12 @@ int main(int argc, char** argv) {
 
             } else {
                 // in0
-                auto activations_tilized = test::tilize(tensor_in0_fp8.get_values(), M, K);
+                auto activations_tilized = tilize_swizzled(tensor_in0_fp8.get_values(), M, K);
                 std::vector<uint32_t> activations = pack_fp32_vec_as_bfp8_tiles(activations_tilized, true, false);
                 input_buffer0 = create_and_transfer_data_sharded_cb_fp8(device, activations, Mt, Kt);
 
                 // in1
-                auto identity_tilized = test::tilize(tensor_in1_fp8.get_values(), K, N);
+                auto identity_tilized = tilize_swizzled(tensor_in1_fp8.get_values(), K, N);
                 auto weights = pack_fp32_vec_as_bfp8_tiles(identity_tilized, true, false);
                 input_buffer1 = create_and_transfer_data_sharded_cb_fp8(device, weights, Kt, Nt);
 
@@ -472,7 +465,7 @@ int main(int argc, char** argv) {
                     0,
                     100,
                     std::chrono::system_clock::now().time_since_epoch().count());
-                auto output_tilized = test::tilize(out_tensor.get_values(), M, N);
+                auto output_tilized = tilize_swizzled(out_tensor.get_values(), M, N);
                 auto outputs = pack_fp32_vec_as_bfp8_tiles(output_tilized, true, false);
                 output_buffer = create_and_transfer_data_sharded_cb_fp8(device, outputs, Mt, Nt);
             }
@@ -1405,58 +1398,6 @@ std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val
     return vec;
 }
 
-namespace test {
-// Given a tensor that is row-major datums, make it tilized
-// so that its row major within a tile, and each tile's data
-// is contiguous
-template <typename T>
-std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_ASSERT(rows % 32 == 0);
-    TT_ASSERT(cols % 32 == 0);
-    int num_tiles_r = rows / 32;
-    int num_tiles_c = cols / 32;
-    std::vector<T> result;
-    for (auto r = 0; r < num_tiles_r; r++) {
-        for (auto c = 0; c < num_tiles_c; c++) {
-            for (auto j = 0; j < 32; j++) {      // tile rows
-                for (auto i = 0; i < 32; i++) {  // tile cols
-                    // each row of tiles is 32x32 * num_tiles_c
-                    // each row within the row of tiles is cols
-                    // each col of tiles is 32
-                    // pick row of tiles, pick the row within the tile, pick col tile
-                    int index = r * 32 * 32 * num_tiles_c + j * cols + c * 32 + i;
-                    result.push_back(data.at(index));
-                }
-            }
-        }
-    }
-    return result;
-}
-
-// Given a tilized data (each tile's data is contiguous and row major within the
-// tile) transform it back to row major full tensor. (This function inverts the
-// tilize() function)
-template <typename T>
-std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    TT_ASSERT(rows % 32 == 0);
-    TT_ASSERT(cols % 32 == 0);
-    int num_tiles_r = rows / 32;
-    int num_tiles_c = cols / 32;
-    std::vector<T> result;
-    for (auto r = 0; r < num_tiles_r; r++) {
-        for (auto i = 0; i < 32; i++) {
-            for (auto c = 0; c < num_tiles_c; c++) {
-                int offset = r * 32 * 32 * num_tiles_c + c * 32 * 32 + i * 32;
-                for (auto j = 0; j < 32; j++) {
-                    result.push_back(data.at(offset + j));
-                }
-            }
-        }
-    }
-    return result;
-}
-}  // namespace test
-
 template <typename T>
 std::vector<T> get_row_slice(std::vector<T> data, int start_row_index, int num_rows, int rows, int cols) {
     std::vector<T> result;
@@ -1522,12 +1463,12 @@ void prepare_inputs(
         std::vector<float> in0_slice = get_row_slice(in0_vec, r * per_core_Mt * 32, num_r * 32, Mt * 32, Kt * 32);
         // only use the first block of in0_slice
         auto in0_block_slice = get_col_slice(in0_slice, 0, in0_block_w * 32, num_r * 32, Kt * 32);
-        auto in0_block_tilized = test::tilize(in0_block_slice, num_r * 32, in0_block_w * 32);
+        auto in0_block_tilized = tilize_swizzled(in0_block_slice, num_r * 32, in0_block_w * 32);
         std::vector<uint32_t> in0 =
             pack_fp32_vec_as_bfp8_tiles(in0_block_tilized, /*row_major_input=*/true, /*is_exp_a=*/false);
 
         auto unpack_vec = unpack_bfp8_tiles_into_float_vec(in0, true, false);
-        auto untilize_vec = test::untilize(unpack_vec, num_r * 32, in0_block_w * 32);
+        auto untilize_vec = untilize_swizzled(unpack_vec, num_r * 32, in0_block_w * 32);
         in0_bfp8_unpack_slice.push_back(untilize_vec);
 
         for (int c = 0; c < num_cores_x; c++) {
@@ -1539,7 +1480,7 @@ void prepare_inputs(
                 in1_block_slice.at(i * (num_c * 32) + i) = (float)1;
             }
 
-            auto in1_block_tilized = test::tilize(in1_block_slice, in0_block_w * 32, num_c * 32);
+            auto in1_block_tilized = tilize_swizzled(in1_block_slice, in0_block_w * 32, num_c * 32);
             std::vector<uint32_t> in1 =
                 pack_fp32_vec_as_bfp8_tiles(in1_block_tilized, /*row_major_input=*/true, /*is_exp_a=*/false);
 
@@ -1571,8 +1512,8 @@ bool validation_single_core(
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
-    auto result_untilized = test_utils::untilize(result_flat_layout, Mt * 32, Nt * 32);
+    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+    auto result_untilized = untilize_swizzled(result_flat_layout, Mt * 32, Nt * 32);
 
     std::vector<float> golden_vec(Mt * Nt * 32 * 32, 0);  // Initialize with zeros
     const auto& values0 = tensor_in0.get_values();
@@ -1618,7 +1559,7 @@ bool validation_single_core_fp8(
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
 
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
-    auto result_untilized = test::untilize(result_bfp8, Mt * 32, Nt * 32);
+    auto result_untilized = untilize_swizzled(result_bfp8, Mt * 32, Nt * 32);
 
     std::vector<float> golden_vec(Mt * Nt * 32 * 32, 0);  // Initialize with zeros
     const auto& values0 = tensor_in0.get_values();
@@ -1680,7 +1621,7 @@ bool validation(
             uint32_t num_c = (c == num_cores_x - 1) ? (last_block_w) : (per_core_Nt);
             tt_metal::detail::ReadFromDeviceL1(device, core, out_addr, num_r * num_c * single_tile_size, result_vec);
             auto result_flat_layout = unpack_bfp8_tiles_into_float_vec(result_vec, true, false);
-            auto result_untilized = test::untilize(result_flat_layout, num_r * 32, num_c * 32);
+            auto result_untilized = untilize_swizzled(result_flat_layout, num_r * 32, num_c * 32);
 
             uint32_t num_patterns = (num_c - 1) / in0_block_w + 1;
             uint32_t last_remain_c = num_c % in0_block_w == 0 ? in0_block_w : num_c % in0_block_w;

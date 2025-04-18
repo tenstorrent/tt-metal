@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -26,14 +26,13 @@ class TtSegformerEfficientSelfAttention:
 
     def __call__(
         self,
+        device,
         hidden_states: ttnn.Tensor,
         height: int,
         width: int,
         parameters,
         output_attentions=False,
     ):
-        device = hidden_states.device()
-
         if len(hidden_states.shape) == 4:
             batch_size, __, seq_len, hidden_size = hidden_states.shape
         elif len(hidden_states.shape) == 3:
