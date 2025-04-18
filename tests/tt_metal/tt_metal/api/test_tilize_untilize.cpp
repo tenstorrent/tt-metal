@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <gtest/gtest.h>
-#include <sys/types.h>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tilize_utils.hpp>
 #include <vector>
 #include <random>
+#include <sys/types.h>
 
-#include "assert.hpp"
-#include "gtest/gtest.h"
+#include <gtest/gtest.h>
+
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/assert.hpp>
 #include <tt_stl/span.hpp>
 
 namespace reference {
