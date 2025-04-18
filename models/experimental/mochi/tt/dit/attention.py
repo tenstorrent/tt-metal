@@ -17,7 +17,6 @@ from models.experimental.mochi.tt.common import (
     get_padded_vision_seq_len,
 )
 from functools import partial
-from ttnn import ConcatMeshToTensor
 
 
 class AsymmetricAttention(LightweightModule):
@@ -197,16 +196,18 @@ class AsymmetricAttention(LightweightModule):
 
     def _seq_to_replicated_tensor(self, seq_parallel_tensor, N):
         replicated_tensor = ttnn.all_gather(seq_parallel_tensor, dim=2)
-        tensors = ttnn.get_device_tensors(replicated_tensor)
         tile_padded_seqlen = math.ceil(N / 32) * 32
-        for i in range(len(tensors)):
-            # Slice out local head and slice sequence padding
-            tensors[i] = tensors[i][:, :, :tile_padded_seqlen]
-            # Add padding information
-            tensors[i] = ttnn.reshape(
-                tensors[i], [tensors[i].shape[0], tensors[i].shape[1], N, tensors[i].shape[3]], tensors[i].shape
+
+        if tile_padded_seqlen < replicated_tensor.shape[2]:
+            replicated_tensor = ttnn.slice(
+                replicated_tensor, [0, 0, 0, 0], [1, 1, tile_padded_seqlen, replicated_tensor.shape[3]]
             )
-        return ttnn.aggregate_as_tensor(tensors)
+        replicated_tensor = ttnn.reshape(
+            replicated_tensor,
+            [replicated_tensor.shape[0], replicated_tensor.shape[1], N, replicated_tensor.shape[3]],
+            replicated_tensor.shape,
+        )
+        return replicated_tensor
 
     def _seq_to_col_parallel_tensor(self, seq_parallel_tensor, N):
         dim = seq_parallel_tensor.shape[3]
@@ -216,7 +217,9 @@ class AsymmetricAttention(LightweightModule):
         tile_padded_seqlen = math.ceil(N / 32) * 32
         for i in range(len(tensors)):
             # Slice out local head and slice sequence padding
-            tensors[i] = tensors[i][:, :, :tile_padded_seqlen, i * local_dim : (i + 1) * local_dim]
+            tensors[i] = ttnn.slice(
+                tensors[i], [0, 0, 0, i * local_dim], [1, 1, tile_padded_seqlen, (i + 1) * local_dim]
+            )
             # Add padding information
             tensors[i] = ttnn.reshape(
                 tensors[i], [tensors[i].shape[0], tensors[i].shape[1], N, tensors[i].shape[3]], tensors[i].shape
@@ -239,7 +242,9 @@ class AsymmetricAttention(LightweightModule):
 
         padded_M = padded_seq_len // self.num_devices
         for i in range(len(tensors)):
-            tensors[i] = tensors[i][:, :, i * padded_M : (i + 1) * padded_M]
+            tensors[i] = ttnn.slice(
+                tensors[i], [0, 0, i * padded_M, 0], [1, 1, (i + 1) * padded_M, tensors[i].shape[3]]
+            )
         return ttnn.aggregate_as_tensor(tensors)
 
     def run_qkv_y(self, y):

@@ -8,8 +8,6 @@ from models.experimental.mochi.tt.dit.attention import AsymmetricAttention
 from models.experimental.mochi.tt.dit.mlp import FeedForward
 from models.experimental.mochi.tt.dit.norms import modulated_rmsnorm, residual_tanh_gated_rmsnorm
 
-from ttnn import ConcatMeshToTensor
-
 
 class AsymmetricJointBlock(LightweightModule):
     def __init__(
@@ -214,11 +212,10 @@ class AsymmetricJointBlock(LightweightModule):
         )
         mod_x_B11Z = ttnn.all_gather(mod_x_B11Z, dim=3)
 
-        scale_msa_x_B11X = mod_x_B11Z[:, :, :, : self.hidden_size_x]
-        gate_msa_x_B11X = mod_x_B11Z[:, :, :, self.hidden_size_x : 2 * self.hidden_size_x]
-        scale_mlp_x_B11X = mod_x_B11Z[:, :, :, 2 * self.hidden_size_x : 3 * self.hidden_size_x]
-        gate_mlp_x_B11X = mod_x_B11Z[:, :, :, 3 * self.hidden_size_x :]
-        # scale_msa_x, gate_msa_x, scale_mlp_x, gate_mlp_x = ttnn.split(mod_x, 4, dim=1)
+        scale_msa_x_B11X = ttnn.slice(mod_x_B11Z, [0, 0, 0, 0], [1, 1, 1, self.hidden_size_x])
+        gate_msa_x_B11X = ttnn.slice(mod_x_B11Z, [0, 0, 0, self.hidden_size_x], [1, 1, 1, 2 * self.hidden_size_x])
+        scale_mlp_x_B11X = ttnn.slice(mod_x_B11Z, [0, 0, 0, 2 * self.hidden_size_x], [1, 1, 1, 3 * self.hidden_size_x])
+        gate_mlp_x_B11X = ttnn.slice(mod_x_B11Z, [0, 0, 0, 3 * self.hidden_size_x], [1, 1, 1, 4 * self.hidden_size_x])
 
         scale_msa_y_B11Y = None
         if not uncond:
@@ -233,11 +230,17 @@ class AsymmetricJointBlock(LightweightModule):
             )
             mod_y_B11C = ttnn.all_gather(mod_y_B11C, dim=3)
             if self.update_y:
-                scale_msa_y_B11Y = mod_y_B11C[:, :, :, : self.hidden_size_y]
-                gate_msa_y_B11Y = mod_y_B11C[:, :, :, self.hidden_size_y : 2 * self.hidden_size_y]
-                scale_mlp_y_B11Y = mod_y_B11C[:, :, :, 2 * self.hidden_size_y : 3 * self.hidden_size_y]
-                gate_mlp_y_B11Y = mod_y_B11C[:, :, :, 3 * self.hidden_size_y :]
-                # scale_msa_y, gate_msa_y, scale_mlp_y, gate_mlp_y = ttnn.split(mod_y, 4, dim=1)
+                scale_msa_y_B11Y = ttnn.slice(mod_y_B11C, [0, 0, 0, 0], [1, 1, 1, self.hidden_size_y])
+                gate_msa_y_B11Y = ttnn.slice(
+                    mod_y_B11C, [0, 0, 0, self.hidden_size_y], [1, 1, 1, 2 * self.hidden_size_y]
+                )
+                scale_mlp_y_B11Y = ttnn.slice(
+                    mod_y_B11C, [0, 0, 0, 2 * self.hidden_size_y], [1, 1, 1, 3 * self.hidden_size_y]
+                )
+                gate_mlp_y_B11Y = ttnn.slice(
+                    mod_y_B11C, [0, 0, 0, 3 * self.hidden_size_y], [1, 1, 1, 4 * self.hidden_size_y]
+                )
+
             else:
                 scale_msa_y_B11Y = mod_y_B11C
 

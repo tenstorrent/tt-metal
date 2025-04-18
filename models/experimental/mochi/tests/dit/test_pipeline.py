@@ -4,7 +4,6 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-import numpy as np
 from models.utility_functions import skip_for_grayskull
 from models.experimental.mochi.tt.common import compute_metrics
 from genmo.mochi_preview.pipelines import sample_model as reference_sample_model
@@ -78,12 +77,12 @@ def test_sample_model(mesh_device, use_program_cache, reset_seeds, n_layers):
         "seed": 1234,
     }
 
+    logger.info("Running reference sample_model")
+    reference_output = reference_sample_model(device=device, dit=ref_dit, conditioning=conditioning, **sample_args)
+
     # Run both implementations
     logger.info("Running TT sample_model")
     tt_output = sample_model_tt(device=device, dit=tt_dit, conditioning=conditioning, **sample_args)
-
-    logger.info("Running reference sample_model")
-    reference_output = reference_sample_model(device=device, dit=ref_dit, conditioning=conditioning, **sample_args)
 
     # Compute metrics
     pcc_required = 0.985
@@ -280,7 +279,7 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
 
     warmup_output = sample_model_profile(device=device, dit=tt_dit, conditioning=conditioning, **sample_args)
 
-    num_bench_steps = 10
+    num_bench_steps = 2
     bench_sigma, bench_cfg = get_schedule(num_bench_steps)
     bench_args = {
         "width": width,

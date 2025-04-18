@@ -122,8 +122,8 @@ class FinalLayer(LightweightModule):
             mod = ttnn.all_gather(mod, dim=3)
 
         # Split modulation into shift and scale
-        shift = mod[:, :, :, : self.hidden_size]
-        scale = mod[:, :, :, self.hidden_size :]
+        shift = ttnn.slice(mod, [0, 0, 0, 0], [1, 1, 1, self.hidden_size])
+        scale = ttnn.slice(mod, [0, 0, 0, self.hidden_size], [1, 1, 1, 2 * self.hidden_size])
 
         # Apply layer norm with activation-dependent weights
 
