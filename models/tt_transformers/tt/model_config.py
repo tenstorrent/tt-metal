@@ -1213,12 +1213,12 @@ class ModelArgs:
         self.n_kv_heads = params.get(
             "n_kv_heads", params.get("num_key_value_heads", self.n_heads)
         )  # For models like GLM-4 that may not specify n_kv_heads
-        self.n_layers = params.get("n_layers", params.get("num_hidden_layers"))
+        self.n_layers = int(params.get("num_hidden_layers", params.get("n_layers")))
         self.full_model_n_layers = self.n_layers
-        self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
-        self.vocab_size = params["vocab_size"]
+        self.norm_eps = params.get("rms_norm_eps", params.get("norm_eps"))
+        self.vocab_size = int(params.get("vocab_size"))
         self.padded_vocab_size = 128 * 1024
-        self.head_dim = params.get("head_dim", self.dim // self.n_heads)
+        self.head_dim = self.dim // self.n_heads
 
         # Handle different MLP dimension specifications
         if "intermediate_size" in params:
@@ -1230,16 +1230,7 @@ class ModelArgs:
             self.multiple_of = params.get("multiple_of", 256)
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
-        # GLM-4 specific parameters
-        self.partial_rotary_factor = params.get("partial_rotary_factor", 1.0)  # Default to 1.0 (full RoPE)
-        self.attention_bias = params.get("attention_bias", False)  # Whether the model uses bias terms in attention
-
-        # Model architecture type identification
-        self.is_glm4 = False
-        if "model_type" in params:
-            self.is_glm4 = params["model_type"] == "glm"
-        elif "_name_or_path" in params:
-            self.is_glm4 = "glm-4" in params["_name_or_path"].lower()
+        # Removed GLM-4 specific parameter loading
 
         if "_name_or_path" in params:
             self.model_name = os.path.basename(params["_name_or_path"])
@@ -1371,18 +1362,7 @@ class ModelArgs:
             # Load weights for reference model
             self.config = config
 
-            is_glm4 = False
-            partial_rotary_factor = 1.0
-
-            # Detect if this is a GLM-4 model
-            if config.get("model_type") == "glm4" or "GLM-4" in config.get("_name_or_path", ""):
-                is_glm4 = True
-                partial_rotary_factor = config.get("partial_rotary_factor", 0.5)
-                logger.info(f"Detected GLM-4 model with partial_rotary_factor={partial_rotary_factor}")
-
-            # Store GLM-4 specific parameters
-            self.is_glm4 = is_glm4
-            self.partial_rotary_factor = partial_rotary_factor
+            # Removed GLM-4 specific parameter detection
 
             # Set params from the model config to our args
             self.hf_model_config = config

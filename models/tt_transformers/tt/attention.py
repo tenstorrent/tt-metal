@@ -48,16 +48,19 @@ class Attention(LightweightModule):
             max(self.max_batch_size // self.num_device_groups, 1) if self.TG else self.max_batch_size
         )
 
-        # Store the partial rotary factor for GLM-4 models
-        self.partial_rotary_factor = (
-            configuration.partial_rotary_factor if hasattr(configuration, "partial_rotary_factor") else 1.0
-        )
-
         # Create our own transformation matrices if not provided, using partial_rotary_factor
         if transformation_mats is None:
+            # Import temporarily needed function if not already imported globally
+            # Note: Assuming get_rot_transformation_mat is accessible, adjust import if needed
+            try:
+                from models.tt_transformers.tt.common import get_rot_transformation_mat
+            except ImportError:
+                # Handle case where it might be moved or refactored, though unlikely for base
+                raise ImportError("Could not import get_rot_transformation_mat for default matrix generation.")
+
             self.transformation_mats = {
-                "prefill": get_rot_transformation_mat(self.head_dim, partial_rotary_factor=self.partial_rotary_factor),
-                "decode": get_rot_transformation_mat(self.head_dim, partial_rotary_factor=self.partial_rotary_factor),
+                "prefill": get_rot_transformation_mat(self.head_dim, partial_rotary_factor=1.0),  # Use 1.0 always
+                "decode": get_rot_transformation_mat(self.head_dim, partial_rotary_factor=1.0),  # Use 1.0 always
             }
         else:
             self.transformation_mats = transformation_mats

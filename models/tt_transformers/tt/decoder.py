@@ -37,7 +37,6 @@ class TransformerBlock(LightweightModule):
         self.n_kv_heads = args.n_kv_heads
         self.current = 0
         self.model_config = args.get_model_config()
-        self.is_glm4 = args.is_glm4 if hasattr(args, "is_glm4") else False
 
         self.layer_num = layer_num
 
@@ -97,43 +96,6 @@ class TransformerBlock(LightweightModule):
             TG=args.is_galaxy,
         )
 
-        # Additional layer norms for GLM-4 architecture
-        if self.is_glm4:
-            self.post_attention_layernorm = DistributedNorm(
-                RMSNorm(
-                    device=mesh_device,
-                    dim=args.dim,
-                    state_dict=state_dict,
-                    state_dict_prefix=args.get_state_dict_prefix("", layer_num),
-                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                    weight_dtype=ttnn.bfloat16,
-                    weight_key="post_attention_layernorm",
-                    is_distributed=self.args.is_distributed_norm,
-                    sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-                    sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
-                    ccl_topology=self.args.ccl_topology(),
-                ),
-                args,
-                TG=args.is_galaxy,
-            )
-            self.post_mlp_layernorm = DistributedNorm(
-                RMSNorm(
-                    device=mesh_device,
-                    dim=args.dim,
-                    state_dict=state_dict,
-                    state_dict_prefix=args.get_state_dict_prefix("", layer_num),
-                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                    weight_dtype=ttnn.bfloat16,
-                    weight_key="post_mlp_layernorm",
-                    is_distributed=self.args.is_distributed_norm,
-                    sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                    sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
-                    ccl_topology=self.args.ccl_topology(),
-                ),
-                args,
-                TG=args.is_galaxy,
-            )
-
     def forward(
         self,
         x: ttnn.Tensor,
@@ -153,108 +115,41 @@ class TransformerBlock(LightweightModule):
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
-        if self.is_glm4:
-            # GLM-4 architecture:
-            # 1. Apply input norm
-            # 2. Apply attention
-            # 3. Apply post-attention norm
-            # 4. Add residual (after norm)
-            # Repeat similar pattern for MLP
+        # Norms take fractured inputs and output replicated across devices
+        attn_in = self.attention_norm(x, mode)
+        # Attention takes replicated inputs and produces fractured outputs
+        attn_out = self.attention.forward(
+            attn_in,
+            current_pos,
+            rot_mats,
+            user_id,
+            mode,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
+            kv_cache=kv_cache,
+        )
+        # Here x and attn_out are both fractured across devices
+        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
+        ttnn.deallocate(attn_out)
+        if mode == "prefill":
+            x.deallocate(True)
 
-            # Store residual for later
-            residual = x
-
-            # Input layernorm
-            attn_in = self.attention_norm(x, mode)
-
-            # Attention module
-            attn_out = self.attention.forward(
-                attn_in,
-                current_pos,
-                rot_mats,
-                user_id,
-                mode,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache,
-            )
-
-            # Apply post-attention norm to the attention output
-            attn_norm_out = self.post_attention_layernorm(attn_out, mode)
-            ttnn.deallocate(attn_out)
-
-            # Add residual after norm
-            h = ttnn.add(residual, attn_norm_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
-            if mode == "prefill":
-                residual.deallocate(True)
-            ttnn.deallocate(attn_norm_out)
-
-            # Store new residual for MLP path
-            residual = h
-
-            # Pre-MLP norm
-            ff_in = self.ff_norm(h, mode)
-            if TG and mode == "decode":
-                ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
-
-            # MLP
-            ff_out = self.feed_forward.forward(ff_in, mode)
-
-            # Apply post-MLP norm
-            ff_norm_out = self.post_mlp_layernorm(ff_out, mode)
-            ttnn.deallocate(ff_out)
-
-            # Add residual after norm
-            out = ttnn.add(
-                residual,
-                ff_norm_out,
-                memory_config=skip_mem_cfg,
-                dtype=self.args.ccl_dtype
-                if TG and not self.args.is_distributed_norm(mode)
-                else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
-            )
-            ttnn.deallocate(ff_norm_out)
-            ttnn.deallocate(residual)
-
-        else:
-            # Original Llama-like architecture
-            # Norms take fractured inputs and output replicated across devices
-            attn_in = self.attention_norm(x, mode)
-            # Attention takes replicated inputs and produces fractured outputs
-            attn_out = self.attention.forward(
-                attn_in,
-                current_pos,
-                rot_mats,
-                user_id,
-                mode,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache,
-            )
-            # Here x and attn_out are both fractured across devices
-            h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
-            ttnn.deallocate(attn_out)
-            if mode == "prefill":
-                x.deallocate(True)
-
-            # Norms take fractured inputs and output replicated across devices
-            ff_in = self.ff_norm(h, mode)
-            if TG and mode == "decode":
-                ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
+        # Norms take fractured inputs and output replicated across devices
+        ff_in = self.ff_norm(h, mode)
+        if TG and mode == "decode":
+            ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
             # MLP takes replicated inputs and produces fractured outputs
-            ff_out = self.feed_forward.forward(ff_in, mode)
-            # ff_out and h are both fractured across devices
-            out = ttnn.add(
-                h,
-                ff_out,
-                memory_config=skip_mem_cfg,
-                dtype=self.args.ccl_dtype
-                if TG and not self.args.is_distributed_norm(mode)
-                else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
-            )
-            ttnn.deallocate(ff_out)
-            ttnn.deallocate(h)
-
+        ff_out = self.feed_forward.forward(ff_in, mode)
+        # ff_out and h are both fractured across devices
+        out = ttnn.add(
+            h,
+            ff_out,
+            memory_config=skip_mem_cfg,
+            dtype=self.args.ccl_dtype
+            if TG and not self.args.is_distributed_norm(mode)
+            else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
+        )
+        ttnn.deallocate(ff_out)
+        ttnn.deallocate(h)
         return out  # fractured across devices
