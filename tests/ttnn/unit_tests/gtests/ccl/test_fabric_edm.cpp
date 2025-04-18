@@ -80,6 +80,7 @@ static void dispatch_1d_fabric_on_mesh(
     size_t num_rows = std::stoi(argv[arg_idx++]);
     size_t num_cols = std::stoi(argv[arg_idx++]);
     size_t first_link_offset = std::stoi(argv[arg_idx++]);
+    TT_FATAL(arg_idx == argc, "Missing args");
 
     test_params.params.num_fabric_rows = num_rows;
     test_params.params.num_fabric_cols = num_cols;
@@ -99,6 +100,7 @@ static void dispatch_single_line_bw_test(
     int argc,
     char** argv,
     size_t arg_idx) {
+    TT_FATAL(arg_idx == argc, "Missing args");
     Run1DFabricPacketSendTest(test_specs, test_params.params);
 }
 
@@ -119,7 +121,6 @@ int main(int argc, char** argv) {
     bool disable_sends_for_interior_workers = std::stoi(argv[arg_idx++]);
     bool unidirectional_test = std::stoi(argv[arg_idx++]);
     bool senders_are_unidirectional = std::stoi(argv[arg_idx++]);
-    TT_FATAL(arg_idx == argc, "Missing args");
 
     // WriteThroughputStabilityTestWithPersistentFabricParams params;
     TestParams test_params;
