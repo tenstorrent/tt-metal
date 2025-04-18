@@ -73,9 +73,6 @@ def test_roll(device, input_tensor, shifts, dim, layout, dtype, memory_config):
     ttnn_out = ttnn.roll(ttnn_tensor, shifts, dim)
     ttnn_result_torch = ttnn.to_torch(ttnn_out)
 
-    print("Expected:", pytorch_out)
-    print("Actual:", ttnn_result_torch)
-
     assert_with_pcc(pytorch_out, ttnn_result_torch)
     assert torch.allclose(pytorch_out, ttnn_result_torch)
 
@@ -118,8 +115,6 @@ def test_roll_without_dim(device, input_tensor, shifts):
     pytorch_out = torch.roll(tensor, shifts)
     ttnn_out = ttnn.roll(ttnn_tensor, shifts)
     ttnn_result_torch = ttnn.to_torch(ttnn_out)
-    print(pytorch_out)
-    print(ttnn_result_torch)
     assert_with_pcc(pytorch_out, ttnn_result_torch)
     assert torch.allclose(pytorch_out, ttnn_result_torch)
 
@@ -196,8 +191,6 @@ def test_roll_tile_padding(device, input_tensor, shifts, dim, layout, dtype):
     ttnn_out = ttnn.roll(ttnn_tensor, shifts, dim)
     ttnn_result_torch = ttnn.to_torch(ttnn_out)
 
-    print("Expected (PyTorch Output):", pytorch_out)
-    print("Actual (TTNN Output):", ttnn_result_torch)
     assert_with_pcc(pytorch_out, ttnn_result_torch)
     assert torch.allclose(pytorch_out, ttnn_result_torch)
 
