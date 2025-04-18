@@ -6,6 +6,7 @@
 
 #include <unordered_map>
 #include <variant>
+#include <cstdint>
 
 namespace tt::tt_metal {
 
@@ -15,9 +16,16 @@ struct ReplicateTensor {
     ReplicateTensor(int replication_factor) : replication_factor(replication_factor) {}
 };
 bool operator==(const ReplicateTensor&, const ReplicateTensor&);
+
+enum class DeviceLinearizationType : std::uint16_t {
+    ROW_MAJOR,
+    RING,
+};
 struct ShardTensor {
-    int shard_dimension;
-    ShardTensor(int shard_dimension) : shard_dimension(shard_dimension) {}
+    std::uint16_t shard_dimension;
+    DeviceLinearizationType linearization;
+    ShardTensor(int shard_dimension, DeviceLinearizationType linearization = DeviceLinearizationType::ROW_MAJOR) :
+        shard_dimension(shard_dimension), linearization(linearization) {}
 };
 bool operator==(const ShardTensor& lhs, const ShardTensor& rhs);
 

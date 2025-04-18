@@ -28,7 +28,9 @@ public:
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device);
 
 // Creates a mapper that shards a tensor along a single dimension.
-std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_device, int dim);
+// When `mesh_device` is N-dimensional, `linearization` defines the order in which shards are mapped to devices.
+std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
+    MeshDevice& mesh_device, int dim, DeviceLinearizationType linearization = DeviceLinearizationType::ROW_MAJOR);
 
 // Creates a mapper that shards a tensor along two dimensions, which will be intepreted as rows and columns.
 // If either dimension is not specified, the tensor is replicated along that dimension.
