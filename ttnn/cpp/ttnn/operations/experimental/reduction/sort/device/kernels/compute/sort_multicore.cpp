@@ -108,9 +108,9 @@ void MAIN {
             input_tensor_transposed_cb_index,
             index_tensor_transposed_cb_index,
             Wt,
-            true,
+            /*switch_dir=*/true,
             ascending,
-            5);
+            /*end_phase(log2(K))=*/5);
 
         // Wait for bitonic sequence of Wt tiles
         cb_wait_front(input_tensor_transposed_cb_index, Wt);
@@ -128,6 +128,11 @@ void MAIN {
                 for (uint32_t i = 0; i < Wt; i++) {
                     uint32_t j = i ^ sub_dist;
                     if (j > i) {
+                        // Determine direction for this comparison block
+                        const bool ascending_block = ((i >> stage) & 1) == 0;
+                        const bool dir = ascending_block == ascending;
+
+                        // Get indexes of tiles to compare
                         const uint32_t left_tile_id = i;
                         const uint32_t right_tile_id = j;
 
@@ -143,7 +148,7 @@ void MAIN {
                         copy_tile(index_tensor_transposed_cb_index, left_tile_id, index_dest_start);
                         copy_tile(index_tensor_transposed_cb_index, right_tile_id, index_dest_end);
 
-                        ckernel::topk_local_sort(0, (int)ascending, 5);
+                        ckernel::topk_local_sort(0, (int)dir, 5);
 
                         pack_reconfig_data_format(input_tensor_transposed_cb_index);
                         pack_tile<true>(input_dest_start, input_tensor_transposed_cb_index, left_tile_id);
