@@ -136,7 +136,7 @@ jobs:
             LATEST_TAG=latest-rc
           fi
           echo "Determined that the current tag is " $LATEST_TAG
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-release-amd64
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
           echo "Tagging the image as " $REPO_IMAGE_NAME:$LATEST_TAG
