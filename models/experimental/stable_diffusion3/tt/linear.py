@@ -277,7 +277,8 @@ class TtLinear:
         activation: str | None = None,
         deallocate: bool = False,
     ) -> ttnn.Tensor:
-        assert x.shape[-1] == self._in_channels, "input tensor does not have the expected shape"
+        msg = f"last value in input shape {list(x.shape)} should be equal to {self._in_channels}"
+        assert x.shape[-1] == self._in_channels, msg
 
         weight = self._weight
         bias = self._bias
