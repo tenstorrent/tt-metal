@@ -163,6 +163,8 @@ void Cluster::generate_cluster_descriptor() {
             if (board_type == BoardType::N300) {
                 if (this->cluster_desc_->get_all_chips().size() == 2) {
                     this->cluster_type_ = ClusterType::N300;
+                } else if (this->cluster_desc_->get_all_chips().size() == 4) {
+                    this->cluster_type_ = ClusterType::N300_2X2;
                 } else if (this->cluster_desc_->get_all_chips().size() == 8) {
                     this->cluster_type_ = ClusterType::T3K;
                 }
@@ -1295,6 +1297,7 @@ void Cluster::initialize_control_plane() {
     switch (this->cluster_type_) {
         case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::N300_2X2: mesh_graph_descriptor = "n300_2x2_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::GALAXY: mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
