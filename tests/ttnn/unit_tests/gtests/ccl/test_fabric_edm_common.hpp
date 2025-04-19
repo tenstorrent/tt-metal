@@ -2547,7 +2547,7 @@ void Run1DFabricPacketSendTest(
         global_semaphore_addrs.push_back(global_semaphore_addr);
     }
 
-    std::vector<std::vector<IDevice*>> fabric_under_test_worker_devices;
+    std::vector<std::vector<IDevice*>> fabric_under_test_worker_devices(fabrics_under_test_devices.size());
     std::vector<std::vector<Program>> programs_per_fabric(fabrics_under_test_devices.size());
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
         auto& devices = fabrics_under_test_devices[fabric_index];
@@ -2704,15 +2704,15 @@ void Run1DFabricPacketSendTest(
             const size_t sync_core_noc_x = device->worker_core_from_logical_core(worker_cores_vec[0]).x;
             const size_t sync_core_noc_y = device->worker_core_from_logical_core(worker_cores_vec[0]).y;
 
-            auto local_device_fabric_handle =
-                ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-                    device,
-                    forward_device,
-                    backward_device,
-                    &program,
-                    enable_persistent_fabric_mode,
-                    params.num_links,
-                    topology);
+            // auto local_device_fabric_handle =
+            //     ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
+            //         device,
+            //         forward_device,
+            //         backward_device,
+            //         &program,
+            //         enable_persistent_fabric_mode,
+            //         params.num_links,
+            //         topology);
 
             // reserve CB
             tt_metal::CircularBufferConfig cb_src0_config =
@@ -2742,25 +2742,31 @@ void Run1DFabricPacketSendTest(
                 auto worker_core = worker_cores_vec[l];
                 const size_t dest_noc_x = device->worker_core_from_logical_core(dest_core_coord[l]).x;
                 const size_t dest_noc_y = device->worker_core_from_logical_core(dest_core_coord[l]).y;
-                auto build_connection_args = [&local_device_fabric_handle, device, &program, &worker_core](
-                                                 bool is_connected_in_direction,
-                                                 ttnn::ccl::EdmLineFabricOpInterface::Direction direction,
-                                                 std::vector<uint32_t>& rt_args_out) {
-                    rt_args_out.push_back(is_connected_in_direction);
-                    if (is_connected_in_direction) {
-                        const auto connection = local_device_fabric_handle.uniquely_connect_worker(device, direction);
-                        const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
-                            connection, program, {worker_core});
-                        log_info(
-                            tt::LogTest,
-                            "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",
-                            device->id(),
-                            direction,
-                            connection.edm_noc_x,
-                            connection.edm_noc_y);
-                        std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args_out));
-                    }
-                };
+                auto build_connection_args =
+                    [l,
+                     // &local_device_fabric_handle,
+                     device,
+                     &program,
+                     &worker_core](
+                        bool is_connected_in_direction, IDevice* connected_device, std::vector<uint32_t>& rt_args_out) {
+                        rt_args_out.push_back(is_connected_in_direction);
+                        if (is_connected_in_direction) {
+                            tt::tt_fabric::append_fabric_connection_rt_args(
+                                device->id(), connected_device->id(), l, program, {worker_core}, rt_args_out);
+                            // const auto connection = local_device_fabric_handle.uniquely_connect_worker(device,
+                            // direction); const auto new_rt_args =
+                            // ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
+                            //     connection, program, {worker_core});
+                            // log_info(
+                            //     tt::LogTest,
+                            //     "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",
+                            //     device->id(),
+                            //     direction,
+                            //     connection.edm_noc_x,
+                            //     connection.edm_noc_y);
+                            // std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args_out));
+                        }
+                    };
                 // RT ARGS
                 bool disable_sends_for_worker =
                     (params.disable_sends_for_interior_workers && (i != 0) && (i != line_size - 1)) ||
@@ -2822,8 +2828,8 @@ void Run1DFabricPacketSendTest(
                 rt_args.push_back(packet_header_cb_index);
                 rt_args.push_back(packet_header_cb_size_in_headers);
 
-                build_connection_args(has_forward_connection, ttnn::ccl::EdmLineFabricOpInterface::FORWARD, rt_args);
-                build_connection_args(has_backward_connection, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD, rt_args);
+                build_connection_args(has_forward_connection, forward_device, rt_args);
+                build_connection_args(has_backward_connection, backward_device, rt_args);
 
                 if (params.line_sync) {
                     rt_args.push_back(sync_core_noc_x);
