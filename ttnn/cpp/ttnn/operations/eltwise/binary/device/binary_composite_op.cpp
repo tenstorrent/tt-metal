@@ -313,13 +313,12 @@ Tensor ExecuteDiv::invoke(
             }
             return result;
         }
-
         Tensor a = typecast(queue_id, input_a, DataType::FLOAT32);
         Tensor b = typecast(queue_id, input_b, DataType::FLOAT32);
 
         // Div operation without inf/nan handling as reciprocal(0) = 1.7014118346046923e+38 not inf/nan
-        Tensor result =
-            ttnn::multiply(queue_id, a, ttnn::reciprocal(b), std::nullopt, output_mem_config, output_tensor);
+        constexpr auto none = tt::stl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+        Tensor result = ttnn::divide(a, b, std::nullopt, output_mem_config, std::nullopt, none, none, none, false);
 
         if (round_mode == "trunc") {
             result = ttnn::trunc(queue_id, result, output_mem_config, output_tensor);
