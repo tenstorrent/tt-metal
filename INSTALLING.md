@@ -10,6 +10,7 @@ These instructions will guide you through the installation of Tenstorrent system
 ## Prerequisites:
 
 ### 1: Set Up the Hardware
+
 - Follow the instructions for the Tenstorrent device you are using at: [Hardware Setup](https://docs.tenstorrent.com)
 
 ---
@@ -18,15 +19,18 @@ These instructions will guide you through the installation of Tenstorrent system
 
 Note the current compatibility matrix:
 
-| Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
-|----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-| Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | 1.31 or above      | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.1.3 or above, `mesh` config |
-| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | 1.31 or above      | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.1.3 or above, `mesh` config |
-| Wormhole             | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
-| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.1.3 or above, `mesh` config |
-| Blackhole            | Ubuntu 22.04    | 3.10     | v1.31 or above     | fw_pack-80.15.0.0 (v80.15.0.0)             | v3.0.5 or above       | N/A                            |
+| Device               | OS           | Python | Driver (TT-KMD) | Firmware (TT-Flash)            | TT-SMI           | TT-Topology                    |
+| -------------------- | ------------ | ------ | --------------- | ------------------------------ | ---------------- | ------------------------------ |
+| Galaxy (Wormhole 4U) | Ubuntu 22.04 | 3.10   | 1.31 or above   | fw_pack-80.17.0.0 (v80.17.0.0) | v3.0.12 or above | v1.1.3 or above, `mesh` config |
+| Galaxy (Wormhole 6U) | Ubuntu 22.04 | 3.10   | 1.31 or above   | fw_pack-80.17.0.0 (v80.17.0.0) | v3.0.12 or above | v1.1.3 or above, `mesh` config |
+| Wormhole             | Ubuntu 22.04 | 3.10   | v1.31 or above  | fw_pack-80.17.0.0 (v80.17.0.0) | v3.0.12 or above | N/A                            |
+| T3000 (Wormhole)     | Ubuntu 22.04 | 3.10   | v1.31 or above  | fw_pack-80.17.0.0 (v80.17.0.0) | v3.0.12 or above | v1.1.3 or above, `mesh` config |
+| Blackhole            | Ubuntu 22.04 | 3.10   | v1.31 or above  | fw_pack-80.15.0.0 (v80.15.0.0) | v3.0.5 or above  | N/A                            |
 
 #### Install System-level Dependencies
+
+The `install_dependencies.sh` script will add additional repositories and install all the necessary development tools which may not exist in the default Ubuntu package repository list. (Ex. a recent version of `cmake`, `clang-17`, etc)
+
 ```
 wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/install_dependencies.sh
 chmod a+x install_dependencies.sh
@@ -36,15 +40,17 @@ sudo ./install_dependencies.sh
 ---
 
 #### Install the Driver (TT-KMD)
+
 - DKMS must be installed:
 
-| OS              | Command                |
-|------------------------|----------------------------------------------------|
-| Ubuntu / Debian        | ```apt install dkms```                             |
-| Fedora                 | ```dnf install dkms```                             |
-| Enterprise Linux Based | ```dnf install epel-release && dnf install dkms``` |
+| OS                     | Command                                        |
+| ---------------------- | ---------------------------------------------- |
+| Ubuntu / Debian        | `apt install dkms`                             |
+| Fedora                 | `dnf install dkms`                             |
+| Enterprise Linux Based | `dnf install epel-release && dnf install dkms` |
 
 - Install the latest TT-KMD version:
+
 ```
 git clone https://github.com/tenstorrent/tt-kmd.git
 cd tt-kmd
@@ -70,16 +76,23 @@ pip install git+https://github.com/tenstorrent/tt-flash.git
 ```
 
 - Reboot to load changes:
+
 ```
 sudo reboot
 ```
 
 - Check if TT-Flash is installed:
+
 ```
 tt-flash --version
 ```
 
-- Download and install the TT-Firmware version according to the table above. We will use latest here as example:
+- Download and install the TT-Firmware version according to the table above.
+
+Note, if you get an error message from `tt-flash` indicating the current firmware version of your device is too old, you can run `tt-flash` with the `--force` argument.
+
+We will use latest here as example:
+
 ```
 file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
 curl -L -o "$file_name" "https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
@@ -88,10 +101,14 @@ tt-flash flash --fw-tar $file_name
 
 - For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash Github Repository](https://github.com/tenstorrent/tt-flash).
 
+**Important**: As previously stated, perform a system reboot after flashing the firmware.
+
 ---
 
 #### Install System Management Interface (TT-SMI)
+
 - Install Tenstorrent Software Management Interface (TT-SMI) according to the table above. We will use a specific version here as an example:
+
 ```
 pip install git+https://github.com/tenstorrent/tt-smi@v3.0.12
 ```
@@ -100,15 +117,17 @@ pip install git+https://github.com/tenstorrent/tt-smi@v3.0.12
 
 Once hardware and system software are installed, verify that the system has been configured correctly.
 
-  - Run the TT-SMI utility:
-  ```
-  tt-smi
-  ```
-  A display with device information, telemetry, and firmware will appear:<br>
+- Run the TT-SMI utility:
+
+```
+tt-smi
+```
+
+A display with device information, telemetry, and firmware will appear:<br>
 
 ![image](https://docs.tenstorrent.com/_images/tt_smi.png)
 <br>
-  If the tool runs without error, your system has been configured correctly.
+If the tool runs without error, your system has been configured correctly.
 
 - For more information, visit Tenstorrent's [TT-SMI GitHub repository](https://github.com/tenstorrent/tt-smi).
 
@@ -142,6 +161,7 @@ Once hardware and system software are installed, verify that the system has been
 ---
 
 ### Option 1: From Source
+
 Install from source if you are a developer who wants to be close to the metal and the source code. Recommended for running the demo models.
 
 #### Step 1. Clone the Repository:
@@ -156,14 +176,25 @@ git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 ./build_metal.sh
 ```
 
-- (recommended) For an out-of-the-box virtual environment to use, execute:
+If there are issues configuring and building, ensure that the [`install_dependencies.sh` script has been run](#install-system-level-dependencies).
+
+- (recommended) Install a recommended out-of-the-box virtual environment.
+
+It is recommended to use Python 3.10 or 3.11. Newer versions of Python such as 3.12 deprecates modules which are necessary for successfully running some examples.
+
+A good way to install a custom Python version is by using [PyEnv](https://github.com/pyenv/pyenv)
+
+You can execute the `create_venv.sh` to configure the virtual environment. Don't forget to activate once you've created
+
 ```
 ./create_venv.sh
 source python_env/bin/activate
 ```
 
 - (optional) Software dependencies for profiling use:
+
   - Install dependencies:
+
   ```sh
   sudo apt install pandoc libtbb-dev libcapstone-dev pkg-config
   ```
@@ -175,6 +206,7 @@ source python_env/bin/activate
 ---
 
 ### Option 2: From Docker Release Image
+
 Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
 
 Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-amd64-release) page
@@ -191,6 +223,7 @@ docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstor
 ---
 
 ### Option 3: From Wheel
+
 Install from wheel for quick access to our APIs and to get an AI model running
 
 #### Step 1. Download and Install the Latest Wheel:
@@ -207,9 +240,9 @@ Install from wheel for quick access to our APIs and to get an AI model running
 
 To try our pre-built models in `models/`, you must:
 
-  - Install their required dependencies
-  - Set appropriate environment variables
-  - Set the CPU performance governor to ensure high performance on the host
+- Install their required dependencies
+- Set appropriate environment variables
+- Set the CPU performance governor to ensure high performance on the host
 
 - This is done by executing the following:
   ```sh
@@ -229,19 +262,23 @@ To try our pre-built models in `models/`, you must:
 
   - Run the appropriate command for the Tenstorrent card you have installed:
 
-  | Card             | Command                              |
-  |------------------|--------------------------------------|
-  | Grayskull        | ```export ARCH_NAME=grayskull```     |
-  | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
-  | Blackhole        | ```export ARCH_NAME=blackhole```     |
+  | Card      | Command                        |
+  | --------- | ------------------------------ |
+  | Grayskull | `export ARCH_NAME=grayskull`   |
+  | Wormhole  | `export ARCH_NAME=wormhole_b0` |
+  | Blackhole | `export ARCH_NAME=blackhole`   |
 
   - Run:
+
+  `$(pwd)` could correspond to the current path of the cloned `tt-metal` repository.
+
   ```
   export TT_METAL_HOME=$(pwd)
   export PYTHONPATH=$(pwd)
   ```
 
 - Then, try running a programming example:
+
   ```
   python3 -m ttnn.examples.usage.run_op_on_device
   ```
@@ -251,4 +288,5 @@ To try our pre-built models in `models/`, you must:
 ---
 
 ### Interested in Contributing?
+
 - For more information on development and contributing, visit Tenstorrent's [CONTRIBUTING.md page](https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md).
