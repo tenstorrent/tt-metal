@@ -79,6 +79,13 @@ void ArgMax::validate_with_output_tensors(
         // TODO: Add support for normalized_dim = 0, 1, 2
         TT_FATAL(normalized_dim == (input_rank - 1), "Only argmax on last dim is supported!");
     }
+
+    if (this->use_multicore && this->sub_core_grids.has_value()) {
+        TT_FATAL(
+            this->sub_core_grids->ranges().size() <= 2,
+            "Multicore argmax only supports up to 2 core grid ranges, but got {} ranges",
+            this->sub_core_grids->ranges().size());
+    }
 }
 
 std::vector<TensorSpec> ArgMax::compute_output_specs(
@@ -110,7 +117,8 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const auto normalized_dim =
         this->dim.has_value() ? *this->dim + input_tensor.get_padded_shape().rank() * (*this->dim < 0) : this->dim;
     if (this->use_multicore) {
-        return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim, this->sub_core_grids);
+        return detail::argmax_multi_core(
+            input_tensor, output_tensor, normalized_dim, this->keepdim, this->sub_core_grids);
     }
     return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim, this->keepdim);
 }
