@@ -57,4 +57,68 @@ std::vector<chan_id_t> get_ordered_fabric_eth_chans(chip_id_t chip_id, const std
     return ordered_eth_chans;
 }
 
+void set_routing_mode(RoutingMode routing_mode) {
+    // override for forced routing mode
+    uint16_t mode = (uint16_t)routing_mode;
+    if (routing_mode != RoutingMode::RoutingModeUndefined) {
+        return;
+    }
+
+    // Validate dimension flags are orthogonal (only one can be set)
+    TT_ASSERT(
+        __builtin_popcount(mode & (ROUTING_MODE_1D | ROUTING_MODE_2D | ROUTING_MODE_3D)) == 1,
+        "Only one dimension mode (1D, 2D, 3D) can be active at once");
+
+    // Validate topology flags are orthogonal
+    TT_ASSERT(
+        __builtin_popcount(mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_MESH | ROUTING_MODE_TORUS)) ==
+            1,
+        "Only one topology mode (RING, LINE, MESH, TORUS) can be active at once");
+
+    // Validate push/pull flags are orthogonal
+    TT_ASSERT(
+        __builtin_popcount(mode & (ROUTING_MODE_PUSH | ROUTING_MODE_PULL)) <= 1,
+        "PUSH and PULL routing modes cannot be used together");
+
+    // Validate push/pull flags are only for 2D
+    TT_ASSERT(
+        !(mode & (ROUTING_MODE_PUSH | ROUTING_MODE_PULL)) || (mode & ROUTING_MODE_2D),
+        "PUSH and PULL routing modes can only be used with 2D topology");
+
+    // Validate 1D can't be used with MESH or TORUS
+    TT_ASSERT(
+        !(mode & ROUTING_MODE_1D) || !(mode & (ROUTING_MODE_MESH | ROUTING_MODE_TORUS)),
+        "1D routing mode cannot be combined with MESH or TORUS topology");
+
+    // Validate 2D can't be used with LINE or RING
+    TT_ASSERT(
+        !(mode & ROUTING_MODE_2D) || !(mode & (ROUTING_MODE_LINE | ROUTING_MODE_RING)),
+        "2D routing mode cannot be combined with LINE or RING topology");
+
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
+    control_plane->set_routing_mode(routing_mode);
+}
+
+void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
+    // TODO: take more parameters to set detail routing mode
+    TT_ASSERT(
+        dimension == 1 || dimension == 2 || dimension == 3,
+        "Invalid dimension {}. Supported dimensions are 1, 2, or 3",
+        dimension);
+
+    uint16_t mode = (dimension == 1 ? ROUTING_MODE_1D : dimension == 2 ? ROUTING_MODE_2D : ROUTING_MODE_3D);
+    if (topology == Topology::Ring) {
+        mode |= ROUTING_MODE_RING;
+    } else if (topology == Topology::Linear) {
+        mode |= ROUTING_MODE_LINE;
+    } else if (topology == Topology::Mesh) {
+        mode |= ROUTING_MODE_MESH;
+        // } else if (topology == Topology::Torus) {
+        //     mode |= ROUTING_MODE_TORUS;
+    }
+
+    mode |= ROUTING_MODE_LOW_LATENCY;
+    set_routing_mode((RoutingMode)mode);
+}
+
 }  // namespace tt::tt_fabric
