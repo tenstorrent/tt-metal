@@ -8,10 +8,8 @@
 
 #include <cstdint>
 #include <array>
-#include <vector>
-#include <bit>
+#include <optional>
 #include <climits>
-
 namespace tt::tt_metal {
 
 /*! @brief Ringbuffer cache manager
@@ -23,11 +21,10 @@ namespace tt::tt_metal {
 template <int CACHE_BLOCK_SIZE, int CACHE_SIZE>
 class RingbufferCacheManager {
 public:
-    RingbufferCacheManager() {
+    RingbufferCacheManager() : manager_{} {
         std::fill(this->valid_.begin(), this->valid_.end(), -1);
         // Initialize the cache manager entries
         static_assert((CACHE_SIZE & (CACHE_SIZE - 1)) == 0, "Ringbuffer manager array size must be a power of 2");
-        std::fill(this->manager_.entry.begin(), this->manager_.entry.end(), 0);
         this->manager_.entry[0].length = CACHE_SIZE;  // to get over the first allocation without special handling
     };
 
@@ -41,17 +38,11 @@ public:
      */
     std::optional<std::pair<bool, uint32_t>> is_cached(uint16_t pgm_id, size_t lengthB);
 
-    /*! @brief if program is present in rb, then return its offset
-     *   @param pgm_id program id
-     *   @return offset of the program in ringbuffer, or -1 if not present
-     */
-    // int32_t get_ringbuffer_offset (uint64_t pgm_id);
-
 private:
-    constexpr static size_t offset_width_ = std::bit_width(CACHE_SIZE - 1);
-    constexpr static size_t length_width_ = std::bit_width(CACHE_SIZE - 1);
+    constexpr static size_t offset_width_ = 10;  // std::bit_width(CACHE_SIZE - 1);
+    constexpr static size_t length_width_ = 11;  // std::bit_width(CACHE_SIZE);
     constexpr static size_t valid_width_ = CHAR_BIT * sizeof(uint32_t) - offset_width_ - length_width_;
-    static_assert(valid_width_ > 11, "valid_width must be greater than 11 bits to cover all program ids");
+    static_assert(valid_width_ > 4, "Valid table size is too small");
 
     /*! @brief cache manager entry */
     struct RingbufferCacheManagerEntry {
@@ -73,14 +64,11 @@ private:
     } manager_;
 
     /*! @brief indexed by program id. Contains index to entry in cache manager if cache hit */
-    std::vector<int16_t> valid_;
+    std::array<int16_t, (1 << valid_width_)> valid_;
 
-    void add_manager_entry(uint16_t pgm_id, uint32_t offset, uint32_t length, uint16_t idx);
-    void add_manager_entry(uint16_t pgm_id, uint32_t offset, uint32_t length) {
-        add_manager_entry(pgm_id, offset, length, this->manager_.next_idx);
-    }
+    void add_manager_entry(uint16_t pgm_id, uint32_t offset, uint32_t length);
     void invalidate_manager_entry(uint16_t idx);
-    void invalidate_manager_entry(void) { invalidate_manager_entry(this->manager_.oldest_idx); }
+    void invalidate_manager_entry(void);
 };
 
 }  // namespace tt::tt_metal
