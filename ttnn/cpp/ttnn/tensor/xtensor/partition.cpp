@@ -6,7 +6,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
-#include <xtensor/xdynamic_view.hpp>
+#include <xtensor/views/xdynamic_view.hpp>
 
 namespace ttnn::experimental::xtensor {
 

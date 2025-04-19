@@ -7,8 +7,8 @@
 #include <gtest/gtest.h>
 
 #include <core/ttnn_all_includes.hpp>
-#include <xtensor/xarray.hpp>
-#include <xtensor/xview.hpp>
+#include <xtensor/containers/xarray.hpp>
+#include <xtensor/views/xview.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
