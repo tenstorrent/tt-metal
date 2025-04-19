@@ -1674,16 +1674,36 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
             [](const binary_operation_t& self,
                const Tensor& input_tensor,
                const Tensor& exponent,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor,
-               const QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, exponent, memory_config, output_tensor);
+               const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const std::optional<bool>& use_legacy,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor,
+                    exponent,
+                    dtype,
+                    memory_config,
+                    output_tensor,
+                    activations,
+                    input_tensor_a_activations,
+                    input_tensor_b_activations,
+                    use_legacy);
             },
             py::arg("input_tensor"),
             py::arg("exponent"),
             py::kw_only(),
+            py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
+            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = ttnn::DefaultQueueId},
 
         // scalar input - tensor exponent
@@ -1691,16 +1711,36 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
             [](const binary_operation_t& self,
                float input,
                const Tensor& exponent,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor,
-               const QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input, exponent, memory_config, output_tensor);
+               const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const std::optional<bool>& use_legacy,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input,
+                    exponent,
+                    dtype,
+                    memory_config,
+                    output_tensor,
+                    activations,
+                    input_tensor_a_activations,
+                    input_tensor_b_activations,
+                    use_legacy);
             },
             py::arg("input"),
             py::arg("exponent"),
             py::kw_only(),
+            py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
+            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = ttnn::DefaultQueueId});
 }
 }  // namespace detail
