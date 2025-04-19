@@ -2884,14 +2884,14 @@ void Run1DFabricPacketSendTest(
         }
 
         for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
-            auto& worker_devices = fabrics_under_test_devices[fabric_index];
+            auto& worker_devices = fabric_under_test_worker_devices[fabric_index];
             auto& programs = programs_per_fabric[fabric_index];
             build_and_enqueue(worker_devices, programs, i != 0);
         }
 
         log_info(tt::LogTest, "Waiting for Op finish on all devices");
         for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
-            auto& worker_devices = fabrics_under_test_devices[fabric_index];
+            auto& worker_devices = fabric_under_test_worker_devices[fabric_index];
             wait_for_worker_program_completion(worker_devices, subdevice_managers);
         }
         log_info(tt::LogTest, "Main op done");
@@ -2914,7 +2914,7 @@ void Run1DFabricPacketSendTest(
     }
 
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
-        auto& devices = fabrics_under_test_devices[fabric_index];
+        auto& devices = fabric_under_test_worker_devices[fabric_index];
         for (IDevice* d : devices) {
             detail::DumpDeviceProfileResults(d);
         }

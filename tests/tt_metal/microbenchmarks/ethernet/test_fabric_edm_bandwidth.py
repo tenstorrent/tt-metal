@@ -208,7 +208,6 @@ def process_1d_fabric_on_mesh_results(
     num_cluster_cols,
 ):
     assert num_cluster_rows > 0 ^ num_cluster_cols > 0
-    num_lines_expected = num_cluster_rows + num_cluster_cols
     bandwidth_inner_loop, packets_per_second_inner_loop = profile_results(
         zone_name_inner,
         num_messages,
@@ -229,11 +228,10 @@ def process_1d_fabric_on_mesh_results(
         unidirectional,
     )
 
-    logger.info("line: {} B/c", i)
-    logger.info("bandwidth_inner_loop: {} B/c", bw_inner)
-    logger.info("bandwidth: {} B/c", bw)
-    logger.info("packets_per_second_inner_loop: {} pps", pps_inner)
-    logger.info("packets_per_second: {} pps", pps)
+    logger.info("bandwidth_inner_loop: {} B/c", bandwidth_inner_loop)
+    logger.info("bandwidth: {} B/c", bandwidth)
+    logger.info("packets_per_second_inner_loop: {} pps", packets_per_second_inner_loop)
+    logger.info("packets_per_second: {} pps", packets_per_second)
 
     test_name = (
         f"{'unicast' if is_unicast else 'mcast'}_{fabric_mode.name}_multifabric_{num_cluster_rows}x{num_cluster_cols}"
@@ -638,7 +636,7 @@ def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [2])
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", [1, 2])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_cols", [4])
