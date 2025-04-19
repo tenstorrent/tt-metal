@@ -198,7 +198,18 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
     // Check for minimal interleaved case
-    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
+    if ((((dim == 3 &&
+               ((input_tensor.dtype() == DataType::BFLOAT16 && input_tensor_shape[0] == 1 &&
+                 input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0 &&
+                 (((input_tensor_shape[3] / 32) % 12) % 2 == 0 || ((input_tensor_shape[3] / 32) % 56) % 2 == 0))) ||
+           (input_tensor.dtype() == DataType::BFLOAT8_B && output_mem_config.buffer_type == BufferType::DRAM &&
+            ((input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0 &&
+              (input_tensor_shape[3] / 32) % 12 == 0) ||  // llama 8B N300
+             (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0 &&
+              (input_tensor_shape[3] / 32) % 12 == 8) ||  // T3K Falcon 40, Decode/Prefill
+             (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0 &&
+              (input_tensor_shape[3] / 32) % 12 == 4))))) ||
+         (dim < 3 && ((input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2]) % 32 == 0))) &&
         input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         input_tensor_page_layout == tt::tt_metal::Layout::TILE) {
         return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
