@@ -2384,10 +2384,10 @@ static std::vector<std::vector<IDevice*>> generate_line_fabrics_under_test(
             std::move(generate_default_line_fabric_under_test(use_galaxy, use_tg, line_size, topology, view)));
     } else {
         TT_FATAL(
-            params.num_fabric_rows > view.num_rows(),
+            params.num_fabric_rows <= view.num_rows(),
             "num_rows_requested must be less than or equal to the number of rows in the mesh");
         TT_FATAL(
-            params.num_fabric_cols > view.num_cols(),
+            params.num_fabric_cols <= view.num_cols(),
             "num_cols_requested must be less than or equal to the number of cols in the mesh");
         for (size_t i = 0; i < params.num_fabric_rows; i++) {
             fabrics_under_test.push_back(view.get_devices_on_row(i));

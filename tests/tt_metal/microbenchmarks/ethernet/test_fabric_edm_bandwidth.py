@@ -371,7 +371,7 @@ def run_fabric_edm(
     if test_mode == "1_fabric_instance":
         assert num_cluster_rows == 0 and num_cluster_cols == 0
     elif test_mode == "1D_fabric_on_mesh":
-        assert num_cluster_rows > 0 ^ num_cluster_cols > 0
+        assert (num_cluster_rows > 0) ^ (num_cluster_cols > 0)
     else:
         raise ValueError(f"Invalid test mode: {test_mode}")
 
@@ -397,7 +397,8 @@ def run_fabric_edm(
     if test_mode == "1D_fabric_on_mesh":
         cmd += f" \
             {num_cluster_rows} \
-            {num_cluster_cols}"
+            {num_cluster_cols} \
+            0"
     logger.info(f"Running command: {cmd}")
     rc = os.system(cmd)
 
