@@ -27,6 +27,10 @@ Note the current compatibility matrix:
 | T3000 (Wormhole)     | Ubuntu 22.04 | 3.10   | v1.31 or above  | fw_pack-80.17.0.0 (v80.17.0.0) | v3.0.12 or above | v1.1.3 or above, `mesh` config |
 | Blackhole            | Ubuntu 22.04 | 3.10   | v1.31 or above  | fw_pack-80.15.0.0 (v80.15.0.0) | v3.0.5 or above  | N/A                            |
 
+It is **required** to use Python 3.10. Newer versions of Python such as 3.12 deprecates modules which are necessary for successfully running some examples.
+
+A good way to install a custom Python version is by using [PyEnv](https://github.com/pyenv/pyenv)
+
 #### Install System-level Dependencies
 
 The `install_dependencies.sh` script will add additional repositories and install all the necessary development tools which may not exist in the default Ubuntu package repository list. (Ex. a recent version of `cmake`, `clang-17`, etc)
@@ -179,10 +183,6 @@ git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 If there are issues configuring and building, ensure that the [`install_dependencies.sh` script has been run](#install-system-level-dependencies).
 
 - (recommended) Install a recommended out-of-the-box virtual environment.
-
-It is recommended to use Python 3.10 or 3.11. Newer versions of Python such as 3.12 deprecates modules which are necessary for successfully running some examples.
-
-A good way to install a custom Python version is by using [PyEnv](https://github.com/pyenv/pyenv)
 
 You can execute the `create_venv.sh` to configure the virtual environment. Don't forget to activate once you've created
 
