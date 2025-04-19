@@ -10,22 +10,23 @@
 #include <array>
 #include <optional>
 #include <climits>
+
 namespace tt::tt_metal {
 
 /*! @brief Ringbuffer cache manager
  *  This class manages the ringbuffer cache for the prefetcher.
  *  It keeps track of the entries in the ringbuffer and their offsets.
- *  The ringbuffer is divided into blocks of size cache_block_sizeB.
+ *  The ringbuffer is divided into blocks of size cache_block_sizeBB.
  *  The cache manager keeps track of the entries in the ringbuffer and their offsets.
  */
-template <int CACHE_BLOCK_SIZE, int CACHE_SIZE>
+template <int cache_block_sizeB, int cache_size_blocks>
 class RingbufferCacheManager {
 public:
     RingbufferCacheManager() : manager_{} {
         std::fill(this->valid_.begin(), this->valid_.end(), -1);
         // Initialize the cache manager entries
-        static_assert((CACHE_SIZE & (CACHE_SIZE - 1)) == 0, "Ringbuffer manager array size must be a power of 2");
-        this->manager_.entry[0].length = CACHE_SIZE;  // to get over the first allocation without special handling
+        this->manager_.entry[0].length =
+            cache_size_blocks;  // to get over the first allocation without special handling
     };
 
     ~RingbufferCacheManager() = default;
@@ -39,8 +40,14 @@ public:
     std::optional<std::pair<bool, uint32_t>> is_cached(uint16_t pgm_id, size_t lengthB);
 
 private:
-    constexpr static size_t offset_width_ = 10;  // std::bit_width(CACHE_SIZE - 1);
-    constexpr static size_t length_width_ = 11;  // std::bit_width(CACHE_SIZE);
+    static_assert(cache_size_blocks > 0, "Ringbuffer cache size must be greater than 0");
+    static_assert(
+        (cache_size_blocks & (cache_size_blocks - 1)) == 0, "Ringbuffer manager array size must be a power of 2");
+    static_assert(cache_block_sizeB > 0, "Ringbuffer cache block size must be greater than 0");
+    static_assert(cache_size_blocks % cache_block_sizeB == 0, "Ringbuffer cache size must be a multiple of block size");
+    static constexpr int log2_constexpr(int n) { return (n < 2) ? 0 : 1 + log2_constexpr(n / 2); }
+    constexpr static size_t offset_width_ = log2_constexpr(cache_size_blocks);
+    constexpr static size_t length_width_ = log2_constexpr(cache_size_blocks) + 1;
     constexpr static size_t valid_width_ = CHAR_BIT * sizeof(uint32_t) - offset_width_ - length_width_;
     static_assert(valid_width_ > 4, "Valid table size is too small");
 
@@ -53,7 +60,7 @@ private:
 
     /*! @brief cache manager  */
     struct {
-        std::array<RingbufferCacheManagerEntry, CACHE_SIZE> entry;
+        std::array<RingbufferCacheManagerEntry, cache_size_blocks> entry;
         // the following indexes are for the ringbuffer manager, not the ringbuffer
         uint16_t oldest_idx{0};  // update this whenever an entry is evicted from cache
         uint16_t next_idx{0};    // update this whenever an entry is added to cache
