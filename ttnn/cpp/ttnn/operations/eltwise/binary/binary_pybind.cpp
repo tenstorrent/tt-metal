@@ -2090,7 +2090,8 @@ void py_module(py::module& module) {
     detail::bind_binary_unary_max_operation(
         module,
         ttnn::maximum,
-        R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(BFLOAT16, FLOAT32, INT32, UINT32)doc");
 
     detail::bind_prelu(
         module,

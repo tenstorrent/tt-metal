@@ -308,7 +308,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case BITWISE_OR: return {"binary_bitwise_tile_init();", "or_binary_tile"};
         case BITWISE_XOR: return {"binary_bitwise_tile_init();", "xor_binary_tile"};
         case MAXIMUM:
-            if (dtype == DataType::INT32) {
+            if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
                 return {"binary_max_tile_init();", "binary_max_int32_tile"};
             } else {
                 return {"binary_max_tile_init();", "binary_max_tile"};
