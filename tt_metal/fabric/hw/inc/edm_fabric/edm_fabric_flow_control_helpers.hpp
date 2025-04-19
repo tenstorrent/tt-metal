@@ -159,4 +159,41 @@ private:
     BufferPtr ptr = BufferPtr{0};
 };
 
+template <uint8_t NUM_BUFFERS>
+struct ChannelCounter {
+    static constexpr bool IS_POW2_NUM_BUFFERS = is_power_of_2(NUM_BUFFERS);
+    uint32_t counter = 0;
+    BufferIndex index{0};
+
+    FORCE_INLINE BufferIndex get_buffer_index() const {
+        if constexpr (IS_POW2_NUM_BUFFERS) {
+            return BufferIndex{static_cast<uint8_t>(counter & (NUM_BUFFERS - 1))};
+        } else {
+            return index;
+        }
+    }
+
+    FORCE_INLINE void increment() {
+        counter++;
+        if constexpr (!IS_POW2_NUM_BUFFERS) {
+            index = BufferIndex{wrap_increment<NUM_BUFFERS>(index.get())};
+        }
+    }
+
+    FORCE_INLINE void increment_n(uint32_t n) {
+        counter += n;
+        if constexpr (!IS_POW2_NUM_BUFFERS) {
+            index = BufferIndex{wrap_increment_n<NUM_BUFFERS>(index.get(), n)};
+        }
+    }
+
+    FORCE_INLINE bool is_caught_up_to(const ChannelCounter& leading_counter) const {
+        return this->counter == leading_counter.counter;
+    }
+
+    FORCE_INLINE uint32_t distance_behind(const ChannelCounter& leading_counter) const {
+        return leading_counter.counter - this->counter;
+    }
+};
+
 }  // namespace tt::tt_fabric
