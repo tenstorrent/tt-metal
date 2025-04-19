@@ -711,21 +711,53 @@ Tensor ExecutePower::invoke(
     QueueId queue_id,
     const Tensor& input,
     const Tensor& exponent,
-    const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tensor>& output_tensor) {
+    const std::optional<const DataType>& dtype,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::UnaryWithParam> post_activations,
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
     return BinaryOperationSfpu<operations::binary::BinaryOpType::POWER>::invoke(
-        queue_id, input, exponent, std::nullopt, output_mem_config, output_tensor);
+        queue_id,
+        input,
+        exponent,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
 }
 
-// power - scalar input
+// power - scalar input, tensor exponent
 Tensor ExecutePower::invoke(
     QueueId queue_id,
     float input_a,
     const Tensor& exponent,
-    const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tensor>& output_tensor) {
+    const std::optional<const DataType>& dtype,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::UnaryWithParam> post_activations,
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    // As per binary infra, first input is always a tensor but this support needed for pytorch2 tracing
+    // https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.pow.Scalar.md
+
     Tensor input = ttnn::full_like(exponent, input_a);
-    return ExecutePower::invoke(queue_id, input, exponent, output_mem_config, std::move(output_tensor));
+    return ExecutePower::invoke(
+        queue_id,
+        input,
+        exponent,
+        std::nullopt,
+        memory_config,
+        std::move(optional_output_tensor),
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
 }
 
 Tensor ExecuteRsub::invoke(
