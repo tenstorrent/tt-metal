@@ -5,7 +5,7 @@
 #include <allocator.hpp>
 #include <assert.hpp>
 #include <buffer.hpp>
-#include <buffer_constants.hpp>
+#include <buffer_types.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
 #include <magic_enum/magic_enum.hpp>

@@ -16,6 +16,7 @@ import psutil
 import json
 import matplotlib.pyplot as plt
 import numpy as np
+from pathlib import Path
 
 from models.tt_transformers.tt.model_config import parse_optimizations
 
@@ -47,6 +48,18 @@ pareto_commands = {
         for i, setting in enumerate(dtype_mf_settings)
     ]
     for k, v in cmd.items()
+}
+
+DECODER_CONFIG_FOLDER = Path("models/tt_transformers/tests/configurations/")
+decoder_config_files = [file for file in DECODER_CONFIG_FOLDER.glob("*.json")]
+
+pareto_commands_from_json = {
+    k: v
+    for i, file in enumerate(decoder_config_files)
+    for k, v in {
+        f"accuracy-dmf-json-{i}": f"pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-accuracy and file' --decoder_config_file {file}",
+        f"demo-dmf-json-{i}": f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'params0 and batch-1' --decoder_config_file {file}",
+    }.items()
 }
 
 
@@ -518,6 +531,9 @@ def main(stdscr):
                         if command_input == "pareto":
                             command_input = ",".join(pareto_commands.keys())
 
+                        if command_input == "pareto_from_json":
+                            command_input = ",".join(pareto_commands_from_json.keys())
+
                         # Parse models, devices, and commands
                         models = parse_list(model_input)
                         devices = parse_list(device_input)
@@ -917,6 +933,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "model-prefill": "pytest models/tt_transformers/tests/test_model_prefill.py -k performance-4096",
         # Precision and Math Fidelity tests for Pareto analysis
         **pareto_commands,
+        **pareto_commands_from_json,
         # Vision tests (require 11B weights)
         "vision-mlp": "pytest models/tt_transformers/tests/multimodal/test_image_mlp.py",
         "vision-attn": "pytest models/tt_transformers/tests/multimodal/test_image_attention.py",
@@ -1341,7 +1358,10 @@ def export_results_to_markdown(output_entries, stdscr):
                 speed = entry.speed
                 ttft = entry.ttft
 
-                setting_idx = int(entry.command_name[len("demo-dmf-") :])
+                match = re.search(r"demo-dmf(?:-json)?-(\d+)", entry.command_name)
+                if not match:
+                    continue
+                setting_idx = int(match.group(1))
                 if setting_idx not in dmf_entries:
                     dmf_entries[setting_idx] = {key: ["N/A", "N/A", speed or "N/A", ttft]}
                 else:
@@ -1356,7 +1376,10 @@ def export_results_to_markdown(output_entries, stdscr):
                     if match:
                         top1, top5 = match.group(1), match.group(2)
 
-                setting_idx = int(entry.command_name[len("accuracy-dmf-") :])
+                match = re.search(r"accuracy-dmf(?:-json)?-(\d+)", entry.command_name)
+                if not match:
+                    continue
+                setting_idx = int(match.group(1))
                 if setting_idx not in dmf_entries:
                     dmf_entries[setting_idx] = {key: [top1, top5, "N/A", "N/A"]}
                 else:
@@ -1417,7 +1440,9 @@ def export_results_to_markdown(output_entries, stdscr):
     if dmf_entries:
         data_to_plot = {}
         for setting_idx, entries in dmf_entries.items():
-            desc = gen_description(setting_idx)
+            # Check if any entry used this setting_idx and came from JSON
+            used_json_for_setting = any(f"json-{setting_idx}" in e.command_name for e in output_entries)
+            desc = "" if used_json_for_setting else gen_description(setting_idx)
             markdown_lines.extend(
                 [
                     "",
@@ -1445,26 +1470,33 @@ def export_results_to_markdown(output_entries, stdscr):
             speed, top1, desc = data
             plot_data_with_desc(speed, top1, "Speed (t/s/u)", "Top-1 (%)", desc, model_device_name)
 
-    # Write to PERF.md
-    with open("PERF.md", "w") as f:
-        f.write("\n".join(markdown_lines) + "\n")
+    # Check if any entry came from a JSON config
+    used_json = any("json" in entry.command_name for entry in output_entries)
 
-    # Clear screen and show message
-    stdscr.clear()
+    # Only update PERF.md and display it if not using JSON
+    if not used_json:
+        with open("PERF.md", "w") as f:
+            f.write("\n".join(markdown_lines) + "\n")
 
-    # display 'PERF.md' using less
-    # Save current terminal state
-    curses.def_prog_mode()
-    # Exit curses temporarily
-    curses.endwin()
-    # Run less command
-    os.system(f"less -R PERF.md")
-    # Resume curses
-    curses.reset_prog_mode()
-    stdscr.refresh()
+        # Clear screen and show message
+        stdscr.clear()
 
-    # display helpful message at the bottom of the screen
-    stdscr.addstr(0, 0, f"Table written to {os.path.abspath('PERF.md')}")
+        # display 'PERF.md' using less
+        # Save current terminal state
+        curses.def_prog_mode()
+        # Exit curses temporaril
+        curses.endwin()
+        # Run less command
+        os.system(f"less -R PERF.md")
+        # Resume curses
+        curses.reset_prog_mode()
+        stdscr.refresh()
+
+        # display helpful message at the bottom of the screen
+        stdscr.addstr(0, 0, f"Table written to {os.path.abspath('PERF.md')}")
+    else:
+        stdscr.clear()
+
     stdscr.addstr(1, 0, f"Plots written to .svg files in {os.path.abspath('data_plots/')}")
     stdscr.addstr(2, 0, "Press any key to return...")
     stdscr.refresh()
@@ -1578,35 +1610,36 @@ def plot_data_with_desc(objective1, objective2, objective1_label, objective2_lab
     x = 0.1
     y = height_incr / 4
 
-    # add footnote to the plot
+    # add footnote to the plot only when json is not used
     for i in pareto_indices:
         desc_splits = point_desc[i].split("}")
-        fidelity_desc = desc_splits[1][2:] + "}"  # 2: slice to remove the leading ", "
-        # find substring "li_qkv_prefill" in fidelity_desc and insert a new line before it so the text fits in the plot
-        idx = fidelity_desc.find("li_qkv_prefill")
-        assert idx != -1, f"li_qkv_prefill not found in {fidelity_desc}"
-        fidelity_desc_part2 = " " * len("fidelity_cfg = {") + fidelity_desc[idx:]
-        plt.figtext(
-            x, y, f"{fidelity_desc_part2}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6
-        )
-        y += height_incr / 8
-        fidelity_desc_part1 = fidelity_desc[:idx]
-        plt.figtext(
-            x, y, f"{fidelity_desc_part1}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6
-        )
-        y += height_incr / 8
-        dtype_desc = desc_splits[0] + "}"
-        plt.figtext(x, y, f"{dtype_desc}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6)
-        y += height_incr / 8
-        plt.figtext(
-            x,
-            y,
-            f"{i}: {objective1_label}={objective1[i]}, {objective2_label}={objective2[i]}",
-            ha="left",
-            transform=fig.dpi_scale_trans,
-            fontsize=10,
-        )
-        y += height_incr / 3
+        if len(desc_splits) >= 2:
+            fidelity_desc = desc_splits[1][2:] + "}"  # 2: slice to remove the leading ", "
+            # find substring "li_qkv_prefill" in fidelity_desc and insert a new line before it so the text fits in the plot
+            idx = fidelity_desc.find("li_qkv_prefill")
+            assert idx != -1, f"li_qkv_prefill not found in {fidelity_desc}"
+            fidelity_desc_part2 = " " * len("fidelity_cfg = {") + fidelity_desc[idx:]
+            plt.figtext(
+                x, y, f"{fidelity_desc_part2}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6
+            )
+            y += height_incr / 8
+            fidelity_desc_part1 = fidelity_desc[:idx]
+            plt.figtext(
+                x, y, f"{fidelity_desc_part1}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6
+            )
+            y += height_incr / 8
+            dtype_desc = desc_splits[0] + "}"
+            plt.figtext(x, y, f"{dtype_desc}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6)
+            y += height_incr / 8
+            plt.figtext(
+                x,
+                y,
+                f"{i}: {objective1_label}={objective1[i]}, {objective2_label}={objective2[i]}",
+                ha="left",
+                transform=fig.dpi_scale_trans,
+                fontsize=10,
+            )
+            y += height_incr / 3
 
     x = fig_width / 2
     plt.figtext(

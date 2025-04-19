@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "allocator_types.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "hal.hpp"
