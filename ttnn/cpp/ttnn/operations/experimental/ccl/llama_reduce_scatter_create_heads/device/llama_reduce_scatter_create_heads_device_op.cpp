@@ -6,18 +6,19 @@
 #include <utility>
 
 #include "cpp/ttnn/tensor/types.hpp"
-#include "llama_reduce_scatter_device_operation.hpp"
+#include "llama_reduce_scatter_create_heads_device_op.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 
-LlamaReduceScatterDeviceOperation::program_factory_t LlamaReduceScatterDeviceOperation::select_program_factory(
+LlamaReduceScatterCreateHeadsDeviceOperation::program_factory_t
+LlamaReduceScatterCreateHeadsDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return LlamaReduceScatterAdd{};
+    return LlamaReduceScatterCreateHeads{};
 }
 
-void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
+void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
     auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
@@ -59,10 +60,11 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-void LlamaReduceScatterDeviceOperation::validate_on_program_cache_hit(
+void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
 
-LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceOperation::compute_output_specs(
+LlamaReduceScatterCreateHeadsDeviceOperation::spec_return_value_t
+LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
 
@@ -116,7 +118,8 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
         TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), out_memory_config))};
 }
 
-LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDeviceOperation::create_output_tensors(
+LlamaReduceScatterCreateHeadsDeviceOperation::tensor_return_value_t
+LlamaReduceScatterCreateHeadsDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
 
@@ -124,8 +127,10 @@ LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDevic
     return tensor;
 }
 
-std::tuple<LlamaReduceScatterDeviceOperation::operation_attributes_t, LlamaReduceScatterDeviceOperation::tensor_args_t>
-LlamaReduceScatterDeviceOperation::invoke(
+std::tuple<
+    LlamaReduceScatterCreateHeadsDeviceOperation::operation_attributes_t,
+    LlamaReduceScatterCreateHeadsDeviceOperation::tensor_args_t>
+LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& intermediate_packet_buffer,
     const int32_t dim,

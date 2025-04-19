@@ -17,7 +17,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-struct LlamaReduceScatterDeviceOperation {
+struct LlamaReduceScatterCreateHeadsDeviceOperation {
     struct operation_attributes_t {
         const uint32_t dim;
         const std::optional<GlobalSemaphore> cross_device_semaphore;
@@ -39,7 +39,7 @@ struct LlamaReduceScatterDeviceOperation {
 
     using tensor_return_value_t = Tensor;
 
-    struct LlamaReduceScatterAdd {
+    struct LlamaReduceScatterCreateHeads {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
@@ -64,7 +64,7 @@ struct LlamaReduceScatterDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<LlamaReduceScatterAdd>;
+    using program_factory_t = std::variant<LlamaReduceScatterCreateHeads>;
 
     // Mandatory methods
 
@@ -101,7 +101,7 @@ struct LlamaReduceScatterDeviceOperation {
 
 namespace ttnn::prim {
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-constexpr auto llama_reduce_scatter = ttnn::register_operation<
-    "ttnn::prim::llama_reduce_scatter",
-    ttnn::operations::experimental::ccl::LlamaReduceScatterDeviceOperation>();
+constexpr auto llama_reduce_scatter_create_heads = ttnn::register_operation<
+    "ttnn::prim::llama_reduce_scatter_create_heads",
+    ttnn::operations::experimental::ccl::LlamaReduceScatterCreateHeadsDeviceOperation>();
 }  // namespace ttnn::prim

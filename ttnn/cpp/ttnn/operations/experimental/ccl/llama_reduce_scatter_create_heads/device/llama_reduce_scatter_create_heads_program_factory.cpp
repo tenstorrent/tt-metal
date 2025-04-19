@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llama_reduce_scatter_device_operation.hpp"
+#include "llama_reduce_scatter_create_heads_device_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include <tt-metalium/constants.hpp>
@@ -236,8 +236,8 @@ CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_
 
 }  // namespace detail
 
-LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::cached_program_t
-LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
+LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cached_program_t
+LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
