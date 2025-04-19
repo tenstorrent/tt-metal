@@ -15,6 +15,8 @@ from models.utility_functions import (
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.squeezebert.tt import ttnn_functional_squeezebert
+from models.demos.squeezebert.tt.ttnn_functional_squeezebert import init_squeezebert
+
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 
 from transformers import SqueezeBertForQuestionAnswering, pipeline, SqueezeBertTokenizer
@@ -54,6 +56,7 @@ def run_squeezebert_question_and_answering_inference(
 ):
     disable_persistent_kernel_cache()
 
+    init_squeezebert()
     hugging_face_reference_model = SqueezeBertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
@@ -192,7 +195,7 @@ def run_squeezebert_question_and_answering_inference_squad_v2(
     token_type_ids = True
     inputs_squadv2 = squadv2_1K_samples_input(tokenizer, sequence_size, attention_mask, token_type_ids, batch_size)
     squad_metric = evaluate.load("squad_v2")
-
+    init_squeezebert()
     with torch.no_grad():
         pred_labels = []
         cpu_pred_labels = []

@@ -14,6 +14,8 @@ from models.perf.perf_utils import prep_perf_report
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.squeezebert.tt import ttnn_functional_squeezebert
+from models.demos.squeezebert.tt.ttnn_functional_squeezebert import init_squeezebert
+
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 from models.utility_functions import (
@@ -58,7 +60,7 @@ def get_expected_times(squeezebert):
 @pytest.mark.parametrize("squeezebert", [ttnn_functional_squeezebert])
 def test_performance(device, use_program_cache, model_name, sequence_size, squeezebert):
     disable_persistent_kernel_cache()
-
+    init_squeezebert()
     num_iterations = 2
     batch_size = 8
 

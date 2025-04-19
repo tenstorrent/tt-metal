@@ -46,6 +46,11 @@ ttnn_weights_bias_map = {}
 conv1d_out_channels_map = {}
 
 
+def init_squeezebert():
+    ttnn_weights_bias_map.clear()
+    conv1d_out_channels_map.clear()
+
+
 def ttnn_conv1d(
     device,
     tt_input_tensor,
