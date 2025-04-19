@@ -2402,8 +2402,6 @@ static std::vector<std::vector<IDevice*>> generate_line_fabrics_under_test(
 
 template <typename FABRIC_DEVICE_FIXTURE = Fabric1DFixture>
 void Run1DFabricPacketSendTest(
-    // size_t num_links,
-    // size_t num_op_invocations,
     const std::vector<Fabric1DPacketSendTestSpec>& test_specs,
     const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
     size_t fabric_context_switch_interval =
@@ -2477,15 +2475,6 @@ void Run1DFabricPacketSendTest(
 
     auto fabrics_under_test_devices =
         generate_line_fabrics_under_test(params, use_galaxy, use_tg, line_size, topology, view);
-
-    // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
-
-    // std::vector<IDevice*> devices;
-    // devices.reserve(line_size);
-    // for (size_t i = 0; i < line_size; i++) {
-    //     devices.push_back(devices_[i]);
-    // }
-    // build the mesh device
 
     // Persistent Fabric Setup
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle = std::nullopt;
