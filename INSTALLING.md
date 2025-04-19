@@ -45,17 +45,15 @@ sudo ./install_dependencies.sh
 
 #### Install the Driver (TT-KMD)
 
-- DKMS must be installed:
+- DKMS must be installed in Ubuntu:
 
-| OS                     | Command                                        |
-| ---------------------- | ---------------------------------------------- |
-| Ubuntu / Debian        | `apt install dkms`                             |
-| Fedora                 | `dnf install dkms`                             |
-| Enterprise Linux Based | `dnf install epel-release && dnf install dkms` |
+```sh
+sudo apt install dkms
+```
 
 - Install the latest TT-KMD version:
 
-```
+```sh
 git clone https://github.com/tenstorrent/tt-kmd.git
 cd tt-kmd
 sudo dkms add .
@@ -75,19 +73,19 @@ cd ..
 
 - Install TT-Flash:
 
-```
+```sh
 pip install git+https://github.com/tenstorrent/tt-flash.git
 ```
 
 - Reboot to load changes:
 
-```
+```sh
 sudo reboot
 ```
 
 - Check if TT-Flash is installed:
 
-```
+```sh
 tt-flash --version
 ```
 
@@ -97,7 +95,7 @@ Note, if you get an error message from `tt-flash` indicating the current firmwar
 
 We will use latest here as example:
 
-```
+```sh
 file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
 curl -L -o "$file_name" "https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
 tt-flash flash --fw-tar $file_name
@@ -113,7 +111,7 @@ tt-flash flash --fw-tar $file_name
 
 - Install Tenstorrent Software Management Interface (TT-SMI) according to the table above. We will use a specific version here as an example:
 
-```
+```sh
 pip install git+https://github.com/tenstorrent/tt-smi@v3.0.12
 ```
 
@@ -123,7 +121,7 @@ Once hardware and system software are installed, verify that the system has been
 
 - Run the TT-SMI utility:
 
-```
+```sh
 tt-smi
 ```
 
@@ -176,7 +174,7 @@ git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 
 #### Step 2. Invoke our Build Scripts:
 
-```
+```sh
 ./build_metal.sh
 ```
 
@@ -186,7 +184,7 @@ If there are issues configuring and building, ensure that the [`install_dependen
 
 You can execute the `create_venv.sh` to configure the virtual environment. Don't forget to activate once you've created
 
-```
+```sh
 ./create_venv.sh
 source python_env/bin/activate
 ```
@@ -245,6 +243,7 @@ To try our pre-built models in `models/`, you must:
 - Set the CPU performance governor to ensure high performance on the host
 
 - This is done by executing the following:
+
   ```sh
   export PYTHONPATH=$(pwd)
   pip install -r tt_metal/python_env/requirements-dev.txt
@@ -264,22 +263,21 @@ To try our pre-built models in `models/`, you must:
 
   | Card      | Command                        |
   | --------- | ------------------------------ |
-  | Grayskull | `export ARCH_NAME=grayskull`   |
   | Wormhole  | `export ARCH_NAME=wormhole_b0` |
   | Blackhole | `export ARCH_NAME=blackhole`   |
 
   - Run:
 
-  `$(pwd)` could correspond to the current path of the cloned `tt-metal` repository.
+  `$(pwd)` should correspond to the current path of the cloned `tt-metal` repository.
 
-  ```
+  ```sh
   export TT_METAL_HOME=$(pwd)
   export PYTHONPATH=$(pwd)
   ```
 
 - Then, try running a programming example:
 
-  ```
+  ```sh
   python3 -m ttnn.examples.usage.run_op_on_device
   ```
 
