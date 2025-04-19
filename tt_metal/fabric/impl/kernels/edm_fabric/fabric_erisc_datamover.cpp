@@ -301,10 +301,17 @@ struct OutboundReceiverChannelPointers {
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct ReceiverChannelPointers {
-    tt::tt_fabric::ChannelBufferPointer<RECEIVER_NUM_BUFFERS> wr_sent_ptr;
-    tt::tt_fabric::ChannelBufferPointer<RECEIVER_NUM_BUFFERS> wr_flush_ptr;
-    tt::tt_fabric::ChannelBufferPointer<RECEIVER_NUM_BUFFERS> ack_ptr;
-    tt::tt_fabric::ChannelBufferPointer<RECEIVER_NUM_BUFFERS> completion_ptr;
+    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
+    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;
+    ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;
+    ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
+    std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+
+    FORCE_INLINE void set_src_chan_id(BufferIndex buffer_index, uint8_t src_chan_id) {
+        src_chan_ids[buffer_index.get()] = src_chan_id;
+    }
+
+    FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const { return src_chan_ids[buffer_index.get()]; }
 };
 
 struct PacketHeaderRecorder {
@@ -401,36 +408,26 @@ FORCE_INLINE void send_next_data(
  * Doesn't check to see if indeed a new message is available. It's assumed the caller has handled that separately.
  * MUST CHECK !is_eth_txq_busy() before calling
  */
-template <size_t NUM_SENDER_CHANNELS, uint8_t SENDER_NUM_BUFFERS, uint8_t RECEIVER_NUM_BUFFERS>
+template <uint8_t RECEIVER_NUM_BUFFERS>
 FORCE_INLINE void receiver_send_received_ack(
-    std::array<tt::tt_fabric::ChannelBufferPointer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_eth_sender_ackptrs,
-    std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_sender_channels,
     // currently the pointer is working multiple jobs (ack, completion, read) because we haven't implemented the
     // decoupling of those jobs yet to separate pointrers
-    tt::tt_fabric::ChannelBufferPointer<RECEIVER_NUM_BUFFERS>& receiver_channel_ptr,
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_buffer_channel) {
-    // Set the acknowledgement bits. We have a different location than the
-
-    auto receiver_buffer_index = receiver_channel_ptr.get_buffer_index();
-    volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+    BufferIndex receiver_buffer_index,
+    const tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_buffer_channel) {
+    // Set the acknowledgement bits
+    volatile tt_l1_ptr auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
         local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
     const auto src_id = pkt_header->src_ch_id;
+    while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
+    };
     remote_update_ptr_val(to_sender_packets_acked_streams[src_id], 1);
 }
 
 // MUST CHECK !is_eth_txq_busy() before calling
-template <size_t NUM_SENDER_CHANNELS, uint8_t SENDER_NUM_BUFFERS, uint8_t RECEIVER_NUM_BUFFERS>
-FORCE_INLINE void receiver_send_completion_ack(
-    std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_sender_channels,
-    tt::tt_fabric::ChannelBufferPointer<RECEIVER_NUM_BUFFERS>& receiver_channel_ptr,
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_buffer_channel) {
-    auto receiver_buffer_index = receiver_channel_ptr.get_buffer_index();
-
-    volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
-        local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
-    const auto src_id = pkt_header->src_ch_id;
+FORCE_INLINE void receiver_send_completion_ack(uint8_t src_id) {
+    while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
+    };
     remote_update_ptr_val(to_sender_packets_completed_streams[src_id], 1);
-    receiver_channel_ptr.increment();
 }
 
 template <uint8_t SENDER_NUM_BUFFERS>
@@ -658,31 +655,31 @@ void run_receiver_channel_step(
     PacketHeaderRecorder& packet_header_recorder,
     WriteTridTracker& receiver_channel_trid_tracker,
     uint8_t rx_channel_id) {
-    auto& ack_ptr = receiver_channel_pointers.ack_ptr;
+    auto& ack_counter = receiver_channel_pointers.ack_counter;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
     if constexpr (enable_first_level_ack) {
         bool pkts_received = pkts_received_since_last_check > 0;
-        bool can_send_over_eth = !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
-        ASSERT(receiver_channel_pointers.completion_ptr.distance_behind(ack_ptr) < RECEIVER_NUM_BUFFERS);
-        if (pkts_received && can_send_over_eth) {
+        ASSERT(receiver_channel_pointers.completion_ptr.distance_behind(ack_counter) < RECEIVER_NUM_BUFFERS);
+        if (pkts_received) {
             // currently only support processing one packet at a time, so we only decrement by 1
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-            receiver_send_received_ack(remote_sender_channels, ack_ptr, local_receiver_channel);
-            ack_ptr.increment();
+            receiver_send_received_ack(ack_counter.get_buffer_index(), local_receiver_channel);
+            ack_counter.increment();
         }
     } else {
         increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
-        ack_ptr.increment_n(pkts_received_since_last_check);
+        ack_counter.increment_n(pkts_received_since_last_check);
     }
 
-    auto& wr_sent_ptr = receiver_channel_pointers.wr_sent_ptr;
-    bool unwritten_packets = !wr_sent_ptr.is_caught_up_to(ack_ptr);
+    auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
+    bool unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
     if (unwritten_packets) {
-        auto receiver_buffer_index = wr_sent_ptr.get_buffer_index();
+        auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
             local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
 
         ROUTING_FIELDS_TYPE cached_routing_fields = packet_header->routing_fields;
+        receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         bool can_send_to_all_local_chip_receivers =
             can_forward_packet_completely(cached_routing_fields, downstream_edm_interface);
         bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
@@ -692,45 +689,43 @@ void run_receiver_channel_step(
                 receiver_buffer_index);
             receiver_forward_packet(
                 packet_header, cached_routing_fields, downstream_edm_interface, trid, rx_channel_id);
-            wr_sent_ptr.increment();
+            wr_sent_counter.increment();
         }
     }
 
     if constexpr (!fuse_receiver_flush_and_completion_ptr) {
-        auto& wr_flush_ptr = receiver_channel_pointers.wr_flush_ptr;
-        bool unflushed_writes = !wr_flush_ptr.is_caught_up_to(wr_sent_ptr);
+        auto& wr_flush_counter = receiver_channel_pointers.wr_flush_counter;
+        bool unflushed_writes = !wr_flush_counter.is_caught_up_to(wr_sent_counter);
         if (unflushed_writes) {
-            auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
+            auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
             bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
             if (next_trid_flushed) {
-                wr_flush_ptr.increment();
+                wr_flush_counter.increment();
                 receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             }
         }
 
-        auto& completion_ptr = receiver_channel_pointers.completion_ptr;
-        bool unsent_completions = !completion_ptr.is_caught_up_to(wr_flush_ptr);
+        auto& completion_counter = receiver_channel_pointers.completion_counter;
+        bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
         if (unsent_completions) {
-            bool can_send_without_blocking = !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
-            if (can_send_without_blocking) {
-                // completion ptr incremented in callee
-                receiver_send_completion_ack(remote_sender_channels, completion_ptr, local_receiver_channel);
-            }
+            // completion ptr incremented in callee
+            auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
+            receiver_send_completion_ack(receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
+            completion_counter.increment();
         }
     } else {
-        auto& wr_flush_ptr = receiver_channel_pointers.wr_flush_ptr;
-        // Currently unclear if it's better to loop here or not... Also unclear if merging these
-        // two pointers is better or not... Seems to be maybe 5-10% better merged but need more data
-        bool unflushed_writes_and_eth_txq_not_busy =
-            !wr_flush_ptr.is_caught_up_to(wr_sent_ptr) && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
-        auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
+        // flush and completion are fused, so we only need to update one of the counters
+        // update completion since other parts of the code check against completion
+        auto& completion_counter = receiver_channel_pointers.completion_counter;
+        // Currently unclear if it's better to loop here or not...
+        bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
+        auto receiver_buffer_index = completion_counter.get_buffer_index();
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-        bool can_send_completion = unflushed_writes_and_eth_txq_not_busy && next_trid_flushed;
+        bool can_send_completion = unflushed_writes && next_trid_flushed;
         if (can_send_completion) {
-            auto& completion_ptr = receiver_channel_pointers.completion_ptr;
-            wr_flush_ptr.increment();
+            receiver_send_completion_ack(receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
-            receiver_send_completion_ack(remote_sender_channels, completion_ptr, local_receiver_channel);
+            completion_counter.increment();
         }
     }
 };
@@ -771,14 +766,14 @@ bool all_channels_drained(
         eth_buffers_drained =
             eth_buffers_drained &&
             (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0 &&
-             receiver_channel_pointers[0].completion_ptr.is_caught_up_to(receiver_channel_pointers[0].ack_ptr));
+             receiver_channel_pointers[0].completion_counter.is_caught_up_to(receiver_channel_pointers[0].ack_counter));
     }
     // Receiver 1 enabled
     if constexpr (enable_ring_support) {
         eth_buffers_drained =
             eth_buffers_drained &&
             (get_ptr_val<to_receiver_packets_sent_streams[1]>() == 0 &&
-             receiver_channel_pointers[1].completion_ptr.is_caught_up_to(receiver_channel_pointers[1].ack_ptr));
+             receiver_channel_pointers[1].completion_counter.is_caught_up_to(receiver_channel_pointers[1].ack_counter));
     }
     // Sender 2 enabled
     if constexpr (enable_ring_support && !dateline_connection) {
@@ -1436,6 +1431,7 @@ void kernel_main() {
                 local_handshake_master_eth_chan,
                 (uint32_t)termination_signal_ptr,
                 *termination_signal_ptr);
+            noc_async_write_barrier();
         }
     }
 
