@@ -233,9 +233,6 @@ def process_1d_fabric_on_mesh_results(
     logger.info("packets_per_second_inner_loop: {} pps", packets_per_second_inner_loop)
     logger.info("packets_per_second: {} pps", packets_per_second)
 
-    test_name = (
-        f"{'unicast' if is_unicast else 'mcast'}_{fabric_mode.name}_multifabric_{num_cluster_rows}x{num_cluster_cols}"
-    )
     summarize_to_csv(
         test_name,
         packet_size,
@@ -262,6 +259,7 @@ def process_1d_fabric_on_mesh_results(
 
 def process_results(
     *,
+    test_name,
     zone_name_inner,
     zone_name_main,
     is_unicast,
@@ -299,7 +297,6 @@ def process_results(
     logger.info("packets_per_second: {} pps", packets_per_second)
 
     # Add summary to CSV
-    test_name = f"{'unicast' if is_unicast else 'mcast'}_{fabric_mode.name}"
     summarize_to_csv(
         test_name,
         packet_size,
@@ -368,8 +365,12 @@ def run_fabric_edm(
 ):
     if test_mode == "1_fabric_instance":
         assert num_cluster_rows == 0 and num_cluster_cols == 0
+        test_name = f"{'unicast' if is_unicast else 'mcast'}_{fabric_mode.name}"
     elif test_mode == "1D_fabric_on_mesh":
         assert (num_cluster_rows > 0) ^ (num_cluster_cols > 0)
+        test_name = (
+            f"{'unicast' if is_unicast else 'mcast'}_{fabric_mode.name}_{num_cluster_rows}x{num_cluster_cols}_mesh"
+        )
     else:
         raise ValueError(f"Invalid test mode: {test_mode}")
 
@@ -412,6 +413,7 @@ def run_fabric_edm(
     zone_name_main = "MAIN-TEST-BODY"
 
     process_results(
+        test_name=test_name,
         zone_name_inner=zone_name_inner,
         zone_name_main=zone_name_main,
         is_unicast=is_unicast,
