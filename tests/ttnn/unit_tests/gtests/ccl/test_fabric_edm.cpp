@@ -91,7 +91,15 @@ static void dispatch_1d_fabric_on_mesh(
         num_rows > 0 ^ num_cols > 0,
         "Either num_rows or num_cols (but not both) must be greater than 0 when running 1D fabric on mesh BW test");
 
-    Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_specs, test_params.params);
+    if (test_params.params.fabric_mode == FabricTestMode::Linear) {
+        Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_specs, test_params.params);
+    } else if (test_params.params.fabric_mode == FabricTestMode::FullRing) {
+        Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_specs, test_params.params);
+    } else {
+        TT_THROW(
+            "Invalid fabric mode when using device init fabric in 1D fabric on mesh BW test: {}",
+            test_params.params.fabric_mode);
+    }
 }
 
 static void dispatch_single_line_bw_test(

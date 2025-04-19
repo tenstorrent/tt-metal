@@ -185,7 +185,7 @@ def profile_results(
     bytes_per_GB = 1000000000
     bandwidth_GB_s = (bandwidth * freq_hz) / bytes_per_GB
     logger.info("main_loop_cycles: {} ", max(main_loop_cycles))
-    logger.info("bandwidth: {} GB/s", bandwidth)
+    logger.info("bandwidth: {} GB/s", bandwidth_GB_s)
 
     return bandwidth, packets_per_second
 
@@ -640,7 +640,7 @@ def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
-@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_cols", [4])
 def test_fabric_t3k_4chip_cols_mcast_bw(
     num_messages,
@@ -653,7 +653,7 @@ def test_fabric_t3k_4chip_cols_mcast_bw(
     num_cluster_cols,
 ):
     run_fabric_edm(
-        is_unicast=False,
+        is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
         noc_message_type="noc_unicast_write",
@@ -679,7 +679,7 @@ def test_fabric_t3k_4chip_cols_mcast_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
-@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_rows", [2])
 def test_fabric_t3k_4chip_rows_mcast_bw(
     num_messages,
