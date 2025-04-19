@@ -7,11 +7,14 @@
 #include "dropout_program_factory.hpp"
 
 #include "dropout_device_operation_types.hpp"
+#include "tt-metalium/mesh_workload.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
+namespace ttnn::operations::experimental::dropout::program {
 namespace {
 constexpr auto kWriterKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/writer_dropout_interleaved_start_id.cpp";
@@ -28,9 +31,16 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_2;
 
 constexpr uint32_t kNumInputTiles = 2;
 constexpr uint32_t kNumOutputTiles = 2;
-}  // namespace
 
-namespace ttnn::operations::experimental::dropout::program {
+// Overrides the seed with a per-device seed by using the device ID as an offset.
+operation_attributes_t override_per_device_seed(
+    const operation_attributes_t& args, const ttnn::MeshCoordinate& mesh_coord, const ttnn::Tensor& input_tensor) {
+    operation_attributes_t args_with_per_device_seed = args;
+    args_with_per_device_seed.seed += input_tensor.mesh_device()->get_device(mesh_coord)->id();
+    return args_with_per_device_seed;
+}
+
+}  // namespace
 
 using namespace tt::constants;
 
@@ -336,6 +346,45 @@ void DropoutProgramFactory::override_runtime_arguments(
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
+    }
+}
+
+DropoutMeshWorkloadFactory::cached_mesh_workload_t DropoutMeshWorkloadFactory::create_mesh_workload(
+    const operation_attributes_t& args,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
+
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
+        for (const auto& mesh_coord : mesh_coord_range) {
+            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
+            auto single_device_program = DropoutProgramFactory::create(
+                override_per_device_seed(args, mesh_coord, tensor_args.input), tensor_args, output);
+            shared_variables[mesh_coord_range] = std::move(single_device_program.shared_variables);
+            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
+        }
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+}
+
+void DropoutMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
+
+    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
+        auto cached_program_proxy = DropoutProgramFactory::cached_program_t::proxy(
+            program, cached_workload.shared_variables.at(mesh_coord_range));
+        DropoutProgramFactory::override_runtime_arguments(
+            cached_program_proxy,
+            override_per_device_seed(args, mesh_coord_range.start_coord(), tensor_args.input),
+            tensor_args,
+            tensor_return_value);
     }
 }
 

@@ -1376,6 +1376,7 @@ def test_shard_and_concat_2d_various_shapes(mesh_device, tensor_shape):
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.skip(reason="Uneven Sharding across devices is not supported by TT-Mesh")
 def test_shard_and_concat_2d_non_divisible(mesh_device):
     rows, cols = mesh_device.shape
     # Create a tensor with dimensions not perfectly divisible by the mesh shape

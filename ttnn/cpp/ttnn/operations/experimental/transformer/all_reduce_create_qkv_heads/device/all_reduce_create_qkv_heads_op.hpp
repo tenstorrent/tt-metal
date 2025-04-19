@@ -26,11 +26,8 @@ constexpr int MAX_HEAD = 32;
 namespace ttnn {
 
 struct AllReduceCreateQkvHeads {
-    std::optional<IDevice*> forward_device;
-    std::optional<IDevice*> backward_device;
     const uint32_t num_links;
     const uint32_t ring_size;
-    const uint32_t ring_index;
     const MemoryConfig all_reduce_mem_config;
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
@@ -44,12 +41,11 @@ struct AllReduceCreateQkvHeads {
     std::optional<const uint32_t> slice_size;
     const MemoryConfig final_mem_config;
     const DataType dtype;
+    const uint32_t cluster_axis;
+
     AllReduceCreateQkvHeads(
-        std::optional<IDevice*> forward_device,
-        std::optional<IDevice*> backward_device,
         uint32_t num_links,
         uint32_t ring_size,
-        uint32_t ring_index,
         MemoryConfig all_reduce_mem_config,
         ccl::Topology topology,
         GlobalSemaphore semaphore,
@@ -60,12 +56,10 @@ struct AllReduceCreateQkvHeads {
         bool input_on_subcoregrids,
         std::optional<const uint32_t> slice_size,
         MemoryConfig final_mem_config,
-        DataType dtype) :
-        forward_device(forward_device),
-        backward_device(backward_device),
+        DataType dtype,
+        const uint32_t cluster_axis) :
         num_links(num_links),
         ring_size(ring_size),
-        ring_index(ring_index),
         all_reduce_mem_config(all_reduce_mem_config),
         topology(topology),
         semaphore(semaphore),
@@ -76,7 +70,8 @@ struct AllReduceCreateQkvHeads {
         input_on_subcoregrids(input_on_subcoregrids),
         slice_size(slice_size),
         final_mem_config(final_mem_config),
-        dtype(dtype) {}
+        dtype(dtype),
+        cluster_axis(cluster_axis) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -85,7 +80,6 @@ struct AllReduceCreateQkvHeads {
 
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("ring_index", ring_index);
         attrs.emplace_back("all_reduce_mem_config", all_reduce_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
@@ -97,36 +91,22 @@ struct AllReduceCreateQkvHeads {
             attrs.emplace_back("slice_size", slice_size.value());
         }
         attrs.emplace_back("final_mem_config", final_mem_config);
-
+        attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
     }
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const std::vector<Tensor>& input_tensors,
+        std::vector<Tensor>& output_tensors) const;
+    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
+        const ttnn::MeshCoordinate& mesh_coord,
+        const std::vector<Tensor>& input_tensors,
+        std::vector<Tensor>& output_tensors) const;
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
-
-namespace ccl {
-namespace all_reduce_create_qkv_heads_detail {
-AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
-    const Tensor& input_tensor,
-    const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::vector<IDevice*>& devices,
-    const ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    uint32_t num_heads,
-    uint32_t num_kv_heads,
-    bool input_on_subcoregrids,
-    std::optional<const uint32_t> slice_size,
-    MemoryConfig final_mem_config,
-    const std::optional<const DataType> dtype);
-
-}  // namespace all_reduce_create_qkv_heads_detail
-}  // namespace ccl
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     size_t num_links,
@@ -147,7 +127,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& all_reduce_memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,

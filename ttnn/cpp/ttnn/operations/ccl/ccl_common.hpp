@@ -8,6 +8,7 @@
 #include <numeric>
 
 #include <tt-metalium/constants.hpp>
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -31,10 +32,15 @@ struct SyncModeSpec {
 
 class EriscDatamoverBuilder;
 
+// Creates a mesh workload by calling the `create_program` function for each coordinate in the `tensor_coords` set.
+tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program);
+
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
-    const Tensor& input_tensor,
-    const std::vector<IDevice*>& devices,
-    const ttnn::ccl::Topology& topology);
+    const IDevice* target_device, const std::vector<IDevice*>& devices, const ttnn::ccl::Topology& topology);
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
@@ -461,7 +467,7 @@ class RingReduceScatterWrappedTensorSlicer : public RingReduceScatterBaseTensorS
 class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
    public:
     InterleavedRingAllGatherTensorSlicer(
-        Tensor const& input_tensor, Tensor const& output_tensor, int slice_dim, uint32_t slice_idx) :
+         const Tensor & input_tensor,  const Tensor & output_tensor, int slice_dim, uint32_t slice_idx) :
         LegacyCclTensorSlicer() {
         this->row_major = input_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR;
         this->slice_dim_is_width = input_tensor.get_padded_shape().rank() - 1 == slice_dim;

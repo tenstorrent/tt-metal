@@ -119,10 +119,14 @@ def run_conv(
     fast_compare=False,
     slice_config=None,
 ):
-    if isinstance(device, ttnn.MeshDevice):
-        assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
-        assert weight_mesh_mapper is not None, "Expected mesh mapper for weight tensors when using device mesh"
-        assert output_mesh_composer is not None, "Expected mesh composer for output tensor when using device mesh"
+    if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
+        assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
+        assert (
+            weight_mesh_mapper is not None
+        ), "Expected mesh mapper for weight tensors when running on multiple devices"
+        assert (
+            output_mesh_composer is not None
+        ), "Expected mesh composer for output tensor when running on multiple devices"
         num_devices = len(device.get_device_ids())
         total_batch_size = num_devices * batch_size  # Batch size across all devices
         logger.info(f"Using {num_devices} devices for this test")

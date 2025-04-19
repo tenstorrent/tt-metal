@@ -92,6 +92,7 @@ operation::ProgramWithCallbacks barrier_with_workers(
     const bool is_starting_core,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology) {
@@ -105,7 +106,8 @@ operation::ProgramWithCallbacks barrier_with_workers(
     auto const& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
 
     // Get the device from the tensor
-    const auto& device = input_tensor.device();
+    const auto& device =
+        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(target_device_id) : input_tensor.device();
     // Get a representation of the topology
 
     // Create the program

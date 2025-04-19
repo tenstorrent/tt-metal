@@ -346,7 +346,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb,
+               const std::optional<const GlobalCircularBuffer>& global_cb,
                const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
@@ -433,7 +433,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb,
+               const std::optional<const GlobalCircularBuffer>& global_cb,
                const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,

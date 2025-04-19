@@ -33,7 +33,7 @@
 #include "ttnn/tensor/types.hpp"
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::IDevice;
+using tt::tt_metal::distributed::MeshDevice;
 
 using tt::tt_metal::Layout;
 using tt::tt_metal::OwnedStorage;
@@ -73,7 +73,7 @@ Tensor host_function(const Tensor& input_tensor) {
 }
 
 template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
-bool run_test(IDevice* device, const ttnn::Shape& shape, float low, float high, Args... args) {
+bool run_test(MeshDevice* device, const ttnn::Shape& shape, float low, float high, Args... args) {
     auto input_tensor = ttnn::random::uniform(bfloat16(low), bfloat16(high), shape).to_layout(Layout::TILE);
 
     using ttnn::operations::unary::UnaryOpType;
@@ -124,7 +124,8 @@ void test_operation_infrastructure() {
     using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device = device_owner.get();
 
     auto shape = ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
     auto input_tensor =
@@ -139,8 +140,6 @@ void test_operation_infrastructure() {
     ttnn::operations::unary::tensor_args_t tensor_args{input_tensor};
     auto program_hash = ttnn::operations::unary::UnaryDeviceOperation::compute_program_hash(op_args, tensor_args);
     TT_FATAL(program_hash == 3018574135764717736ULL, "Actual value is {}", program_hash);
-
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 void test_shape_padding() {
@@ -151,7 +150,8 @@ void test_shape_padding() {
     using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device = device_owner.get();
     ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device);
 
     ttnn::Shape input_shape({1, 1, 13, 18});
@@ -167,8 +167,6 @@ void test_shape_padding() {
 
     TT_FATAL(output_tensor.get_padded_shape() == padded_input_shape, "Error");
     TT_FATAL(output_tensor.get_logical_shape() == input_shape, "Error");
-
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 namespace tt {
@@ -191,7 +189,8 @@ void test_numerically() {
     using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device = device_owner.get();
 
     ttnn::Shape shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
     {
@@ -235,8 +234,6 @@ void test_numerically() {
         auto allclose = run_test<UnaryOpType::TANH>(device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
         TT_FATAL(allclose, "Error");
     }
-
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 void test_program_cache() {
@@ -248,7 +245,8 @@ void test_program_cache() {
     using ttnn::operations::unary::UnaryWithParam;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    auto device_owner = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+    auto device = device_owner.get();
 
     auto run_tests = [&]() {
         // Program Cache Miss
@@ -294,7 +292,6 @@ void test_program_cache() {
 
     device->disable_and_clear_program_cache();
     TT_FATAL(device->num_program_cache_entries() == 0, "Error");
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 int main(int argc, char** argv) {

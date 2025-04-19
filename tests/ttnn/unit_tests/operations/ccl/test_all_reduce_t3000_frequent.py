@@ -114,7 +114,6 @@ def run_all_reduce_test(
     for i in range(num_devices):
         input_tensor = torch.rand(per_chip_output_shape).bfloat16()
         t = ttnn.from_torch(input_tensor, input_dtype, layout=layout)
-        t = t.to(mesh_device.get_device(mesh_device.get_device_ids()[i]), mem_config)
         tt_input_tensors.append(t)
         input_tensor = input_tensor.view(1, -1, input_tensor.shape[2], input_tensor.shape[3])
         input_tensors.append(input_tensor)
@@ -123,7 +122,7 @@ def run_all_reduce_test(
 
     assert len(tt_input_tensors) == num_devices
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, mem_config)
     # Run the op
     for i in range(num_iters):
         output_tensor_mesh = ttnn.experimental.all_reduce(
@@ -133,7 +132,6 @@ def run_all_reduce_test(
             memory_config=mem_config,
             topology=topology,
         )
-
         ttnn.synchronize_device(mesh_device)
         logger.info(f"Done iteration {i}")
 

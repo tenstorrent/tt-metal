@@ -32,8 +32,6 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
                 TT_THROW("Device input_tensor cannot be converted to torch");
             } else if constexpr (std::is_same_v<T, tt::tt_metal::BorrowedStorage>) {
                 return storage.buffer;
-            } else if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceStorage>) {
-                TT_THROW("Tensor with MultiDeviceStorage cannot be converted to torch");
             } else if constexpr (std::is_same_v<T, tt::tt_metal::MultiDeviceHostStorage>) {
                 TT_THROW(
                     "Tensor MultiDeviceHostStorage cannot be converted to torch directly. Use composer(..) "
@@ -229,8 +227,11 @@ inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_l
                 default: TT_THROW("Unsupported DataType: {}", input_dtype); break;
             }
         };
-    return distributed::is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_dtype)
-                                                             : convert_dtype(input_tensor);
+    TT_FATAL(!is_device_tensor(input_tensor), "to_dtype only supports host tensors");
+
+    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
+    return distributed::is_multi_device_host_tensor(input_tensor) ? transform(input_tensor, convert_dtype)
+                                                                  : convert_dtype(input_tensor);
 }
 
 }  // namespace detail
@@ -245,8 +246,12 @@ struct ToDtype {
             return input_tensor;
         }
 
+        TT_FATAL(!is_device_tensor(input_tensor), "to_dtype only supports host tensors");
+
         auto row_major_input_tensor = input_tensor.to_layout(ttnn::ROW_MAJOR_LAYOUT);
-        auto intermediate_tensor = distributed::is_multi_device_tensor(row_major_input_tensor)
+
+        // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
+        auto intermediate_tensor = distributed::is_multi_device_host_tensor(row_major_input_tensor)
                                        ? transform(row_major_input_tensor, detail::convert_to_cpp_supported_dtype)
                                        : detail::convert_to_cpp_supported_dtype(row_major_input_tensor);
         return detail::convert_to_dtype(intermediate_tensor, input_layout, dtype);

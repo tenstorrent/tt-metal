@@ -258,10 +258,17 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 int GraphProcessor::add_tensor(const Tensor& t) {
     auto& storage = t.get_storage();
     std::vector<tt::tt_metal::Buffer*> buffers = std::visit(
-        [&t](auto&& storage) -> std::vector<tt::tt_metal::Buffer*> {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, DeviceStorage> || std::is_same_v<T, MultiDeviceStorage>) {
-                return t.buffers();
+        [&t]<typename T>(const T& storage) -> std::vector<tt::tt_metal::Buffer*> {
+            if constexpr (std::is_same_v<T, DeviceStorage>) {
+                if (storage.mesh_buffer) {
+                    // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
+                    // It has an ID different from the "backing" buffer that was used to perform the allocation.
+                    // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
+                    // buffer.
+                    return {storage.mesh_buffer->get_backing_buffer()};
+                } else {
+                    return t.buffers();
+                }
             }
             return {};
         },

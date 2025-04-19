@@ -12,6 +12,7 @@ namespace tt::tt_metal::distributed {
 using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
 
 class MeshCommandQueue;
+class FDMeshCommandQueue;
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
 
 class MeshWorkload {
@@ -39,6 +40,7 @@ private:
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
     ProgramConfig& get_program_config(uint32_t index);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
+    void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
 
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
     std::shared_ptr<MeshBuffer> kernel_bin_buf_;
@@ -54,7 +56,7 @@ private:
     friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
     template <typename WorkloadType, typename DeviceType>
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
-    friend MeshCommandQueue;
+    friend FDMeshCommandQueue;
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
 
 public:
@@ -62,6 +64,7 @@ public:
     MeshWorkload();
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
+    const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
 
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);

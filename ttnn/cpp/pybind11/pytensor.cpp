@@ -38,11 +38,7 @@ namespace detail {
 
 #ifdef DEBUG
 
-void log_external_operation(
-    std::size_t operation_id,
-    std::size_t device_operation_id,
-    const operation::ExternalOperation& operation,
-    const std::vector<Tensor>& input_tensors) {
+void log_external_operation(const operation::ExternalOperation& operation, const std::vector<Tensor>& input_tensors) {
     tt::log_debug(tt::LogOp, "Launching External Operation: \"{}\"", operation.get_type_name());
 
     auto attributes = operation.attributes();
@@ -63,11 +59,7 @@ void log_external_operation(
 }
 #else
 
-void log_external_operation(
-    std::size_t operation_id,
-    std::size_t device_operation_id,
-    const operation::ExternalOperation& operation,
-    const std::vector<Tensor>& input_tensors) {}
+void log_external_operation(const operation::ExternalOperation& operation, const std::vector<Tensor>& input_tensors) {}
 
 #endif
 
@@ -145,7 +137,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<Layout> optional_layout,
     const std::optional<Tile>& optional_tile,
     const MemoryConfig& memory_config,
-    IDevice* device,
+    MeshDevice* device,
     const bool force_disable_borrow = false) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
@@ -675,16 +667,13 @@ void pytensor_module(py::module& m_tensor) {
             return py::cpp_function(std::function([function, function_name](
                                                       const py::args& args, const py::kwargs& kwargs) {
                 ZoneScopedN("TT_DNN_FALLBACK_OP");
-                uint32_t device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
                 auto [operation, input_tensors] =
                     detail::parse_external_operation(function, args, kwargs, function_name);
                 GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
-                detail::log_external_operation(
-                    ttnn::CoreIDs::instance().get_python_operation_id(), device_operation_id, operation, input_tensors);
-
+                detail::log_external_operation(operation, input_tensors);
                 auto output = function(*args, **kwargs);
-
-                TracyOpTTNNExternal(device_operation_id, operation, input_tensors);
+                TracyOpTTNNExternal(
+                    operation, input_tensors, ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
                 GraphTracker::instance().track_function_end(output);
                 return output;
             }));
@@ -753,7 +742,7 @@ void pytensor_module(py::module& m_tensor) {
                           const std::array<uint32_t, 4>& shape,
                           DataType data_type,
                           Layout layout,
-                          IDevice* device,
+                          MeshDevice* device,
                           const std::optional<Tile>& tile) {
                 return Tensor::from_vector(
                     std::move(data),
@@ -807,7 +796,7 @@ void pytensor_module(py::module& m_tensor) {
                           const std::array<uint32_t, 4>& shape,
                           DataType data_type,
                           Layout layout,
-                          IDevice* device,
+                          MeshDevice* device,
                           const MemoryConfig& memory_config,
                           const std::optional<Tile>& tile) {
                 return Tensor::from_vector(
@@ -899,7 +888,7 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             py::init<>([](const py::object& python_tensor,
                           std::optional<DataType> data_type,
-                          IDevice* device,
+                          MeshDevice* device,
                           Layout layout,
                           const MemoryConfig& mem_config,
                           const std::optional<Tile>& tile) {
@@ -981,15 +970,9 @@ void pytensor_module(py::module& m_tensor) {
                 tt_tensor = tt_tensor.to(tt_device)
         )doc")
         .def(
-            "track_ref_count",
-            [](Tensor& self) { return self.track_ref_count(); },
-            R"doc(
-                Log the reference count (as seen by the main and worker threads) of a tensor as it evolves during runtime.
-            )doc")
-        .def(
             "to",
             py::overload_cast<MeshDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
-            py::arg("mesh_device").noconvert(),
+            py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
             py::arg("cq_id") = ttnn::DefaultQueueId,
             py::keep_alive<0, 2>(),
@@ -1014,7 +997,6 @@ void pytensor_module(py::module& m_tensor) {
 
                 tt_tensor = tt_tensor.to(tt_device)
         )doc")
-        .def("sync", [](Tensor& self) { return self.wait_for_tensor_data_populated(); })
         .def(
             "extract_shard",
             [](const Tensor& self, CoreCoord core) { return self.extract_shard(core); },
@@ -1436,7 +1418,7 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "device",
-            [](const Tensor& self) { return self.device(); },
+            [](const Tensor& self) { return dynamic_cast<MeshDevice*>(self.device()); },
             R"doc(
             Get the device of the tensor.
 
@@ -1448,7 +1430,7 @@ void pytensor_module(py::module& m_tensor) {
             py::return_value_policy::reference)
         .def(
             "devices",
-            [](const Tensor& self) { return self.get_workers(); },
+            [](const Tensor& self) { return std::vector<MeshDevice*>{dynamic_cast<MeshDevice*>(self.device())}; },
             R"doc(
             Get devices tensor is mapped on to.
 
@@ -1529,7 +1511,14 @@ void pytensor_module(py::module& m_tensor) {
             [](const Tensor& self) -> uint32_t {
                 return std::visit(
                     tt::stl::overloaded{
-                        [](const DeviceStorage& s) -> uint32_t { return s.buffer->address(); },
+                        [](const DeviceStorage& s) -> uint32_t {
+                            if (s.mesh_buffer) {
+                                return s.mesh_buffer->address();
+                            } else {
+                                TT_FATAL(s.buffer != nullptr, "Tensor is not allocated.");
+                                return s.buffer->address();
+                            }
+                        },
                         [&](auto&&) -> uint32_t {
                             TT_THROW(
                                 "{} doesn't support buffer_address method",

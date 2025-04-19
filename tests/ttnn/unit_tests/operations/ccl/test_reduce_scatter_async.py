@@ -11,9 +11,6 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import (
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows,
 )
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 
 
 def is_unsupported_case(input_shape, dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
@@ -162,10 +159,10 @@ def run_reduce_scatter_test(
     mesh_device.load_sub_device_manager(sub_device_manager)
     # create global semaphore handles
     from_remote_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
     to_remote_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
     mesh_device.set_sub_device_stall_group([worker_sub_device_id])
     debug = False
@@ -195,15 +192,11 @@ def run_reduce_scatter_test(
                         tile_id += 1
     for i, canonical_input_tensor in enumerate(input_tensors):
         logger.info(f"Creating input tensor on device {mesh_device.get_device_ids()[i]}")
-        tt_input_tensors.append(
-            ttnn.Tensor(canonical_input_tensor, input_dtype)
-            .to(layout)
-            .to(mesh_device.get_device(mesh_device.get_device_ids()[i]), input_mem_config)
-        )
+        tt_input_tensors.append(ttnn.Tensor(canonical_input_tensor, input_dtype).to(layout))
 
     assert len(tt_input_tensors) == num_devices
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
     # Run the op
     if trace_mode:

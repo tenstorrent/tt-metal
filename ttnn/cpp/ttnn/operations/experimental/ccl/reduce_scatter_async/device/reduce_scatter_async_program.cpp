@@ -2128,6 +2128,7 @@ void lower_command_streams_to_noc_commands(
 
 operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     Program& program,
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor const& input_tensor,
@@ -2169,12 +2170,11 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
 
     const size_t page_size = get_page_size(input_tensor);
-    IDevice* device = input_tensor.device();
     std::array<IDevice*, 2> neighbour_devices = {forward_device.value_or(nullptr), backward_device.value_or(nullptr)};
     size_t fabric_buffer_size_pages = packet_size_bytes / get_page_size(input_tensor);
     auto const& topology_config = LineTopology(line_size, line_index);
 
-    auto const& worker_cores = select_worker_cores(topology, num_links, device, sub_device_id);
+    auto const& worker_cores = select_worker_cores(topology, num_links, target_device, sub_device_id);
 
     constexpr size_t local_input_tensor_idx = 0;
     constexpr size_t local_final_output_tensor_idx = 1;
@@ -2243,7 +2243,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
 
 
     initialize_op_internal_tensor_syncs(
-        program, device, neighbour_devices, all_tensors, worker_cores, from_remote_sems, to_remote_sem);
+        program, target_device, neighbour_devices, all_tensors, worker_cores, from_remote_sems, to_remote_sem);
 
     validate_tensors(all_tensors, topology_config);
 
@@ -2267,7 +2267,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     const size_t pages_per_cb_packet = packet_size_bytes / cb_page_size;
     auto builder_config = ReduceScatterBuilderConfig{
         program,
-        device,
+        target_device,
         forward_device.value_or(nullptr),
         backward_device.value_or(nullptr),
         all_tensors,
@@ -2285,7 +2285,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     std::unordered_map<CoreCoord, size_t> math_page_counts;
     generate_worker_command_streams(builder_config, fabric_mode, command_streams, math_page_counts);
 
-    log_worker_command_streams(command_streams, device);
+    log_worker_command_streams(command_streams, target_device);
 
     constexpr bool command_lowering_enabled_in_reduce_scatter = false; // #Issue: https://github.com/tenstorrent/tt-metal/issues/16529
     if (command_lowering_enabled_in_reduce_scatter && ttnn::ccl::worker_detail::can_command_stream_be_lowered_to_noc_commands(input_tensor)) {
@@ -2298,7 +2298,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
             input_tensor_from_remote_backward_direction_idx,
             partial_output_tensor_forward_direction_idx,
             partial_output_tensor_backward_direction_idx);
-        log_worker_command_streams(command_streams, device);
+        log_worker_command_streams(command_streams, target_device);
     }
 
     populate_worker_runtime_args(
@@ -2463,6 +2463,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     Tensor& local_partial_output_tensor_from_backward_direction,
     std::optional<Tensor>& foreward_direction_remote_output_tensor,
     std::optional<Tensor>& backward_direction_remote_output_tensor,
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     ttnn::operations::binary::BinaryOpType reduce_op,
@@ -2477,7 +2478,6 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     auto program = tt::tt_metal::Program();
 
     bool persistent_fabric = true;
-    IDevice* device = input_tensor.device();
 
     fabric_lifetime_mode fabric_mode = fabric_lifetime_mode::PERSISTENT;
     // Link Counting Scheme: By default use all the links between the current device
@@ -2486,14 +2486,14 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     const size_t max_num_links = num_links_preferred.value_or(std::numeric_limits<std::size_t>::max());
     std::optional<size_t> num_links = std::nullopt;
     std::array<std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>, 2> device_pairs = {
-        std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>{device, forward_device},
-        std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>{device, backward_device}};
+        std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>{target_device, forward_device},
+        std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>{target_device, backward_device}};
 
     for (const auto& pair : device_pairs) {
         if (!num_links.has_value()) {
             if (pair.second.has_value()) {
                 auto remote_chip_id = pair.second.value()->id();
-                num_links = std::min(device->get_ethernet_sockets(remote_chip_id).size(), max_num_links);
+                num_links = std::min(target_device->get_ethernet_sockets(remote_chip_id).size(), max_num_links);
             }
         }
     }
@@ -2502,6 +2502,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     TT_FATAL(fabric_mode == fabric_lifetime_mode::PERSISTENT, "Reduce scatter doesn't support transient fabric mode");
     return reduce_scatter_async_on_instantiated_edm_fabric(
         program,
+        target_device,
         forward_device,
         backward_device,
         input_tensor,

@@ -174,11 +174,11 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 
 class Internal_ {
    public:
-    using map_type = decltype(detail::ProgramImpl::circular_buffer_by_id_);
+       using map_type = decltype(detail::ProgramImpl::circular_buffer_by_id_);
 
-    static const map_type &get_circular_buffers_by_id(const Program &program) noexcept {
-        return program.pimpl_->circular_buffer_by_id_;
-    }
+       static const map_type& get_circular_buffers_by_id(const Program& program) noexcept {
+           return program.pimpl_->circular_buffer_by_id_;
+       }
 };
 
 }  // namespace detail
@@ -208,7 +208,8 @@ Program::Program() : pimpl_(std::make_unique<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 }
 
-KernelHandle detail::ProgramImpl::add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType &programmable_core_type) {
+KernelHandle detail::ProgramImpl::add_kernel(
+    const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& programmable_core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add kernel to an already compiled program {}", this->id);
     // Id is unique across all kernels on all core types
     KernelHandle id = this->num_kernels();
@@ -313,7 +314,8 @@ CoreType KernelGroup::get_core_type() const {
     return MetalContext::instance().hal().get_core_type(this->programmable_core_type_index);
 };
 
-std::vector<std::shared_ptr<KernelGroup>> &detail::ProgramImpl::get_kernel_groups(uint32_t programmable_core_type_index) {
+std::vector<std::shared_ptr<KernelGroup>>& detail::ProgramImpl::get_kernel_groups(
+    uint32_t programmable_core_type_index) {
     update_kernel_groups(programmable_core_type_index);
     return kernel_groups_[programmable_core_type_index];
 }
@@ -322,7 +324,8 @@ std::vector<std::shared_ptr<KernelGroup>> &Program::get_kernel_groups(uint32_t p
     return pimpl_->get_kernel_groups(programmable_core_type_index);
 }
 
-std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& detail::ProgramImpl::get_kernels(uint32_t programmable_core_type_index) {
+std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& detail::ProgramImpl::get_kernels(
+    uint32_t programmable_core_type_index) {
     return this->kernels_.at(programmable_core_type_index);
 }
 
@@ -330,7 +333,7 @@ std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& Program::get_kernels(
     return pimpl_->get_kernels(programmable_core_type_index);
 }
 
-KernelGroup *detail::ProgramImpl::kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index) {
+KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_t programmable_core_type_index) {
     update_kernel_groups(programmable_core_type_index);
     if (core.x >= grid_extent_[programmable_core_type_index].x || core.y >= grid_extent_[programmable_core_type_index].y)
         return nullptr;
@@ -532,10 +535,10 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
             index++;
         }
     }
-
 }
 
-void detail::ProgramImpl::CircularBufferAllocator::mark_address(uint64_t address, uint64_t size, uint64_t base_address) {
+void detail::ProgramImpl::CircularBufferAllocator::mark_address(
+    uint64_t address, uint64_t size, uint64_t base_address) {
     if (this->l1_regions.empty()) {
         this->l1_regions.emplace_back(base_address, base_address);
     }
@@ -554,8 +557,7 @@ void detail::ProgramImpl::CircularBufferAllocator::mark_address(uint64_t address
     }
 }
 
-CBHandle detail::ProgramImpl::add_circular_buffer_(
-    const std::shared_ptr<CircularBuffer>& circular_buffer) {
+CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<CircularBuffer>& circular_buffer) {
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {
@@ -614,7 +616,8 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(
     return circular_buffer->id();
 }
 
-CBHandle detail::ProgramImpl::add_circular_buffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config) {
+CBHandle detail::ProgramImpl::add_circular_buffer(
+    const CoreRangeSet& core_range_set, const CircularBufferConfig& config) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
     // Merge ranges to reduce the number of multicasts needed to initialize CBs.
     std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set.merge_ranges(), config);
@@ -650,7 +653,8 @@ std::shared_ptr<CircularBuffer> detail::ProgramImpl::get_circular_buffer(CBHandl
     return this->circular_buffer_by_id_.at(cb_id);
 }
 
-std::vector<std::shared_ptr<CircularBuffer>> detail::ProgramImpl::circular_buffers_on_core(const CoreCoord &core) const {
+std::vector<std::shared_ptr<CircularBuffer>> detail::ProgramImpl::circular_buffers_on_core(
+    const CoreCoord& core) const {
     std::vector<std::shared_ptr<CircularBuffer>> cbs_on_core;
     for (const auto& circular_buffer : circular_buffers_) {
         if (circular_buffer->is_on_logical_core(core)) {
@@ -664,7 +668,8 @@ std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers_on_core(c
     return pimpl_->circular_buffers_on_core(core);
 }
 
-std::vector<std::shared_ptr<CircularBuffer>> detail::ProgramImpl::circular_buffers_on_corerange(const CoreRange &cr) const {
+std::vector<std::shared_ptr<CircularBuffer>> detail::ProgramImpl::circular_buffers_on_corerange(
+    const CoreRange& cr) const {
     std::vector<std::shared_ptr<CircularBuffer>> cbs_on_core;
     for (const auto& circular_buffer : circular_buffers_) {
         if (circular_buffer->is_on_logical_corerange(cr)) {
@@ -797,7 +802,8 @@ size_t detail::ProgramImpl::num_semaphores() const { return semaphores_.size(); 
 
 size_t Program::num_semaphores() const { return pimpl_->num_semaphores(); }
 
-void detail::ProgramImpl::init_semaphores(const IDevice &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
+void detail::ProgramImpl::init_semaphores(
+    const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
     uint64_t kernel_config_base =
         MetalContext::instance().hal().get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
@@ -816,7 +822,8 @@ void Program::init_semaphores(const IDevice &device, const CoreCoord &logical_co
     pimpl_->init_semaphores(device, logical_core, programmable_core_type_index);
 }
 
-void detail::ProgramImpl::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
+void detail::ProgramImpl::add_semaphore(
+    const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
     semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
@@ -890,7 +897,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
     }
 }
 
-void detail::ProgramImpl::set_cb_data_fmt(const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+void detail::ProgramImpl::set_cb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
     //ZoneScoped;
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
@@ -903,7 +910,7 @@ void detail::ProgramImpl::set_cb_data_fmt(const std::vector<CoreRange> &crs, Jit
     }
 }
 
-void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
     //ZoneScoped;
     for (const auto &logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
@@ -1099,7 +1106,7 @@ uint32_t& detail::ProgramImpl::get_program_config_size(uint32_t programmable_cor
     return this->program_config_sizes_[programmable_core_type_index];
 }
 
-const std::vector<SubDeviceId> &detail::ProgramImpl::determine_sub_device_ids(const IDevice* device) {
+const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(const IDevice* device) {
     // We need to calculate the sub_device_id when we haven't compiled the program yet, or this is the first time we
     // are getting the sub_device_ids after compilation
     auto sub_device_manager_id = device->get_active_sub_device_manager_id();
@@ -1360,7 +1367,6 @@ uint32_t Program::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType
 }
 
 uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
-
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
     uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
@@ -1432,11 +1438,13 @@ size_t detail::ProgramImpl::num_kernels() const {
 
 size_t Program::num_kernels() const { return pimpl_->num_kernels(); }
 
-const std::vector<std::shared_ptr<CircularBuffer>> &detail::ProgramImpl::circular_buffers() const { return circular_buffers_; }
+const std::vector<std::shared_ptr<CircularBuffer>>& detail::ProgramImpl::circular_buffers() const {
+    return circular_buffers_;
+}
 
 const std::vector<std::shared_ptr<CircularBuffer>> &Program::circular_buffers() const { return pimpl_->circular_buffers(); }
 
-const std::vector< Semaphore > & detail::ProgramImpl::semaphores() const { return semaphores_; }
+const std::vector<Semaphore>& detail::ProgramImpl::semaphores() const { return semaphores_; }
 
 const std::vector< Semaphore > & Program::semaphores() const { return pimpl_->semaphores(); }
 
@@ -1448,7 +1456,8 @@ void detail::ProgramImpl::release_buffers() { owned_buffer_pool = {}; }
 
 void Program::release_buffers() { pimpl_->release_buffers(); }
 
-std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaphores_on_core(const CoreCoord &core, CoreType core_type) const {
+std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaphores_on_core(
+    const CoreCoord& core, CoreType core_type) const {
     std::vector<std::reference_wrapper<const Semaphore>> semaphores;
     for (const Semaphore &s : this->semaphores_) {
         if (s.initialized_on_logical_core(core) && s.core_type() == core_type) {

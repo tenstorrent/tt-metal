@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <functional>
-#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -197,8 +196,6 @@ public:
 
 private:
     void validate_no_overlap();
-
-    mutable std::mutex ranges_guard;
     std::vector<CoreRange> ranges_;
 };
 
