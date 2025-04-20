@@ -167,9 +167,7 @@ void Cluster::generate_cluster_descriptor() {
                     this->cluster_type_ = ClusterType::T3K;
                 }
             } else if (board_type == BoardType::N150) {
-                if (this->cluster_desc_->get_all_chips().size() == 1) {
-                    this->cluster_type_ = ClusterType::N150;
-                }
+                this->cluster_type_ = ClusterType::N150;
             } else if (board_type == BoardType::P100) {
                 if (this->cluster_desc_->get_all_chips().size() == 1) {
                     this->cluster_type_ = ClusterType::P100;
