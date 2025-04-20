@@ -638,10 +638,12 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
 
         mm_in0_sender_args.push_back((std::uint32_t)worker_core_type);
         mm_in0_sender_args.push_back((std::uint32_t)sender_id);
-        mm_in0_sender_args.insert(
-            mm_in0_sender_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
-        mm_in0_sender_args.insert(
-            mm_in0_sender_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
+        for (auto arg : in0_mcast_sender_noc_x) {
+            mm_in0_sender_args.push_back(arg);
+        }
+        for (auto arg : in0_mcast_sender_noc_y) {
+            mm_in0_sender_args.push_back(arg);
+        }
 
         sender_id++;
     }
@@ -656,10 +658,12 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
         uint32_t worker_core_type = 3;
         mm_in0_receiver_args.push_back((std::uint32_t)worker_core_type);
         mm_in0_receiver_args.push_back((std::uint32_t)0);
-        mm_in0_receiver_args.insert(
-            mm_in0_receiver_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
-        mm_in0_receiver_args.insert(
-            mm_in0_receiver_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
+        for (auto arg : in0_mcast_sender_noc_x) {
+            mm_in0_receiver_args.push_back(arg);
+        }
+        for (auto arg : in0_mcast_sender_noc_y) {
+            mm_in0_receiver_args.push_back(arg);
+        }
     }
 
     for (auto core : all_cores_in_rect_grid_vec) {
@@ -791,6 +795,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
                     (per_core_N_storage_curr_stride + per_core_N_in1_sender) % per_core_N_storage;
             }
         } else {
+            mm_in1_sender_writer_args.push_back(0);
             uint32_t num_cores_write_back = 0;
 
             if (curr_storage_core < num_cores_written_back) {
@@ -857,7 +862,7 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
                 }
             }
 
-            mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 5, num_cores_write_back);
+            mm_in1_sender_writer_args[5] = num_cores_write_back;
         }
     }
 

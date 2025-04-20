@@ -1007,7 +1007,9 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 mm_in0_sender_args->push_back(in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args->push_back(in0_mcast_receiver_grid_diff_coord_end);
                 mm_in0_sender_args->push_back(in0_mcast_receiver_grid_same_coord);
-                mm_in0_sender_args->insert(mm_in0_sender_args->end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
+                for (auto arg : in0_mcast_noc_y) {
+                    mm_in0_sender_args->push_back(arg);
+                }
             } else {
                 in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).y;
                 mm_in0_sender_args->push_back(core.x);
@@ -1015,7 +1017,9 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 mm_in0_sender_args->push_back(in0_mcast_receiver_grid_same_coord);
                 mm_in0_sender_args->push_back(in0_mcast_receiver_grid_diff_coord_end);
                 mm_in0_sender_args->push_back(in0_mcast_receiver_grid_same_coord);
-                mm_in0_sender_args->insert(mm_in0_sender_args->end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
+                for (auto arg : in0_mcast_noc_x) {
+                    mm_in0_sender_args->push_back(arg);
+                }
                 mm_in0_sender_args->push_back(in0_mcast_receiver_grid_same_coord);
             }
         } else if (in1_idx == 0) {
@@ -1124,9 +1128,10 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                 }
 
                 if (in1_is_sharded and in1_is_dram) {  // in1 is dram sharded
-                    uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
                     vc = vc == 3 ? 0 : vc + 1;
                     mm_in1_sender_writer_args.push_back(vc);
+                    uint32_t num_iter_index = mm_in1_sender_writer_args.size();
+                    mm_in1_sender_writer_args.push_back(0);
 
                     uint32_t num_iter = 0;  // iterate how many banks, till fill the current worker block
 
@@ -1183,7 +1188,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0_in1(
                             worker_core_stride = stride;
                         }
                     }
-                    mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + num_iter_index, num_iter);
+                    mm_in1_sender_writer_args[num_iter_index] = num_iter;
                 }
                 if (fuse_op) {
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);

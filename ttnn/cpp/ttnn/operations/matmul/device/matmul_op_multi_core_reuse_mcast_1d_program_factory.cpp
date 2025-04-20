@@ -810,14 +810,17 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
                     &mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid->runtime_args[core.x][core.y];
             }
 
-            mm_in0_sender_args->reserve(5 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
             mm_in0_sender_args->push_back(i);
             mm_in0_sender_args->push_back(start_core_noc.x);
             mm_in0_sender_args->push_back(start_core_noc.y);
             mm_in0_sender_args->push_back(end_core_noc.x);
             mm_in0_sender_args->push_back(end_core_noc.y);
-            mm_in0_sender_args->insert(mm_in0_sender_args->end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
-            mm_in0_sender_args->insert(mm_in0_sender_args->end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
+            for (auto arg : in0_mcast_noc_x) {
+                mm_in0_sender_args->push_back(arg);
+            }
+            for (auto arg : in0_mcast_noc_y) {
+                mm_in0_sender_args->push_back(arg);
+            }
 
             if (fuse_op) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(*mm_in0_sender_args, false);
@@ -2127,8 +2130,9 @@ tt::tt_metal::ProgramDescriptor create_program_gather_in0(
             (std::uint32_t)false,  // end_of_hop
         };
 
-        mm_in0_args.insert(
-            mm_in0_args.end(), unpadded_in0_shard_widths_in_tiles.begin(), unpadded_in0_shard_widths_in_tiles.end());
+        for (auto arg : unpadded_in0_shard_widths_in_tiles) {
+            mm_in0_args.push_back(arg);
+        }
 
         /* in1 */
         auto& mm_in1_args = mm_kernel_in1_sender_writer.runtime_args[core.x][core.y];
@@ -2144,10 +2148,9 @@ tt::tt_metal::ProgramDescriptor create_program_gather_in0(
             (std::uint32_t)core_type,
             i,  // ring_idx
         };
-        mm_kernel_compute_args.insert(
-            mm_kernel_compute_args.end(),
-            unpadded_in0_shard_widths_in_tiles.begin(),
-            unpadded_in0_shard_widths_in_tiles.end());
+        for (auto arg : unpadded_in0_shard_widths_in_tiles) {
+            mm_kernel_compute_args.push_back(arg);
+        }
     }
 
     // Runtime args for hop cores
