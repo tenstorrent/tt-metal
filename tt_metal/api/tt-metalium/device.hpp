@@ -179,8 +179,6 @@ public:
     virtual void init_command_queue_device() = 0;
 
     virtual void init_fabric() = 0;
-    // FIXME MT: Temp remove feature
-    // virtual void allocate_dram_debug_buffer() = 0;
     // Puts device into reset
     virtual bool close() = 0;
 

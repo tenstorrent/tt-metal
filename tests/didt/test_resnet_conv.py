@@ -137,8 +137,6 @@ class ResnetConvTest(OpTestBase):
             input_width=self.input_width,
             conv_config=self.program_config,
             compute_config=self.compute_config,
-            conv_op_cache=self.reader_patterns_cache,
-            debug=False,
             groups=self.groups,
             # grid_opt=ttnn.CoreCoord(self.compute_with_storage_grid_size[0], self.compute_with_storage_grid_size[1]),
         )

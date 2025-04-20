@@ -22,8 +22,6 @@
 // when making any changes to this file.
 // Have to keep a copy because cannot import ttnn into tests/tt_metal.
 
-volatile uint32_t* pmon_mem = (volatile uint32_t*)(0x00015200);
-
 namespace NAMESPACE {
 
 FORCE_INLINE void reload_from_cb_to_dst(
@@ -92,8 +90,6 @@ void MAIN {
         return;
     }
 #endif
-
-    // *pmon_mem = 0x12345678;
 
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
