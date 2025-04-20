@@ -102,7 +102,7 @@ class TtUNet2DConditionModel(nn.Module):
         temb = ttnn.add(temb, temb_add)
         ttnn.deallocate(temb_add)
 
-        [sample, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [sample, [H, W]] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.tt_conv1_weights,
             in_channels=self.conv1_params["input_channels"],
@@ -121,11 +121,8 @@ class TtUNet2DConditionModel(nn.Module):
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
-            return_weights_and_bias=True,
         )
         C = self.conv1_params["output_channels"]
-        self.tt_conv1_weights = d_w
-        self.tt_conv1_bias = d_b
 
         sample = ttnn.to_memory_config(sample, ttnn.DRAM_MEMORY_CONFIG)
         residuals = (sample,)
@@ -194,7 +191,7 @@ class TtUNet2DConditionModel(nn.Module):
         self.conv_config.shard_layout = sample.memory_config().memory_layout if sample.is_sharded() else None
         self.conv_config.act_block_h_override = 32 if sample.is_sharded() else 0
 
-        [sample, [H, W], [d_w, d_b]] = ttnn.conv2d(
+        [sample, [H, W]] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.tt_conv2_weights,
             in_channels=self.conv2_params["input_channels"],
@@ -216,8 +213,6 @@ class TtUNet2DConditionModel(nn.Module):
             return_weights_and_bias=True,
         )
         C = self.conv2_params["output_channels"]
-        self.tt_conv2_weights = d_w
-        self.tt_conv2_bias = d_b
 
         self.conv_config.preprocess_weights_on_device = False
         self.conv_config.always_preprocess_weights = False

@@ -183,7 +183,7 @@ class TtResnetBlock2D(nn.Module):
                 groups=self.groups,
             )
         else:
-            [hidden_states, [H, W] ] = ttnn.conv2d(
+            [hidden_states, [H, W]] = ttnn.conv2d(
                 input_tensor=hidden_states,
                 weight_tensor=self.tt_conv1_weights,
                 in_channels=self.conv1_params["input_channels"],
@@ -263,8 +263,6 @@ class TtResnetBlock2D(nn.Module):
             return_output_dim=True,
         )
         C = self.conv2_params["output_channels"]
-        self.tt_conv2_weights = d_w
-        self.tt_conv2_bias = d_b
 
         if self.tt_conv3_weights is not None:
             if input_tensor.shape[3] >= 1920:
@@ -272,7 +270,7 @@ class TtResnetBlock2D(nn.Module):
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
             self.conv_config.shard_layout = None
             self.conv_config.act_block_h_override = 0
-            [input_tensor, [H, W], [d_w, d_b]] = ttnn.conv2d(
+            [input_tensor, [H, W]] = ttnn.conv2d(
                 input_tensor=input_tensor,
                 weight_tensor=self.tt_conv3_weights,
                 in_channels=self.conv3_params["input_channels"],
@@ -293,8 +291,6 @@ class TtResnetBlock2D(nn.Module):
                 return_output_dim=True,
             )
             C = self.conv3_params["output_channels"]
-            self.tt_conv3_weights = d_w
-            self.tt_conv3_bias = d_b
             if input_tensor.is_sharded():
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 

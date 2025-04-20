@@ -78,8 +78,7 @@ def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, a
         reshard_if_not_optimal=True,
         act_block_w_div=1,
         act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=True,
-        always_preprocess_weights=True,
+        preprocess_weights_on_device=False,
         transpose_shards=True,
     )
 
@@ -118,8 +117,7 @@ def prepare_split_conv_params(
         reshard_if_not_optimal=True,
         act_block_w_div=1,
         act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=True,
-        always_preprocess_weights=True,
+        preprocess_weights_on_device=False,
         transpose_shards=True,
     )
 
@@ -147,8 +145,8 @@ def prepare_split_conv_params(
     ]
 
     if bias is not None:
-        if split_in > 1:
-            bias_chunks = list(torch.split(bias, Cin_split, 3))
+        if split_out > 1:
+            bias_chunks = list(torch.split(bias, Cout_split, 3))
         else:
             bias_chunks = [bias]
 
@@ -205,7 +203,6 @@ def split_conv2d(
     outputs = []
 
     for idx_out in range(split_out):
-
         for idx_in in range(split_in):
             [intermediate, [Hout, Wout]] = ttnn.conv2d(
                 input_tensor=hidden_states_split[idx_in],
@@ -248,4 +245,4 @@ def split_conv2d(
     else:
         output = outputs[0]
 
-    return output, [C, H, W] 
+    return output, [C, H, W]
