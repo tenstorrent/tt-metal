@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/unary/tanh_accurate/tanh_accurate.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -261,18 +262,7 @@ Tensor Tanh::invoke(
         return detail::unary_impl(
             queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
     } else {
-        TT_FATAL(
-            input_tensor.get_dtype() == DataType::BFLOAT16,
-            "Supported dtypes for tanh with accuracy mode enabled is : BFLOAT16");
-
-        const auto tanh_res = detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config);
-        const auto two_x = ttnn::multiply(input_tensor, 2, std::nullopt, memory_config);
-        const auto exp_2x = ttnn::exp(two_x, false, memory_config, two_x);
-        const auto numer = ttnn::subtract(exp_2x, 1, std::nullopt, memory_config);
-        const auto denom = ttnn::add_(exp_2x, 1);
-        const auto tanh_exp = ttnn::divide(numer, denom, std::nullopt, memory_config, numer);
-        const auto abs_val = ttnn::abs(input_tensor, memory_config);
-        return ttnn::where(ttnn::gt(abs_val, 3.5f), tanh_res, tanh_exp, memory_config, optional_output_tensor);
+        return ttnn::tanh_accurate(queue_id, input_tensor, memory_config, optional_output_tensor);
     }
 }
 
