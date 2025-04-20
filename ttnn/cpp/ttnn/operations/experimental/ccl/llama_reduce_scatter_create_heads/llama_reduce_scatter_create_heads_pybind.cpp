@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llama_reduce_scatter_pybind.hpp"
-#include "llama_reduce_scatter.hpp"
+#include "llama_reduce_scatter_create_heads_pybind.hpp"
+#include "llama_reduce_scatter_create_heads.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 namespace ttnn::operations::experimental::ccl {
 namespace py = pybind11;
 
-void py_bind_llama_reduce_scatter(py::module& module) {
+void py_bind_llama_reduce_scatter_create_heads(py::module& module) {
     auto doc =
-        R"doc(llama_reduce_scatter(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(llama_reduce_scatter_create_heads(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
 
             Reduce_scatter after FF1/3 for Llama70B.
 
@@ -33,7 +33,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
 
             Example:
 
-                >>> tensor = ttnn.experimental.llama_reduce_scatter(
+                >>> tensor = ttnn.experimental.llama_reduce_scatter_create_heads(
                                 tt_input_tensors_list[i],
                                 tt_intermediate_tensors_list[i],
                                 dim,
@@ -44,10 +44,10 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                                 num_links=num_links,
                                 memory_config=output_mem_config))doc";
 
-    using OperationType = decltype(ttnn::experimental::llama_reduce_scatter);
+    using OperationType = decltype(ttnn::experimental::llama_reduce_scatter_create_heads);
     ttnn::bind_registered_operation(
         module,
-        ttnn::experimental::llama_reduce_scatter,
+        ttnn::experimental::llama_reduce_scatter_create_heads,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,

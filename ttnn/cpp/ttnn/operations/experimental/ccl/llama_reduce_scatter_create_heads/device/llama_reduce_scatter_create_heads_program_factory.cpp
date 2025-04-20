@@ -20,7 +20,7 @@
 namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
-
+namespace rs_heads_fusion {
 std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index) {
     ttnn::SmallVector<uint32_t> device_order;
     device_order.reserve(ring_size - 1);
@@ -234,6 +234,7 @@ CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_
     return worker_cores;
 }
 
+}  // namespace rs_heads_fusion
 }  // namespace detail
 
 LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cached_program_t
@@ -253,7 +254,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     uint32_t num_links = operation_attributes.num_links;
 
     uint32_t ring_index = operation_attributes.ring_index;
-    std::string device_order = detail::device_order_array_string(ring_size, ring_index);
+    std::string device_order = detail::rs_heads_fusion::device_order_array_string(ring_size, ring_index);
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
@@ -337,23 +338,23 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     // UNCOMMENT this once we can allocate persistent buffers across all device lifetimes
     uint32_t num_packets_total_per_device =
         (input_shard_cores_per_device * input_tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
-    auto packet_worker_cores_grid = detail::get_worker_cores(
+    auto packet_worker_cores_grid = detail::rs_heads_fusion::get_worker_cores(
         intermediate_packet_buffer_grid,
         num_packets_total_per_device,
         input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     auto available_cores = sub_device_cores.subtract(packet_worker_cores_grid);
 
-    auto sender_core_grid = detail::get_worker_cores(
+    auto sender_core_grid = detail::rs_heads_fusion::get_worker_cores(
         available_cores, num_workers_per_link * num_links, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
 
-    auto schedule = detail::distribute_work_evenly(
+    auto schedule = detail::rs_heads_fusion::distribute_work_evenly(
         input_shard_cores_per_device,
         num_workers_per_link * num_links,
         input_tiles_per_core_width,
         num_pages_per_packet);
-    auto schedule_string = detail::schedule_to_string(schedule);
+    auto schedule_string = detail::rs_heads_fusion::schedule_to_string(schedule);
 
     // input sharded buffer
     uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
@@ -390,7 +391,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             {{packet_header_cb_index, DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_index, packet_header_size_bytes);
 
-    uint32_t max_shards_per_worker = detail::max_shards_per_worker(schedule);
+    uint32_t max_shards_per_worker = detail::rs_heads_fusion::max_shards_per_worker(schedule);
     uint32_t num_shards_total = max_shards_per_worker * (num_devices - 1);
     uint32_t num_pages_total = num_shards_total * input_tiles_per_core_width;
 
@@ -520,7 +521,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     auto packet_bounding_box = packet_worker_cores_grid.bounding_box();
     auto packet_start_worker_core = to_worker_cores({packet_bounding_box.start_coord});
     auto packet_end_worker_core = to_worker_cores({packet_bounding_box.end_coord});
-    auto total_num_read_txns = detail::get_num_entries_in_schedule(schedule);
+    auto total_num_read_txns = detail::rs_heads_fusion::get_num_entries_in_schedule(schedule);
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_id,
@@ -547,9 +548,12 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     if (packet_worker_cores_grid.num_cores() == 1) {
         reader_defines["SKIP_MCAST"] = "1";
     }
-    reader_defines["INPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(input_cores, ncores_input));
-    reader_defines["OUTPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(output_cores, ncores_output));
-    reader_defines["PACKET_WORKER_CORES"] = detail::cores_to_string(to_worker_cores(packet_worker_cores));
+    reader_defines["INPUT_CORE_XY"] =
+        detail::rs_heads_fusion::cores_to_string(to_worker_cores(input_cores, ncores_input));
+    reader_defines["OUTPUT_CORE_XY"] =
+        detail::rs_heads_fusion::cores_to_string(to_worker_cores(output_cores, ncores_output));
+    reader_defines["PACKET_WORKER_CORES"] =
+        detail::rs_heads_fusion::cores_to_string(to_worker_cores(packet_worker_cores));
     reader_defines["SCHEDULE"] = schedule_string;
 
     // create local semaphore
@@ -655,7 +659,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         uint32_t num_shards_to_read_per_worker = schedule[sender_core_idx].size();
 
         if (sender_core_grid.contains(core)) {
-            auto sender_total_num_pages = detail::get_total_num_pages_in_schedule(schedule[sender_core_idx]);
+            auto sender_total_num_pages =
+                detail::rs_heads_fusion::get_total_num_pages_in_schedule(schedule[sender_core_idx]);
 
             reader_runtime_args[is_reader_sender_core_idx] = true;
             reader_runtime_args[is_reader_worker_core_idx] = false;
@@ -734,7 +739,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
          .core_range = all_cores_grid}};
 }
 
-void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_arguments(
+void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

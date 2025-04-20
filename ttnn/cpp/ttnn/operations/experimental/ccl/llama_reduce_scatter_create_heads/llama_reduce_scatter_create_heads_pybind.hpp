@@ -11,6 +11,6 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-void py_bind_llama_reduce_scatter(pybind11::module& module);
+void py_bind_llama_reduce_scatter_create_heads(pybind11::module& module);
 
 }  // namespace ttnn::operations::experimental::ccl

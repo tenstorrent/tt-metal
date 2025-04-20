@@ -11,7 +11,7 @@
 namespace ttnn {
 namespace operations::experimental::ccl {
 
-struct ExecuteLlamaReduceScatter {
+struct ExecuteLlamaReduceScatterCreateHeads {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
@@ -28,9 +28,9 @@ struct ExecuteLlamaReduceScatter {
 }  // namespace operations::experimental::ccl
 
 namespace experimental {
-constexpr auto llama_reduce_scatter = ttnn::register_operation<
-    "ttnn::experimental::llama_reduce_scatter",
-    ttnn::operations::experimental::ccl::ExecuteLlamaReduceScatter>();
+constexpr auto llama_reduce_scatter_create_heads = ttnn::register_operation<
+    "ttnn::experimental::llama_reduce_scatter_create_heads",
+    ttnn::operations::experimental::ccl::ExecuteLlamaReduceScatterCreateHeads>();
 }  // namespace experimental
 
 }  // namespace ttnn

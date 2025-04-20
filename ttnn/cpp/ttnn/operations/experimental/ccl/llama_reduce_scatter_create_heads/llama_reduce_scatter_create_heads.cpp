@@ -6,8 +6,8 @@
 
 #include <tt-metalium/constants.hpp>
 
-#include "llama_reduce_scatter.hpp"
-#include "device/llama_reduce_scatter_device_operation.hpp"
+#include "llama_reduce_scatter_create_heads.hpp"
+#include "device/llama_reduce_scatter_create_heads_device_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
@@ -15,7 +15,7 @@
 namespace ttnn::operations::experimental::ccl {
 namespace detail {}  // namespace detail
 
-ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
+ttnn::Tensor ExecuteLlamaReduceScatterCreateHeads::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& intermediate_packet_buffer,
@@ -78,7 +78,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
                     }
                 }
             }
-            return {ttnn::prim::llama_reduce_scatter(
+            return {ttnn::prim::llama_reduce_scatter_create_heads(
                 input_tensor,
                 intermediate_packet_buffer,
                 dim,
