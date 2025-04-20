@@ -26,47 +26,6 @@ ALWI void REL() { release_dst(); }
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
 
-void calc_numeric_stable(
-    uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
-    // calculate max val per row
-    ACQ();
-    reconfig_data_format(cb_in, cb_bcast_scaler);
-    cb_reserve_back(cb_max, 1);
-    cb_wait_front(cb_bcast_scaler, 1);
-    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
-    for (uint32_t wt = 0; wt < Wt; wt++) {
-        cb_wait_front(cb_in, wt + 1);
-        constexpr uint32_t bcast_scaler0 = 0;
-        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, wt, bcast_scaler0, 0);
-    }
-    reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_max);
-    pack_tile(0, cb_max);
-    cb_push_back(cb_max, 1);
-    REL();
-
-    // calculate x-max(x)
-    exp_tile_init<EXP_APPROX>();
-    reconfig_data_format_srcb(cb_max);
-    cb_wait_front(cb_max, 1);
-    sub_bcast_cols_init_short(cb_in, cb_max);
-    for (uint32_t wt = 0; wt < Wt; wt += ndst) {
-        ACQ();
-        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-            sub_tiles_bcast_cols(cb_in, cb_max, wt + wt8, 0, wt8);
-        }
-        cb_reserve_back(cb_out, ndst);
-        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-            exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
-            pack_tile(wt8, cb_out);     // reuse the exps buffer again, this time in a circular manner
-        }
-        cb_push_back(cb_out, ndst);
-        REL();
-    }
-    cb_pop_front(cb_in, Wt);
-    cb_pop_front(cb_max, 1);
-    cb_wait_front(cb_out, Wt);
-}
-
 namespace NAMESPACE {
 void MAIN {
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -118,9 +77,6 @@ void MAIN {
         // unpackconfig
         // reduce_init
         // extra cb for holding partial reduces
-#if FUSED_SCALE_MASK
-        cb_wait_front(cb_fused_scale, 1);
-#endif
         for (uint32_t wt_block = 0; wt_block < Wt_blocks; wt_block += blocks) {
             // pack and unpack hardware configs
             for (uint_32t b = 0; b < block and wt_block + b < Wt; b += ndst) {
