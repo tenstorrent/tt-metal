@@ -210,7 +210,6 @@ class TtUNet2DConditionModel(nn.Module):
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
-            return_weights_and_bias=True,
         )
         C = self.conv2_params["output_channels"]
 

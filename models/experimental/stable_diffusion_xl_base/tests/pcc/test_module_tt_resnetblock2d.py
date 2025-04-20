@@ -17,8 +17,8 @@ from models.utility_functions import torch_random
         ((1, 320, 64, 64), (1, 1280), 1, 0, True, 1, "down_blocks", 0.998),
         ((1, 640, 64, 64), (1, 1280), 1, 1, False, 1, "down_blocks", 0.995),
         ((1, 640, 32, 32), (1, 1280), 2, 0, True, 1, "down_blocks", 0.997),
-        ((1, 1280, 32, 32), (1, 1280), 2, 1, False, 1, "down_blocks", 0.992),
-        ((1, 960, 128, 128), (1, 1280), 2, 0, True, 6, "up_blocks", 0.975),
+        ((1, 1280, 32, 32), (1, 1280), 2, 1, False, 1, "down_blocks", 0.993),
+        ((1, 960, 128, 128), (1, 1280), 2, 0, True, 6, "up_blocks", 0.991),
         ((1, 640, 128, 128), (1, 1280), 2, 1, True, 2, "up_blocks", 0.997),
         ((1, 2560, 32, 32), (1, 1280), 0, 0, True, 1, "up_blocks", 0.988),
         ((1, 1920, 32, 32), (1, 1280), 0, 2, True, 1, "up_blocks", 0.991),
@@ -27,7 +27,7 @@ from models.utility_functions import torch_random
         ((1, 960, 64, 64), (1, 1280), 1, 2, True, 1, "up_blocks", 0.996),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 def test_resnetblock2d(
     device, temb_shape, input_shape, down_block_id, resnet_id, conv_shortcut, split_in, block, pcc, use_program_cache
 ):
