@@ -248,7 +248,7 @@ void process_go_signal_mcast_cmd() {
         // This chip is virtualizing cores the go signal is uncasted to
         // In this case, the number of unicasts specified in the command can exceed
         // the number of actual cores on this chip.
-        if (cmd->mcast.num_unicast_txns > num_physical_unicast_cores) {
+        if (num_unicasts > num_physical_unicast_cores) {
             // If this is the case, cap the number of unicasts to avoid invalid NOC txns
             num_unicasts = num_physical_unicast_cores;
             // Fake updates from non-existent workers here. The dispatcher expects an ack from

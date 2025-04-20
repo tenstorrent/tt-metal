@@ -31,7 +31,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
 @pytest.mark.parametrize("is_rmsnorm", [True])
@@ -50,7 +50,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
     ],
 )
 def test_llama_tg_LayerNorm(
-    mesh_device,
+    device,
     use_program_cache,
     input_width,
     num_devices,
@@ -67,7 +67,6 @@ def test_llama_tg_LayerNorm(
     grid_offset,
     output_core_grid,
 ):
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Create input and weight tensors
     torch_input_tensor, torch_weight, torch_input_chunks, torch_weight_chunks = create_input_and_weight_tensors(
         input_width, num_devices, seed, mean, std
