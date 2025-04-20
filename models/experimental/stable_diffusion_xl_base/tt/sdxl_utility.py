@@ -78,7 +78,7 @@ def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, a
         reshard_if_not_optimal=True,
         act_block_w_div=1,
         act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=False,
+        preprocess_weights_on_device=True,
         transpose_shards=True,
     )
 
@@ -117,7 +117,7 @@ def prepare_split_conv_params(
         reshard_if_not_optimal=True,
         act_block_w_div=1,
         act_block_h_override=act_block_h_override,
-        preprocess_weights_on_device=False,
+        preprocess_weights_on_device=True,
         transpose_shards=True,
     )
 

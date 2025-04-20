@@ -813,9 +813,15 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * input_channels_alignment);
     uint32_t out_channel_padding = out_channels_padded - out_channels;
 
+    bool skip_prepare_bias = false;
+
+    // If the bias tensor is already prepared, but the weights are not, then skip bias preparation
+    if (bias_tensor.has_value() && bias_tensor->is_device_tensor() && bias_tensor.value().layout() == Layout::TILE) {
+        skip_prepare_bias = true;
+    }
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
         TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
-        if (bias_tensor.has_value()) {
+        if (bias_tensor.has_value() && !skip_prepare_bias) {
             TT_ASSERT(bias_tensor.value().get_dtype() == DataType::FLOAT32);
         }
     } else {
@@ -950,14 +956,18 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape, weight_tensor_.get_padded_shape());
 
     if (bias_tensor.has_value()) {
-        bias_tensor_ = prepare_bias_on_device(
-            bias_tensor.value(),
-            weights_bias_dtype,
-            out_channels,
-            weight_block_w_ntiles,
-            input_parallel_config,
-            output_parallel_config,
-            device);
+        if (skip_prepare_bias) {
+            bias_tensor_ = bias_tensor.value();
+        } else {
+            bias_tensor_ = prepare_bias_on_device(
+                bias_tensor.value(),
+                weights_bias_dtype,
+                out_channels,
+                weight_block_w_ntiles,
+                input_parallel_config,
+                output_parallel_config,
+                device);
+        }
     }
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
