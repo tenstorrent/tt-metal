@@ -162,6 +162,7 @@ tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::ve
         this->ring_size,
         this->output_mem_config,
         this->topology,
+        this->cluster_axis,
         input_shape,
         input_memory_layout,
         input_dtype,

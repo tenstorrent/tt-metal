@@ -62,7 +62,7 @@ struct ReduceScatterAsync {
         attrs.emplace_back("num_links_preferred", num_links_preferred);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
-
+        attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
     }
 

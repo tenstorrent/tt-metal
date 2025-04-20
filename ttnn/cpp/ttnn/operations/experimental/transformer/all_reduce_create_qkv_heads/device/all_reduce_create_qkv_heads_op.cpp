@@ -306,6 +306,7 @@ tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
         this->ring_size,
         this->all_reduce_mem_config,
         this->topology,
+        this->cluster_axis,
         input_shape,
         input_memory_layout,
         input_dtype,

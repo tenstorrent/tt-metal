@@ -73,7 +73,7 @@ struct AllGatherAsync {
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
-
+        attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
     }
 

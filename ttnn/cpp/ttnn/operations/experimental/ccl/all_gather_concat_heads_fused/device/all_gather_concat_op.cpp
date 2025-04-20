@@ -149,12 +149,12 @@ tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(const std::v
         this->ring_size,
         this->output_mem_config,
         this->topology,
+        this->cluster_axis,
         input_shape,
         input_memory_layout,
         input_dtype,
         input_memory_config,
-        this->num_heads,
-        this->cluster_axis);
+        this->num_heads);
 }
 
 namespace operations {

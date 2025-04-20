@@ -216,6 +216,7 @@ operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tenso
         this->scatter_dim,
         this->ring_size,
         this->topology,
+        this->cluster_axis,
         input_shape,
         input_memory_layout,
         input_dtype,
