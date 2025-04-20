@@ -21,7 +21,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -31,10 +31,10 @@
 #include "llrt.hpp"
 // Do we really want to expose Hal like this?
 // This looks like an API level test
-#include "llrt/hal.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 #include "watcher_server.hpp"
@@ -78,7 +78,8 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     // For ethernet core, need to have smaller buffer at a different address
     if (is_eth_core) {
         l1_buffer_size = 1024;
-        l1_buffer_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        l1_buffer_addr = MetalContext::instance().hal().get_dev_addr(
+            HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     }
 
     tt_metal::InterleavedBufferConfig l1_config{
@@ -148,10 +149,13 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
             // This is illegal because we'd be writing to the mailbox memory
             if (is_eth_core) {
                 l1_buffer_addr = std::min(
-                    hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::MAILBOX),
-                    hal_ref.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::MAILBOX));
+                    MetalContext::instance().hal().get_dev_addr(
+                        HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::MAILBOX),
+                    MetalContext::instance().hal().get_dev_addr(
+                        HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::MAILBOX));
             } else {
-                l1_buffer_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
+                l1_buffer_addr = MetalContext::instance().hal().get_dev_addr(
+                    HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
             }
             break;
         default:

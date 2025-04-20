@@ -25,7 +25,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/constants.hpp>
@@ -45,7 +45,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/semaphore.hpp>
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -169,7 +169,7 @@ void validate_sems(
         ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, sem_buffer_base, sem_buffer_size, readback_sem_vals);
         uint32_t sem_idx = 0;
         for (uint32_t i = 0; i < readback_sem_vals.size();
-             i += (hal_ref.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
+             i += (MetalContext::instance().hal().get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
             EXPECT_EQ(readback_sem_vals[i], expected_semaphore_values[sem_idx]);
             sem_idx++;
         }

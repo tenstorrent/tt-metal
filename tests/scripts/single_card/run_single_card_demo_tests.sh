@@ -19,6 +19,16 @@ run_qwen7b_func() {
 
 }
 
+run_segformer_func() {
+
+  #Segformer Segmentation Demo
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
+
+  #Segformer Classification Demo
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
+
+}
+
 run_llama3_func() {
   fail=0
 
@@ -176,6 +186,12 @@ run_whisper_perf() {
 
   # Whisper conditional generation
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+
+}
+
+run_yolov9c_perf() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/experimental/functional_yolov9c/demo/demo.py --timeout 600
 
 }
 

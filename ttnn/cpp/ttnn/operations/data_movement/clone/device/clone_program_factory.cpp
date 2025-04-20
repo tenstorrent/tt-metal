@@ -68,8 +68,8 @@ tt::tt_metal::ProgramDescriptor CloneOperation::ProgramFactory::create(
 
     auto input_buffer = input.buffer();
     auto output_buffer = output.buffer();
-    bool input_is_dram = input_buffer->buffer_type() == BufferType::DRAM ? true : false;
-    bool output_is_dram = output_buffer->buffer_type() == BufferType::DRAM ? true : false;
+    bool input_is_dram = input_buffer->buffer_type() == BufferType::DRAM;
+    bool output_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
 
     constexpr size_t max_num_kernels = 4;
     program.kernels.resize(max_num_kernels);

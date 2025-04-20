@@ -23,7 +23,7 @@
 #include "allocator_types.hpp"
 #include "assert.hpp"
 #include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include "buffer_types.hpp"
 #include "device.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
@@ -107,7 +107,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
     MeshCoordinateRange bcast_device_range(mesh_device->shape());
     std::vector<uint32_t> exec_buf_end = {};
 
-    DeviceCommand command_sequence(hal_ref.get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
 
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {

@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/unary/tanh_accurate/tanh_accurate.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -83,7 +84,6 @@ template struct ExecuteUnary<UnaryOpType::COS>;
 template struct ExecuteUnary<UnaryOpType::ERFINV>;
 template struct ExecuteUnary<UnaryOpType::EXP2>;
 template struct ExecuteUnary<UnaryOpType::EXPM1>;
-template struct ExecuteUnary<UnaryOpType::EQZ>;
 template struct ExecuteUnary<UnaryOpType::GEZ>;
 template struct ExecuteUnary<UnaryOpType::GTZ>;
 template struct ExecuteUnary<UnaryOpType::I0>;
@@ -97,6 +97,7 @@ template struct ExecuteUnary<UnaryOpType::LEZ>;
 template struct ExecuteUnary<UnaryOpType::LOG>;
 template struct ExecuteUnary<UnaryOpType::LOG10>;
 template struct ExecuteUnary<UnaryOpType::LOG2>;
+template struct ExecuteUnary<UnaryOpType::LOG1P>;
 template struct ExecuteUnary<UnaryOpType::LOGICAL_NOT_UNARY>;
 template struct ExecuteUnary<UnaryOpType::LTZ>;
 template struct ExecuteUnary<UnaryOpType::NEG>;
@@ -214,6 +215,15 @@ Tensor LogSigmoid::invoke(
         optional_output_tensor);
 }
 
+Tensor Eqz::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::EQZ;
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
 Tensor Unary_chain::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
@@ -252,18 +262,7 @@ Tensor Tanh::invoke(
         return detail::unary_impl(
             queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
     } else {
-        TT_FATAL(
-            input_tensor.get_dtype() == DataType::BFLOAT16,
-            "Supported dtypes for tanh with accuracy mode enabled is : BFLOAT16");
-
-        const auto tanh_res = detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config);
-        const auto two_x = ttnn::multiply(input_tensor, 2, std::nullopt, memory_config);
-        const auto exp_2x = ttnn::exp(two_x, false, memory_config, two_x);
-        const auto numer = ttnn::subtract(exp_2x, 1, std::nullopt, memory_config);
-        const auto denom = ttnn::add_(exp_2x, 1);
-        const auto tanh_exp = ttnn::divide(numer, denom, std::nullopt, memory_config, numer);
-        const auto abs_val = ttnn::abs(input_tensor, memory_config);
-        return ttnn::where(ttnn::gt(abs_val, 3.5f), tanh_res, tanh_exp, memory_config, optional_output_tensor);
+        return ttnn::tanh_accurate(queue_id, input_tensor, memory_config, optional_output_tensor);
     }
 }
 

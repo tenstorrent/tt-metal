@@ -61,7 +61,15 @@ from models.utility_functions import skip_for_blackhole
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "worker_l1_size": 1344544}], indirect=True
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "worker_l1_size": 1344544,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
 )
 def test_llama_model_inference(
     num_iters,
@@ -196,10 +204,13 @@ def test_llama_model_inference(
             )
             tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=model_args.sub_core_grids)
             tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
-                tt_out_rm, dim=3, use_multicore=True, sub_core_grids=model_args.sub_core_grids
+                tt_out_rm, dim=3, keepdim=True, use_multicore=True, sub_core_grids=model_args.sub_core_grids
             )
 
             tt_output_torch = ttnn.to_torch(tt_out_tok, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+
+            # Only check user 0, see GH issue #16719
+            tt_output_torch = tt_output_torch[..., :1, :]
 
             outputs.append(tt_output_torch)
 

@@ -18,7 +18,6 @@ inline void calculate_comp(uint exponent_size_8) {
     const vFloat one = 1.0f;
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        vFloat flag1, flag2;
 
         // a[i] == 0
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
@@ -63,6 +62,41 @@ inline void calculate_comp(uint exponent_size_8) {
         }
 
         dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_int() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        vInt v = dst_reg[0];
+
+        // a[i] == 0
+        if constexpr (COMP_MODE == SfpuType::equal_zero) {
+            v_if(v == 0) { v = 1; }
+            v_else { v = 0; }
+            v_endif;
+        }
+
+        dst_reg[0] = v;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_unary_int(int scalar) {
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        vInt v = dst_reg[0];
+        vInt val = 0;
+
+        // a[i] != scalar
+        if constexpr (COMP_MODE == SfpuType::unary_ne) {
+            v_if(v != scalar) { val = 1; }
+            v_endif;
+            dst_reg[0] = val;
+        }
+        dst_reg[0] = val;
         dst_reg++;
     }
 }

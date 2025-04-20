@@ -49,7 +49,8 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
         kernel_handle = CreateKernel(program, kernel_file, CoreCoord(0, 0), config);
         detail::CompileProgram(device, program);
 
-        const uint32_t tensix_core_type = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const uint32_t tensix_core_type =
+            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         const uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
         const int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(config.processor);
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
@@ -95,7 +96,8 @@ TEST_F(DeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProces
         KernelHandle kernel_handle_riscv_1 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_1);
         detail::CompileProgram(device, program);
 
-        const uint32_t tensix_core_type = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const uint32_t tensix_core_type =
+            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         const uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
         const int riscv_0_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(config_riscv_0.processor);
         const int riscv_1_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(config_riscv_1.processor);

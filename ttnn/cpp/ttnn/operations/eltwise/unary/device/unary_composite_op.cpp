@@ -292,14 +292,6 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
     return result;
 }
 
-// log1p 1
-// use transformation y = log(1.0 + x) by broadcast
-Tensor _log1p(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor x_1 = ttnn::add(x, 1.0f, std::nullopt, output_mem_config);
-    Tensor result_log1p = ttnn::log(x_1, output_mem_config);
-    return result_log1p;
-}
-
 // multivariate log-gamma function
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
@@ -501,7 +493,7 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     } else if (min.value() > max.value()) {
         return full_like(a, max.value());
     }
-    Tensor a_max = ttnn::minimum(a, max.value(), output_memory_config);
+    Tensor a_max = ttnn::minimum(ttnn::DefaultQueueId, a, max.value(), std::nullopt, output_memory_config);
     if (min.value() == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
@@ -523,7 +515,7 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
         return ttnn::where(
             ttnn::le(a, max.value(), std::nullopt, output_memory_config), a, max.value(), output_memory_config);
     }
-    Tensor a_max = ttnn::minimum(a, max.value(), output_memory_config);
+    Tensor a_max = ttnn::minimum(ttnn::DefaultQueueId, a, max.value(), std::nullopt, output_memory_config);
     Tensor temp = ttnn::where(
         ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config),
         ttnn::relu(a_max, output_memory_config),
@@ -563,7 +555,7 @@ Tensor _selu(
     Tensor x_Exp_minus_1 = ttnn::expm1(x);
     Tensor result_t2_ = ttnn::multiply(x_Exp_minus_1, alpha, std::nullopt, output_mem_config);
     x_Exp_minus_1.deallocate();
-    Tensor result_term2 = ttnn::minimum(result_t2_, 0.0f, output_mem_config);
+    Tensor result_term2 = ttnn::minimum(ttnn::DefaultQueueId, result_t2_, 0.0f, std::nullopt, output_mem_config);
     result_t2_.deallocate();
 
     // term 1
