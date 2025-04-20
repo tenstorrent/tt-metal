@@ -26,7 +26,60 @@ ALWI void REL() { release_dst(); }
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
 
-void exp_cb(uint32_t in_cb, uint32_t out_cb, uint32_t cb_length, uint32_t blk) {}
+void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length, uint32_t blk) {
+    // Requirements:
+    //   cb_length of cb_in and cb_out are the same.
+    //   blk is a divisor of cb_length
+    for (uint32_t cur_blk = 0; cur_blk < cb_length; cur_blk += blk) {
+        tile_regs_acquire();
+        tile_regs_wait();
+        cb_wait_front(cb_in, blk);
+        cb_reserve_back(cb_out, blk);
+        copy_tile_to_dst_init_short(in_cb);
+        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+            copy_tile(cb_in, cur_dst, cur_dst);
+        }
+        cb_pop_front(cb_in, blk);
+        exp_tile_init<EXP_APPROX>();
+        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+            exp_tile<EXP_APPROX>(cur_dst);  // exp on DST[0]
+        }
+        tile_regs_commit();
+        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+            pack_tile(cur_dst, cb_out);
+        }
+        cb_push_back(cb_out, blk);
+        tile_regs_release();
+    }
+}
+void reduce_cb(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, bool use_prev_reduce, uint32_t cb_length) {
+    // Requirements:
+    //   cb_length of cb_in and cb_out are the same.
+    //   blk is a divisor of cb_length
+    const uint32_t dst0 = 0;
+    const uint32_t dst1 = 1;
+    tile_regs_acquire();
+    tile_regs_wait();
+    reduce_init<true>(cb_in, cb_scaler, cb_out);
+    cb_wait_front(cb_in, cb_length);
+    for (uint32_t cur_tile = 0; cur_tile < cb_length; cur_tile++) {
+        reduce_tile(cb_in, cb_scaler, cur_tile, 0, dst0);
+    }
+    cb_pop_front(cb_in, cb_length);
+    if (use_prev_reduce) {
+        cb_wait_front(cb_out, 1);
+        copy_tile_init(cb_out);
+        copy_tile(cb_out, 0, dst1);
+        add_binary_tile_init();
+        add_binary_tile(dst0, dst1);
+        cb_pop_front(cb_out, 1);
+    }
+    tile_regs_commit();
+    cb_reserve_back(cb_out, 1);
+    pack_tile(dst0, cb_out);
+    cb_push_back(cb_out, 1);
+    tile_regs_release();
+}
 
 namespace NAMESPACE {
 void MAIN {
