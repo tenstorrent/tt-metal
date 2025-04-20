@@ -10,6 +10,7 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt_stl/trivial_static_vector.hpp>
 
 #include <umd/device/tt_core_coordinates.h>
 
@@ -85,11 +86,11 @@ struct EthernetConfigDescriptor {
 };
 
 struct KernelDescriptor {
-    using CompileTimeArgs = boost::container::small_vector<uint32_t, 16>;
+    using CompileTimeArgs = tt::stl::trivial_static_vector<uint32_t, 32>;
     using Defines = boost::container::small_vector<std::pair<std::string, std::string>, 16>;
-    using CoreRuntimeArgs = boost::container::small_vector<uint32_t, 16>;
+    using CoreRuntimeArgs = tt::stl::trivial_static_vector<uint32_t, 32>;
     using RuntimeArgs = boost::container::small_vector<boost::container::small_vector<CoreRuntimeArgs, 8>, 8>;
-    using CommonRuntimeArgs = boost::container::small_vector<uint32_t, 16>;
+    using CommonRuntimeArgs = tt::stl::trivial_static_vector<uint32_t, 32>;
     using ConfigDescriptor = std::variant<
         ReaderConfigDescriptor,
         WriterConfigDescriptor,
