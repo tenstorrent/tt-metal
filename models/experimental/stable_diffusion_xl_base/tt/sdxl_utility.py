@@ -60,7 +60,7 @@ def prepare_linear_params(device, weights, bias, dtype):
 def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, act_block_h_override=0):
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
@@ -79,6 +79,7 @@ def prepare_conv_params(device, weights, bias, dtype, act_dtype=ttnn.bfloat16, a
         act_block_w_div=1,
         act_block_h_override=act_block_h_override,
         preprocess_weights_on_device=True,
+        always_preprocess_weights=False,
         transpose_shards=True,
     )
 
@@ -118,6 +119,7 @@ def prepare_split_conv_params(
         act_block_w_div=1,
         act_block_h_override=act_block_h_override,
         preprocess_weights_on_device=True,
+        always_preprocess_weights=False,
         transpose_shards=True,
     )
 
@@ -145,8 +147,8 @@ def prepare_split_conv_params(
     ]
 
     if bias is not None:
-        if split_out > 1:
-            bias_chunks = list(torch.split(bias, Cout_split, 3))
+        if split_in > 1:
+            bias_chunks = list(torch.split(bias, Cin_split, 3))
         else:
             bias_chunks = [bias]
 
