@@ -208,8 +208,8 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
     CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid;
     CoreRangeSet in0_mcast_cores_without_work_and_not_in_receiver_grid;
     CoreRangeSet in0_mcast_receivers;
-    std::vector<uint32_t> in0_mcast_noc_x;
-    std::vector<uint32_t> in0_mcast_noc_y;
+    boost::container::small_vector<uint32_t, 16> in0_mcast_noc_x;
+    boost::container::small_vector<uint32_t, 16> in0_mcast_noc_y;
     if (in0_is_sharded) {
         in0_mcast_cores_with_work_and_in_receiver_grid = all_cores_with_work;
 
@@ -338,74 +338,6 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
         };
     }
     in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
-
-    tt_metal::KernelDescriptor::CompileTimeArgs in1_sender_writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in1_is_dram,
-        (std::uint32_t)out_is_dram,
-
-        // READER
-        // in1 tensor args
-        (std::uint32_t)1,                // in1_tensor_stride_w
-        (std::uint32_t)N,                // in1_tensor_stride_h
-        (std::uint32_t)in0_block_w * N,  // in1_tensor_next_block_stride
-        (std::uint32_t)in1_block_w,      // in1_tensor_next_w_dim_block_stride
-        // in1 block args
-        (std::uint32_t)in1_block_w,                // in1_block_w
-        (std::uint32_t)in0_block_w,                // in1_block_h
-        (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
-        // in0/in1 common args
-        (std::uint32_t)num_blocks,        // num_blocks
-        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
-        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in1 mcast args
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,  // in1_mcast_num_dests
-        (std::uint32_t)0,  // in1_mcast_num_cores
-        // batch args
-        (std::uint32_t)K * N,        // KtNt
-        (std::uint32_t)B,            // batch
-        (std::uint32_t)bcast_batch,  // bcast_B
-
-        // WRITER
-        // out tensor args
-        (std::uint32_t)1,                   // out_tensor_stride_w
-        (std::uint32_t)N,                   // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
-        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
-        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
-        // out subblock args
-        (std::uint32_t)out_subblock_w,                     // out_subblock_w
-        (std::uint32_t)out_subblock_h,                     // out_subblock_h
-        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-        // batch args
-        (std::uint32_t)M * N  // MtNt
-    };
-    if (bias_buffer != nullptr) {
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)in3_is_dram);
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
-    } else {
-        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
-        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
-    }
-
-    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
-
-    tt_metal::KernelDescriptor::CompileTimeArgs in0_receiver_compile_time_args = {
-        // in0 block args
-        (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
-        // in0/in1 common args
-        (std::uint32_t)num_blocks,        // num_blocks
-        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
-        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore_id,
-        (std::uint32_t)in0_mcast_receiver_semaphore_id,
-        // batch args
-        (std::uint32_t)B  // batch
-    };
 
     tt_metal::KernelDescriptor::Defines mm_kernel_defines;
     tt_metal::KernelDescriptor::Defines mm_kernel_in0_sender_writer_defines;
@@ -540,7 +472,19 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
         mm_kernel_in0_receiver->kernel_source =
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp";
         mm_kernel_in0_receiver->core_ranges = in0_mcast_receivers.ranges();
-        mm_kernel_in0_receiver->compile_time_args = in0_receiver_compile_time_args;
+        mm_kernel_in0_receiver->compile_time_args = {
+            // in0 block args
+            (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
+            // in0/in1 common args
+            (std::uint32_t)num_blocks,        // num_blocks
+            (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
+            (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
+            // in0 mcast args
+            (std::uint32_t)in0_mcast_sender_semaphore_id,
+            (std::uint32_t)in0_mcast_receiver_semaphore_id,
+            // batch args
+            (std::uint32_t)B  // batch
+        };
         mm_kernel_in0_receiver->config = tt_metal::DataMovementConfigDescriptor{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
@@ -553,12 +497,64 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
         "reader_bmm_tile_layout_in1_sender_writer_padding.cpp";
     mm_kernel_in1_sender_writer.core_ranges = all_cores_with_work.ranges();
-    mm_kernel_in1_sender_writer.compile_time_args = in1_sender_writer_compile_time_args;
     mm_kernel_in1_sender_writer.defines = mm_kernel_in1_sender_writer_defines;
     mm_kernel_in1_sender_writer.config = tt_metal::DataMovementConfigDescriptor{
         .processor = tt_metal::DataMovementProcessor::RISCV_0,
         .noc = in1_noc,
     };
+    auto& in1_sender_writer_compile_time_args = mm_kernel_in1_sender_writer.compile_time_args;
+    in1_sender_writer_compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t)in1_is_dram,
+        (std::uint32_t)out_is_dram,
+
+        // READER
+        // in1 tensor args
+        (std::uint32_t)1,                // in1_tensor_stride_w
+        (std::uint32_t)N,                // in1_tensor_stride_h
+        (std::uint32_t)in0_block_w * N,  // in1_tensor_next_block_stride
+        (std::uint32_t)in1_block_w,      // in1_tensor_next_w_dim_block_stride
+        // in1 block args
+        (std::uint32_t)in1_block_w,                // in1_block_w
+        (std::uint32_t)in0_block_w,                // in1_block_h
+        (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
+        // in0/in1 common args
+        (std::uint32_t)num_blocks,        // num_blocks
+        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
+        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
+        // in1 mcast args
+        (std::uint32_t)0,
+        (std::uint32_t)0,
+        (std::uint32_t)0,  // in1_mcast_num_dests
+        (std::uint32_t)0,  // in1_mcast_num_cores
+        // batch args
+        (std::uint32_t)K * N,        // KtNt
+        (std::uint32_t)B,            // batch
+        (std::uint32_t)bcast_batch,  // bcast_B
+
+        // WRITER
+        // out tensor args
+        (std::uint32_t)1,                   // out_tensor_stride_w
+        (std::uint32_t)N,                   // out_tensor_stride_h
+        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
+        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
+        // out subblock args
+        (std::uint32_t)out_subblock_w,                     // out_subblock_w
+        (std::uint32_t)out_subblock_h,                     // out_subblock_h
+        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
+        // batch args
+        (std::uint32_t)M * N  // MtNt
+    };
+    if (bias_buffer != nullptr) {
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)in3_is_dram);
+        in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
+    } else {
+        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
+        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
+    }
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
     mm_kernel_in1_sender_writer.reserve_runtime_args();
     // Compute kernel compile time args
 
@@ -602,7 +598,7 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in0(
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
     mm_kernel.core_ranges = all_cores_with_work.ranges();
     mm_kernel.compile_time_args = compute_kernel_args;
-    mm_kernel.defines = mm_kernel_defines;
+    mm_kernel.defines = std::move(mm_kernel_defines);
     mm_kernel.config = tt_metal::ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -1087,127 +1083,6 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
         in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     }
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    tt_metal::KernelDescriptor::CompileTimeArgs in0_sender_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
-
-        // in0 tensor args
-        (std::uint32_t)1,                // in0_tensor_stride_w
-        (std::uint32_t)K,                // in0_tensor_stride_h
-        (std::uint32_t)in0_block_w,      // in0_tensor_next_block_stride
-        (std::uint32_t)K * in0_block_h,  // in0_tensor_next_h_dim_block_stride
-        // in0 block args
-        (std::uint32_t)in0_block_w,                // in0_block_w
-        (std::uint32_t)in0_block_h,                // in0_block_h
-        (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
-        (std::uint32_t)extract_shard_sub_blocks,
-        (std::uint32_t)in0_shard_width_in_tiles,
-        (std::uint32_t)in0_shard_height_in_tiles,
-        // in0/in1 common args
-        (std::uint32_t)num_blocks,        // num_blocks
-        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
-        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in0 mcast args
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,  // in0_mcast_num_dests
-        (std::uint32_t)0,  // in0_mcast_num_cores
-        // batch args
-        (std::uint32_t)M * K,  // MtKt
-        (std::uint32_t)B       // batch
-    };
-    in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
-
-    tt_metal::KernelDescriptor::CompileTimeArgs in1_sender_writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in1_is_dram,
-        (std::uint32_t)out_is_dram,
-
-        // READER
-        // in1 tensor args
-        (std::uint32_t)1,                // in1_tensor_stride_w
-        (std::uint32_t)N,                // in1_tensor_stride_h
-        (std::uint32_t)in0_block_w * N,  // in1_tensor_next_block_stride
-        (std::uint32_t)in1_block_w,      // in1_tensor_next_w_dim_block_stride
-        // in1 block args
-        (std::uint32_t)in1_block_w,                // in1_block_w
-        (std::uint32_t)in0_block_w,                // in1_block_h
-        (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
-        // in0/in1 common args
-        (std::uint32_t)num_blocks,        // num_blocks
-        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
-        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in1 mcast args
-        (std::uint32_t)in1_mcast_sender_semaphore_id,
-        (std::uint32_t)in1_mcast_receiver_semaphore_id,
-        (std::uint32_t)num_cores - 1,                     // in1_mcast_num_dests
-        (std::uint32_t)in1_mcast_receiver_num_cores - 1,  // in1_mcast_num_cores
-        // batch args
-        (std::uint32_t)K * N,        // KtNt
-        (std::uint32_t)B,            // batch
-        (std::uint32_t)bcast_batch,  // bcast_B
-
-        // WRITER
-        // out tensor args
-        (std::uint32_t)1,                   // out_tensor_stride_w
-        (std::uint32_t)N,                   // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
-        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
-        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
-        // out subblock args
-        (std::uint32_t)out_subblock_w,                     // out_subblock_w
-        (std::uint32_t)out_subblock_h,                     // out_subblock_h
-        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-        // batch args
-        (std::uint32_t)M * N  // MtNt
-    };
-    if (bias_buffer != nullptr) {
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)in3_is_dram);
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
-    } else {
-        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
-        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
-    }
-
-    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
-
-    tt_metal::KernelDescriptor::CompileTimeArgs in1_receiver_writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)out_is_dram,
-
-        // READER
-        // in1 block args
-        (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
-        // in0/in1 common args
-        (std::uint32_t)num_blocks,        // num_blocks
-        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
-        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
-        // in1 mcast args
-        (std::uint32_t)in1_mcast_sender_semaphore_id,
-        (std::uint32_t)in1_mcast_receiver_semaphore_id,
-        // batch args
-        (std::uint32_t)B,  // batch
-
-        // WRITER
-        // out tensor args
-        (std::uint32_t)1,                   // out_tensor_stride_w
-        (std::uint32_t)N,                   // out_tensor_stride_h
-        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
-        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
-        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
-        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
-        // out subblock args
-        (std::uint32_t)out_subblock_w,                     // out_subblock_w
-        (std::uint32_t)out_subblock_h,                     // out_subblock_h
-        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
-        // batch args
-        (std::uint32_t)M * N  // MtNt
-    };
-
-    if (bias_buffer != nullptr) {
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)in1_block_w);
-    }
 
     tt_metal::KernelDescriptor::Defines mm_kernel_defines;
     tt_metal::KernelDescriptor::Defines mm_kernel_in0_sender_defines;
@@ -1266,12 +1141,39 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
     mm_kernel_in0_sender.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp";
     mm_kernel_in0_sender.core_ranges = all_cores.ranges();
-    mm_kernel_in0_sender.compile_time_args = in0_sender_compile_time_args;
     mm_kernel_in0_sender.defines = mm_kernel_in0_sender_defines;
     mm_kernel_in0_sender.config = tt_metal::DataMovementConfigDescriptor{
         .processor = tt_metal::DataMovementProcessor::RISCV_1,
         .noc = in0_noc,
     };
+    mm_kernel_in0_sender.compile_time_args = {// interleaved accessor args
+                                              (std::uint32_t)in0_is_dram,
+
+                                              // in0 tensor args
+                                              (std::uint32_t)1,                // in0_tensor_stride_w
+                                              (std::uint32_t)K,                // in0_tensor_stride_h
+                                              (std::uint32_t)in0_block_w,      // in0_tensor_next_block_stride
+                                              (std::uint32_t)K * in0_block_h,  // in0_tensor_next_h_dim_block_stride
+                                                                               // in0 block args
+                                              (std::uint32_t)in0_block_w,      // in0_block_w
+                                              (std::uint32_t)in0_block_h,      // in0_block_h
+                                              (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
+                                              (std::uint32_t)extract_shard_sub_blocks,
+                                              (std::uint32_t)in0_shard_width_in_tiles,
+                                              (std::uint32_t)in0_shard_height_in_tiles,
+                                              // in0/in1 common args
+                                              (std::uint32_t)num_blocks,        // num_blocks
+                                              (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
+                                              (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
+                                                                                // in0 mcast args
+                                              (std::uint32_t)0,
+                                              (std::uint32_t)0,
+                                              (std::uint32_t)0,      // in0_mcast_num_dests
+                                              (std::uint32_t)0,      // in0_mcast_num_cores
+                                                                     // batch args
+                                              (std::uint32_t)M * K,  // MtKt
+                                              (std::uint32_t)B,      // batch
+                                              (std::uint32_t)fuse_op};
     mm_kernel_in0_sender.reserve_runtime_args();
 
     auto& mm_kernel_in1_sender_writer = program.kernels[num_kernels++];
@@ -1279,12 +1181,63 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
         "reader_bmm_tile_layout_in1_sender_writer_padding.cpp";
     mm_kernel_in1_sender_writer.core_ranges = {in1_mcast_sender};
-    mm_kernel_in1_sender_writer.compile_time_args = in1_sender_writer_compile_time_args;
     mm_kernel_in1_sender_writer.defines = mm_kernel_in1_sender_writer_defines;
     mm_kernel_in1_sender_writer.config = tt_metal::DataMovementConfigDescriptor{
         .processor = tt_metal::DataMovementProcessor::RISCV_0,
         .noc = in1_noc,
     };
+    mm_kernel_in1_sender_writer.compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t)in1_is_dram,
+        (std::uint32_t)out_is_dram,
+
+        // READER
+        // in1 tensor args
+        (std::uint32_t)1,                // in1_tensor_stride_w
+        (std::uint32_t)N,                // in1_tensor_stride_h
+        (std::uint32_t)in0_block_w * N,  // in1_tensor_next_block_stride
+        (std::uint32_t)in1_block_w,      // in1_tensor_next_w_dim_block_stride
+        // in1 block args
+        (std::uint32_t)in1_block_w,                // in1_block_w
+        (std::uint32_t)in0_block_w,                // in1_block_h
+        (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
+        // in0/in1 common args
+        (std::uint32_t)num_blocks,        // num_blocks
+        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
+        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
+        // in1 mcast args
+        (std::uint32_t)in1_mcast_sender_semaphore_id,
+        (std::uint32_t)in1_mcast_receiver_semaphore_id,
+        (std::uint32_t)num_cores - 1,                     // in1_mcast_num_dests
+        (std::uint32_t)in1_mcast_receiver_num_cores - 1,  // in1_mcast_num_cores
+        // batch args
+        (std::uint32_t)K * N,        // KtNt
+        (std::uint32_t)B,            // batch
+        (std::uint32_t)bcast_batch,  // bcast_B
+
+        // WRITER
+        // out tensor args
+        (std::uint32_t)1,                   // out_tensor_stride_w
+        (std::uint32_t)N,                   // out_tensor_stride_h
+        (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
+        (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+        (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
+        (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
+        // out subblock args
+        (std::uint32_t)out_subblock_w,                     // out_subblock_w
+        (std::uint32_t)out_subblock_h,                     // out_subblock_h
+        (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
+        // batch args
+        (std::uint32_t)M * N  // MtNt
+    };
+    if (bias_buffer != nullptr) {
+        mm_kernel_in1_sender_writer.compile_time_args.push_back((std::uint32_t)in3_is_dram);
+        mm_kernel_in1_sender_writer.compile_time_args.push_back((std::uint32_t)1);
+    } else {
+        mm_kernel_in1_sender_writer.compile_time_args.push_back(0);  // Placeholder; not used
+        mm_kernel_in1_sender_writer.compile_time_args.push_back(0);  // Placeholder; not used
+    }
+    mm_kernel_in1_sender_writer.compile_time_args.push_back((std::uint32_t)fuse_op);
     mm_kernel_in1_sender_writer.reserve_runtime_args();
 
     tt::tt_metal::KernelDescriptor* mm_kernel_in1_receiver_writer = nullptr;
@@ -1294,12 +1247,46 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
             "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp";
         mm_kernel_in1_receiver_writer->core_ranges = in1_mcast_receivers.ranges();
-        mm_kernel_in1_receiver_writer->compile_time_args = in1_receiver_writer_compile_time_args;
         mm_kernel_in1_receiver_writer->defines = mm_kernel_in1_receiver_writer_defines;
         mm_kernel_in1_receiver_writer->config = tt_metal::DataMovementConfigDescriptor{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
         };
+        mm_kernel_in1_receiver_writer->compile_time_args = {
+            // interleaved accessor args
+            (std::uint32_t)out_is_dram,
+
+            // READER
+            // in1 block args
+            (std::uint32_t)in1_block_w * in0_block_w,  // in1_block_num_tiles
+            // in0/in1 common args
+            (std::uint32_t)num_blocks,        // num_blocks
+            (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
+            (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
+            // in1 mcast args
+            (std::uint32_t)in1_mcast_sender_semaphore_id,
+            (std::uint32_t)in1_mcast_receiver_semaphore_id,
+            // batch args
+            (std::uint32_t)B,  // batch
+
+            // WRITER
+            // out tensor args
+            (std::uint32_t)1,                   // out_tensor_stride_w
+            (std::uint32_t)N,                   // out_tensor_stride_h
+            (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
+            (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
+            (std::uint32_t)out_block_w,         // out_tensor_next_w_dim_block_stride
+            (std::uint32_t)out_block_h * N,     // out_tensor_next_h_dim_block_stride
+            // out subblock args
+            (std::uint32_t)out_subblock_w,                     // out_subblock_w
+            (std::uint32_t)out_subblock_h,                     // out_subblock_h
+            (std::uint32_t)(out_subblock_w * out_subblock_h),  // out_subblocks_w * out_subblocks_h
+            // batch args
+            (std::uint32_t)M * N  // MtNt
+        };
+        if (bias_buffer != nullptr) {
+            mm_kernel_in1_receiver_writer->compile_time_args.push_back((std::uint32_t)in1_block_w);
+        }
         mm_kernel_in1_receiver_writer->reserve_runtime_args();
     }
 
@@ -1315,7 +1302,15 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
 
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    tt_metal::KernelDescriptor::CompileTimeArgs compute_kernel_args = {
+    // Create compute kernel
+    // bool fp32_dest_acc_en = false;
+    // Gelu currently has better accuracy when run in approx mode
+    // bool math_approx_mode = false;
+    auto& mm_kernel = program.kernels[num_kernels++];
+    mm_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
+    mm_kernel.core_ranges = all_cores.ranges();
+    mm_kernel.compile_time_args = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks
         in0_block_num_tiles,     // in0_block_num_tiles
@@ -1337,16 +1332,6 @@ tt::tt_metal::ProgramDescriptor create_program_mcast_in1(
 
         untilize_out  // untilize_out
     };
-
-    // Create compute kernel
-    // bool fp32_dest_acc_en = false;
-    // Gelu currently has better accuracy when run in approx mode
-    // bool math_approx_mode = false;
-    auto& mm_kernel = program.kernels[num_kernels++];
-    mm_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp";
-    mm_kernel.core_ranges = all_cores.ranges();
-    mm_kernel.compile_time_args = compute_kernel_args;
     mm_kernel.defines = mm_kernel_defines;
     mm_kernel.config = tt_metal::ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -1796,48 +1781,6 @@ tt::tt_metal::ProgramDescriptor create_program_gather_in0(
     uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    /* Compile time args */
-    tt_metal::KernelDescriptor::CompileTimeArgs in0_sender_compile_time_args = {
-        (std::uint32_t)in0_shard_width_in_tiles,
-        (std::uint32_t)per_core_M,  // in0_shard_height_in_tiles
-        (std::uint32_t)B,           // batch
-        (std::uint32_t)ring_size,   // ring_size
-        (std::uint32_t)in0_signal_semaphore_id,
-    };
-
-    tt_metal::KernelDescriptor::CompileTimeArgs in1_sender_writer_compile_time_args = {
-        (std::uint32_t)in1_is_dram_interleaved,    // in1_is_dram_interleaved
-        (std::uint32_t)in1_block_height_in_tiles,  // in1_block_height_in_tiles
-        (std::uint32_t)per_core_N,                 // in1_block_width_in_tiles
-        (std::uint32_t)in1_tensor_width_in_tiles,  // in1_tensor_width_in_tiles
-        (std::uint32_t)num_blocks,                 // num_blocks
-        (std::uint32_t)B,                          // batch
-    };
-
-    tt_metal::KernelDescriptor::CompileTimeArgs compute_kernel_args = {
-        in0_block_w,             // in0_block_w
-        in0_num_subblocks,       // in0_num_subblocks
-        in0_block_num_tiles,     // in0_block_num_tiles
-        in0_subblock_num_tiles,  // in0_subblock_num_tiles
-
-        in1_num_subblocks,      // in1_num_subblocks
-        in1_block_num_tiles,    // in1_block_num_tiles
-        in1_block_size_bytes,   // in1_block_size_bytes
-        in1_tensor_size_bytes,  // in1_tensor_size_bytes
-        in1_per_core_w,         // in1_per_core_w
-
-        num_blocks,  // num_blocks
-
-        out_subblock_h,          // out_subblock_h
-        out_subblock_w,          // out_subblock_w
-        out_subblock_num_tiles,  // out_subblock_num_tiles
-        B,                       // batch
-        out_block_tiles,         // out_block_num_tiles
-
-        untilize_out,             // untilize_out
-        in1_is_dram_interleaved,  // in1_is_dram_interleaved
-    };
-
     /* Kernel defines */
     tt_metal::KernelDescriptor::Defines mm_in1_kernel_defines;
     tt_metal::KernelDescriptor::Defines mm_kernel_defines;
@@ -1882,7 +1825,13 @@ tt::tt_metal::ProgramDescriptor create_program_gather_in0(
     mm_kernel_in0.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp";
     mm_kernel_in0.core_ranges = all_cores.ranges();
-    mm_kernel_in0.compile_time_args = in0_sender_compile_time_args;
+    mm_kernel_in0.compile_time_args = {
+        (std::uint32_t)in0_shard_width_in_tiles,
+        (std::uint32_t)per_core_M,  // in0_shard_height_in_tiles
+        (std::uint32_t)B,           // batch
+        (std::uint32_t)ring_size,   // ring_size
+        (std::uint32_t)in0_signal_semaphore_id,
+    };
     mm_kernel_in0.config = tt_metal::DataMovementConfigDescriptor{
         .processor = tt_metal::DataMovementProcessor::RISCV_1,
         .noc = in0_noc,
@@ -1894,7 +1843,14 @@ tt::tt_metal::ProgramDescriptor create_program_gather_in0(
     mm_kernel_in1_sender_writer.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp";
     mm_kernel_in1_sender_writer.core_ranges = all_cores.ranges();
-    mm_kernel_in1_sender_writer.compile_time_args = in1_sender_writer_compile_time_args;
+    mm_kernel_in1_sender_writer.compile_time_args = {
+        (std::uint32_t)in1_is_dram_interleaved,    // in1_is_dram_interleaved
+        (std::uint32_t)in1_block_height_in_tiles,  // in1_block_height_in_tiles
+        (std::uint32_t)per_core_N,                 // in1_block_width_in_tiles
+        (std::uint32_t)in1_tensor_width_in_tiles,  // in1_tensor_width_in_tiles
+        (std::uint32_t)num_blocks,                 // num_blocks
+        (std::uint32_t)B,                          // batch
+    };
     mm_kernel_in1_sender_writer.defines = mm_in1_kernel_defines;
     mm_kernel_in1_sender_writer.config = tt_metal::DataMovementConfigDescriptor{
         .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1908,8 +1864,30 @@ tt::tt_metal::ProgramDescriptor create_program_gather_in0(
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/"
         "bmm_large_block_zm_fused_bias_activation_gathered.cpp";
     mm_kernel.core_ranges = all_cores.ranges();
-    mm_kernel.compile_time_args = compute_kernel_args;
-    mm_kernel.defines = mm_kernel_defines;
+    mm_kernel.compile_time_args = {
+        in0_block_w,             // in0_block_w
+        in0_num_subblocks,       // in0_num_subblocks
+        in0_block_num_tiles,     // in0_block_num_tiles
+        in0_subblock_num_tiles,  // in0_subblock_num_tiles
+
+        in1_num_subblocks,      // in1_num_subblocks
+        in1_block_num_tiles,    // in1_block_num_tiles
+        in1_block_size_bytes,   // in1_block_size_bytes
+        in1_tensor_size_bytes,  // in1_tensor_size_bytes
+        in1_per_core_w,         // in1_per_core_w
+
+        num_blocks,  // num_blocks
+
+        out_subblock_h,          // out_subblock_h
+        out_subblock_w,          // out_subblock_w
+        out_subblock_num_tiles,  // out_subblock_num_tiles
+        B,                       // batch
+        out_block_tiles,         // out_block_num_tiles
+
+        untilize_out,             // untilize_out
+        in1_is_dram_interleaved,  // in1_is_dram_interleaved
+    };
+    mm_kernel.defines = std::move(mm_kernel_defines);
     mm_kernel.config = tt_metal::ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

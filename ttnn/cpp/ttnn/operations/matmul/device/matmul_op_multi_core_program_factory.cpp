@@ -184,8 +184,8 @@ tt::tt_metal::ProgramDescriptor matmul_multi_core(const Tensor& a, const Tensor&
         writer_kernel.runtime_args[core.x][core.y] = {dst_addr, num_output_tiles_per_core, num_tiles_written};
         num_tiles_written += num_output_tiles_per_core;
     }
-    program.kernels.resize(num_kernels);
 
+    program.kernels.resize(num_kernels);
     return program;
 }
 

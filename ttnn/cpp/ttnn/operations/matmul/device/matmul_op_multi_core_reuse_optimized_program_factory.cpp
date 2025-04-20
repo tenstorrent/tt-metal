@@ -159,13 +159,7 @@ tt::tt_metal::ProgramDescriptor create_program(
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    tt_metal::KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
-    };
-    tt_metal::KernelDescriptor::CompileTimeArgs reader_writer_compile_time_args = {// interleaved accessor args
-                                                                                   (std::uint32_t)in1_is_dram,
-                                                                                   (std::uint32_t)out_is_dram};
+
     tt_metal::KernelDescriptor::Defines mm_kernel_in0_reader_defines;
     tt_metal::KernelDescriptor::Defines mm_kernel_in1_reader_writer_defines;
     if (in0_is_sharded) {
@@ -186,8 +180,11 @@ tt::tt_metal::ProgramDescriptor create_program(
     mm_kernel_in0_reader.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp";
     mm_kernel_in0_reader.core_ranges = all_cores.ranges();
-    mm_kernel_in0_reader.compile_time_args = reader_compile_time_args;
-    mm_kernel_in0_reader.defines = mm_kernel_in0_reader_defines;
+    mm_kernel_in0_reader.compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t)in0_is_dram,
+    };
+    mm_kernel_in0_reader.defines = std::move(mm_kernel_in0_reader_defines);
     mm_kernel_in0_reader.config = tt_metal::ReaderConfigDescriptor{};
     mm_kernel_in0_reader.reserve_runtime_args();
 
@@ -195,8 +192,12 @@ tt::tt_metal::ProgramDescriptor create_program(
     mm_kernel_in1_reader_writer.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp";
     mm_kernel_in1_reader_writer.core_ranges = all_cores.ranges();
-    mm_kernel_in1_reader_writer.compile_time_args = reader_writer_compile_time_args;
-    mm_kernel_in1_reader_writer.defines = mm_kernel_in1_reader_writer_defines;
+    mm_kernel_in1_reader_writer.compile_time_args = {
+        // interleaved accessor args
+        (std::uint32_t)in1_is_dram,
+        (std::uint32_t)out_is_dram,
+    };
+    mm_kernel_in1_reader_writer.defines = std::move(mm_kernel_in1_reader_writer_defines);
     mm_kernel_in1_reader_writer.config = tt_metal::WriterConfigDescriptor{};
     mm_kernel_in1_reader_writer.reserve_runtime_args();
 

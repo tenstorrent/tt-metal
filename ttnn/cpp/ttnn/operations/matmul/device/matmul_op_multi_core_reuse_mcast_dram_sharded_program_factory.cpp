@@ -300,44 +300,6 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
             "currently not support per_core_M larger than 1, while split one shard into multiple blocks");
     }
 
-    tt_metal::KernelDescriptor::CompileTimeArgs in0_sender_compile_time_args = {
-        (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
-        (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
-        // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore_id,
-        (std::uint32_t)in0_mcast_receiver_semaphore_id,
-        (std::uint32_t)num_worker_cores,  // in0_mcast_num_dests
-        (std::uint32_t)num_mcast_cores,   // in0_mcast_num_cores
-        // block
-        (std::uint32_t)num_blocks,
-        // mcast noc coords
-        (std::uint32_t)start_core_noc.x,
-        (std::uint32_t)start_core_noc.y,
-        (std::uint32_t)end_core_noc.x,
-        (std::uint32_t)end_core_noc.y,
-        // semahpre valid
-        (std::uint32_t)in0_mcast_sender_valid_semaphore_id,
-        //
-        (std::uint32_t)num_blocks_per_shard};
-
-    tt_metal::KernelDescriptor::CompileTimeArgs in1_sender_writer_compile_time_args = {
-        (std::uint32_t)in1_buffer_page_size,
-        (std::uint32_t)in1_buffer_num_pages,
-        // in1 block args
-        (std::uint32_t)per_core_N_in1_sender,                // in1_block_w
-        (std::uint32_t)per_core_N_in1_sender * in0_block_w,  // in1_block_num_tiles
-        // in0/in1 common args
-        (std::uint32_t)num_blocks,                                    // num_blocks
-        (std::uint32_t)out_block_tiles,                               // out_block_num_tiles
-        (std::uint32_t)per_core_N_compute * output_single_tile_size,  // out_tensor_stride_w_bytes
-        (std::uint32_t)per_core_N_storage * output_single_tile_size,  // out_reshard_tensor_stride_w_bytes
-        (std::uint32_t)per_core_M};
-    if (bias_buffer != nullptr) {
-        in1_sender_writer_compile_time_args.push_back(bias_buffer_page_size);
-        in1_sender_writer_compile_time_args.push_back(bias_buffer_num_pages);
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
-    }
-
     tt_metal::KernelDescriptor::Defines mm_kernel_defines;
     tt_metal::KernelDescriptor::Defines mm_kernel_in0_sender_define;
     tt_metal::KernelDescriptor::Defines mm_kernel_in1_sender_writer_defines;
@@ -387,7 +349,25 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
         "reader_bmm_tile_layout_in0_sender_dram_sharded.cpp";
     mm_kernel_in0_sender.core_ranges = all_cores_in_rect_grid.ranges();
-    mm_kernel_in0_sender.compile_time_args = in0_sender_compile_time_args;
+    mm_kernel_in0_sender.compile_time_args = {
+        (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
+        (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
+        // in0 mcast args
+        (std::uint32_t)in0_mcast_sender_semaphore_id,
+        (std::uint32_t)in0_mcast_receiver_semaphore_id,
+        (std::uint32_t)num_worker_cores,  // in0_mcast_num_dests
+        (std::uint32_t)num_mcast_cores,   // in0_mcast_num_cores
+        // block
+        (std::uint32_t)num_blocks,
+        // mcast noc coords
+        (std::uint32_t)start_core_noc.x,
+        (std::uint32_t)start_core_noc.y,
+        (std::uint32_t)end_core_noc.x,
+        (std::uint32_t)end_core_noc.y,
+        // semahpre valid
+        (std::uint32_t)in0_mcast_sender_valid_semaphore_id,
+        //
+        (std::uint32_t)num_blocks_per_shard};
     mm_kernel_in0_sender.defines = mm_kernel_in0_sender_define;
     mm_kernel_in0_sender.config = tt_metal::DataMovementConfigDescriptor{
         .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -400,12 +380,28 @@ tt::tt_metal::ProgramDescriptor create_program_dram_sharded(
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
         "reader_bmm_tile_layout_in1_sender_dram_sharded.cpp";
     mm_kernel_in1_sender_writer.core_ranges = all_cores_in_rect_grid.ranges();
-    mm_kernel_in1_sender_writer.compile_time_args = in1_sender_writer_compile_time_args;
-    mm_kernel_in1_sender_writer.defines = mm_kernel_in1_sender_writer_defines;
+    mm_kernel_in1_sender_writer.defines = std::move(mm_kernel_in1_sender_writer_defines);
     mm_kernel_in1_sender_writer.config = tt_metal::DataMovementConfigDescriptor{
         .processor = tt_metal::DataMovementProcessor::RISCV_0,
         .noc = in1_noc,
     };
+    mm_kernel_in1_sender_writer.compile_time_args = {
+        (std::uint32_t)in1_buffer_page_size,
+        (std::uint32_t)in1_buffer_num_pages,
+        // in1 block args
+        (std::uint32_t)per_core_N_in1_sender,                // in1_block_w
+        (std::uint32_t)per_core_N_in1_sender * in0_block_w,  // in1_block_num_tiles
+        // in0/in1 common args
+        (std::uint32_t)num_blocks,                                    // num_blocks
+        (std::uint32_t)out_block_tiles,                               // out_block_num_tiles
+        (std::uint32_t)per_core_N_compute * output_single_tile_size,  // out_tensor_stride_w_bytes
+        (std::uint32_t)per_core_N_storage * output_single_tile_size,  // out_reshard_tensor_stride_w_bytes
+        (std::uint32_t)per_core_M};
+    if (bias_buffer != nullptr) {
+        mm_kernel_in1_sender_writer.compile_time_args.push_back(bias_buffer_page_size);
+        mm_kernel_in1_sender_writer.compile_time_args.push_back(bias_buffer_num_pages);
+        mm_kernel_in1_sender_writer.compile_time_args.push_back((std::uint32_t)1);
+    }
     mm_kernel_in1_sender_writer.reserve_runtime_args();
 
     // Compute kernel compile time args

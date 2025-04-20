@@ -62,24 +62,6 @@ tt_metal::ProgramDescriptor create_program(
 
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    tt_metal::KernelDescriptor::CompileTimeArgs compute_kernel_args = {
-        in0_block_w,             // in0_block_w
-        in0_num_subblocks,       // in0_num_subblocks
-        in0_block_num_tiles,     // in0_block_num_tiles
-        in0_subblock_num_tiles,  // in0_subblock_num_tiles
-
-        in1_num_subblocks,    // in1_num_subblocks
-        in1_block_num_tiles,  // in1_block_num_tiles
-        in1_per_core_w,       // in1_per_core_w
-
-        num_blocks,  // num_blocks
-
-        out_subblock_h,          // out_subblock_h
-        out_subblock_w,          // out_subblock_w
-        out_subblock_num_tiles,  // out_subblock_num_tiles
-        B                        // batch
-    };
-
     uint32_t num_blocks_read = 0;
     uint32_t num_blocks_y = M / per_core_M;
     uint32_t num_blocks_x = N / per_core_N;
@@ -138,11 +120,7 @@ tt_metal::ProgramDescriptor create_program(
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    tt_metal::KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        (uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
-
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    tt_metal::KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)out_is_dram};
 
     constexpr auto max_num_kernels = 3;
     program.kernels.resize(max_num_kernels);
@@ -153,7 +131,7 @@ tt_metal::ProgramDescriptor create_program(
     mm_reader_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout.cpp";
     mm_reader_kernel.core_ranges = all_cores.ranges();
-    mm_reader_kernel.compile_time_args = reader_compile_time_args;
+    mm_reader_kernel.compile_time_args = {(uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
     mm_reader_kernel.config = tt_metal::ReaderConfigDescriptor{};
     mm_reader_kernel.reserve_runtime_args();
 
@@ -161,7 +139,7 @@ tt_metal::ProgramDescriptor create_program(
     unary_writer_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_tile_layout.cpp";
     unary_writer_kernel.core_ranges = all_cores.ranges();
-    unary_writer_kernel.compile_time_args = writer_compile_time_args;
+    unary_writer_kernel.compile_time_args = {(uint32_t)out_is_dram};
     unary_writer_kernel.config = tt_metal::WriterConfigDescriptor{};
     unary_writer_kernel.reserve_runtime_args();
 
@@ -169,7 +147,23 @@ tt_metal::ProgramDescriptor create_program(
     auto& mm_kernel = program.kernels[num_kernels++];
     mm_kernel.kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm.cpp";
     mm_kernel.core_ranges = all_cores.ranges();
-    mm_kernel.compile_time_args = compute_kernel_args;
+    mm_kernel.compile_time_args = {
+        in0_block_w,             // in0_block_w
+        in0_num_subblocks,       // in0_num_subblocks
+        in0_block_num_tiles,     // in0_block_num_tiles
+        in0_subblock_num_tiles,  // in0_subblock_num_tiles
+
+        in1_num_subblocks,    // in1_num_subblocks
+        in1_block_num_tiles,  // in1_block_num_tiles
+        in1_per_core_w,       // in1_per_core_w
+
+        num_blocks,  // num_blocks
+
+        out_subblock_h,          // out_subblock_h
+        out_subblock_w,          // out_subblock_w
+        out_subblock_num_tiles,  // out_subblock_num_tiles
+        B                        // batch
+    };
     mm_kernel.config = tt_metal::ComputeConfigDescriptor{.math_fidelity = math_fidelity};
     mm_kernel.reserve_runtime_args();
 
