@@ -287,7 +287,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     const Tile output_tile =
         (out_sharded && tile_h <= 16) ? tt::tt_metal::Tile({tile_h, 32}) : tt::tt_metal::Tile({tile_h, tile_w});
 
-    const ttnn::operations::matmul::Matmul matmul_params(
+    const ttnn::operations::matmul::MatmulArgs matmul_params(
         program_config,
         /*bcast_batch=*/std::nullopt,
         out_mem_config,
@@ -304,7 +304,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     ttnn::Tensor output_tensor;
     // Warmup iterations
     for (int iter = 0; iter < num_warmup_iterations; ++iter) {
-        output_tensor = ttnn::operations::matmul::matmul(
+        output_tensor = ttnn::prim::matmul(
             input_tensor_0,
             input_tensor_1,
             /*bias=*/std::nullopt,
@@ -322,7 +322,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     if (use_trace) {
         auto tid = ttnn::operations::trace::begin_trace_capture(device, ttnn::DefaultQueueId);
         for (int iter = 0; iter < num_measurement_iterations; ++iter) {
-            output_tensor = ttnn::operations::matmul::matmul(
+            output_tensor = ttnn::prim::matmul(
                 input_tensor_0,
                 input_tensor_1,
                 /*bias=*/std::nullopt,
@@ -348,7 +348,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             ZoneScopedN("Matmul iterations");
             for (int iter = 0; iter < num_measurement_iterations; ++iter) {
                 auto start_time = std::chrono::high_resolution_clock::now();
-                output_tensor = ttnn::operations::matmul::matmul(
+                output_tensor = ttnn::prim::matmul(
                     input_tensor_0,
                     input_tensor_1,
                     /*bias=*/std::nullopt,

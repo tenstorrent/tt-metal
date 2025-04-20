@@ -42,7 +42,7 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const struct Matmul& parameters,
+    const Matmul::operation_attributes_t& parameters,
     const uint8_t& queue_id,
     std::optional<ttnn::Tensor>& optional_output_tensor) {
     const auto& input_tensor_a_adjusted = parameters.transpose_a
@@ -77,7 +77,7 @@ ttnn::Tensor bound_matmul(
         }
     }
 
-    auto output_tensor = matmul(
+    auto output_tensor = ttnn::prim::matmul(
         input_tensor_a_adjusted,
         input_tensor_b_adjusted,
         post_process_bias ? std::nullopt : bias,
@@ -129,7 +129,7 @@ Tensor MatmulOperation::invoke(
         input_tensor_a,
         input_tensor_b,
         /*bias=*/std::nullopt,
-        Matmul{
+        Matmul::operation_attributes_t{
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
@@ -175,7 +175,7 @@ Tensor LinearOperation::invoke(
         input_tensor_a,
         input_tensor_b,
         bias,
-        Matmul{
+        Matmul::operation_attributes_t{
             program_config,
             /*bcast_batch=*/std::nullopt,
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,

@@ -13,7 +13,7 @@ using namespace tt::constants;
 using namespace tt;
 using tt_metal::Buffer;
 
-tt_metal::operation::ProgramWithCallbacks create_program(
+tt_metal::ProgramDescriptor create_program(
     tt_metal::IDevice* device,
     tt::DataFormat in0_cb_data_format,
     tt::DataFormat in1_cb_data_format,
@@ -33,7 +33,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     tt_metal::Buffer* in0_buffer,
     tt_metal::Buffer* in1_buffer,
     tt_metal::Buffer* out_buffer) {
-    tt_metal::Program program{};
+    tt_metal::ProgramDescriptor program;
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_cb_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_cb_data_format);
@@ -62,7 +62,92 @@ tt_metal::operation::ProgramWithCallbacks create_program(
 
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    std::vector<uint32_t> compute_kernel_args = {
+    uint32_t num_blocks_read = 0;
+    uint32_t num_blocks_y = M / per_core_M;
+    uint32_t num_blocks_x = N / per_core_N;
+
+    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerangeset(
+        num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
+
+    // Create circular buffers
+    uint32_t src0_cb_index = 0;
+    program.cbs.push_back(tt_metal::CBDescriptor{
+        .total_size = in0_CB_size,
+        .core_ranges = all_cores.ranges(),
+        .format_descriptors =
+            {
+                tt_metal::CBFormatDescriptor{
+                    .buffer_index = src0_cb_index,
+                    .data_format = in0_cb_data_format,
+                    .page_size = in0_single_tile_size,
+                },
+            },
+    });
+
+    uint32_t src1_cb_index = 1;
+    program.cbs.push_back(tt_metal::CBDescriptor{
+        .total_size = in1_CB_size,
+        .core_ranges = all_cores.ranges(),
+        .format_descriptors =
+            {
+                tt_metal::CBFormatDescriptor{
+                    .buffer_index = src1_cb_index,
+                    .data_format = in1_cb_data_format,
+                    .page_size = in1_single_tile_size,
+                },
+            },
+    });
+
+    uint32_t output_cb_index = tt::CBIndex::c_16;
+    uint32_t interm0_cb_index = 24;
+    program.cbs.push_back(tt_metal::CBDescriptor{
+        .total_size = out_CB_size,
+        .core_ranges = all_cores.ranges(),
+        .format_descriptors =
+            {
+                tt_metal::CBFormatDescriptor{
+                    .buffer_index = output_cb_index,
+                    .data_format = out_cb_data_format,
+                    .page_size = out_single_tile_size,
+                },
+                tt_metal::CBFormatDescriptor{
+                    .buffer_index = interm0_cb_index,
+                    .data_format = out_cb_data_format,
+                    .page_size = out_single_tile_size,
+                },
+            },
+    });
+
+    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
+
+    constexpr auto max_num_kernels = 3;
+    program.kernels.resize(max_num_kernels);
+    size_t num_kernels = 0;
+
+    // Create reader and writer kernels per core
+    auto& mm_reader_kernel = program.kernels[num_kernels++];
+    mm_reader_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout.cpp";
+    mm_reader_kernel.core_ranges = all_cores.ranges();
+    mm_reader_kernel.compile_time_args = {(uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
+    mm_reader_kernel.config = tt_metal::ReaderConfigDescriptor{};
+    mm_reader_kernel.reserve_runtime_args();
+
+    auto& unary_writer_kernel = program.kernels[num_kernels++];
+    unary_writer_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_tile_layout.cpp";
+    unary_writer_kernel.core_ranges = all_cores.ranges();
+    unary_writer_kernel.compile_time_args = {(uint32_t)out_is_dram};
+    unary_writer_kernel.config = tt_metal::WriterConfigDescriptor{};
+    unary_writer_kernel.reserve_runtime_args();
+
+    // Create compute kernel
+    auto& mm_kernel = program.kernels[num_kernels++];
+    mm_kernel.kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm.cpp";
+    mm_kernel.core_ranges = all_cores.ranges();
+    mm_kernel.compile_time_args = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks
         in0_block_num_tiles,     // in0_block_num_tiles
@@ -79,63 +164,8 @@ tt_metal::operation::ProgramWithCallbacks create_program(
         out_subblock_num_tiles,  // out_subblock_num_tiles
         B                        // batch
     };
-
-    uint32_t num_blocks_read = 0;
-    uint32_t num_blocks_y = M / per_core_M;
-    uint32_t num_blocks_x = N / per_core_N;
-
-    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerangeset(
-        num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
-
-    // Create circular buffers
-    uint32_t src0_cb_index = 0;
-    tt_metal::CircularBufferConfig src0_cb_config =
-        tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_cb_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
-
-    uint32_t src1_cb_index = 1;
-    tt_metal::CircularBufferConfig src1_cb_config =
-        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_cb_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
-
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    uint32_t interm0_cb_index = 24;
-    std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-        {output_cb_index, out_cb_data_format}, {interm0_cb_index, out_cb_data_format}};
-    tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-            .set_page_size(output_cb_index, out_single_tile_size)
-            .set_page_size(interm0_cb_index, out_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
-
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
-
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
-
-    // Create reader and writer kernels per core
-    auto mm_reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-    auto unary_writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_tile_layout.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    // Create compute kernel
-    auto mm_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args});
+    mm_kernel.config = tt_metal::ComputeConfigDescriptor{.math_fidelity = math_fidelity};
+    mm_kernel.reserve_runtime_args();
 
     for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
         for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
@@ -144,7 +174,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
             // Write runtime args to device
-            std::vector<uint32_t> mm_reader_args = {
+            mm_reader_kernel.runtime_args[core.x][core.y] = {
                 (std::uint32_t)in0_buffer->address(),          // in0_tensor_addr
                 (std::uint32_t)K * per_core_M * output_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)1,                              // in0_tensor_stride_w
@@ -173,7 +203,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                 (std::uint32_t)bcast_batch  // bcast_B
             };
 
-            std::vector<uint32_t> writer_args = {
+            unary_writer_kernel.runtime_args[core.x][core.y] = {
                 (std::uint32_t)out_buffer->address(),                                      // out_tensor_addr
                 (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * N,  // out_tensor_start_tile_id
                 (std::uint32_t)1,                                                          // out_tensor_stride_w
@@ -191,51 +221,12 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                 (std::uint32_t)B       // batch
             };
 
-            tt_metal::SetRuntimeArgs(program, mm_reader_kernel_id, core, mm_reader_args);
-            tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_args);
-
             num_blocks_read++;
         }
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id = mm_reader_kernel_id,
-                                           writer_kernel_id = unary_writer_kernel_id,
-                                           num_cores_x,
-                                           num_blocks_y,
-                                           num_blocks_x](
-                                              const void* operation,
-                                              const tt::tt_metal::Program& program,
-                                              const std::vector<ttnn::Tensor>& input_tensors,
-                                              const std::vector<std::optional<const ttnn::Tensor>>&,
-                                              const std::vector<ttnn::Tensor>& output_tensors) {
-        auto src_dram_buffer_a = input_tensors.at(0).buffer();
-        auto src_dram_buffer_b = input_tensors.at(1).buffer();
-
-        auto dst_dram_buffer = output_tensors.at(0).buffer();
-
-        uint32_t num_blocks_read = 0;
-        for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
-            for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
-                int core_idx_x = num_blocks_read % num_cores_x;
-                int core_idx_y = num_blocks_read / num_cores_x;
-                CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
-
-                {
-                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_dram_buffer_a->address();
-                    runtime_args[8] = src_dram_buffer_b->address();
-                }
-
-                {
-                    auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = dst_dram_buffer->address();
-                }
-                num_blocks_read++;
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    program.kernels.resize(num_kernels);
+    return program;
 }
 
 namespace ttnn {
@@ -244,7 +235,7 @@ namespace operations {
 
 namespace matmul {
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
+tt::tt_metal::ProgramDescriptor matmul_multi_core_reuse(
     const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
     const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 

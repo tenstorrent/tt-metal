@@ -17,9 +17,11 @@ namespace operations {
 
 namespace matmul {
 
-tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
-    const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
-    tt_metal::Program program{};
+tt::tt_metal::ProgramDescriptor matmul_multi_core(const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
+    tt_metal::ProgramDescriptor program;
+    constexpr auto max_num_kernels = 4;
+    program.kernels.resize(max_num_kernels);
+    size_t num_kernels = 0;
 
     const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
@@ -71,74 +73,88 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
-    tt_metal::CircularBufferConfig src0_cb_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    program.cbs.push_back(tt_metal::CBDescriptor{
+        .total_size = num_input_tiles * in0_single_tile_size,
+        .core_ranges = all_cores.ranges(),
+        .format_descriptors = {tt_metal::CBFormatDescriptor{
+            .buffer_index = src0_cb_index,
+            .data_format = in0_data_format,
+            .page_size = in0_single_tile_size,
+        }},
+    });
 
     uint32_t src1_cb_index = 1;
-    tt_metal::CircularBufferConfig src1_cb_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    program.cbs.push_back(tt_metal::CBDescriptor{
+        .total_size = num_input_tiles * in1_single_tile_size,
+        .core_ranges = all_cores.ranges(),
+        .format_descriptors = {tt_metal::CBFormatDescriptor{
+            .buffer_index = src1_cb_index,
+            .data_format = in1_data_format,
+            .page_size = in1_single_tile_size,
+        }},
+    });
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
-    tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(
-            num_output_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
-            .set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    program.cbs.push_back(tt_metal::CBDescriptor{
+        .total_size = num_output_tiles * output_single_tile_size,
+        .core_ranges = all_cores.ranges(),
+        .format_descriptors = {tt_metal::CBFormatDescriptor{
+            .buffer_index = output_cb_index,
+            .data_format = output_data_format,
+            .page_size = output_single_tile_size,
+        }},
+    });
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
-
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? true : false;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
-    auto reader_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    auto& reader_kernel = program.kernels[num_kernels++];
+    reader_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp";
+    reader_kernel.core_ranges = all_cores.ranges();
+    reader_kernel.compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+    reader_kernel.config = tt_metal::ReaderConfigDescriptor{};
+    reader_kernel.reserve_runtime_args();
 
-    auto writer_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    auto& writer_kernel = program.kernels[num_kernels++];
+    writer_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    writer_kernel.core_ranges = all_cores.ranges();
+    writer_kernel.compile_time_args = {(uint32_t)output_cb_index, (uint32_t)dst_is_dram};
+    writer_kernel.config = tt_metal::WriterConfigDescriptor{};
+    writer_kernel.reserve_runtime_args();
 
-    std::vector<uint32_t> compute_args_group_1 = {
+    auto& bmm_kernel = program.kernels[num_kernels++];
+    bmm_kernel.kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp";
+    bmm_kernel.core_ranges = core_group_1.ranges();
+    bmm_kernel.compile_time_args = {
         1,                                 // B
         1,                                 // Mt
         Kt,                                // Kt
         num_output_tiles_per_core_group_1  // Nt
-    };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt
-        // for simplicity
-
-    auto eltwise_binary_kernel_group_1_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
-        core_group_1,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity, .dst_full_sync_en = true, .compile_args = compute_args_group_1});
+    };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only
+        // set Nt for simplicity
+    bmm_kernel.config = tt_metal::ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .dst_full_sync_en = true,
+    };
 
     if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_args_group_2 = {
-            1,                                 // B
-            1,                                 // Mt
-            Kt,                                // Kt
-            num_output_tiles_per_core_group_2  // Nt
-        };  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set
-            // Nt for simplicity
-
-        auto eltwise_binary_kernel_group_2_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
-            core_group_2,
-            tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity, .dst_full_sync_en = true, .compile_args = compute_args_group_2});
+        auto& bmm_kernel_2 = program.kernels[num_kernels++];
+        bmm_kernel_2.kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp";
+        bmm_kernel_2.core_ranges = core_group_2.ranges();
+        bmm_kernel_2.compile_time_args = {
+            1,
+            1,
+            Kt,
+            num_output_tiles_per_core_group_2};  // bmm compute kernel the B, Mt, Nt are just 3 for loops that
+                                                 // technically act as 1 large loop, so only set Nt for simplicity
+        bmm_kernel_2.config = tt_metal::ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .dst_full_sync_en = true,
+        };
     }
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
@@ -152,55 +168,25 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        tt_metal::SetRuntimeArgs(
-            program,
-            reader_id,
-            core,
-            {src0_addr,
-             src1_addr,
-             Mt,
-             Kt,
-             Nt,
-             MtKt,
-             KtNt,
-             B,
-             uint32_t(bcast_batch),
-             num_tiles_written,
-             num_output_tiles_per_core,
-             MtNt});
-        tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, num_output_tiles_per_core, num_tiles_written});
+        reader_kernel.runtime_args[core.x][core.y] = {
+            src0_addr,
+            src1_addr,
+            Mt,
+            Kt,
+            Nt,
+            MtKt,
+            KtNt,
+            B,
+            uint32_t(bcast_batch),
+            num_tiles_written,
+            num_output_tiles_per_core,
+            MtNt};
+        writer_kernel.runtime_args[core.x][core.y] = {dst_addr, num_output_tiles_per_core, num_tiles_written};
         num_tiles_written += num_output_tiles_per_core;
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = reader_id, writer_kernel_id = writer_id, num_cores, num_cores_y](
-            const void* operation,
-            const Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>&,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_dram_buffer_a = input_tensors.at(0).buffer();
-            auto src_dram_buffer_b = input_tensors.at(1).buffer();
-
-            auto dst_dram_buffer = output_tensors.at(0).buffer();
-
-            for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-                CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-                {
-                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_dram_buffer_a->address();
-                    runtime_args[1] = src_dram_buffer_b->address();
-                }
-
-                {
-                    auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = dst_dram_buffer->address();
-                }
-            }
-        };
-
-    return {std::move(program), override_runtime_args_callback};
+    program.kernels.resize(num_kernels);
+    return program;
 }
 
 }  // namespace matmul
