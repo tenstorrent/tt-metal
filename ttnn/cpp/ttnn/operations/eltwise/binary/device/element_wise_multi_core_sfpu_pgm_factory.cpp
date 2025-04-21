@@ -108,7 +108,7 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::ElementWiseMultiCoreSfpu:
     });
 
     tt::tt_metal::KernelDescriptor::Defines eltwise_defines;
-    utils::append_defines(
+    utils::append_defines_fp32(
         eltwise_defines, op_type, a_dtype, b_dtype, fused_activations, operation_attributes.input_tensor_a_activation);
 
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;

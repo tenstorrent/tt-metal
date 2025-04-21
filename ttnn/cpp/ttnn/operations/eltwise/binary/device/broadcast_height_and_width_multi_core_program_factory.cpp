@@ -136,7 +136,6 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::BroadcastHeightAndWidthMu
             .data_format = src1_cb_data_format,
             .page_size = src1_single_tile_size,
         }},
-        .buffer = src1_buffer,
     });
 
     uint32_t num_output_tiles = output_sharded ? num_tiles_per_shard : 2;
