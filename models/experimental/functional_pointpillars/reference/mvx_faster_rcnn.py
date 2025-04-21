@@ -459,6 +459,6 @@ class MVXFasterRCNN(nn.Module):
         else:
             results_list_2d = None
 
-        print("results_list_3d", results_list_3d)
+        # print("results_list_3d", results_list_3d)
         # detsamples = self.add_pred_to_datasample(batch_data_samples, results_list_3d, results_list_2d)
         return results_list_3d
