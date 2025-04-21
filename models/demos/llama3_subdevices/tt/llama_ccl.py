@@ -592,7 +592,6 @@ class TT_CCL:
             num_heads=num_heads,
             memory_config=memory_config,
             subdevice_id=self.worker_sub_device_id,
-            enable_persistent_fabric_mode=self.enable_persistent_fabric,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
