@@ -13,8 +13,6 @@ namespace tt::tt_metal::distributed {
 SDMeshCommandQueue::SDMeshCommandQueue(MeshDevice* mesh_device, uint32_t id) :
     MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool()) {}
 
-SDMeshCommandQueue::~SDMeshCommandQueue() {}
-
 void SDMeshCommandQueue::write_shard_to_device(
     Buffer* shard_view, const void* src, const BufferRegion& region, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     TT_FATAL(region.offset == 0, "Offset is not supported for slow dispatch");
@@ -46,7 +44,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload exection.", __FUNCTION__);
     }
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
-        for (auto coord : coord_range) {
+        for (const auto& coord : coord_range) {
             auto device = mesh_device_->get_device(coord);
             tt_metal::detail::LaunchProgram(device, program);
         }

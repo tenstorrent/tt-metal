@@ -25,7 +25,7 @@ protected:
 
 public:
     SDMeshCommandQueue(MeshDevice* mesh_device, uint32_t id);
-    ~SDMeshCommandQueue() override;
+    ~SDMeshCommandQueue() override = default;
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
