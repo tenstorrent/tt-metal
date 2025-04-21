@@ -34,13 +34,18 @@ inline void RunPersistent1dFabricLatencyTest(
     bool enable_fused_payload_with_sync,
     ttnn::ccl::Topology topology) {
     const bool is_ring = topology == ttnn::ccl::Topology::Ring;
+
+    // Device init fabric is only supported on ring topologies because for this test, the line topology test
+    // invokes a "custom" fabric where the end of the line loops back on itself. This is not an official configuration
+    // of the fabric and so is not promoted to device init.
     bool use_device_init_fabric = std::is_same_v<DEVICE_FIXTURE_T, Fabric1DRingDeviceInitFixture>;
     size_t num_links = 1;
 
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+    bool is_6u = num_devices == 32 && tt::tt_metal::GetNumPCIeDevices() == num_devices;
+    if (num_devices < 4 && !is_6u) {
+        log_info("This test can only be run on T3000 or 6u systems");
         return;
     }
 
@@ -51,22 +56,41 @@ inline void RunPersistent1dFabricLatencyTest(
     auto view = test_fixture.mesh_device_->get_view();
 
     std::vector<IDevice*> devices_;
-    if (line_size == 4) {
-        devices_ = {
-            view.get_device(MeshCoordinate(0, 1)),
-            view.get_device(MeshCoordinate(0, 2)),
-            view.get_device(MeshCoordinate(1, 2)),
-            view.get_device(MeshCoordinate(1, 1))};
+    if (is_6u) {
+        // on 6u galaxy systems, we can form a 2D torus so we can just use a full row or column
+        devices_.reserve(line_size);
+        size_t r = 0;
+        size_t c = 0;
+        size_t* loop_var = nullptr;
+        if (line_size == 4) {
+            loop_var = &c;
+        } else if (line_size == 8) {
+            loop_var = &r;
+        } else {
+            TT_THROW(
+                "Invalid line size for 6u system. Supported line sizes are 4 and 8 but {} was specified.", line_size);
+        }
+        for (; *loop_var < line_size; (*loop_var)++) {
+            devices_.push_back(view.get_device(MeshCoordinate(r, c)));
+        }
     } else {
-        devices_ = {
-            view.get_device(MeshCoordinate(0, 0)),
-            view.get_device(MeshCoordinate(0, 1)),
-            view.get_device(MeshCoordinate(0, 2)),
-            view.get_device(MeshCoordinate(0, 3)),
-            view.get_device(MeshCoordinate(1, 3)),
-            view.get_device(MeshCoordinate(1, 2)),
-            view.get_device(MeshCoordinate(1, 1)),
-            view.get_device(MeshCoordinate(1, 0))};
+        if (line_size == 4) {
+            devices_ = {
+                view.get_device(MeshCoordinate(0, 1)),
+                view.get_device(MeshCoordinate(0, 2)),
+                view.get_device(MeshCoordinate(1, 2)),
+                view.get_device(MeshCoordinate(1, 1))};
+        } else {
+            devices_ = {
+                view.get_device(MeshCoordinate(0, 0)),
+                view.get_device(MeshCoordinate(0, 1)),
+                view.get_device(MeshCoordinate(0, 2)),
+                view.get_device(MeshCoordinate(0, 3)),
+                view.get_device(MeshCoordinate(1, 3)),
+                view.get_device(MeshCoordinate(1, 2)),
+                view.get_device(MeshCoordinate(1, 1)),
+                view.get_device(MeshCoordinate(1, 0))};
+        }
     }
     std::vector<IDevice*> devices;
     std::vector<IDevice*> devices_with_workers;
@@ -256,7 +280,8 @@ inline void RunPersistent1dFabricLatencyTest(
         if (!use_device_init_fabric) {
             TT_FATAL(
                 local_device_fabric_handle->get_num_links() == num_links,
-                "Error in test setup. Expected two links between devices but got {} links for device {}",
+                "Error in test setup. Expected {} links between devices but got {} links for device {}",
+                num_links,
                 local_device_fabric_handle->get_num_links(),
                 device->id());
         }
@@ -471,7 +496,7 @@ int main(int argc, char** argv) {
 
     uint32_t test_expected_num_devices = 8;
     size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-    bool is_6u = num_devices == 32;
+    bool is_6u = num_devices == 32 && tt::tt_metal::GetNumPCIeDevices() == num_devices;
     if (num_devices < test_expected_num_devices) {
         tt::log_warning("This test can only be run on T3000 devices");
         return 1;
