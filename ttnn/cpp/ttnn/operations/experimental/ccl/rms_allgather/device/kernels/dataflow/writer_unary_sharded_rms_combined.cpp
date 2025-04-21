@@ -43,8 +43,16 @@ void kernel_main() {
     // Reshard writer
     constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(20);
     constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(21);
+    constexpr uint32_t stats_set_semaphore_id = get_compile_time_arg_val(22);
+    constexpr uint32_t signaling_cb = get_compile_time_arg_val(23);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(24);
 
+    uint32_t stats_set_semaphore_addr = get_semaphore(stats_set_semaphore_id);
     size_t arg_idx = 0;
+    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t scalar_w = get_arg_val<uint32_t>(arg_idx++);
     wh_generate_reduce_scaler<true>(cb_in_2, scalar_w);
 
@@ -54,12 +62,15 @@ void kernel_main() {
     } else {
         arg_idx++;
     }
-
     const uint32_t iteration_number = get_arg_val<uint32_t>(arg_idx++);
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     ttnn::ccl::address_t tensor_address0 = get_arg_val<ttnn::ccl::address_t>(arg_idx++);
-
+    const uint64_t multicast_data_noc = get_noc_multicast_addr(
+        mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y, 0);
+    const uint64_t stats_set_semaphore_noc_addr = multicast_data_noc | stats_set_semaphore_addr;
+    volatile tt_l1_ptr uint32_t* stats_set_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_set_semaphore_addr);
     // Start the all gather part
     if (iteration_number == 0) {
         // Do this only on one of the cores
@@ -138,11 +149,22 @@ void kernel_main() {
             noc_semaphore_inc(out_ready_sem_noc_addr, 1);
             noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value);
         }
+        // Signal the other local cores that the semaphore has returned
+
+        *stats_set_semaphore_addr_ptr = VALID;
+        noc_semaphore_set_multicast_loopback_src(
+            stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_blocks, false, false);
 
         // 4. global semaphore reset
         if (iteration_number == 0) {
             *reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) = 0;
         }
         fabric_connection.close_finish();  // Includes a noc async write barrier
+    } else {
+        // Wait for the signal that the stats semaphore was written in the all gather core
+        noc_semaphore_wait(stats_set_semaphore_addr_ptr, VALID);
     }
+    // Tell the compute kernel it is ok to proceed
+    cb_reserve_back(signaling_cb, 1);
+    cb_push_back(signaling_cb, 1);
 }

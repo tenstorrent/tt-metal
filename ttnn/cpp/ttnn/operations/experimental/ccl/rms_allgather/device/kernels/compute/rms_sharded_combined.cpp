@@ -49,6 +49,7 @@ void MAIN {
     constexpr uint32_t cb_gamma = get_compile_time_arg_val(25);
     constexpr uint32_t cb_stats_reduced = get_compile_time_arg_val(26);
     constexpr uint32_t cb_ex_global = get_compile_time_arg_val(27);
+    constexpr uint32_t signaling_cb = get_compile_time_arg_val(28);
 
     constexpr uint32_t num_blocks_second_stage_reduction = num_blocks_first_stage + num_blocks_second_stage - 1;
 
@@ -191,6 +192,9 @@ void MAIN {
         reduce_revert_delta(cb_reduction_out);
         cb_push_back(cb_reduction_out, num_tiles_per_allgather_worker);
     }
+    // Waits for stats tensor to have valid data
+    cb_wait_front(signaling_cb, 1);
+    cb_pop_front(signaling_cb, 1);
 }
 
 }  // namespace NAMESPACE

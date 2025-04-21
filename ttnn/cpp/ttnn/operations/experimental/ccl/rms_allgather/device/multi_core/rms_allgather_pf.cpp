@@ -414,6 +414,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_second_stage_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto post_reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto stats_filled_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     // reader defines
     std::map<string, string> reader_mcast_sender_defines;
@@ -604,6 +605,11 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
                 .set_globally_allocated_address(*stats.value().buffer());
         auto cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
     }
+    uint32_t signaling_cb = tt::CBIndex::c_22;
+    tt::tt_metal::CircularBufferConfig signaling_cb_config =
+        tt::tt_metal::CircularBufferConfig(2, {{signaling_cb, tt::DataFormat::Float16_b}})
+            .set_page_size(signaling_cb, 2);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, signaling_cb_config);
 
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
@@ -693,6 +699,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     writer_compile_time_args.push_back(
         block_wt_resharded * out_single_tile_size);  // out_reshard_tensor_stride_w_bytes: how many bytes to skip to get
                                                      // to the next data chunk
+    writer_compile_time_args.push_back(stats_filled_semaphore);
+    writer_compile_time_args.push_back(signaling_cb);
+    writer_compile_time_args.push_back(num_blocks);
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
@@ -731,7 +740,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         x_cb_index,
         in5_cb_index,
         cb_stats_reduced_index,
-        ex_global_cb_index};
+        ex_global_cb_index,
+        signaling_cb};
 
     // reader kernel
 
@@ -1027,6 +1037,21 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             std::vector<uint32_t> writer_mcast_sender_args;
+            CoreCoord mcast_start, mcast_end;
+            CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
+            CoreCoord bottom_right_core = {
+                (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
+            auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
+            auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+            mcast_start = top_left_core_physical;
+            mcast_end = bottom_right_core_physical;
+            if (writer_noc == NOC::NOC_1) {
+                std::swap(mcast_start, mcast_end);
+            }
+            writer_mcast_sender_args.push_back(mcast_start.x);
+            writer_mcast_sender_args.push_back(mcast_start.y);
+            writer_mcast_sender_args.push_back(mcast_end.x);
+            writer_mcast_sender_args.push_back(mcast_end.y);
             if (use_two_stage_reduce && (!(width_index < 1))) {
                 writer_mcast_sender_args.push_back(packed_winv_value);
                 writer_mcast_sender_args.push_back(packed_cinv_value_one);
@@ -1041,6 +1066,21 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             writer_kernel_ids.push_back(writer_mcast_sender_kernels_id);
         } else {
             std::vector<uint32_t> writer_mcast_receiver_args;
+            CoreCoord mcast_start, mcast_end;
+            CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
+            CoreCoord bottom_right_core = {
+                (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
+            auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
+            auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+            mcast_start = top_left_core_physical;
+            mcast_end = bottom_right_core_physical;
+            if (reader_noc == NOC::NOC_1) {
+                std::swap(mcast_start, mcast_end);
+            }
+            writer_mcast_receiver_args.push_back(mcast_start.x);
+            writer_mcast_receiver_args.push_back(mcast_start.y);
+            writer_mcast_receiver_args.push_back(mcast_end.x);
+            writer_mcast_receiver_args.push_back(mcast_end.y);
             writer_mcast_receiver_args.push_back(packed_winv_value);
             writer_mcast_receiver_args.push_back(packed_cinv_value);
             writer_mcast_receiver_args.push_back(i);  // Core ID to limit number of cores to do all gather on
@@ -1081,12 +1121,12 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
                 if (writer_kernel_id == writer_mcast_sender_kernels_id) {
                     auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
-                    runtime_args[3] = semaphore.address();
-                    runtime_args[5] = dst_buffer->address();
+                    runtime_args[7] = semaphore.address();
+                    runtime_args[9] = dst_buffer->address();
                 } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
                     auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
-                    runtime_args[3] = semaphore.address();
-                    runtime_args[5] = dst_buffer->address();
+                    runtime_args[7] = semaphore.address();
+                    runtime_args[9] = dst_buffer->address();
                 }
             }
             UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *src_buffer_a);
