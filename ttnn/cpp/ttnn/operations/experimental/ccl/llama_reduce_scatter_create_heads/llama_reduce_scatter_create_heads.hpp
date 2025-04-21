@@ -28,8 +28,8 @@ struct ExecuteLlamaReduceScatterCreateHeads {
 }  // namespace operations::experimental::ccl
 
 namespace experimental {
-constexpr auto llama_reduce_scatter_create_heads = ttnn::register_operation<
-    "ttnn::experimental::llama_reduce_scatter_create_heads",
+constexpr auto llama_rs_create_heads = ttnn::register_operation<
+    "ttnn::experimental::llama_rs_create_heads",
     ttnn::operations::experimental::ccl::ExecuteLlamaReduceScatterCreateHeads>();
 }  // namespace experimental
 

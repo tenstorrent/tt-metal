@@ -216,7 +216,7 @@ def run_reduce_scatter_test(
 
     tt_out_tensor_list = []
     if trace_mode:
-        tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
+        tt_out_tensor = ttnn.experimental.llama_rs_create_heads(
             tt_input_tensors_list[0],
             tt_intermediate_tensors_list[0],
             dim,
@@ -231,7 +231,7 @@ def run_reduce_scatter_test(
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for iter in range(num_iters):
-            tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
+            tt_out_tensor = ttnn.experimental.llama_rs_create_heads(
                 tt_input_tensors_list[0],
                 tt_intermediate_tensors_list[0],
                 dim,
@@ -255,7 +255,7 @@ def run_reduce_scatter_test(
         ttnn.synchronize_device(mesh_device)
     else:
         for i in range(num_iters):
-            tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
+            tt_out_tensor = ttnn.experimental.llama_rs_create_heads(
                 tt_input_tensors_list[i],
                 tt_intermediate_tensors_list[i],
                 dim,
