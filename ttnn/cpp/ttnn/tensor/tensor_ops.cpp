@@ -58,16 +58,16 @@ Tensor tensor_to_device(
     const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
-
-    Tensor device_tensor = Tensor(mesh_device);
-    if (device_tensor.mesh_device_ != nullptr and device_tensor.mesh_device_ != mesh_device) {
-        TT_ASSERT(device_tensor.device() == mesh_device && "Currently do not support moving between devices");
+    if (input_tensor.storage_type() == StorageType::DEVICE) {
+        TT_ASSERT(input_tensor.mesh_device() == mesh_device, "Currently do not support moving between devices");
+        GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
-    } else {
-        tensor_impl::validate_on_device_dtype_and_layout(
-            input_tensor.get_padded_shape(), input_tensor.get_dtype(), input_tensor.get_layout());
-        return tensor_impl::to_device_mesh_tensor_wrapper(input_tensor, mesh_device, mem_config, cq_id);
     }
+    tensor_impl::validate_on_device_dtype_and_layout(
+        input_tensor.get_padded_shape(), input_tensor.get_dtype(), input_tensor.get_layout());
+    auto device_tensor = tensor_impl::to_device_mesh_tensor_wrapper(input_tensor, mesh_device, mem_config, cq_id);
+    GraphTracker::instance().track_function_end(device_tensor);
+    return device_tensor;
 }
 
 Tensor tensor_to_device(
