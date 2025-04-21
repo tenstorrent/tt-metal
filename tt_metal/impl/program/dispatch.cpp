@@ -2085,7 +2085,21 @@ void write_program_command_sequence(
     CoreType dispatch_core_type,
     bool stall_first,
     bool stall_before_program) {
+    // Generic function to write data to cq
+    auto write_data_to_cq = [&](uint8_t* data, uint32_t size_bytes) {
+        manager.issue_queue_reserve(size_bytes, command_queue_id);
+        uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+        manager.cq_write(data, size_bytes, write_ptr);
+        manager.issue_queue_push_back(size_bytes, command_queue_id);
+        manager.fetch_queue_reserve_back(command_queue_id);
+        manager.fetch_queue_write(size_bytes, command_queue_id);
+    };
+
+    // Write preamble command sequence
     uint32_t preamble_fetch_size_bytes = program_command_sequence.preamble_command_sequence.size_bytes();
+    uint8_t* preamble_command_sequence_data = (uint8_t*)program_command_sequence.preamble_command_sequence.data();
+    write_data_to_cq(preamble_command_sequence_data, preamble_fetch_size_bytes);
+
     auto& curr_stall_seq_idx = program_command_sequence.current_stall_seq_idx;
     uint32_t stall_fetch_size_bytes =
         (stall_first || stall_before_program)
@@ -2103,15 +2117,11 @@ void write_program_command_sequence(
     uint8_t* program_command_sequence_data = (uint8_t*)program_command_sequence.device_command_sequence.data();
 
     uint32_t device_command_sequence_size_bytes =
-        stall_fetch_size_bytes + preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
+        stall_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
 
     if (device_command_sequence_size_bytes <= DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size()) {
         manager.issue_queue_reserve(device_command_sequence_size_bytes, command_queue_id);
         uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-
-        manager.cq_write(
-            program_command_sequence.preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
-        write_ptr += preamble_fetch_size_bytes;
 
         if (stall_first) {
             // Must stall before writing runtime args
@@ -2152,14 +2162,7 @@ void write_program_command_sequence(
         manager.fetch_queue_reserve_back(command_queue_id);
         manager.fetch_queue_write(device_command_sequence_size_bytes, command_queue_id);
     } else {
-        manager.issue_queue_reserve(preamble_fetch_size_bytes, command_queue_id);
         uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-        manager.cq_write(
-            program_command_sequence.preamble_command_sequence.data(), preamble_fetch_size_bytes, write_ptr);
-        manager.issue_queue_push_back(preamble_fetch_size_bytes, command_queue_id);
-        // One fetch queue entry for just the wait and stall, very inefficient
-        manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(preamble_fetch_size_bytes, command_queue_id);
 
         if (stall_first) {
             // Must stall before writing kernel config data
@@ -2229,16 +2232,6 @@ void write_program_command_sequence(
             manager.fetch_queue_write(program_fetch_size_bytes, command_queue_id);
         }
     }
-
-    // Generic function to write data to cq
-    auto write_data_to_cq = [&](uint8_t* data, uint32_t size_bytes) {
-        manager.issue_queue_reserve(size_bytes, command_queue_id);
-        uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-        manager.cq_write(data, size_bytes, write_ptr);
-        manager.issue_queue_push_back(size_bytes, command_queue_id);
-        manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(size_bytes, command_queue_id);
-    };
 
     // Write the launch message
     uint32_t launch_msg_fetch_size_bytes = program_command_sequence.launch_msg_command_sequence.size_bytes();
