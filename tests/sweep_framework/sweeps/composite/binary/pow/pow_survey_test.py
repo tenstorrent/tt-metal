@@ -18,7 +18,7 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "pow_test_2": {
+    "pow_test": {
         "binary_op": [
             {"tt_op": "pow", "a_high": 100, "b_high": 100, "a_low": -100, "b_low": 1},
         ],
