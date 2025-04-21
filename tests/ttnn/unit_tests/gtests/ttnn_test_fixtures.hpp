@@ -25,32 +25,41 @@
 using namespace tt::tt_metal;  // For test
 
 namespace ttnn {
-
-class TTNNFixtureWithDevice : public ::testing::Test {
+class TTNNFixtureBase : public ::testing::Test {
 protected:
     int trace_region_size_ = DEFAULT_TRACE_REGION_SIZE;
     int l1_small_size_ = DEFAULT_L1_SMALL_SIZE;
-
-    IDevice* device_;
-
     tt::ARCH arch_ = tt::ARCH::Invalid;
     size_t num_devices_ = 0;
 
-    void InitStateEnv() {
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        num_devices_ = GetNumAvailableDevices();
-    }
-
-    void checkSlowDispatch() {
+public:
+    void check_slow_dispatch() {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             GTEST_SKIP() << "Skipping test, since it can only be run in Fast Dispatch Mode.";
         }
     }
 
-    void SetUp() override {
+public:
+    TTNNFixtureBase() : trace_region_size_(DEFAULT_TRACE_REGION_SIZE), l1_small_size_(DEFAULT_L1_SMALL_SIZE) {
         std::srand(0);
-        InitStateEnv();
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        num_devices_ = GetNumAvailableDevices();
+    }
+
+    TTNNFixtureBase(int trace_region_size, int l1_small_size) :
+        trace_region_size_(trace_region_size), l1_small_size_(l1_small_size) {
+        std::srand(0);
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        num_devices_ = GetNumAvailableDevices();
+    }
+};
+
+class TTNNFixtureWithDevice : public TTNNFixtureBase {
+protected:
+    IDevice* device_;
+
+    void SetUp() override {
         device_ = tt::tt_metal::CreateDevice(
             /*device_id=*/0,
             /*num_hw_cqs=*/1,
@@ -59,20 +68,15 @@ protected:
     }
 
     void TearDown() override { CloseDevice(device_); }
-
-public:
-    TTNNFixtureWithDevice() : trace_region_size_(DEFAULT_TRACE_REGION_SIZE), l1_small_size_(DEFAULT_L1_SMALL_SIZE) {}
-
-    TTNNFixtureWithDevice(int trace_region_size, int l1_small_size) :
-        trace_region_size_(trace_region_size), l1_small_size_(l1_small_size) {}
 };
 
 // TODO: deduplicate the code with `TTNNFixtureWithDevice`.
-class MultiCommandQueueSingleDeviceFixture : public TTNNFixtureWithDevice {
+class MultiCommandQueueSingleDeviceFixture : public TTNNFixtureBase {
 protected:
+    IDevice* device_;
+
     void SetUp() override {
-        InitStateEnv();
-        checkSlowDispatch();
+        check_slow_dispatch();
 
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ != 1) {
@@ -93,15 +97,12 @@ protected:
 };
 
 // TODO: deduplicate the code with `TTNNFixtureWithDevice`.
-class MultiCommandQueueT3KFixture : public TTNNFixtureWithDevice {
+class MultiCommandQueueT3KFixture : public TTNNFixtureBase {
 protected:
-    // TODO: I think device_ still shows up here, not sure what to do about that though
-
     std::map<chip_id_t, tt::tt_metal::IDevice*> devs;
 
     void SetUp() override {
-        InitStateEnv();
-        checkSlowDispatch();
+        check_slow_dispatch();
 
         if (num_devices_ < 8 or arch_ != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Skipping T3K Multi CQ test suite on non T3K machine.";
