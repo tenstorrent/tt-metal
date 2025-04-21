@@ -171,11 +171,11 @@ def run_reduce_scatter_test(
         scattered_output = torch.cat(scattered_output, dim=1)
 
         output_tensor_goldens_list.append(scattered_output)
-        breakpoint()
+        # breakpoint()
         tt_input = ttnn.from_torch(
             input,
             device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
             memory_config=sharded_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(
@@ -185,7 +185,7 @@ def run_reduce_scatter_test(
         tt_intermediate = ttnn.from_torch(
             intermediate_tensor,
             device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
             memory_config=packet_workers_persistent_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(
@@ -196,6 +196,7 @@ def run_reduce_scatter_test(
         check_mesh_tensor_alloc(tt_intermediate)
         tt_input_tensors_list.append(tt_input)
         tt_intermediate_tensors_list.append(tt_intermediate)
+        # breakpoint()
 
     ccl_sub_device_crs = subdevice_shard_cores_grid if use_regular_grid is not None else SUB_DEVICE_CRS
     worker_sub_device = ttnn.SubDevice(
@@ -358,6 +359,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -365,7 +367,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     ],
     indirect=True,
 )
-def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
+def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode, dtype):
     device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
@@ -393,6 +395,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
         trace_mode,
         num_links=3,
         scheme="random",
+        dtype=dtype,
     )
 
 
