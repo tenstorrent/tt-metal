@@ -16,7 +16,6 @@
 #include "ttnn/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "tools/profiler/op_profiler.hpp"
@@ -24,6 +23,8 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/types.hpp"
+
+#include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
 

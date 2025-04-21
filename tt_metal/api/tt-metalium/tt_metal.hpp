@@ -3,23 +3,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <vector>
+#include <stdint.h>
+#include <cstddef>
 #include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "umd/device/tt_soc_descriptor.h"
-#include "hostdevcommon/common_values.hpp"
-#include "core_coord.hpp"
-#include "dispatch_core_common.hpp"
-#include "buffer.hpp"
-#include "profiler_types.hpp"
-#include "profiler_optional_metadata.hpp"
-#include "fabric_types.hpp"
+#include <hostdevcommon/common_values.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/profiler_types.hpp>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+
+namespace tt {
+namespace tt_metal {
+enum class FabricConfig : uint32_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
-class Program;
 class Buffer;
 class IDevice;
+class Program;
 
 namespace detail {
 
@@ -38,7 +52,8 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
     const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
-    const std::vector<uint32_t>& l1_bank_remap = {});
+    const std::vector<uint32_t>& l1_bank_remap = {},
+    const size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
 void CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
 
@@ -121,9 +136,14 @@ void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& 
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
-void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done = true);
-void LaunchProgram(IDevice* device, const std::shared_ptr<Program>& program, bool wait_until_cores_done = true);
-void WaitProgramDone(IDevice* device, Program& program);
+void LaunchProgram(
+    IDevice* device, Program& program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
+void LaunchProgram(
+    IDevice* device,
+    const std::shared_ptr<Program>& program,
+    bool wait_until_cores_done = true,
+    bool force_slow_dispatch = false);
+void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results = true);
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to
@@ -146,10 +166,11 @@ void WaitProgramDone(IDevice* device, Program& program);
  * |---------------------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
  * | device                    | Which device the program is compiled for                         | IDevice*  | Must be
  * initialized via tt_metal::InitializeDevice | Yes      | | program                   | The program to compile |
- * Program & |                                                    | Yes      | | fd_bootloader_mode        | Set when
- * compiling program to initialize fast dispatch           | bool      | | No       |
+ * Program & |                                                    | Yes      | | force_slow_dispatch        | Set when
+ * a user wants to compile a program with Slow Dispatch Force Enabled (advanced feature, currently used internally to
+ * launch Fast Dispatch Firmware and in the Device Performance Profiler)           | bool      | | No |
  */
-void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode = false);
+void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
  * Writes runtime args that are saved in the program to device
@@ -163,13 +184,13 @@ void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode =
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool fd_bootloader_mode = false);
+void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
 // - Configures circular buffers (inits regs with buffer data)
 // - Takes the device out of reset
-bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootloader_mode = false);
+bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
  * Clear profiler control buffer

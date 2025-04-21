@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include <tt-metalium/assert.hpp>
@@ -166,7 +164,10 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
     TT_FATAL(
         mesh_shape[0] <= mesh_device.shape()[0] &&  //
             mesh_shape[1] <= mesh_device.shape()[1],
-        "Device mesh shape does not match the provided mesh shape.");
+        "Device mesh shape {} does not match the provided mesh shape ({}, {}).",
+        mesh_device.shape(),
+        mesh_shape[0],
+        mesh_shape[1]);
     return std::make_unique<ShardTensorTo2dMesh>(mesh_shape[0], mesh_shape[1], config);
 }
 
@@ -194,7 +195,7 @@ Tensor distribute_tensor(
     std::vector<Tensor> tensors = mapper.map(tensor);
     Tensor output = aggregate_as_tensor(tensors, mapper.config());
     if (mesh_device.has_value()) {
-        return output.to_device(&(mesh_device->get()));
+        return output.to_device(&(mesh_device->get()), output.memory_config());
     }
     return output;
 }

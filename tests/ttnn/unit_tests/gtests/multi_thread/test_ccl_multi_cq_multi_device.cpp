@@ -51,7 +51,19 @@ using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;
 using tt::tt_metal::distributed::MeshShape;
 
-TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
+// Custom Fixture using 1D Fabric on a Multi-CQ MeshDevice
+class T3000MultiCQFabricMeshDeviceFixture : public T3000MultiCQMeshDeviceFixture {
+protected:
+    T3000MultiCQFabricMeshDeviceFixture() {
+        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_1D);
+    }
+    void TearDown() override {
+        T3000MultiCQMeshDeviceFixture::TearDown();
+        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+    }
+};
+
+TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     const size_t dim = 0;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
@@ -76,24 +88,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
         test_expected_num_devices,
         num_devices);
 
-    // FABRIC setup
-    const bool enable_persistent_fabric = true;
-
-    std::vector<Program> dummy_worker_programs;
-    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
-    std::optional<std::vector<Program>> fabric_programs;
-    std::vector<Program*> fabric_program_ptrs;
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
-    setup_test_with_persistent_fabric(
-        devices,
-        dummy_worker_programs,
-        subdevice_managers,
-        fabric_programs,
-        fabric_program_ptrs,
-        fabric_handle,
-        enable_persistent_fabric,
-        num_links);
-
     log_info(LogTest, "Creating Global Semaphore for Ccl Ops");
     auto
         [from_remote_multi_device_global_semaphore,
@@ -107,8 +101,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     const ttnn::Shape input_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
-    auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-    auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
 
     uint8_t op_cq_id = 0;  // operation command queue id
     boost::asio::thread_pool pool(devices.size());
@@ -126,6 +118,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
                 // Generate input data for each device
+                auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
                 for (int j = 0; j < num_elems; j++) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
@@ -145,8 +138,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 
                 promise->set_value();
             });
-            // If you remove below comment (perform sleep), the final output value will be correct.
-            // std::this_thread::sleep_for(std::chrono::seconds(1));
             dev_idx++;
         }
 
@@ -168,8 +159,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
             1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
-            SubDeviceId(0),
-            true);
+            SubDeviceId(0));
 
         log_info(LogTest, "EnqueueReadBuffer", outer_loop);
         // Read the values from each device and compare them with the results calculated on the host
@@ -191,13 +181,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 
     pool.join();
 
-    if (enable_persistent_fabric) {
-        persistent_fabric_teardown_sequence(
-            devices,
-            subdevice_managers,
-            fabric_handle.value(),
-            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-    }
     for (auto device : devices) {
         ttnn::queue_synchronize(device->command_queue(op_cq_id));
     }
@@ -205,7 +188,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     log_info(tt::LogTest, "Finished");
 }
 
-TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
+TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     const size_t dim = 0;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
@@ -230,24 +213,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
         test_expected_num_devices,
         num_devices);
 
-    // FABRIC setup
-    const bool enable_persistent_fabric = true;
-
-    std::vector<Program> dummy_worker_programs;
-    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
-    std::optional<std::vector<Program>> fabric_programs;
-    std::vector<Program*> fabric_program_ptrs;
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
-    setup_test_with_persistent_fabric(
-        devices,
-        dummy_worker_programs,
-        subdevice_managers,
-        fabric_programs,
-        fabric_program_ptrs,
-        fabric_handle,
-        enable_persistent_fabric,
-        num_links);
-
     log_info(LogTest, "Creating Global Semaphore for Ccl Ops");
     auto
         [from_remote_multi_device_global_semaphore,
@@ -261,8 +226,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     const ttnn::Shape input_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
-    auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-    auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
 
     uint8_t ccl_cq_id = 0;  // ccl operation command queue id
     uint8_t op_cq_id = 1;   // device operation, read/write command queue id
@@ -282,6 +245,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
                 // Generate input data for each device
+                auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
                 for (int j = 0; j < num_elems; j++) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
@@ -327,8 +291,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
             1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
-            SubDeviceId(0),
-            true);
+            SubDeviceId(0));
 
         futures.clear();  // Clear futures for the next set of tasks
         for (size_t i = 0; i < devices.size(); ++i) {
@@ -372,13 +335,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
 
     pool.join();
 
-    if (enable_persistent_fabric) {
-        persistent_fabric_teardown_sequence(
-            devices,
-            subdevice_managers,
-            fabric_handle.value(),
-            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-    }
     for (auto device : devices) {
         ttnn::queue_synchronize(device->command_queue(op_cq_id));
     }

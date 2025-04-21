@@ -4,12 +4,19 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <array>
 #include <optional>
+#include <tuple>
 
-#include "bfloat16.hpp"
-#include "tt_backend_api_types.hpp"
-#include "constants.hpp"
-#include "math.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -59,7 +66,7 @@ struct Tile {
     const bool get_transpose_within_face() const { return transpose_within_face; }
     const bool get_transpose_of_faces() const { return transpose_of_faces; }
 
-    const uint32_t get_tile_size(const DataFormat& format) const;
+    uint32_t get_tile_size(const DataFormat& format) const;
 
     // operators
     bool operator==(const Tile& other) const;

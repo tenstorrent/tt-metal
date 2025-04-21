@@ -37,12 +37,12 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        # True,
-        False,
+        True,
+        # False,
     ),
     ids=(
-        # "paged_attention",
-        "default_attention",
+        "paged_attention",
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -63,6 +63,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 165136000,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
     ],
     indirect=True,
@@ -186,6 +187,9 @@ def test_llama_decoder_inference(
             mesh_shape=model_args.cluster_shape,
         ),
     )
+    # Explicitly allocate global CB to avoid memory fragmentation
+    prefetcher_setup.create_global_cb()
+
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
 

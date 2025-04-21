@@ -65,8 +65,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
     auto cb = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(unpadded_row_size_nbytes);
     uint32_t src_log2_stick_size =
         src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(unpadded_row_size_nbytes) : 0;
@@ -154,11 +154,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, cores, writer_rt_args);
 
     auto override_runtime_args_callback = [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
         CoreCoord core = {0, 0};
         {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
@@ -257,8 +259,8 @@ operation::ProgramWithCallbacks pad_tile(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       (std::uint32_t)src0_is_dram};
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
@@ -283,12 +285,14 @@ operation::ProgramWithCallbacks pad_tile(
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_dram_buffer = input_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_dram_buffer = input_tensors.at(0).buffer();
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -514,14 +518,14 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     // uint32_t cb_npages = 1; // multibuffering for perf
     uint32_t cb_page_alignment = std::max(tt::constants::TILE_WIDTH, src0_buffer->alignment());
     uint32_t cb_pagesize =
-        static_cast<uint32_t>(ceil((float)dst_nbytes_per_core_w / cb_page_alignment)) * cb_page_alignment;
+        static_cast<uint32_t>(std::ceil((float)dst_nbytes_per_core_w / cb_page_alignment)) * cb_page_alignment;
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(unpadded_row_size_nbytes);
     uint32_t src_log2_stick_size =
         src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(unpadded_row_size_nbytes) : 0;
@@ -671,11 +675,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
                                            writer_kernel_id = writer_kernel_id,
                                            ncores_h = ncores_h,
                                            ncores_w = ncores_w](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t j = 0; j < ncores_h; ++j) {
             for (uint32_t i = 0; i < ncores_w; ++i) {
@@ -868,8 +874,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
     bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size_padded);

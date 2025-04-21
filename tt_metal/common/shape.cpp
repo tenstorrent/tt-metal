@@ -4,11 +4,14 @@
 
 #include "shape.hpp"
 
-#include <numeric>
-#include <ostream>
-
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/small_vector.hpp>
+#include <functional>
+#include <numeric>
+#include <ostream>
+#include <utility>
 
 namespace tt::tt_metal {
 
@@ -44,7 +47,7 @@ Shape Shape::to_rank(size_t new_rank) const {
     return Shape(std::move(new_shape));
 }
 
-const uint32_t Shape::get_normalized_index(std::int64_t index) const {
+uint32_t Shape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank());
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
     TT_FATAL(

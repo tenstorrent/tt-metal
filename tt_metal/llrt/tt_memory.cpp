@@ -4,12 +4,12 @@
 
 #include "tt_memory.h"
 
-#include <cstddef>
+#include <assert.hpp>
+#include <algorithm>
 #include <cstdint>
-#include <limits>
+#include <span>
 
 #include "tt_elffile.hpp"
-#include <assert.hpp>
 
 namespace ll_api {
 

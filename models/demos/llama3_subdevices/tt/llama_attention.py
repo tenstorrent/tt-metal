@@ -269,40 +269,36 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         ttnn.deallocate(x)
         # print("done matmul")
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
-        xqkv_reduced = self.tt_ccl.line_all_reduce(
-            xqkv_fused_sharded, cluster_axis=1, num_links=3, memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"]
-        )
-
-        ttnn.deallocate(xqkv_fused_sharded)
-
-        # print("done all reduce")
-
         ###
         # Reshape and rotary embeddings
         ###
         (
+            xqkv_reduced,
             q_heads_pre_rot_1BQD,
             k_heads_pre_rot_1BKD,
             v_heads_1BKD,
-        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
-            xqkv_reduced,
+        ) = self.tt_ccl.line_all_reduce_create_heads(
+            xqkv_fused_sharded,
+            cluster_axis=1,
+            num_links=3,
             num_heads=self.n_local_heads,
+            memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"],
             num_kv_heads=self.n_local_kv_heads,
-            memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
-            overlap_qk_coregrid=False,
+            qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
             batch_offset=self.batch_offset_tt_tensor,
-            slice_size=self.slice_size,
+            slice_size=8,
+            dtype=ttnn.bfloat16,
         )
 
         # print("done create qkv heads")
-
+        ttnn.deallocate(xqkv_fused_sharded)
         ttnn.deallocate(xqkv_reduced)
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
@@ -349,7 +345,7 @@ class TtLlamaAttention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
                 scale=self.scale,
-                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                program_config=self.model_config["PAGED_SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
                 memory_config=sdpa_out_mem_cfg,
             )

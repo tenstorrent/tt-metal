@@ -25,6 +25,7 @@
 #include "risc_attribs.h"
 #include "utils/utils.h"
 #include "debug/assert.h"
+#include "compile_time_args.h"
 #include "dev_msgs.h"
 #include "dataflow_api_common.h"
 #include "dataflow_api_addrgen.h"
@@ -149,20 +150,6 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
-
-// clang-format off
-/**
- * Returns the value of a constexpr argument from kernel_compile_time_args array provided during kernel creation using
- * CreateKernel calls.
- *
- * Return value: constexpr uint32_t
- *
- * | Argument              | Description                        | Type                  | Valid Range | Required |
- * |-----------------------|------------------------------------|-----------------------|-------------|----------|
- * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
- */
-// clang-format on
-#define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
 
 // clang-format off
 /**
@@ -358,12 +345,6 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
     // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
     // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
     uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
-#ifdef ARCH_GRAYSKULL
-    // The following test slows down by 5% when removing the barrier
-    // TODO(pgk) investigate GS arbiter WAR in compiler, is this fixing an issue there?
-    // models/experimental/stable_diffusion/tests/test_perf_unbatched_stable_diffusion.py::test_perf_bare_metal
-    volatile uint32_t local_mem_barrier = pages_acked;
-#endif
     uint16_t free_space_pages_wrap = get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
     return num_pages <= static_cast<int32_t>(free_space_pages_wrap);
 }
@@ -397,12 +378,6 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
         uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
-#ifdef ARCH_GRAYSKULL
-        // The following test slows down by 5% when removing the barrier
-        // TODO(pgk) investigate GS arbiter WAR in compiler, is this fixing an issue there?
-        // models/experimental/stable_diffusion/tests/test_perf_unbatched_stable_diffusion.py::test_perf_bare_metal
-        volatile uint32_t local_mem_barrier = pages_acked;
-#endif
         uint16_t free_space_pages_wrap =
             get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
         free_space_pages = (int32_t)free_space_pages_wrap;
@@ -1564,7 +1539,8 @@ template <bool posted = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
     uint64_t addr, uint8_t be = 0xF, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
-    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    // DEBUG_SANITIZE_NOC_ADDR is not needed here because it doesn't send out the request
+    // The address could be set here or later in noc_inline_dw_write_with_state
 
     uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_CPY | NOC_CMD_WR |
                              NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
@@ -1725,14 +1701,15 @@ void noc_async_read_tile_dram_sharded_with_state(
     }
 }
 
-FORCE_INLINE
-void noc_async_read_tile_dram_sharded_with_state_with_trid(
+template <bool skip_ptr_update = false>
+FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
 
     WAYPOINT("NRDW");
 #ifndef ARCH_GRAYSKULL
-    ncrisc_noc_fast_read_with_transaction_id<noc_mode>(noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
+    ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
+        noc, read_cmd_buf, src_base_addr, src_addr, dest_addr, trid);
 #endif
     WAYPOINT("NRDD");
 }

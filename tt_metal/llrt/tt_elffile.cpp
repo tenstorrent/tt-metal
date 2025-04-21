@@ -4,21 +4,20 @@
 
 #include "tt_elffile.hpp"
 
-#include <algorithm>
-#include <array>
-
 #include <assert.hpp>
-// C++
-#include <map>
-// C
-#include <errno.h>
-// OS
 #include <elf.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <algorithm>
+#include <cstring>
+#include <iterator>
+#include <map>
+
+#include "logger.hpp"
 
 // Verify some knowledge of, and compatibilty with, RiscV
 #ifndef EM_RISCV

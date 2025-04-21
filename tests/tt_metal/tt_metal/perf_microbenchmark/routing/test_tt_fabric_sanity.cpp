@@ -2,23 +2,58 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include "rtoptions.hpp"
-#include <tt-metalium/mesh_graph.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <nlohmann/json_fwd.hpp>
+#include <stdint.h>
+#include <tt_stl/span.hpp>
 #include <tt-metalium/control_plane.hpp>
-//#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "test_common.hpp"
-#include "routing_test_common.hpp"
-#include "eth_l1_address_map.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
-#include <numeric>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
-#include <random>
+#include <exception>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <numeric>
+#include <optional>
 #include <queue>
+#include <random>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/program.hpp>
+#include "routing_test_common.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "test_common.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;
@@ -147,10 +182,10 @@ typedef struct test_board {
         }
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         if (metal_fabric_init_level == 0) {
-            control_plane = tt::Cluster::instance().get_control_plane();
+            control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
             control_plane->write_routing_tables_to_all_chips();
         } else {
-            control_plane = tt::Cluster::instance().get_control_plane();
+            control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         }
 
         if (num_chips_to_use != available_chip_ids.size()) {
@@ -191,7 +226,7 @@ typedef struct test_board {
     void _init_control_plane(const std::string& mesh_graph_descriptor) {
         try {
             const std::filesystem::path mesh_graph_desc_path =
-                std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+                std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
                 "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
             cp_owning_ptr = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
             control_plane = cp_owning_ptr.get();
@@ -304,7 +339,9 @@ typedef struct test_board {
         // for each physical chip id, store the neighbors
         // TDOD: update the logic to find inter-mesh neighbors
         for (auto chip_id : physical_chip_ids) {
-            auto neighbors = tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(chip_id);
+            auto neighbors =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+                    chip_id);
             for (const auto& [neighbor, cores] : neighbors) {
                 // only append valid chip IDs since the neighbors could include mmio chips (wh galaxy) or
                 // could be outside of the board type (in case of partial galaxy configurations)
@@ -453,7 +490,7 @@ typedef struct test_board {
         return control_plane->get_fabric_route(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_chan_id);
     }
 
-    inline std::vector<chip_id_t> get_intra_chip_neighbors(
+    inline stl::Span<const chip_id_t> get_intra_chip_neighbors(
         mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) {
         return control_plane->get_intra_chip_neighbors(src_mesh_id, src_chip_id, routing_direction);
     }
@@ -463,7 +500,13 @@ typedef struct test_board {
     }
 
     inline eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t eth_chan) {
-        return control_plane->get_eth_chan_direction(mesh_id, chip_id, eth_chan);
+        auto active_eth_chans = control_plane->get_active_fabric_eth_channels(mesh_id, chip_id);
+        for (const auto& [eth_chan_, direction] : active_eth_chans) {
+            if (eth_chan_ == eth_chan) {
+                return direction;
+            }
+        }
+        TT_THROW("Cannot find ethernet channel direction");
     }
 
     inline void close_devices() { tt::tt_metal::detail::CloseDevices(device_handle_map); }
@@ -497,7 +540,7 @@ typedef struct test_device {
         program_handle = tt_metal::CreateProgram();
         std::tie(mesh_id, logical_chip_id) = board_handle->get_mesh_chip_id(physical_chip_id);
         mesh_chip_id = (mesh_id << 16 | logical_chip_id);
-        soc_desc = tt::Cluster::instance().get_soc_desc(physical_chip_id);
+        soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
 
         // initalize list of worker cores in 8X8 grid
         // TODO: remove hard-coding
@@ -511,7 +554,9 @@ typedef struct test_device {
         core_range_end_virtual = device_handle->worker_core_from_logical_core(CoreCoord(7, 7));
 
         // populate router cores
-        auto neighbors = tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(device_handle->id());
+        auto neighbors =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+                device_handle->id());
         for (const auto& [neighbor_chip, connected_logical_cores] : neighbors) {
             if (!(board_handle->is_valid_chip_id(neighbor_chip))) {
                 continue;
@@ -611,7 +656,7 @@ typedef struct test_device {
 
     inline uint32_t get_noc_offset(CoreCoord& logical_core) {
         CoreCoord phys_core = device_handle->worker_core_from_logical_core(logical_core);
-        return tt_metal::hal_ref.noc_xy_encoding(phys_core.x, phys_core.y);
+        return tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_core.x, phys_core.y);
     }
 
     void get_available_router_cores(
@@ -767,7 +812,7 @@ typedef struct test_device {
         }
     }
 
-    inline std::vector<chip_id_t> get_intra_chip_neighbors(RoutingDirection routing_direction) {
+    inline stl::Span<const chip_id_t> get_intra_chip_neighbors(RoutingDirection routing_direction) {
         return board_handle->get_intra_chip_neighbors(mesh_id, logical_chip_id, routing_direction);
     }
 
@@ -881,7 +926,7 @@ typedef struct test_traffic {
         test_results_address = test_results_address_;
 
         {
-            uint32_t mcast_encoding = tt::tt_metal::hal_ref.noc_multicast_encoding(
+            uint32_t mcast_encoding = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
                 tx_device->core_range_start_virtual.x,
                 tx_device->core_range_start_virtual.y,
                 tx_device->core_range_end_virtual.x,
@@ -1639,7 +1684,7 @@ int main(int argc, char **argv) {
         }
 
         uint32_t worker_unreserved_base_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+            test_devices.begin()->second->device_handle->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
         if (metal_fabric_init_level == 0) {
             // manual init fabric
@@ -1812,7 +1857,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

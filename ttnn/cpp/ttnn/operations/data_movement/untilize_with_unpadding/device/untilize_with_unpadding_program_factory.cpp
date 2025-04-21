@@ -132,10 +132,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         block_row_size,
         block_row_leftover_size};
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};
 
-    bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t stick_size = unpadded_stick_size;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
@@ -189,11 +189,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
 
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
                                            writer_kernel_id = unary_writer_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -473,11 +475,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
 
     auto override_runtime_args_callback =
         [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const Program& program,
-            const std::vector<Buffer*>& input_buffers,
-            const std::vector<Buffer*>& output_buffers) {
-            auto src_buffer = input_buffers.at(0);
-            auto dst_buffer = output_buffers.at(0);
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto src_buffer = input_tensors.at(0).buffer();
+            auto dst_buffer = output_tensors.at(0).buffer();
 
             auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
@@ -631,11 +635,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 
     auto override_runtime_args_callback =
         [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const Program& program,
-            const std::vector<Buffer*>& input_buffers,
-            const std::vector<Buffer*>& output_buffers) {
-            auto src_buffer = input_buffers.at(0);
-            auto dst_buffer = output_buffers.at(0);
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto src_buffer = input_tensors.at(0).buffer();
+            auto dst_buffer = output_tensors.at(0).buffer();
 
             auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
@@ -848,11 +854,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     auto override_runtime_args_callback =
         [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const Program& program,
-            const std::vector<Buffer*>& input_buffers,
-            const std::vector<Buffer*>& output_buffers) {
-            auto src_buffer = input_buffers.at(0);
-            auto dst_buffer = output_buffers.at(0);
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto src_buffer = input_tensors.at(0).buffer();
+            auto dst_buffer = output_tensors.at(0).buffer();
 
             auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
@@ -988,7 +996,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
-        bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+        bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
         std::vector<uint32_t> writer_ct_args = {
             (uint32_t)out_is_dram,
             (uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or

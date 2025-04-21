@@ -2,35 +2,58 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
-#include <functional>
-#include <random>
-#include <stdexcept>
-#include <string>
-#include <vector>
-
-#include <yaml-cpp/yaml.h>
-
-#include <tt-metalium/bfloat8.hpp>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/global_circular_buffer_impl.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
-
-#include "tests/tt_metal/test_utils/tilization.hpp"
-
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include "test_common.hpp"
+#include <tt-metalium/tilize_utils.hpp>
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using std::vector;
 using namespace tt;
@@ -363,7 +386,7 @@ bool validation_bfp8_b(
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
-    result_untilized = tt::test_utils::untilize(result_bfp8, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
+    result_untilized = untilize_swizzled(result_bfp8, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
 
     const auto& values = input_tensor.get_values();
 
@@ -404,8 +427,8 @@ bool validation_fp16(
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
-    auto result_untilized = tt::test_utils::untilize(result_flat_layout, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
+    auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+    auto result_untilized = untilize_swizzled(result_flat_layout, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
 
     const auto& values = input_tensor.get_values();
 
@@ -447,13 +470,13 @@ bool validation_mixed_df(
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_untilized_fp16 = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
+    auto result_untilized_fp16 = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
 
     std::vector<float> golden_vec(kt * 32 / num_blocks * cb_num_blocks * nt * 32);
     std::vector<float> result_vec_fp16(kt * 32 / num_blocks * cb_num_blocks * nt * 32);
 
     // compare with the result tilized with tilized
-    auto values_fp16 = tt::test_utils::tilize(input_tensor_fp16.get_values(), kt * 32, nt * 32);
+    auto values_fp16 = tilize_swizzled(input_tensor_fp16.get_values(), kt * 32, nt * 32);
 
     uint32_t block_h = kt / num_blocks;
     uint32_t block_w = nt;
@@ -598,7 +621,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         input_buffer = CreateBuffer(config);
     }
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     log_info("created sharded tensor");
 
@@ -756,7 +779,7 @@ int main(int argc, char** argv) {
         if (tile_format == tt::DataFormat::Bfp8_b) {
             for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
                 if (i % 2 == 0) {  // even layers
-                    auto input_vec_tilized = tt::test_utils::tilize(tensor_fp8.get_values(), k, n);
+                    auto input_vec_tilized = tilize_swizzled(tensor_fp8.get_values(), k, n);
                     std::vector<uint32_t> packed_input_vec_tile_layout =
                         pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -769,8 +792,8 @@ int main(int argc, char** argv) {
                         dram_reader_core,
                         num_banks);
                 } else {  // odd layers
-                    auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
-                    auto input_vec_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(input_vec_tilized));
+                    auto input_vec_tilized = tilize_swizzled(tensor_fp16.get_values(), k, n);
+                    auto input_vec_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(input_vec_tilized));
                     vector<uint32_t> packed_input_vec_tile_layout =
                         pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -787,8 +810,8 @@ int main(int argc, char** argv) {
         } else {
             for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
                 if (i % 2 == 0) {  // even layers
-                    auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
-                    auto input_vec_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(input_vec_tilized));
+                    auto input_vec_tilized = tilize_swizzled(tensor_fp16.get_values(), k, n);
+                    auto input_vec_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(input_vec_tilized));
                     vector<uint32_t> packed_input_vec_tile_layout =
                         pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -801,7 +824,7 @@ int main(int argc, char** argv) {
                         dram_reader_core,
                         num_banks);
                 } else {
-                    auto input_vec_tilized = tt::test_utils::tilize(tensor_fp8.get_values(), k, n);
+                    auto input_vec_tilized = tilize_swizzled(tensor_fp8.get_values(), k, n);
                     std::vector<uint32_t> packed_input_vec_tile_layout =
                         pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(

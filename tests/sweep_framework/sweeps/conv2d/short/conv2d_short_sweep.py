@@ -1619,10 +1619,6 @@ failing_parameters = [
     # [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias]
     [1, 528, 528, 192, 192, 3, 3, 2, 2, 1, 1, 2, 1, 1, False],  # 220
     [1, 819, 256, 100, 136, 3, 3, 1, 1, 1, 1, 1, 1, 1, True],  # 1443
-    [1, 1024, 3, 224, 224, 32, 32, 32, 32, 0, 0, 1, 1, 1, True],  # 1458
-    [1, 768, 3, 224, 224, 32, 32, 32, 32, 0, 0, 1, 1, 1, False],  # 1460
-    [1, 768, 3, 224, 224, 32, 32, 32, 32, 0, 0, 1, 1, 1, True],  # 1461
-    [1, 768, 3, 384, 512, 32, 32, 32, 32, 0, 0, 1, 1, 1, True],  # 1464
     [1, 1, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, True],  # 1495
     [1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, True],  # 1496
 ]
@@ -1650,5 +1646,4 @@ def test_conv2d_localrun_conv1d(device, input_spec):
 
 failing_parameters_conv1d = [
     # [batch_size, output_channels, input_channels, input_length, kernel_size, stride, pad, groups, dilation, bias]
-    [1, 768, 768, 3000, 3, 2, 1, 1, 1, True],
 ]

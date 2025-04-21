@@ -4,11 +4,16 @@
 
 #include "rtoptions.hpp"
 
+#include <ctype.h>
 #include <stdio.h>
-#include <stdlib.h>
-
+#include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <stdexcept>
 #include <string>
+
+#include "assert.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 using std::vector;
 
@@ -30,6 +35,8 @@ static const char* TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
 static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
 static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
+// Used for demonstration purposes and will be removed in the future.
+static const char* TT_METAL_FD_FABRIC_DEMO = "TT_METAL_FD_FABRIC";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
@@ -115,6 +122,16 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    const char* skip_eth_cores_with_retrain_str = std::getenv("TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN");
+    if (skip_eth_cores_with_retrain_str != nullptr) {
+        if (skip_eth_cores_with_retrain_str[0] == '0') {
+            skip_eth_cores_with_retrain = false;
+        }
+        if (skip_eth_cores_with_retrain_str[0] == '1') {
+            skip_eth_cores_with_retrain = true;
+        }
+    }
+
     const char* riscv_debug_info_enabled_str = std::getenv("TT_METAL_RISCV_DEBUG_INFO");
     set_riscv_debug_info_enabled(riscv_debug_info_enabled_str != nullptr);
 
@@ -130,7 +147,7 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
-    const char* fb_fabric = getenv("TT_METAL_FD_FABRIC");
+    const char* fb_fabric = getenv(TT_METAL_FD_FABRIC_DEMO);
     fb_fabric_en = fb_fabric != nullptr;
 
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
@@ -162,7 +179,7 @@ RunTimeOptions::RunTimeOptions() {
     }
 }
 
-const std::string& RunTimeOptions::get_root_dir() {
+const std::string& RunTimeOptions::get_root_dir() const {
     if (!this->is_root_dir_specified()) {
         TT_THROW("Env var {} is not set.", TT_METAL_HOME_ENV_VAR);
     }
@@ -170,7 +187,7 @@ const std::string& RunTimeOptions::get_root_dir() {
     return root_dir;
 }
 
-const std::string& RunTimeOptions::get_cache_dir() {
+const std::string& RunTimeOptions::get_cache_dir() const {
     if (!this->is_cache_dir_specified()) {
         TT_THROW("Env var {} is not set.", TT_METAL_CACHE_ENV_VAR);
     }

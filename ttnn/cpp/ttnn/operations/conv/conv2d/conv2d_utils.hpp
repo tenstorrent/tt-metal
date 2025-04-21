@@ -38,7 +38,13 @@ bool use_matmul_for_1x1_conv(
 bool is_1d_conv(uint32_t kernel_width, uint32_t image_width);
 
 bool is_1d_deptwise_conv(
-    uint32_t groups, uint32_t input_channels, uint32_t output_channels, uint32_t kernel_width, uint32_t image_width);
+    uint32_t groups,
+    uint32_t input_channels,
+    uint32_t output_channels,
+    uint32_t kernel_width,
+    uint32_t image_width,
+    bool has_bias);
+
 sliding_window::ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,

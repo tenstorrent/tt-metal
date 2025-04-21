@@ -4,20 +4,24 @@
 
 #pragma once
 
+#include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include "assert.hpp"
-#include "device.hpp"
-#include "dispatch_core_common.hpp"
-#include <tt_stl/span.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "control_plane.hpp"
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt {
 namespace tt_metal::detail {
@@ -46,7 +50,8 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         const tt_metal::DispatchCoreConfig& dispatch_core_config,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {}) noexcept;
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE) noexcept;
 
     tt_metal::IDevice* get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
@@ -63,6 +68,7 @@ private:
     uint8_t num_hw_cqs;
     size_t l1_small_size;
     size_t trace_region_size;
+    size_t worker_l1_size;
     std::vector<uint32_t> l1_bank_remap;
     bool using_fast_dispatch;
     std::mutex lock;

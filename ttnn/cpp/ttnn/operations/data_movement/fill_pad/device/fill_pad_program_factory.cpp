@@ -56,7 +56,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
             .set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // pack bf16 vals
     uint32_t packed_fill_value = (std::uint32_t)fill_value;
@@ -125,10 +125,12 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     }
 
     auto override_runtime_args_callback = [writer_kernel_id, cores](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto tens_buffer = input_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto tens_buffer = input_tensors.at(0).buffer();
 
         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
 

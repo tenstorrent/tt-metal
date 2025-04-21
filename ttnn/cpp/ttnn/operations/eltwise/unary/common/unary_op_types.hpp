@@ -18,6 +18,7 @@ enum class UnaryOpType {
     SQRT,
     SIGMOID,
     LOG,
+    LOG1P,
     TANH,
     LOG2,
     LOG10,
@@ -93,6 +94,17 @@ enum class UnaryOpType {
     PRELU_SFPU,
     ZERO_POINT,
     MISH,
+    MAXIMUM,
+    MINIMUM,
+};
+
+enum class VecMode {
+    None = 0,
+    R = 1,
+    C = 2,
+    RC = 4,
+    RC_custom = 6,
+    Invalid = 0xFF,
 };
 
 struct UnaryWithParam {

@@ -4,8 +4,12 @@
 
 #pragma once
 
+#include <stdint.h>
+
 #include "core_coord.hpp"
+#include "data_types.hpp"
 #include "fd_kernel.hpp"
+#include "system_memory_manager.hpp"
 
 namespace tt::tt_metal {
 

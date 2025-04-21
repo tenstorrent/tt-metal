@@ -20,22 +20,27 @@ from models.utility_functions import (
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 5554176, "num_command_queues": 2}], indirect=True
 )
-@pytest.mark.parametrize("batch_size", (16, 32))
 @pytest.mark.parametrize(
-    "act_dtype, weight_dtype",
-    ((ttnn.bfloat8_b, ttnn.bfloat8_b),),
+    "batch_size_per_device, iterations, act_dtype, weight_dtype",
+    (
+        (16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),
+        (32, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),
+    ),
 )
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 def test_run_resnet50_trace_2cqs_inference(
     device,
     use_program_cache,
-    batch_size,
+    batch_size_per_device,
+    iterations,
     imagenet_label_dict,
     act_dtype,
     weight_dtype,
     enable_async_mode,
     model_location_generator,
 ):
+    batch_size = batch_size_per_device * device.get_num_devices()
+    iterations = iterations // device.get_num_devices()
     profiler.clear()
     with torch.no_grad():
         resnet50_trace_2cq = ResNet50Trace2CQ()
@@ -43,14 +48,14 @@ def test_run_resnet50_trace_2cqs_inference(
         profiler.start(f"compile")
         resnet50_trace_2cq.initialize_resnet50_trace_2cqs_inference(
             device,
-            batch_size,
+            batch_size_per_device,
             act_dtype,
             weight_dtype,
         )
         profiler.end(f"compile")
         model_version = "microsoft/resnet-50"
-        iterations = 100
         image_processor = AutoImageProcessor.from_pretrained(model_version)
+        logger.info("ImageNet-1k validation Dataset")
         input_loc = str(model_location_generator("ImageNet_data"))
         data_loader = get_data_loader(input_loc, batch_size, iterations)
 
@@ -60,17 +65,28 @@ def test_run_resnet50_trace_2cqs_inference(
             inputs, labels = get_batch(data_loader, image_processor)
             input_tensors_all.append(inputs)
             input_labels_all.append(labels)
+        logger.info("Processed ImageNet-1k validation Dataset")
 
+        logger.info("Starting inference")
         correct = 0
-        profiler.start(f"run")
+        total_inference_time = 0
         for iter in range(iterations):
             predictions = []
             inputs = input_tensors_all[iter]
             labels = input_labels_all[iter]
+            profiler.start(f"run")
             ### TODO optimize input streamer for better e2e performance
-            tt_inputs_host = ttnn.from_torch(inputs, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output = resnet50_trace_2cq.execute_resnet50_trace_2cqs_inference(tt_inputs_host).to_torch().to(torch.float)
+            tt_inputs_host = ttnn.from_torch(
+                inputs,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=resnet50_trace_2cq.test_infra.inputs_mesh_mapper,
+            )
+            output = resnet50_trace_2cq.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
+            output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
             prediction = output[:, 0, 0, :].argmax(dim=-1)
+            profiler.end(f"run")
+            total_inference_time += profiler.get(f"run")
             for i in range(batch_size):
                 predictions.append(imagenet_label_dict[prediction[i].item()])
                 logger.info(
@@ -78,7 +94,6 @@ def test_run_resnet50_trace_2cqs_inference(
                 )
                 if imagenet_label_dict[labels[i]] == predictions[-1]:
                     correct += 1
-        profiler.end(f"run")
         resnet50_trace_2cq.release_resnet50_trace_2cqs_inference()
         accuracy = correct / (batch_size * iterations)
         logger.info(f"=============")
@@ -86,7 +101,7 @@ def test_run_resnet50_trace_2cqs_inference(
 
         first_iter_time = profiler.get(f"compile")
         # ensuring inference time fluctuations is not noise
-        inference_time_avg = profiler.get("run") / (iterations)
+        inference_time_avg = total_inference_time / (iterations)
 
         compile_time = first_iter_time - 2 * inference_time_avg
     logger.info(

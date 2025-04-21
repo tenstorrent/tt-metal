@@ -98,8 +98,8 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
 
     uint32_t log2_page_size = 0;
     std::vector<uint32_t> compile_time_args = {cb_index, (uint32_t)src_is_dram, (uint32_t)dst_is_dram};
@@ -184,11 +184,13 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     }
 
     auto override_runtime_args_callback = [kernel_id, num_cores, num_cores_y](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};

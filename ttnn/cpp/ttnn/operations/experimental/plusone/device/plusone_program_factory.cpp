@@ -32,7 +32,13 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     }
 
     const auto& input_shape = input.get_padded_shape();
-    const uint32_t W = input_shape[0];
+    uint32_t W = input_shape[-1];
+    uint32_t H = 1;
+    if (input_shape.size() > 1) {
+        for (uint32_t i = 0; i < input_shape.size() - 1; ++i) {
+            H *= input_shape[i];
+        }
+    }
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
@@ -43,13 +49,14 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     auto src_buffer = input.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index,
         src_is_dram,
         aligned_input_unit_size,
         W,
+        H,
     };
 
     std::map<string, string> kernel_defines;
@@ -68,10 +75,12 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, cores](
-                                              const tt::tt_metal::Program& program,
-                                              const std::vector<tt::tt_metal::Buffer*>& input_buffers,
-                                              const std::vector<tt::tt_metal::Buffer*>&) {
-        auto src_buffer = input_buffers.at(0);
+                                              const void* operation,
+                                              tt::tt_metal::Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
 
         for (const auto& core : cores) {
             {

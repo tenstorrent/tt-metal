@@ -4,13 +4,13 @@
 
 #include "metal_soc_descriptor.h"
 
-#include <fstream>
-#include <iostream>
+#include <assert.hpp>
+#include <yaml-cpp/yaml.h>
 #include <string>
 
-#include <assert.hpp>
-#include "umd/device/cluster.h"
-#include "yaml-cpp/yaml.h"
+#include <umd/device/types/arch.h>
+
+enum BoardType : uint32_t;
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view) const {
     TT_ASSERT(
@@ -198,7 +198,7 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 // removing the harvested physical coordiniates Metal needs the true harvesting state so we generate physical
 // descriptors from virtual coordinates We also initialize additional lookup tables to translate physical coordinates to
 // virtual coordinates because UMD APIs expect virtual coordinates.
-metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, const BoardType& board_type) :
+metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, const BoardType& /*board_type*/) :
     tt_SocDescriptor(other) {
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();

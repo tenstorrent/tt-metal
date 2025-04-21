@@ -2,17 +2,49 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <assert.h>
+#include <chrono>
+#include <fmt/base.h>
+#include <nlohmann/json_fwd.hpp>
+#include <stdint.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include "rtoptions.hpp"
-#include <tt-metalium/control_plane.hpp>
+#include <exception>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program.hpp>
+#include "routing_test_common.hpp"
+#include <tt_stl/span.hpp>
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include "test_common.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "test_common.hpp"
-#include "routing_test_common.hpp"
-#include "eth_l1_address_map.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;
@@ -232,7 +264,7 @@ int main(int argc, char** argv) {
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =
-            std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+            std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
             "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
         auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(tg_mesh_graph_desc_path.string());
         control_plane->write_routing_tables_to_all_chips();
@@ -299,7 +331,7 @@ int main(int argc, char** argv) {
         CoreCoord router_phys_core;
         CoreCoord gk_phys_core;
         uint32_t routing_table_addr =
-            hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+            device_map[test_device_id_l]->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
         uint32_t gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
         uint32_t client_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
         uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_pull_client_interface_t);
@@ -309,7 +341,9 @@ int main(int argc, char** argv) {
         log_info(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
 
         for (auto device : device_map) {
-            auto neighbors = tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(device.second->id());
+            auto neighbors =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+                    device.second->id());
             std::vector<CoreCoord> device_router_cores;
             std::vector<CoreCoord> device_router_phys_cores;
             uint32_t router_mask = 0;
@@ -342,7 +376,8 @@ int main(int argc, char** argv) {
             device_router_map[device.first] = device_router_phys_cores;
 
             gk_phys_core = (device.second->worker_core_from_logical_core(gk_core));
-            uint32_t gk_noc_offset = tt_metal::hal_ref.noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
+            uint32_t gk_noc_offset =
+                tt_metal::MetalContext::instance().hal().noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
 
             std::vector<uint32_t> router_compile_args = {
                 (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
@@ -441,7 +476,8 @@ int main(int argc, char** argv) {
             };
 
             // setup runtime args
-            uint32_t tx_gk_noc_offset = tt_metal::hal_ref.noc_xy_encoding(tx_gk_phys_core.x, tx_gk_phys_core.y);
+            uint32_t tx_gk_noc_offset =
+                tt_metal::MetalContext::instance().hal().noc_xy_encoding(tx_gk_phys_core.x, tx_gk_phys_core.y);
             std::vector<uint32_t> runtime_args = {
                 time_seed,                                                              // 0: time based seed
                 (device_map[test_device_id_l]->id() << 8) + src_endpoint_start_id + i,  // 1: src_endpoint_id
@@ -511,7 +547,7 @@ int main(int argc, char** argv) {
         }
 
         // Wait for tx to return non-zero status.
-        while (1) {
+        while (true) {
             auto tx_status = tt::llrt::read_hex_vec_from_core(test_device_id_l, tx_phys_core[0], test_results_addr, 4);
             if ((tx_status[0] & 0xFFFF) != 0) {
                 break;
@@ -612,7 +648,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

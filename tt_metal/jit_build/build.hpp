@@ -3,20 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <stdint.h>
+#include <tt_stl/aligned_allocator.hpp>
+#include <functional>
+#include <future>
+#include <map>
+#include <memory>
+#include <string>
 #include <string_view>
 #include <thread>
-#include <string>
-#include <future>
+#include <vector>
 
-#include "tt_backend_api_types.hpp"
-#include "utils.hpp"
 #include "core_coord.hpp"
 #include "data_format.hpp"
-#include "jit_build_options.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "jit_build_options.hpp"
 #include "tracy/Tracy.hpp"
-#include <tt_stl/aligned_allocator.hpp>
-#include "rtoptions.hpp"
+#include "tt_backend_api_types.hpp"
+#include "utils.hpp"
+
+namespace tt {
+enum class ARCH;
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -70,7 +78,8 @@ private:
     string out_kernel_root_;
 
     // Tools
-    string gpp_;
+    string gpp_ = "";
+    string gpp_include_dir_ = "";
 
     // Compilation options
     string cflags_;

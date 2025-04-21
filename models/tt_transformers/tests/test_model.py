@@ -10,7 +10,7 @@ from models.tt_transformers.tt.common import (
     sample_host,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
+from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision
 from models.tt_transformers.tt.model import Transformer
 from models.utility_functions import (
     comp_pcc,
@@ -57,9 +57,10 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
-        pytest.param(ModelOptimizations.performance, id="performance"),
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
+    ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -82,12 +83,14 @@ def test_model_inference(
     use_program_cache,
     reset_seeds,
     ensure_gc,
+    request,
 ):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
     mesh_device.enable_async(True)
-    mode_accuracy = optimizations == ModelOptimizations.accuracy
+    test_id = request.node.callspec.id
+    mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
     model_args = ModelArgs(

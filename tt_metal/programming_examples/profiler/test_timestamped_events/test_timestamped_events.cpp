@@ -69,7 +69,7 @@ void RunFillUpAllBuffers(tt_metal::IDevice* device, int loop_count, bool fast_di
     }
 }
 
-int main(int argc, char** argv) {
+int main() {
     bool pass = true;
 
     try {

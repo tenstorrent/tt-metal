@@ -4,6 +4,8 @@
 
 #include <mesh_event.hpp>
 
+#include "mesh_device.hpp"
+
 namespace tt::tt_metal::distributed {
 
 MeshEvent::MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range) :

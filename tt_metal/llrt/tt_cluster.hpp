@@ -4,21 +4,47 @@
 
 #pragma once
 
-#include <cstdint>
-#include <functional>
-
+#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/fabric_host_interface.h>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/fabric_types.hpp>
-#include "umd/device/device_api_metal.h"
-#include "umd/device/tt_cluster_descriptor.h"
-#include "umd/device/tt_xy_pair.h"
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-#include <tt-metalium/dev_msgs.h>
-
+#include "assert.hpp"
+#include "core_coord.hpp"
 #include "llrt/hal.hpp"
+#include "llrt/rtoptions.hpp"
+#include <umd/device/cluster.h>
+#include <umd/device/device_api_metal.h>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_io.hpp>
+#include <umd/device/tt_silicon_driver_common.hpp>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/harvesting.h>
+
+namespace tt {
+enum class ARCH;
+namespace tt_fabric {
+class ControlPlane;
+}  // namespace tt_fabric
+}  // namespace tt
+struct tt_device_params;
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
@@ -61,7 +87,8 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    static Cluster& instance();
+    Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
+    ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
     // for user facing host apis
@@ -72,6 +99,8 @@ public:
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
+
+    std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
 
     ARCH arch() const { return this->arch_; }
 
@@ -271,20 +300,20 @@ public:
     // Get all fabric ethernet cores
     std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const;
 
+    // Get fabric ethernet cores connecting src to dst
+    std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(chip_id_t src_id, chip_id_t dst_id) const;
+
     bool is_worker_core(const CoreCoord& core, chip_id_t chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, chip_id_t chip_id) const;
     CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const;
 
     // These two functions should be removed in favor of direct translation.
-    const std::unordered_map<int, int> get_worker_logical_to_virtual_x(chip_id_t chip_id) const;
-    const std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const;
+    std::unordered_map<int, int> get_worker_logical_to_virtual_x(chip_id_t chip_id) const;
+    std::unordered_map<int, int> get_worker_logical_to_virtual_y(chip_id_t chip_id) const;
 
     const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
 
 private:
-    Cluster();
-    ~Cluster();
-
     void detect_arch_and_target();
     void generate_cluster_descriptor();
     void initialize_device_drivers();
@@ -301,6 +330,10 @@ private:
     void reserve_ethernet_cores_for_tunneling();
 
     void initialize_ethernet_sockets();
+
+    // Disable ethernet cores that retrain
+    // This should be removed when we handle retraining or dropped links in control plane properly
+    void disable_ethernet_cores_with_retrain();
 
     // Initialize control plane, which has mapping of physical device id to MeshGraph config
     void initialize_control_plane();
@@ -334,6 +367,7 @@ private:
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_eth_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     ClusterType cluster_type_ = ClusterType::INVALID;
@@ -368,6 +402,11 @@ private:
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 
     uint32_t routing_info_addr_ = 0;
+
+    // Cluster depends on RunTimeOptions and Hal to set up, but they're all initialized/accessed by MetalContext, so
+    // keep a local reference for init.
+    const llrt::RunTimeOptions& rtoptions_;
+    const tt_metal::Hal& hal_;
 };
 
 }  // namespace tt

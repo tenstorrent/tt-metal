@@ -4,7 +4,6 @@
 
 import math
 import ttnn
-import torch
 from models.experimental.yolo_common.yolo_utils import concat, determine_num_cores, get_core_grid_from_num_cores
 
 
@@ -28,7 +27,6 @@ class TtYOLOv9cConv2D:
         conv_pth,
         bn=None,
         device=None,
-        cache={},
         activation="",
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
@@ -50,7 +48,6 @@ class TtYOLOv9cConv2D:
         self.groups = conv.groups
         self.use_1d_systolic_array = use_1d_systolic_array
         self.deallocate_activation = False
-        self.cache = cache
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -111,7 +108,6 @@ class TtYOLOv9cConv2D:
             stride=self.stride,
             padding=self.padding,
             conv_config=self.conv_config,
-            conv_op_cache=self.cache,
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,
@@ -244,19 +240,19 @@ class TtnnADown:
         self.cv2 = TtYOLOv9cConv2D(device=device, conv=parameter.cv2.conv, conv_pth=conv_pt.cv2.conv, activation="silu")
 
     def __call__(self, device, x):
-        if x.shape[1] == 1:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[-2])), int(math.sqrt(x.shape[-2])), x.shape[-1]))
+        x = ttnn.avg_pool2d(
+            input_tensor=x,
+            batch_size=x.shape[0],
+            input_h=int(math.sqrt(x.shape[-2])),
+            input_w=int(math.sqrt(x.shape[-2])),
+            channels=x.shape[-1],
+            kernel_size=(2, 2),
+            stride=(1, 1),
+            padding=(0, 0),
+            dilation=(1, 1),
+        )
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        x = ttnn.permute(x, (0, 3, 1, 2))
-        x = ttnn.to_torch(x)
-        x = torch.nn.functional.avg_pool2d(x, 2, 1, 0, False, True)
-        x = ttnn.from_torch(
-            x, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        x = ttnn.permute(x, (0, 2, 3, 1))
 
         x1 = x[:, :, :, : x.shape[-1] // 2]
         x2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]

@@ -3,15 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/bfloat16.hpp>
-
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <iostream>
 #include <random>
 #include <vector>
 
 #include "assert.hpp"
-
 #include "tracy/Tracy.hpp"
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
@@ -304,7 +303,7 @@ bool is_close(float a, float b, float rtol, float atol) {
     auto absdiff = fabsf(a - b);
     auto reldenom = fmaxf(fabsf(a), fabsf(b));
     auto result = (absdiff <= atol) || (absdiff <= rtol * reldenom);
-    if (result != true) {
+    if (!result) {
         std::cout << "Discrepacy: A = " << a << " B = " << b << std::endl;
         std::cout << "   absdiff = " << absdiff << std::endl;
         std::cout << "   reldiff = " << absdiff / (reldenom + 1e-6f) << std::endl;

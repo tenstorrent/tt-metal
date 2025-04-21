@@ -9,9 +9,10 @@
 #include <tuple>
 
 #include "conv2d_utils.hpp"
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/hal.hpp>
+#include "tt-metalium/logger.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -412,9 +413,14 @@ bool use_matmul_for_1x1_conv(
 bool is_1d_conv(uint32_t kernel_width, uint32_t image_width) { return kernel_width == 1 && image_width == 1; }
 
 bool is_1d_deptwise_conv(
-    uint32_t groups, uint32_t input_channels, uint32_t output_channels, uint32_t kernel_width, uint32_t image_width) {
+    uint32_t groups,
+    uint32_t input_channels,
+    uint32_t output_channels,
+    uint32_t kernel_width,
+    uint32_t image_width,
+    bool has_bias) {
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
-    return is_depthwise_conv && is_1d_conv(kernel_width, image_width);
+    return is_depthwise_conv && is_1d_conv(kernel_width, image_width) && !has_bias;
 }
 
 template <typename DeviceType>
@@ -653,6 +659,18 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         } else {
             input_tensor = ttnn::to_device(
                 input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+            log_debug(
+                tt::LogOp,
+                "Input Tensor Memory Config is {}, expected {}",
+                input_tensor.memory_config(),
+                (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+
+            // to_device doesn't respect the memory config that's passed.
+            // So to_memory_config is needed to ensure the memory config is set correctly.
+            input_tensor = ttnn::to_memory_config(
+                input_tensor,
+                (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config),
+                std::nullopt);
         }
     }
     return {input_tensor, parallel_config, output_parallel_config};
@@ -751,7 +769,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
 
     const bool conv_is_1d = is_1d_conv(kernel_size[1], input_width);
     const bool conv_is_1d_deptwise =
-        is_1d_deptwise_conv(groups, in_channels, out_channels, kernel_size[1], input_width);
+        is_1d_deptwise_conv(groups, in_channels, out_channels, kernel_size[1], input_width, enable_bias);
 
     auto get_l1_usage_for_sharding = [&](TensorMemoryLayout shard_layout,
                                          const Conv2dConfig& conv_config_in) -> core_count_and_size {
@@ -857,7 +875,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     core_count_and_size height = get_l1_usage_for_sharding(TensorMemoryLayout::HEIGHT_SHARDED, conv_config);
 
     // 1d deptwise convs support only height sharding
-    if (conv_is_1d) {
+    if (conv_is_1d_deptwise) {
         return height.conv_config;
     }
 
@@ -1026,7 +1044,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         // MATMUL PARTIALs CB
         uint32_t matmul_partials_cb_size = partials_block_num_bytes;
-        if (untilize_out == false && interm_dtype == conv_config.dtype) {
+        if (!untilize_out && interm_dtype == conv_config.dtype) {
             matmul_partials_cb_size = 0;
         } else {
             tt::log_debug(tt::LogOp, "Matmul partial CB Size: {}", matmul_partials_cb_size);
@@ -1112,7 +1130,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         // MATMUL PARTIALS CB
         uint32_t matmul_partials_cb_size = output_block_ntiles * partial_tile_size;
-        if (untilize_out == false && interm_dtype == conv_config.dtype) {
+        if (!untilize_out && interm_dtype == conv_config.dtype) {
             matmul_partials_cb_size = 0;
         }
         if (is_1d_depthwise_conv) {
@@ -1203,7 +1221,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         // MATMUL PARTIALS CB
         uint32_t matmul_partials_cb_size = output_block_ntiles * partial_tile_size;
-        if (untilize_out == false && interm_dtype == conv_config.dtype) {
+        if (!untilize_out && interm_dtype == conv_config.dtype) {
             matmul_partials_cb_size = 0;
         } else {
             tt::log_debug(tt::LogOp, "Matmul partials CB Size: {}", matmul_partials_cb_size);

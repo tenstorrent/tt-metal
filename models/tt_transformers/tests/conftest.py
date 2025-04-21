@@ -20,3 +20,11 @@ def pytest_addoption(parser):
         type=parse_optimizations,
         help="Precision and fidelity configuration diffs over default (i.e., accuracy)",
     )
+
+    parser.addoption(
+        "--decoder_config_file",
+        action="store",
+        default=None,
+        type=str,
+        help="Provide a JSON file defining per-decoder precision and fidelity settings",
+    )

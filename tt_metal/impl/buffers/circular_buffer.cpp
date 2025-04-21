@@ -2,15 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <circular_buffer.hpp>
-
-#include <host_api.hpp>
-#include "llrt.hpp"
 #include <buffer.hpp>
+#include <circular_buffer.hpp>
 #include <global_circular_buffer_impl.hpp>
-#include <tt_metal.hpp>
-#include <device.hpp>
-#include <command_queue.hpp>
+#include <array>
+#include <string>
+#include <unordered_map>
+
+#include "assert.hpp"
+#include "circular_buffer_constants.h"
+#include "tile.hpp"
+#include "utils.hpp"
 
 namespace tt {
 

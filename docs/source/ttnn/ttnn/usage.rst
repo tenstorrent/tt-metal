@@ -1,7 +1,7 @@
 .. _Using ttnn:
 
-Using ttnn
-##########
+Using TT-NN
+###########
 
 .. note::
    These basic snippets currently work on Grayskull only. We are working on
@@ -70,12 +70,12 @@ Basic Examples
     ttnn.close_device(device)
 
 
-7. Using tt_lib operation in ttnn
----------------------------------
+7. Using tt_lib operation in TT-NN
+----------------------------------
 
-`tt_lib` operations are missing some of the features of ttnn operations such as graph tracing and in order to support these features, ttnn provides a different to call `tt_lib` operations that enabled the missing features.
+`tt_lib` operations are missing some of the features of TT-NN operations such as graph tracing and in order to support these features, TT-NN provides a different to call `tt_lib` operations that enabled the missing features.
 
-`tt_lib` operations are missing some of the features of ttnn operations such as graph tracing and in order to support these features, ttnn provides a different to call `tt_lib` operations that enabled the missing features.
+`tt_lib` operations are missing some of the features of TT-NN operations such as graph tracing and in order to support these features, TT-NN provides a different to call `tt_lib` operations that enabled the missing features.
 
 .. literalinclude:: ../../../../ttnn/ttnn/examples/usage/using_tt_lib.py
    :language: python
@@ -86,15 +86,15 @@ Basic Examples
 
 .. code-block:: bash
 
-    # To print currently executing ttnn operations
+    # To print currently executing TT-NN operations
     export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'
 
-    # To print the currently executing ttnn and tt_lib operation and its input tensors to stdout
+    # To print the currently executing TT-NN and tt_lib operation and its input tensors to stdout
     export TT_METAL_LOGGER_TYPES=Op
     export TT_METAL_LOGGER_LEVEL=Debug
 
 Logging is not a substitute for profiling.
-Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations>` for instructions on how to profile operations.
+Please refer to :doc:`Profiling TT-NN Operations </ttnn/profiling_ttnn_operations>` for instructions on how to profile operations.
 
 
 .. note::

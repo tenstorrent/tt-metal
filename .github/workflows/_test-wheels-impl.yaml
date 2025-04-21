@@ -32,9 +32,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/install-metal-deps
-        with:
-          os: ${{ matrix.os }}
+      - name: Install system dependencies
+        shell: bash
+        run: sudo ./install_dependencies.sh
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:

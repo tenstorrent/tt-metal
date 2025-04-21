@@ -2,16 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
-#include "device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/allocator.hpp>
-#include "tt_metal/test_utils/env_vars.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <map>
+#include <memory>
+#include <string>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "device_fixture.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
 // FIXME: ARCH_NAME
 #include "noc/noc_parameters.h"
+#include <tt-metalium/program.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -277,7 +299,7 @@ TEST_F(DeviceFixture, TensixIncrementStreamRegWrite) {
                      bottom_right.x,
                      top_left.y,
                      bottom_right.y,
-                     all_cores.size()});
+                     all_cores.size() - 1});
             }
         }
 
@@ -288,11 +310,11 @@ TEST_F(DeviceFixture, TensixIncrementStreamRegWrite) {
 TEST_F(DeviceFixture, TensixInlineWrite4BAlignment) {
     CoreCoord writer_core{0, 0};
     CoreCoord receiver_core(0, 1);
-    uint32_t receiver_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED) + 4;
-    EXPECT_EQ(receiver_addr % 4, 0)
-        << "Expected dest address to be 4B aligned to test noc_inline_dw_write alignment rule";
     uint32_t value_to_write = 39;
     for (tt_metal::IDevice* device : this->devices_) {
+        uint32_t receiver_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1) + 4;
+        EXPECT_EQ(receiver_addr % 4, 0)
+            << "Expected dest address to be 4B aligned to test noc_inline_dw_write alignment rule";
         std::vector<uint32_t> readback(sizeof(uint32_t), 0);
         tt_metal::detail::WriteToDeviceL1(device, receiver_core, receiver_addr, readback);
 
@@ -323,11 +345,12 @@ TEST_F(DeviceFixture, TensixInlineWrite4BAlignment) {
 TEST_F(DeviceFixture, TensixInlineWriteDedicatedNoc) {
     CoreCoord writer_core{0, 0};
     CoreCoord receiver_core(0, 1);
-    uint32_t first_receiver_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-    uint32_t second_receiver_addr = first_receiver_addr + hal_ref.get_alignment(HalMemType::L1);
     uint32_t value_to_write = 39;
 
     for (tt_metal::IDevice* device : this->devices_) {
+        uint32_t first_receiver_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        uint32_t second_receiver_addr =
+            first_receiver_addr + MetalContext::instance().hal().get_alignment(HalMemType::L1);
         std::vector<uint32_t> readback(32 / sizeof(uint32_t), 0);
         tt_metal::detail::WriteToDeviceL1(device, receiver_core, first_receiver_addr, readback);
 
@@ -371,12 +394,11 @@ TEST_F(DeviceFixture, TensixInlineWriteDedicatedNoc) {
 TEST_F(DeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
     CoreCoord writer_core{0, 0};
     CoreCoord receiver_core(0, 1);
-    uint32_t base_receiver_addr =
-        hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED) + 4;
     uint32_t value_to_write = 39;
     uint32_t num_writes = 8;
 
     for (tt_metal::IDevice* device : this->devices_) {
+        uint32_t base_receiver_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1) + 4;
         std::vector<uint32_t> readback(num_writes * sizeof(uint32_t), 0);
         tt_metal::detail::WriteToDeviceL1(device, receiver_core, base_receiver_addr, readback);
 
@@ -417,11 +439,11 @@ TEST_F(DeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
 TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
     CoreCoord writer_core{0, 0};
     CoreCoord receiver_core(0, 1);
-    uint32_t receiver_addr0 = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-    uint32_t receiver_addr2 = receiver_addr0 + (2 * hal_ref.get_alignment(HalMemType::L1));
     uint32_t value_to_write = 39;
 
     for (tt_metal::IDevice* device : this->devices_) {
+        uint32_t receiver_addr0 = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        uint32_t receiver_addr2 = receiver_addr0 + (2 * MetalContext::instance().hal().get_alignment(HalMemType::L1));
         std::vector<uint32_t> readback(80 / sizeof(uint32_t), 0);
         tt_metal::detail::WriteToDeviceL1(device, receiver_core, receiver_addr0, readback);
 
@@ -446,7 +468,7 @@ TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
              receiver_addr0,
              value_to_write,
              2,
-             hal_ref.get_alignment(HalMemType::L1)});
+             MetalContext::instance().hal().get_alignment(HalMemType::L1)});
 
         tt_metal::KernelHandle kernel1 = tt_metal::CreateKernel(
             program,
@@ -466,7 +488,7 @@ TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
              receiver_addr2,
              value_to_write + 2,
              2,
-             hal_ref.get_alignment(HalMemType::L1)});
+             MetalContext::instance().hal().get_alignment(HalMemType::L1)});
 
         tt_metal::detail::LaunchProgram(device, program);
 

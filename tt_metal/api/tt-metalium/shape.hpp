@@ -4,7 +4,14 @@
 
 #pragma once
 
-#include "shape_base.hpp"
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <ostream>
+#include <tuple>
+
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
 
 namespace tt::tt_metal {
 
@@ -30,7 +37,7 @@ public:
     [[nodiscard]] size_t rank() const;
     [[nodiscard]] uint64_t volume() const;
 
-    const uint32_t get_normalized_index(std::int64_t index) const;
+    uint32_t get_normalized_index(std::int64_t index) const;
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");

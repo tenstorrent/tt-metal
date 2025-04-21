@@ -61,8 +61,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         num_preferred_links.value_or(1),
         out_memory_config,
         topology,
-        worker_subdevice_id_opt,
-        true);
+        worker_subdevice_id_opt);
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
@@ -105,8 +104,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         std::nullopt,  // persistent_output_tensor
         out_memory_config,
         num_preferred_links,
-        worker_subdevice_id_opt,
-        true);
+        worker_subdevice_id_opt);
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
@@ -115,6 +113,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<const DataType> dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
@@ -127,10 +126,10 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         mesh_device,
         topology,
         multi_device_global_semaphore,
+        dtype,
         out_memory_config,
         num_preferred_links,
-        worker_subdevice_id_opt,
-        true);
+        worker_subdevice_id_opt);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

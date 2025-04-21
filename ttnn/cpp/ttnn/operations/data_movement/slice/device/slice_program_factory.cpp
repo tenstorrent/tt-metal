@@ -176,8 +176,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t src_stick_size = padded_row_size_bytes;
     uint32_t dst_stick_size = unpadded_row_size_bytes;
@@ -378,12 +378,14 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
             pages,
         });
 
-    auto override_address_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                         const Program& program,
-                                         const std::vector<Buffer*>& input_buffers,
-                                         const std::vector<Buffer*>& output_buffers) {
-        auto input_buffer = input_buffers.at(0);
-        auto output_buffer = output_buffers.at(0);
+    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto input_buffer = input_tensors.at(0).buffer();
+            auto output_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -396,7 +398,7 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
         }
     };
 
-    return {.program = std::move(program), .override_addresses_callback = override_address_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {
@@ -886,8 +888,8 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         static_cast<uint32_t>(src0_cb_index),
         static_cast<uint32_t>(num_dims),

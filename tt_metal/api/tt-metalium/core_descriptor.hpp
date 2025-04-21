@@ -4,11 +4,18 @@
 
 #pragma once
 
-#include "core_coord.hpp"
-#include "dispatch_core_common.hpp"
-
+#include <stdint.h>
 #include <umd/device/types/arch.h>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <map>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 
 namespace tt {
 

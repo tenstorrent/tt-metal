@@ -4,19 +4,28 @@
 
 #pragma once
 
-#include <filesystem>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "allocator.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/allocator_types.hpp>
+
+namespace tt {
+namespace tt_metal {
+enum class BufferType;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
-class Program;
 class IDevice;
+class Program;
 
 namespace detail {
 struct MemoryView;

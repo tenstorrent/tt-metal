@@ -64,8 +64,13 @@ constexpr uint32_t n_depth = get_compile_time_arg_val(26);
 constexpr uint32_t s_depth = get_compile_time_arg_val(27);
 constexpr uint32_t router_mode = get_compile_time_arg_val(28);
 
-using ClientInterfaceType = typename ClientInterfaceSelector<router_mode>::type;
-volatile tt_l1_ptr ClientInterfaceType client_interface = (volatile tt_l1_ptr ClientInterfaceType)client_interface_addr;
+#ifdef FVC_MODE_PULL
+volatile fabric_pull_client_interface_t* client_interface =
+    (volatile fabric_pull_client_interface_t*)client_interface_addr;
+#else
+volatile fabric_push_client_interface_t* client_interface =
+    (volatile fabric_push_client_interface_t*)client_interface_addr;
+#endif
 
 uint32_t target_address;
 uint32_t noc_offset;
@@ -112,7 +117,7 @@ void kernel_main() {
         reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
 
     // initalize client
-    fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
+    fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
 
     uint64_t data_words_sent = 0;
     uint32_t packet_count = 0;
@@ -131,7 +136,7 @@ void kernel_main() {
             n_depth,
             s_depth);
     } else {
-        fabric_async_write_add_header<decltype(client_interface), (ClientDataMode)data_mode>(
+        fabric_async_write_add_header<(ClientDataMode)data_mode>(
             client_interface,
             data_buffer_start_addr,  // source address in sender’s memory
             dest_device >> 16,
@@ -188,7 +193,6 @@ void kernel_main() {
         client_interface->local_pull_request.pull_request.words_read = 0;
         if constexpr (mcast_data) {
             fabric_async_write_multicast<
-                decltype(client_interface),
                 (ClientDataMode)data_mode,
                 AsyncWriteMode::SEND_PR,
                 RoutingType::ROUTING_TABLE>(
@@ -236,7 +240,7 @@ void kernel_main() {
         packet_count++;
         payload[12] = packet_count;
         fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::PUSH>(
-            (fabric_push_client_interface_t*)client_interface,
+            client_interface,
             0,                       // the network plane to use for this transaction
             data_buffer_start_addr,  // source address in sender’s memory
             dest_device >> 16,

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "global_circular_buffer_impl.hpp"
+#include <tt-metalium/global_circular_buffer_impl.hpp>
 //==================================================
 //        GLOBAL CIRCULAR BUFFER FUNCTIONS
 //==================================================

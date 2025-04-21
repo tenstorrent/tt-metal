@@ -4,7 +4,14 @@
 
 #pragma once
 #include <magic_enum/magic_enum.hpp>
-#include "mesh_graph.hpp"
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/mesh_graph.hpp>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_fabric {
 

@@ -4,10 +4,17 @@
 
 #pragma once
 
-#include "fd_kernel.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
+#include <stdint.h>
+#include <optional>
+
+#include "assert.hpp"
 #include "core_coord.hpp"
+#include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
+#include "system_memory_manager.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include <umd/device/tt_xy_pair.h>
 
 typedef struct dispatch_static_config {
     std::optional<uint32_t> dispatch_cb_base;  // 0
@@ -65,9 +72,10 @@ typedef struct dispatch_dependent_config {
     // Populated if fabric is being used to talk to downstream
     std::optional<uint32_t> fabric_router_noc_xy;
     std::optional<uint32_t> upstream_mesh_id;
-    std::optional<uint32_t> upstream_chip_id;
+    std::optional<uint32_t> upstream_dev_id;
     std::optional<uint32_t> downstream_mesh_id;
-    std::optional<uint32_t> downstream_chip_id;
+    std::optional<uint32_t> downstream_dev_id;
+    std::optional<uint32_t> outbound_eth_chan;
 } dispatch_dependent_config_t;
 
 class DispatchKernel : public FDKernel {
@@ -81,7 +89,7 @@ public:
         bool h_variant,
         bool d_variant) :
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
-        auto& core_manager = tt::tt_metal::dispatch_core_manager::instance();  // Not thread safe
+        auto& core_manager = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager();  // Not thread safe
         TT_FATAL(
             noc_selection.downstream_noc == tt::tt_metal::k_dispatch_downstream_noc,
             "Invalid downstream NOC specified for Dispatcher kernel");
@@ -90,11 +98,13 @@ public:
             "Dispatcher kernel cannot have identical upstream and downstream NOCs.");
         static_config_.is_h_variant = h_variant;
         static_config_.is_d_variant = d_variant;
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
         if (h_variant && d_variant) {
             this->logical_core_ = core_manager.dispatcher_core(device_id, channel, cq_id);
         } else if (h_variant) {
-            channel = tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id);
+            channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
+                servicing_device_id);
             this->logical_core_ = core_manager.dispatcher_core(servicing_device_id, channel, cq_id);
         } else if (d_variant) {
             this->logical_core_ = core_manager.dispatcher_d_core(device_id, channel, cq_id);
@@ -111,6 +121,7 @@ public:
 
     void UpdateArgsForFabric(
         const CoreCoord& fabric_router,
+        uint32_t outbound_eth_chan,
         tt::tt_fabric::mesh_id_t src_mesh_id,
         chip_id_t src_chip_id,
         tt::tt_fabric::mesh_id_t dst_mesh_id,

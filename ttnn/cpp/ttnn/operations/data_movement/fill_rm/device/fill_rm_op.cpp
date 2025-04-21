@@ -48,7 +48,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(
             .set_page_size(1, single_tile_size);
     auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)dst_is_dram};
 
     tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -71,10 +71,12 @@ operation::ProgramWithCallbacks fill_rm_single_core(
          uint32_t(bfloat16(val_lo).to_uint16())});
 
     auto override_runtime_args_callback = [kernel_id = binary_reader_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto dst_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 

@@ -2,23 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
 #include <gtest/gtest.h>
+#include <magic_enum/magic_enum.hpp>
+#include <stdint.h>
+#include <compare>
 #include <filesystem>
-#include <unordered_set>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <variant>
+#include <vector>
 
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "detail/kernel_cache.hpp"
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include "hal.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include "kernel.hpp"
-#include "kernel_types.hpp"
-#include "logger.hpp"
-#include "persistent_kernel_cache.hpp"
-#include "tt_metal.hpp"
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/utils.hpp>
 
 using namespace tt::tt_metal;
 
@@ -37,7 +49,8 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
         kernel_handle = CreateKernel(program, kernel_file, CoreCoord(0, 0), config);
         detail::CompileProgram(device, program);
 
-        const uint32_t tensix_core_type = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const uint32_t tensix_core_type =
+            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         const uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
         const int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(config.processor);
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
@@ -83,7 +96,8 @@ TEST_F(DeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProces
         KernelHandle kernel_handle_riscv_1 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_1);
         detail::CompileProgram(device, program);
 
-        const uint32_t tensix_core_type = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const uint32_t tensix_core_type =
+            MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         const uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
         const int riscv_0_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(config_riscv_0.processor);
         const int riscv_1_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(config_riscv_1.processor);

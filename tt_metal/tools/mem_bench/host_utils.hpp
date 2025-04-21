@@ -4,11 +4,14 @@
 
 #pragma once
 
+#include <tt-metalium/tt_align.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
+
 #include "dispatch/memcpy.hpp"
-#include <tt-metalium/tt_align.hpp>
+#include "vector_aligned.hpp"
 
 namespace tt::tt_metal::tools::mem_bench {
 

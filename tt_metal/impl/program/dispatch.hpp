@@ -7,13 +7,34 @@
 #include <circular_buffer.hpp>
 #include <device.hpp>
 #include <kernel.hpp>
-#include <program_impl.hpp>
+#include <tt-metalium/program.hpp>
+#include <stdint.h>
 #include <vector_aligned.hpp>
 #include <worker_config_buffer.hpp>
+#include <array>
+#include <memory>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "dev_msgs.h"
+#include "dispatch_settings.hpp"
+#include "kernel_types.hpp"
+#include "sub_device_types.hpp"
+
+enum class CoreType;
 
 namespace tt {
 
 namespace tt_metal {
+class IDevice;
+class Program;
+class Semaphore;
+class SystemMemoryManager;
+enum class ProgramBinaryStatus : uint8_t;
+struct KernelGroup;
+struct ProgramCommandSequence;
 
 namespace program_dispatch {
 
@@ -111,7 +132,8 @@ KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 void reset_config_buf_mgrs_and_expected_workers(
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
-    uint32_t num_entries_to_reset);
+    uint32_t num_entries_to_reset,
+    uint32_t worker_l1_unreserved_start);
 
 void reset_worker_dispatch_state_on_device(
     IDevice* device,

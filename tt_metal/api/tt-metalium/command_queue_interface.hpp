@@ -9,12 +9,12 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/fabric_host_interface.h>
 
-#include "launch_message_ring_buffer_state.hpp"
-#include "dispatch_settings.hpp"
-#include "buffer.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <tt-metalium/launch_message_ring_buffer_state.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <umd/device/tt_core_coordinates.h>
 
-#include "command_queue_common.hpp"
-#include "system_memory_manager.hpp"
-#include "system_memory_cq_interface.hpp"
-#include "dispatch_mem_map.hpp"
+#include <tt-metalium/command_queue_common.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/system_memory_cq_interface.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
