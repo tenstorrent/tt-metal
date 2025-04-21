@@ -22,8 +22,6 @@ void MAIN {
     constexpr auto cb_output = tt::CBIndex::c_2;
     init_sfpu(cb_input, cb_output);
 
-    log1p_tile_init();
-
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_reserve_back(cb_output, per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
@@ -36,6 +34,7 @@ void MAIN {
 
             exp_tile_init<1u>();
             exp_tile<1u>(0);
+            log1p_tile_init();
             log1p_tile(0);
             tanh_tile_init();
             tanh_tile(0);
