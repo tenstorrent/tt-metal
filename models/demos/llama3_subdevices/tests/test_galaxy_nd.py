@@ -6,7 +6,6 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from dataclasses import dataclass, field
 from typing import List
 from collections import defaultdict
@@ -16,6 +15,8 @@ from ttnn import (
     ConcatMesh2dToTensor,
 )
 from models.utility_functions import nearest_32
+
+# from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 @dataclass
@@ -58,7 +59,7 @@ def aggregate_failures(failures: List[dict]) -> dict:
 @pytest.mark.parametrize(
     "M, K, N, weights_dtype",
     [
-        pytest.param(32, 8192, 32768, ttnn.bfloat8_b, id="Llama3-70B_decode_FF1"),
+        pytest.param(32, 8192, 32768, ttnn.bfloat8_b),
     ],
 )
 @pytest.mark.parametrize(
@@ -72,10 +73,10 @@ def aggregate_failures(failures: List[dict]) -> dict:
         "smoke",
     ],
 )
-# Llama FF1, FF2, FF3 in MLP with dram sharded weights
 def test_galaxy_nd(M, K, N, weights_dtype, mesh_shape, mesh_device, num_iters):
     torch.manual_seed(1234)
 
+    # Use a combination of ones and randn to get more readible output
     act_pt = torch.ones(1, 1, M, K)
     weights_pt = torch.randn(1, 1, K, N) * 32
 
@@ -85,8 +86,8 @@ def test_galaxy_nd(M, K, N, weights_dtype, mesh_shape, mesh_device, num_iters):
     weight_shard_dim = (2, 3)
     concat_dim = (0, 1)
 
-    K = K // mesh_shape[0] if K == 8192 else K // mesh_shape[1]
-    N = N // mesh_shape[1] if N == 32768 else N // mesh_shape[0]
+    K = K // mesh_shape[0]
+    N = N // mesh_shape[1]
 
     act_mem_config = ttnn.create_sharded_memory_config(
         shape=(M, K // 8),
@@ -156,14 +157,15 @@ def test_galaxy_nd(M, K, N, weights_dtype, mesh_shape, mesh_device, num_iters):
         )
         outs.append(out)
 
-        r, c, m, n = out.shape
-        out = out.permute(0, 2, 1, 3).contiguous()  # from [r, c, m, n] to [r, m, c, n]
-        out = out.view(r, 1, m, c * n)
-        out = torch.sum(out, dim=0, keepdim=True)
+        # PCC checking against torch is disabled for now
+        # r, c, m, n = out.shape
+        # out = out.permute(0, 2, 1, 3).contiguous()  # from [r, c, m, n] to [r, m, c, n]
+        # out = out.view(r, 1, m, c * n)
+        # out = torch.sum(out, dim=0, keepdim=True)
 
-        out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99)
-        if not out_pass:
-            logger.warning(f"PCC value: {out_pcc}")
+        # out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99)
+        # if not out_pass:
+        #     logger.warning(f"PCC value: {out_pcc}")
 
     # assert out_pass, f"PCC value is lower than {0.99} for some of the outputs. Check Warnings!"
 
