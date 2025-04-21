@@ -7,6 +7,7 @@
 import os
 import sys
 import csv
+import pytest  # type: ignore
 from argparse import ArgumentParser
 from loguru import logger  # type: ignore
 import matplotlib.pyplot as plt  # type: ignore
@@ -50,6 +51,7 @@ test_bounds = {
 
 
 def run_dm_tests(profile, verbose, gtest_filter, plot, report):
+    logger.info("Starting data movement tests...")
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
 
     # Profile tests
@@ -256,10 +258,10 @@ def performance_check(dm_stats, verbose=False):
             else:
                 logger.info(f"RISCV 0 bandwidth within perf bounds.\n")
 
-        # assert riscv1_cycles_within_bounds
-        # assert riscv0_cycles_within_bounds
-        # assert riscv1_bw_within_bounds
-        # assert riscv0_bw_within_bounds
+        assert riscv1_cycles_within_bounds
+        assert riscv0_cycles_within_bounds
+        assert riscv1_bw_within_bounds
+        assert riscv0_bw_within_bounds
 
 
 def print_stats(dm_stats):
@@ -407,20 +409,11 @@ def export_dm_stats_to_csv(dm_stats, output_file="dm_stats.csv"):
     logger.info(f"dm_stats exported to {output_file}")
 
 
-if __name__ == "__main__":
-    parser = ArgumentParser(description="Generate profiling results for data movement tests.")
-    parser.add_argument(
-        "-p", "--profile", action="store_true", help="Profile the kernels. If not set, use existing profiler logs."
-    )
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging of profiling results.")
-    parser.add_argument(
-        "-g",
-        "--gtest-filter",
-        dest="gtest_filter",
-        help="Filter for gtest tests to run. If not set and profile flag is set, all tests are run.",
-    )
-    parser.add_argument("--plot", action="store_true", help="Export profiling plots to a .png file.")
-    parser.add_argument("-r", "--report", action="store_true", help="Export profiling results to a .csv file.")
-    args = parser.parse_args()
-
-    run_dm_tests(*vars(args).values())
+def test_data_movement(
+    no_profile: bool,
+    verbose_log: bool,
+    gtest_filter: str,
+    plot: bool,
+    report: bool,
+):
+    run_dm_tests(profile=not no_profile, verbose=verbose_log, gtest_filter=gtest_filter, plot=plot, report=report)
