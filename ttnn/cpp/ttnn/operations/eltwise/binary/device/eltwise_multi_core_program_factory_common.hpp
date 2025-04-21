@@ -197,6 +197,13 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
             block_cnt_per_core = block_cnt_per_core_group_2;
             block_size_per_core = block_size_per_core_group_2;
         } else {
+            binary_reader_args = {0, 0, 0, 0, 0, 0, 0, 0};  // 8
+            eltwise_binary_args = {0, 0};                   // 2
+            if (block_or_width_sharded and not out_sharded) {
+                unary_writer_args = {0, 0, 0, 0, 0, 0, 0, 0, 0};  // 9
+            } else {
+                unary_writer_args = {0, 0, 0};  // 3
+            }
             continue;
         }
         binary_reader_args = {
