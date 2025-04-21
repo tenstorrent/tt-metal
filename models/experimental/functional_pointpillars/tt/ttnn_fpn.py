@@ -72,6 +72,7 @@ class TtFPN:
                 activation="relu",
                 deallocate_activation=True,
                 change_shard=True,
+                reshape_tensor=True,
             )
 
             self.lateral_convs.append(l_conv)
@@ -128,7 +129,7 @@ class TtFPN:
 
         # build outputs
         # part 1: from original levels
-        outs = [self.fpn_convs[i](laterals[i])[0] for i in range(used_backbone_levels)]
+        outs = [self.fpn_convs[i](laterals[i]) for i in range(used_backbone_levels)]
         # part 2: add extra levels
         if self.num_outs > len(outs):
             assert False, "This is not invoked So, not implemented"

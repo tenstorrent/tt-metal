@@ -7,6 +7,7 @@ from functools import partial
 import importlib
 import numpy as np
 from mmengine.structures import InstanceData
+import ttnn
 
 from torch import nn as nn
 
@@ -541,6 +542,18 @@ class TtBase3DDenseHead(nn.Module, metaclass=ABCMeta):
         rescale: bool = False,
         **kwargs,
     ):
+        for i in range(len(cls_scores)):
+            cls_scores[i] = ttnn.to_torch(cls_scores[i])
+            cls_scores[i] = cls_scores[i].permute(0, 3, 1, 2)
+            cls_scores[i] = cls_scores[i].to(dtype=torch.float)
+        for i in range(len(bbox_preds)):
+            bbox_preds[i] = ttnn.to_torch(bbox_preds[i])
+            bbox_preds[i] = bbox_preds[i].permute(0, 3, 1, 2)
+            bbox_preds[i] = bbox_preds[i].to(dtype=torch.float)
+        for i in range(len(dir_cls_preds)):
+            dir_cls_preds[i] = ttnn.to_torch(dir_cls_preds[i])
+            dir_cls_preds[i] = dir_cls_preds[i].permute(0, 3, 1, 2)
+
         assert len(cls_scores) == len(bbox_preds)
         assert len(cls_scores) == len(dir_cls_preds)
         num_levels = len(cls_scores)
