@@ -26,7 +26,7 @@ from models.experimental.yolov8s_world.reference import yolov8s_world
 
 
 def get_expected_times(name):
-    base = {"yolov8s_world": (183.7, 0.8)}
+    base = {"yolov8s_world": (183.7, 0.4)}
     return base[name]
 
 
@@ -40,7 +40,7 @@ def get_expected_times(name):
         True,
     ],
 )
-def test_perf(device, use_pretrained_weight):
+def test_perf(device, use_pretrained_weight, use_program_cache):
     disable_persistent_kernel_cache()
     torch_input = torch.randn(1, 3, 640, 640)
 
