@@ -80,7 +80,7 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
     tt_output = ttnn.experimental.fast_reduce_nc(
         tt_input, dims=dims, output=None, compute_kernel_config=compute_kernel_config
     )
-    tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
+    tt_output_cpu = tt_output.cpu().to(cpu_layout).to_torch()
 
     # test for equivalance
     rtol = atol = 0.12
