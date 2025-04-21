@@ -167,6 +167,7 @@ class TtMixtralMLP(LightweightModule):
             w2_in = ttnn.multiply(w1_out, w3_out, output_tensor=w1_out)
 
             w3_out.deallocate(True)
+            w1_out.deallocate(True)
 
             w2_out = ttnn.linear(
                 w2_in,
@@ -208,7 +209,8 @@ class TtMixtralMLP(LightweightModule):
                 dtype=ttnn.bfloat8_b,
             )
             w2_in = ttnn.mul(w1_out, w3_out)
-
+            w1_out.deallocate(True)
+            w3_out.deallocate(True)
             w2_out = ttnn.matmul(
                 w2_in,
                 self.w2,
@@ -221,5 +223,6 @@ class TtMixtralMLP(LightweightModule):
                 ),
                 dtype=ttnn.bfloat8_b,
             )
+            w2_in.deallocate(True)
 
         return w2_out
