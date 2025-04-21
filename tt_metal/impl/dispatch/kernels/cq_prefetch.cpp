@@ -1289,7 +1289,6 @@ bool process_cmd(
     uint32_t& stride,
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state) {
-    DeviceZoneScopedN("PROCESS-CMD");
     volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
     bool done = false;
 
@@ -1603,7 +1602,7 @@ void kernel_main_hd() {
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
     while (!done) {
-        DeviceZoneScopedN("KERNEL-MAIN-HD");
+        DeviceZoneScopedN("CQ-PREFETCH");
         constexpr uint32_t preamble_size = 0;
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
 

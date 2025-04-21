@@ -162,8 +162,6 @@ def main():
             testCommand = f"python3 -m tracy {osCmd}"
 
             envVars = dict(os.environ)
-            # No Dispatch cores for op_report
-            envVars["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "0"
             if options.device:
                 envVars["TT_METAL_DEVICE_PROFILER"] = "1"
             else:
