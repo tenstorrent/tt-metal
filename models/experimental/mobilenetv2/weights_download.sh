@@ -3,7 +3,7 @@
 #!/bin/bash
 
 # Output filename
-OUTPUT="models/experimental/functional_mobilenetv2/mobilenet_v2-b0353104.pth"
+OUTPUT="models/experimental/mobilenetv2/mobilenet_v2-b0353104.pth"
 
 # Create output directory if it doesn't exist
 mkdir -p "$(dirname "$OUTPUT")"
