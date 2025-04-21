@@ -13,15 +13,76 @@
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::binary {
-
-ttnn::Tensor typecast_to(ttnn::DataType dtype, const ttnn::Tensor& input) {
-    return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
-}
-
-bool needs_typecast_to_bfloat16(const ttnn::DataType input) {
-    return (input == ttnn::DataType::BFLOAT8_B || input == ttnn::DataType::BFLOAT4_B);
-}
 namespace detail {
+
+inline Tensor to_dtype(const Tensor& input, DataType dtype) {
+    if (input.get_dtype() == dtype) {
+        return input;
+    }
+
+    return ttnn::typecast(input, dtype);
+}
+
+inline float to_dtype(float input, [[maybe_unused]] DataType dtype) { return input; }
+
+inline bool is_block_format(DataType dtype) {
+    using enum DataType;
+    switch (dtype) {
+        case BFLOAT4_B:
+        case BFLOAT8_B: return true;
+        default: return false;
+    }
+}
+
+inline bool is_layout(const Tensor& input, Layout layout) { return input.get_layout() == layout; }
+
+inline bool is_layout([[maybe_unused]] float input, [[maybe_unused]] Layout layout) { return true; }
+
+inline Tensor to_layout(const Tensor& input, Layout layout) {
+    if (detail::is_layout(input, layout)) {
+        return input;
+    }
+
+    return ttnn::to_layout(input, layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
+}
+
+inline float to_layout(float input, [[maybe_unused]] Layout layout) { return input; }
+
+inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input) {
+    if (not detail::is_block_format(input.get_dtype())) {
+        return false;
+    }
+
+    using enum BinaryOpType;
+
+    return op != ADD and op != SUB and op != MUL;
+}
+
+inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, [[maybe_unused]] float other) {
+    return detail::needs_typecast_to_bfloat16(op, input);
+}
+
+inline bool needs_typecast_to_bfloat16(BinaryOpType op, const Tensor& input, const Tensor& other) {
+    if (not detail::is_block_format(input.get_dtype())) {
+        return false;
+    }
+
+    using enum BinaryOpType;
+
+    if (op != ADD and op != SUB and op != MUL) {
+        return true;
+    }
+
+    const auto& input_shape = input.get_logical_shape();
+    const auto& other_shape = other.get_logical_shape();
+
+    return (input_shape[-2] == 1 and other_shape[-2] > 1) or (input_shape[-1] == 1 and other_shape[-1] > 1);
+}
+
+inline bool needs_typecast_to_bfloat16(
+    [[maybe_unused]] BinaryOpType op, [[maybe_unused]] float input, [[maybe_unused]] const Tensor& other) {
+    return false;
+}
 
 constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
@@ -145,9 +206,9 @@ inline auto invoke_binary_ng(
         }
     }
 
-    const ttnn::DataType a_dtype = lhs.get_dtype();
-    const bool output_preallocated = output.has_value();
-    const ttnn::DataType out_dtype = output_preallocated ? output->get_dtype() : dtype.value_or(a_dtype);
+    const auto a_dtype = lhs.get_dtype();
+    const auto output_preallocated = output.has_value();
+    const auto out_dtype = output_preallocated ? output->get_dtype() : dtype.value_or(a_dtype);
 
     const auto mem_config = output_preallocated ? output->memory_config() : memory_config.value_or(lhs.memory_config());
 
@@ -155,45 +216,25 @@ inline auto invoke_binary_ng(
         TT_FATAL(*dtype == out_dtype, "If both output dtype and output tensor are provided, their dtypes should match");
     }
 
-    bool typecast_a = binary::needs_typecast_to_bfloat16(a_dtype);
-    bool typecast_b = [&] {
-        if constexpr (requires { rhs.get_dtype(); }) {
-            return binary::needs_typecast_to_bfloat16(rhs.get_dtype());
-        } else {
-            return false;
-        }
-    }();
-    bool typecast_out = binary::needs_typecast_to_bfloat16(out_dtype);
+    const auto typecast_a = detail::needs_typecast_to_bfloat16(binary_op_type, lhs, rhs);
+    const auto typecast_b = detail::needs_typecast_to_bfloat16(binary_op_type, rhs, lhs);
+    const auto typecast_out = detail::is_block_format(out_dtype);
 
     // RM is never BFLOAT8 or BFLOAT4 so we can assume it goes in here.
-    if (!typecast_a && !typecast_b) {
-        bool input_a_rm = lhs.get_layout() == Layout::ROW_MAJOR;
-        bool input_b_rm = [&] {
-            if constexpr (requires { rhs.get_layout(); }) {
-                return rhs.get_layout() == Layout::ROW_MAJOR;
-            } else {
-                return true;
-            }
-        }();
-        Tensor input_a =
-            input_a_rm ? ttnn::to_layout(lhs, Layout::TILE, std::nullopt, std::nullopt, (IDevice*)nullptr) : lhs;
-        auto input_b = [&] {
-            if constexpr (requires { rhs.get_layout(); }) {
-                return input_b_rm ? ttnn::to_layout(rhs, Layout::TILE, std::nullopt, std::nullopt, (IDevice*)nullptr)
-                                  : rhs;
-            } else {
-                return rhs;
-            }
-        }();
+    if (not typecast_a and not typecast_b) {
+        const auto input_a_rm = detail::is_layout(lhs, Layout::ROW_MAJOR);
+        const auto input_b_rm = detail::is_layout(rhs, Layout::ROW_MAJOR);
+        const auto input_a = detail::to_layout(lhs, Layout::TILE);
+        const auto input_b = detail::to_layout(rhs, Layout::TILE);
 
-        if (input_a_rm && input_b_rm) {
+        if (input_a_rm and input_b_rm) {
             // we don't support to_layout with optional output tensor
             TT_FATAL(
                 !output_preallocated,
                 "Optional output tensor with Row Major input is not supported right now for Elementwise operations");
         }
 
-        Tensor result = ttnn::prim::binary_ng(
+        auto result = ttnn::prim::binary_ng(
             queue_id,
             input_a,
             input_b,
@@ -208,20 +249,14 @@ inline auto invoke_binary_ng(
         // if both inputs are in row major, convert the output to row major
         // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
         // since it leads to better perf
-        if (input_a_rm && input_b_rm) {
-            result = ttnn::to_layout(result, Layout::ROW_MAJOR, std::nullopt, mem_config, (IDevice*)nullptr);
+        if (input_a_rm and input_b_rm) {
+            return detail::to_layout(result, Layout::ROW_MAJOR);
         }
 
         return result;
     } else {
-        Tensor input_a = binary::typecast_to(DataType::BFLOAT16, lhs);
-        auto input_b = [&] {
-            if constexpr (requires { binary::typecast_to(DataType::BFLOAT16, rhs); }) {
-                return binary::typecast_to(DataType::BFLOAT16, rhs);
-            } else {
-                return rhs;
-            }
-        }();
+        const auto input_a = detail::to_dtype(lhs, DataType::BFLOAT16);
+        const auto input_b = detail::to_dtype(rhs, DataType::BFLOAT16);
         const auto output_tensor =
             output_preallocated and typecast_out ? ttnn::typecast(*output, DataType::BFLOAT16) : output;
 
