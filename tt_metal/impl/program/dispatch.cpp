@@ -2120,6 +2120,7 @@ void write_program_command_sequence(
         stall_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
 
     if (device_command_sequence_size_bytes <= DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size()) {
+        // Write all data in one reserved region
         manager.issue_queue_reserve(device_command_sequence_size_bytes, command_queue_id);
         uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
 
@@ -2162,74 +2163,35 @@ void write_program_command_sequence(
         manager.fetch_queue_reserve_back(command_queue_id);
         manager.fetch_queue_write(device_command_sequence_size_bytes, command_queue_id);
     } else {
-        uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-
         if (stall_first) {
             // Must stall before writing kernel config data
-            manager.issue_queue_reserve(stall_fetch_size_bytes, command_queue_id);
-            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-            manager.cq_write(
-                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-                stall_fetch_size_bytes,
-                write_ptr);
-            manager.issue_queue_push_back(stall_fetch_size_bytes, command_queue_id);
-            // One fetch queue entry for just the wait and stall, very inefficient
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(stall_fetch_size_bytes, command_queue_id);
+            write_data_to_cq(
+                (uint8_t*)program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
+                stall_fetch_size_bytes);
         }
 
         // TODO: We can pack multiple RT args into one fetch q entry
         for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
             uint32_t fetch_size_bytes = cmds.size_bytes();
-            manager.issue_queue_reserve(fetch_size_bytes, command_queue_id);
-            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-            manager.cq_write(cmds.data(), fetch_size_bytes, write_ptr);
-            manager.issue_queue_push_back(fetch_size_bytes, command_queue_id);
-            // One fetch queue entry for each runtime args write location, e.g. BRISC/NCRISC/TRISC/ERISC
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(fetch_size_bytes, command_queue_id);
+            write_data_to_cq((uint8_t*)cmds.data(), stall_fetch_size_bytes);
         }
 
         // Insert a stall between program data that goes on the ring buffer and the rest of the data
         // Otherwise write all data in 1 prefetch entry
         if (stall_before_program) {
             if (program_config_buffer_data_size_bytes > 0) {
-                manager.issue_queue_reserve(program_config_buffer_data_size_bytes, command_queue_id);
-                write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-                manager.cq_write(program_command_sequence_data, program_config_buffer_data_size_bytes, write_ptr);
-                manager.issue_queue_push_back(program_config_buffer_data_size_bytes, command_queue_id);
-                manager.fetch_queue_reserve_back(command_queue_id);
-                manager.fetch_queue_write(program_config_buffer_data_size_bytes, command_queue_id);
+                write_data_to_cq((uint8_t*)program_command_sequence_data, program_config_buffer_data_size_bytes);
                 program_command_sequence_data += program_config_buffer_data_size_bytes;
             }
 
             // Didn't stall before kernel config data, stall before remaining commands
-            manager.issue_queue_reserve(stall_fetch_size_bytes, command_queue_id);
-            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-            manager.cq_write(
-                program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
-                stall_fetch_size_bytes,
-                write_ptr);
-            manager.issue_queue_push_back(stall_fetch_size_bytes, command_queue_id);
-            // One fetch queue entry for just the wait and stall, very inefficient
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(stall_fetch_size_bytes, command_queue_id);
+            write_data_to_cq(
+                (uint8_t*)program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
+                stall_fetch_size_bytes);
 
-            manager.issue_queue_reserve(program_rem_fetch_size_bytes, command_queue_id);
-            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-            manager.cq_write(program_command_sequence_data, program_rem_fetch_size_bytes, write_ptr);
-            manager.issue_queue_push_back(program_rem_fetch_size_bytes, command_queue_id);
-            // One fetch queue entry for rest of program commands
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(program_rem_fetch_size_bytes, command_queue_id);
+            write_data_to_cq((uint8_t*)program_command_sequence_data, program_rem_fetch_size_bytes);
         } else {
-            manager.issue_queue_reserve(program_fetch_size_bytes, command_queue_id);
-            write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-            manager.cq_write(program_command_sequence_data, program_fetch_size_bytes, write_ptr);
-            manager.issue_queue_push_back(program_fetch_size_bytes, command_queue_id);
-            // One fetch queue entry for rest of program commands
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(program_fetch_size_bytes, command_queue_id);
+            write_data_to_cq((uint8_t*)program_command_sequence_data, program_fetch_size_bytes);
         }
     }
 
