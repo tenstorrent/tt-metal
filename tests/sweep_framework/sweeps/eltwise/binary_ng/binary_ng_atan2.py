@@ -35,7 +35,7 @@ def return_mem_config(mem_config_string):
         return ttnn.DRAM_MEMORY_CONFIG
     elif mem_config_string == "l1_height_sharded_rm":
         return ttnn.create_sharded_memory_config(
-            shape=(512 // 8, 512),
+            shape=(256 // 8, 256),
             # shape=(1024 // 8, 1024),
             core_grid=ttnn.CoreGrid(y=2, x=4),
             strategy=ttnn.ShardStrategy.HEIGHT,
@@ -44,7 +44,7 @@ def return_mem_config(mem_config_string):
         )
     elif mem_config_string == "l1_height_sharded_cm":
         return ttnn.create_sharded_memory_config(
-            shape=(512, 512 // 8),
+            shape=(256, 256 // 8),
             # shape=(1024, 1024 // 8),
             core_grid=ttnn.CoreGrid(y=2, x=4),
             strategy=ttnn.ShardStrategy.HEIGHT,
@@ -53,7 +53,7 @@ def return_mem_config(mem_config_string):
         )
     elif mem_config_string == "l1_width_sharded_rm":
         return ttnn.create_sharded_memory_config(
-            shape=(512, 512 // 8),
+            shape=(256, 256 // 8),
             # shape=(1024, 1024 // 8),
             core_grid=ttnn.CoreGrid(y=2, x=4),
             strategy=ttnn.ShardStrategy.WIDTH,
@@ -62,7 +62,7 @@ def return_mem_config(mem_config_string):
         )
     elif mem_config_string == "l1_width_sharded_cm":
         return ttnn.create_sharded_memory_config(
-            shape=(512 // 8, 512),
+            shape=(256 // 8, 256),
             # shape=(1024 // 8, 1024),
             core_grid=ttnn.CoreGrid(y=2, x=4),
             strategy=ttnn.ShardStrategy.WIDTH,
@@ -71,7 +71,7 @@ def return_mem_config(mem_config_string):
         )
     elif mem_config_string == "l1_block_sharded_rm":
         return ttnn.create_sharded_memory_config(
-            shape=(512 // 2, 512 // 4),
+            shape=(256 // 2, 256 // 4),
             # shape=(1024 // 2, 1024 // 4),
             core_grid=ttnn.CoreGrid(y=2, x=4),
             strategy=ttnn.ShardStrategy.BLOCK,
@@ -80,7 +80,7 @@ def return_mem_config(mem_config_string):
         )
     elif mem_config_string == "l1_block_sharded_cm":
         return ttnn.create_sharded_memory_config(
-            shape=(512 // 2, 512 // 4),
+            shape=(256 // 2, 256 // 4),
             # shape=(1024 // 2, 1024 // 4),
             core_grid=ttnn.CoreGrid(y=2, x=4),
             strategy=ttnn.ShardStrategy.BLOCK,
@@ -118,7 +118,7 @@ parameters = {
             # {"tt_op" :"bias_gelu"},
         ],
         # "input_shape": [{"self": [1, 1, 1024, 1024], "other": [1, 1, 1024, 1024]}],
-        "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # for float32 and int32 dtypes
+        "input_shape": [{"self": [1, 1, 256, 256], "other": [1, 1, 256, 256]}],  # for float32 and int32 dtypes
         "input_dtype": [
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat16"},
             {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.float32"},
