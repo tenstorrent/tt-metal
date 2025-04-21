@@ -166,21 +166,21 @@ def run_latency_test(
 # 1D All-to-All Multicast
 @pytest.mark.parametrize("line_size", [8])
 @pytest.mark.parametrize(
-    "topology, latency_ping_message_size_bytes,latency_measurement_worker_line_index,enable_fused_payload_with_sync, expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
+    "latency_ping_message_size_bytes,latency_measurement_worker_line_index,enable_fused_payload_with_sync, expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
     [
-        ("linear", 0, 0, False, 10625, 10300, 11000, 760),
-        ("linear", 0, 1, False, 9000, 8680, 9430, 750),
-        ("linear", 4096, 1, False, 15750, 15500, 16200, 1310),
-        ("linear", 0, 2, False, 7550, 7240, 7840, 755),
-        ("linear", 0, 3, False, 6160, 5850, 6580, 770),
-        ("linear", 0, 4, False, 4680, 4450, 4975, 780),
-        ("linear", 0, 5, False, 3160, 2975, 3470, 790),
-        ("linear", 0, 6, False, 1520, 1420, 1680, 760),
-        ("linear", 16, 6, False, 1520, 1400, 1550, 760),
-        ("linear", 16, 6, True, 1535, 1425, 1700, 770),
-        ("linear", 1024, 6, False, 2000, 1820, 2150, 1000),
-        ("linear", 2048, 6, False, 2240, 2150, 2290, 1120),
-        ("linear", 4096, 6, False, 2600, 2520, 2770, 1300),
+        (0, 0, False, 10625, 10300, 11000, 760),
+        (0, 1, False, 9000, 8680, 9430, 750),
+        (4096, 1, False, 15750, 15500, 16200, 1310),
+        (0, 2, False, 7550, 7240, 7840, 755),
+        (0, 3, False, 6160, 5850, 6580, 770),
+        (0, 4, False, 4680, 4450, 4975, 780),
+        (0, 5, False, 3160, 2975, 3470, 790),
+        (0, 6, False, 1520, 1420, 1680, 760),
+        (16, 6, False, 1520, 1400, 1550, 760),
+        (16, 6, True, 1535, 1425, 1700, 770),
+        (1024, 6, False, 2000, 1820, 2150, 1000),
+        (2048, 6, False, 2240, 2150, 2290, 1120),
+        (4096, 6, False, 2600, 2520, 2770, 1300),
     ],
 )
 @pytest.mark.parametrize("latency_ping_burst_size", [1])
@@ -190,7 +190,6 @@ def run_latency_test(
 @pytest.mark.parametrize("congestion_writers_message_size", [0])
 @pytest.mark.parametrize("congestion_writers_use_mcast", [False])
 def test_1D_line_fabric_latency_on_uncongested_fabric(
-    topology,
     line_size,
     latency_measurement_worker_line_index,
     enable_fused_payload_with_sync,
@@ -207,7 +206,7 @@ def test_1D_line_fabric_latency_on_uncongested_fabric(
     expected_avg_hop_latency_ns,
 ):
     run_latency_test(
-        topology,
+        "linear",
         line_size,
         latency_measurement_worker_line_index,
         latency_ping_message_size_bytes,
@@ -228,14 +227,14 @@ def test_1D_line_fabric_latency_on_uncongested_fabric(
 # 1D All-to-All Multicast
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize(
-    "topology, latency_ping_message_size_bytes,latency_measurement_worker_line_index,enable_fused_payload_with_sync, expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
+    "latency_ping_message_size_bytes,latency_measurement_worker_line_index,enable_fused_payload_with_sync, expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
     [
-        ("ring", 0, 0, False, 3320, 2880, 3520, 805),
-        ("ring", 16, 0, False, 3130, 2840, 3400, 780),
-        ("ring", 16, 0, True, 3170, 2860, 3420, 790),
-        ("ring", 1024, 0, False, 3920, 3580, 4310, 975),
-        ("ring", 2048, 0, False, 4470, 4220, 4730, 1115),
-        ("ring", 4096, 0, False, 5310, 5050, 5700, 1330),
+        (0, 0, False, 3320, 2880, 3520, 805),
+        (16, 0, False, 3130, 2840, 3400, 780),
+        (16, 0, True, 3170, 2860, 3420, 790),
+        (1024, 0, False, 3920, 3580, 4310, 975),
+        (2048, 0, False, 4470, 4220, 4730, 1115),
+        (4096, 0, False, 5310, 5050, 5700, 1330),
     ],
 )
 @pytest.mark.parametrize("latency_ping_burst_size", [1])
@@ -245,7 +244,6 @@ def test_1D_line_fabric_latency_on_uncongested_fabric(
 @pytest.mark.parametrize("congestion_writers_message_size", [0])
 @pytest.mark.parametrize("congestion_writers_use_mcast", [False])
 def test_1D_ring_fabric_latency_on_uncongested_fabric(
-    topology,
     line_size,
     latency_measurement_worker_line_index,
     enable_fused_payload_with_sync,
@@ -262,7 +260,7 @@ def test_1D_ring_fabric_latency_on_uncongested_fabric(
     expected_avg_hop_latency_ns,
 ):
     run_latency_test(
-        topology,
+        "ring",
         line_size,
         latency_measurement_worker_line_index,
         latency_ping_message_size_bytes,
