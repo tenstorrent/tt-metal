@@ -31,7 +31,7 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
-    ttnn::ccl::Topology topology,
+    ::ttnn::ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
@@ -44,7 +44,10 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
     uint32_t block_wt,
-    DeviceComputeKernelConfig compute_kernel_config);
+    DeviceComputeKernelConfig compute_kernel_config,
+    const GlobalSemaphore& semaphore,
+    const uint32_t ring_size,
+    const uint32_t num_links);
 
 struct RMSAllGather {
     float eps;
@@ -76,7 +79,7 @@ struct RMSAllGather {
         ttnn::operations::normalization::LayerNormProgramConfig program_config,
         const DeviceComputeKernelConfig compute_kernel_config,
         std::optional<DataType> dtype,
-        ttnn::ccl::Topology topology,
+        ::ttnn::ccl::Topology topology,
         const bool is_pre,
         uint32_t num_links,
         uint32_t ring_size,

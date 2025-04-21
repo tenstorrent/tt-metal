@@ -30,7 +30,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -497,7 +497,7 @@ int main(int argc, char** argv) {
 
     // Determine if it passes performance goal
     auto avg_dram_bandwidth = calculate_average(dram_bandwidth);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // goal is 90% of peak DRAM bandwidth performance
         double target_bandwidth = static_cast<double>(dram_bandwidth_spec) * 0.9;
         if (avg_dram_bandwidth < target_bandwidth) {

@@ -170,7 +170,6 @@ Checks: >
   -readability-redundant-smartptr-get,
   -readability-redundant-string-cstr,
   -readability-redundant-string-init,
-  -readability-simplify-boolean-expr,
   -readability-static-accessed-through-instance,
   -readability-static-definition-in-anonymous-namespace,
   -readability-suspicious-call-argument,
@@ -182,5 +181,8 @@ CheckOptions:
     value: true
   - key: portability-simd-intrinsics.Suggest
     value: true
+  # May enable later; for now activate the check with a lighter touch
+  - key: readability-simplify-boolean-expr.SimplifyDeMorgan
+    value: false
 
 FormatStyle: 'file'

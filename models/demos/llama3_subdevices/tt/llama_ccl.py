@@ -421,6 +421,45 @@ class TT_CCL:
         self.buffer_idx[cluster_axis] = (self.buffer_idx[cluster_axis] + 1) % self.num_cbs
         return output_tensor_mesh
 
+    def line_all_reduce_create_heads(
+        self,
+        input_tensor_mesh,
+        cluster_axis,
+        num_links,
+        num_heads,
+        memory_config,
+        num_kv_heads,
+        qkv_memory_config,
+        batch_offset,
+        slice_size,
+        dtype=None,
+    ):
+        (
+            xqkv_reduced,
+            q_heads_pre_rot_1BQD,
+            k_heads_pre_rot_1BKD,
+            v_heads_1BKD,
+        ) = ttnn.experimental.all_reduce_create_qkv_heads(
+            input_tensor_mesh,
+            self.persistent_buffers[cluster_axis][self.buffer_idx[cluster_axis]],
+            cluster_axis=cluster_axis,
+            mesh_device=self.mesh_device,
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            num_heads=num_heads,
+            memory_config=memory_config,
+            topology=ttnn.Topology.Linear,
+            num_links=num_links,
+            subdevice_id=self.worker_sub_device_id,
+            num_kv_heads=num_kv_heads,
+            final_memory_config=qkv_memory_config,
+            batch_offset=batch_offset,
+            slice_size=slice_size,
+            dtype=dtype,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        self.buffer_idx[cluster_axis] = (self.buffer_idx[cluster_axis] + 1) % self.num_cbs
+        return xqkv_reduced, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
+
     def line_reduce_scatter(
         self,
         input_tensor_mesh,
@@ -605,6 +644,7 @@ def tt_sharded_distributed_rmsnorm(
     ln_sharded_progcfg,
     ln_sharded_stats_memcfg,
     tt_ccl=None,
+    output_mem_config=None,
 ):
     # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
@@ -640,6 +680,7 @@ def tt_sharded_distributed_rmsnorm(
         epsilon=epsilon,
         weight=gamma,
         stats=tt_stats,
+        memory_config=output_mem_config,
         is_pre=False,
     )
     ttnn.deallocate(tt_stats)

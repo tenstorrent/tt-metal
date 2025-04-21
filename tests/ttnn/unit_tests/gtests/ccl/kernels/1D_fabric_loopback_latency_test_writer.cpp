@@ -139,6 +139,7 @@ void kernel_main() {
             // Wait for the fabric endpoint to have a completely empty sender channel buffer
             if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
                 if (burst_size > 1) {
+                    DPRINT << "STUCK\n";
                     while (1);  // invalid config -- hang instead of reporting garbage numbers
                 }
                 // Initialize to i + 1 so we can safely reset to 0 and not invalidate the first
@@ -170,7 +171,6 @@ void kernel_main() {
 
                 {
                     DeviceZoneScopedN("WAIT-FOR-ALL-SEMAPHORES");
-
                     if constexpr (!sem_inc_only && !enable_fused_payload_with_sync) {
                         noc_semaphore_wait_min(payload_l1_ptr, i + 1);
                     } else {

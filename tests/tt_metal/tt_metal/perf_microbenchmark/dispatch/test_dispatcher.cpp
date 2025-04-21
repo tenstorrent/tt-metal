@@ -24,7 +24,7 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/command_queue_common.hpp>
 #include "common.h"
 #include <tt-metalium/core_coord.hpp>
@@ -37,7 +37,6 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>
-#include "rtoptions.hpp"
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
@@ -725,7 +724,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
+    tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "test_dispatcher.cpp - Test Passed");

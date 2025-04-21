@@ -49,8 +49,16 @@ class Generator:
             self.model = self.model[0]
 
     def prefill_forward_text(
-        self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, enable_trace=False
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        enable_trace=False,
+        sampling_params=SamplingParams(temperature=0.0, top_k=-1, top_p=1.0),
     ):
+        assert sampling_params.temperature == 0, "Currently only supporting greedy decoding (temperature=0) on device"
+
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
         kv_cache = kv_cache[0]

@@ -11,6 +11,7 @@ from models.experimental.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
     concat,
     determine_num_cores_for_upsample,
     get_core_grid_from_num_cores,
+    tt_adaptive_to_max_pool2d,
 )
 
 
@@ -559,11 +560,10 @@ class TtImagePoolingAttn:
                 input_params=input_params[i],
                 is_act_false=True,
                 conv_alone=True,
-                reshape_tensor=True,
             )
             for i, in_channels in enumerate(ch)
         ]
-        self.im_pools = nn.ModuleList([nn.AdaptiveMaxPool2d((k, k)) for _ in range(nf)])
+        self.im_pools = [ttnn.max_pool2d for i in range(nf)]
         self.ec = ec
         self.nh = nh
         self.nf = nf
@@ -576,21 +576,56 @@ class TtImagePoolingAttn:
         assert len(x) == self.nf
         num_patches = self.k**2
 
-        x = [ttnn.permute(proj(x)[0], (0, 3, 1, 2)) for (x, proj) in zip(x, self.projections)]
+        x = [proj(x)[0] for (x, proj) in zip(x, self.projections)]
         x = [
-            ttnn.reshape(
-                ttnn.from_torch(
-                    pool(ttnn.to_torch(x)),
-                    device=self.device,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+            ttnn.to_layout(
+                ttnn.reshape(
+                    pool(
+                        input_tensor=ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT),
+                        batch_size=1,
+                        input_h=int(math.sqrt(x.shape[2])),
+                        input_w=int(math.sqrt(x.shape[2])),
+                        channels=x.shape[-1],
+                        kernel_size=[
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[0],
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[0],
+                        ],
+                        stride=[
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[1],
+                            tt_adaptive_to_max_pool2d(
+                                torch.randn(
+                                    x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]
+                                ),
+                                (3, 3),
+                            )[1],
+                        ],
+                        padding=[0, 0],
+                        dilation=[1, 1],
+                        memory_config=ttnn.L1_MEMORY_CONFIG,
+                        applied_shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ),
+                    (bs, num_patches, -1),
                 ),
-                (bs, -1, num_patches),
+                layout=ttnn.TILE_LAYOUT,
             )
             for (x, pool) in zip(x, self.im_pools)
         ]
-        x = ttnn.concat(x, dim=-1)
-        x = ttnn.permute(x, (0, 2, 1))
+        x = ttnn.concat(x, dim=1)
         q = ttnn.clone(text)
         for index, module in enumerate(self.query):
             if module == ttnn.linear:

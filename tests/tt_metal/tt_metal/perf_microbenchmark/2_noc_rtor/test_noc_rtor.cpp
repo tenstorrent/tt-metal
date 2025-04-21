@@ -24,7 +24,7 @@
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -227,7 +227,7 @@ int main(int argc, char** argv) {
 
     // Determine if it passes performance goal
     auto avg_elapsed_us = calculate_average(elapsed_us);
-    if (pass && bypass_check == false) {
+    if (pass && !bypass_check) {
         // TODO: Numbers are TBD in SoW
         ;
     }

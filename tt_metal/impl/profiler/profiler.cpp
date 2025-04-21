@@ -7,7 +7,6 @@
 #include <host_api.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <nlohmann/json.hpp>
-#include <rtoptions.hpp>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -78,7 +77,8 @@ void DeviceProfiler::readRiscProfilerResults(
 
         riscCount = 1;
     }
-    profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+    profiler_msg_t* profiler_msg =
+        MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
     uint32_t coreFlatID =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
@@ -383,9 +383,9 @@ void DeviceProfiler::logPacketData(
 
     if (packet_type == kernel_profiler::TS_DATA) {
         if (this->current_zone_it != device_events.end()) {
-            // Check if we are in BRISC Dispatch zone. If so, we could have gotten dispatch meta data packets
+            // Check if we are in a Tensix Dispatch zone. If so, we could have gotten dispatch meta data packets
             // These packets can amend parent zone's info
-            if (tracy::riscName[risc_num] == "BRISC" &&
+            if ((tracy::riscName[risc_num] == "BRISC" || tracy::riscName[risc_num] == "NCRISC") &&
                 this->current_zone_it->zone_phase == tracy::TTDeviceEventPhase::begin &&
                 this->current_zone_it->zone_name.find("DISPATCH") != std::string::npos) {
                 if (zone_name.find("process_cmd") != std::string::npos) {
@@ -407,9 +407,21 @@ void DeviceProfiler::logPacketData(
                         fmt::format("{}", magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteLargeType>(data)));
                     metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
                 }
-                std::string cmd_name = this->current_dispatch_meta_data.cmd_subtype != ""
-                                           ? this->current_dispatch_meta_data.cmd_subtype
-                                           : this->current_dispatch_meta_data.cmd_type;
+
+                std::string newZoneName = this->current_dispatch_meta_data.cmd_type;
+                if (tracy::riscName[risc_num] == "BRISC") {
+                    if (this->current_dispatch_meta_data.cmd_subtype != "") {
+                        newZoneName = fmt::format(
+                            "{}:{}",
+                            this->current_dispatch_meta_data.worker_runtime_id,
+                            this->current_dispatch_meta_data.cmd_subtype);
+                    } else {
+                        newZoneName = fmt::format(
+                            "{}:{}",
+                            this->current_dispatch_meta_data.worker_runtime_id,
+                            this->current_dispatch_meta_data.cmd_type);
+                    }
+                }
                 tracy::TTDeviceEvent event = tracy::TTDeviceEvent(
                     this->current_dispatch_meta_data.worker_runtime_id,
                     this->current_zone_it->chip_id,
@@ -420,7 +432,7 @@ void DeviceProfiler::logPacketData(
                     this->current_zone_it->timestamp,
                     this->current_zone_it->line,
                     this->current_zone_it->file,
-                    fmt::format("{}:{}", this->current_dispatch_meta_data.worker_runtime_id, cmd_name),
+                    newZoneName,
                     this->current_zone_it->zone_phase);
                 device_events.erase(this->current_zone_it);
                 auto ret = device_events.insert(event);
@@ -667,8 +679,8 @@ void DeviceProfiler::serializeJsonNocTraces(
 }
 
 CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c) const {
-    bool coord_is_translated =
-        c.x >= hal_ref.get_virtual_worker_start_x() && c.y >= hal_ref.get_virtual_worker_start_y();
+    bool coord_is_translated = c.x >= MetalContext::instance().hal().get_virtual_worker_start_x() &&
+                               c.y >= MetalContext::instance().hal().get_virtual_worker_start_y();
     if (device_architecture == tt::ARCH::WORMHOLE_B0 && coord_is_translated) {
         const metal_SocDescriptor& soc_desc =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
@@ -763,6 +775,7 @@ void DeviceProfiler::dumpResults(
     ZoneScoped;
 
     auto device_id = device->id();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     device_core_frequency = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
 
     generateZoneSourceLocationsHashes();
@@ -771,7 +784,7 @@ void DeviceProfiler::dumpResults(
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE || state == ProfilerDumpState::FORCE_UMD_READ) {
-                if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores() ||
+                if (rtoptions.get_profiler_do_dispatch_cores() ||
                     state == ProfilerDumpState::FORCE_UMD_READ) {
                     tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
                 }
@@ -784,7 +797,7 @@ void DeviceProfiler::dumpResults(
             }
         }
 
-        if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+        if (rtoptions.get_profiler_noc_events_enabled()) {
             log_warning("Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
         }
 
@@ -811,12 +824,12 @@ void DeviceProfiler::dumpResults(
             }
 
             // if defined, used profiler_noc_events_report_path to write json log. otherwise use output_dir
-            auto rpt_path = tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_report_path();
+            auto rpt_path = rtoptions.get_profiler_noc_events_report_path();
             if (rpt_path.empty()) {
                 rpt_path = output_dir;
             }
 
-            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+            if (rtoptions.get_profiler_noc_events_enabled()) {
                 serializeJsonNocTraces(noc_trace_json_log, rpt_path, device_id);
             }
         }
@@ -901,7 +914,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
 #endif
 }
 
-bool getDeviceProfilerState() { return tt::llrt::RunTimeOptions::get_instance().get_profiler_enabled(); }
+bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled(); }
 
 }  // namespace tt_metal
 

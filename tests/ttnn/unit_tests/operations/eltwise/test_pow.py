@@ -207,3 +207,33 @@ def test_binary_sfpu_pow_bug(device, input_shapes, dtype):
 
     pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
     assert pcc >= 0.999
+
+
+@pytest.mark.parametrize(
+    "input_a, input_b",
+    [
+        ([32, 64], [32, 64]),
+        ([1, 128, 96], [1, 128, 1]),
+        ([5, 3, 1, 128], [5, 1, 64, 128]),
+        ([2, 1, 1, 1, 1], [2, 1, 2, 64, 128]),
+        ([], [128]),
+    ],
+)
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_binary_ng_pow(device, input_a, input_b, dtype):
+    torch.manual_seed(0)
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    torch_input_tensor_a = torch.randn(input_a, dtype=torch_dtype)
+    torch_input_tensor_b = torch.randn(input_b, dtype=torch_dtype)
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b, use_legacy=False)
+    output = ttnn.to_torch(output)
+
+    pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
+    assert pcc >= 0.999

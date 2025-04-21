@@ -14,7 +14,6 @@
 #include "blackhole/bh_hal.hpp"
 #include "core_config.h"
 #include "dev_mem_map.h"
-#include "hal_asserts.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
@@ -99,7 +98,14 @@ HalCoreInfoType create_idle_eth_mem_map() {
         processor_classes[processor_class_idx] = processor_types;
     }
 
-    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
+    return {
+        HalProgrammableCoreType::IDLE_ETH,
+        CoreType::ETH,
+        processor_classes,
+        mem_map_bases,
+        mem_map_sizes,
+        false /*supports_cbs*/,
+        false /*supports_receiving_multicast_cmds*/};
 }
 
 }  // namespace tt::tt_metal::blackhole

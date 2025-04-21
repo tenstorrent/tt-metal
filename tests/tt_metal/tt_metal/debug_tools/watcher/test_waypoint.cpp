@@ -17,7 +17,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -192,7 +192,8 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
                     virtual_core.y,
                     waypoint,
                     // TODO(#17275): Rework risc counts & masks into HAL and generalize this test.
-                    (device->arch() == ARCH::BLACKHOLE) ? waypoint : "   X");
+                    // Active eth core only has one available erisc to test on.
+                    (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : "   X");
                 if (device->arch() == ARCH::BLACKHOLE) {
                     expected += fmt::format("rmsg:***|** h_id:0 smsg:* k_id:{}", k_id_s);
                 } else {

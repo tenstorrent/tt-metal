@@ -219,6 +219,7 @@ private:
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
+    void clear_launch_messages_on_eth_cores();
     void get_associated_dispatch_virtual_cores(
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& my_dispatch_cores,
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& other_dispatch_cores);
