@@ -80,7 +80,7 @@ tt::tt_metal::ProgramDescriptor UnaryProgramFactory::create(
     unary_reader_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
     unary_reader_kernel.core_ranges = all_cores.ranges();
-    unary_reader_kernel.common_runtime_args = {(uint32_t)src_is_dram};
+    unary_reader_kernel.compile_time_args = {(uint32_t)src_is_dram};
     unary_reader_kernel.config = ReaderConfigDescriptor{};
     unary_reader_kernel.reserve_runtime_args();
 
@@ -88,7 +88,7 @@ tt::tt_metal::ProgramDescriptor UnaryProgramFactory::create(
     unary_writer_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
     unary_writer_kernel.core_ranges = all_cores.ranges();
-    unary_writer_kernel.common_runtime_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    unary_writer_kernel.compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
     unary_writer_kernel.config = WriterConfigDescriptor{};
     unary_writer_kernel.reserve_runtime_args();
 
