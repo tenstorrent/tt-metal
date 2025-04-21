@@ -31,7 +31,7 @@ void MAIN {
     constexpr uint32_t cb_stats = get_compile_time_arg_val(9);  // Input Stats Tensor
     constexpr uint32_t cb_xmm = get_compile_time_arg_val(10);   // Input Tensor
     constexpr uint32_t cb_eps = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_scaler_global = get_compile_time_arg_val(12);
+    constexpr uint32_t post_cb_scaler_global = get_compile_time_arg_val(12);
     constexpr uint32_t cb_var = get_compile_time_arg_val(13);
     constexpr uint32_t cb_im = get_compile_time_arg_val(14);
     constexpr uint32_t cb_gamma = get_compile_time_arg_val(15);
@@ -45,7 +45,7 @@ void MAIN {
     constexpr uint32_t scaler0 = 0;
 
     // We need to block here until the stats tensor is filled with a semaphore
-    binary_op_init_common(cb_stats, cb_scaler_global, cb_var);
+    binary_op_init_common(cb_stats, post_cb_scaler_global, cb_var);
 
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 
@@ -61,14 +61,14 @@ void MAIN {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(1);
             cb_reserve_back(cb_var, 1);
 
-            cb_wait_front(cb_scaler_global, 1);
-            reduce_init_delta<false>(cb_stats, cb_scaler_global, cb_var);
+            cb_wait_front(post_cb_scaler_global, 1);
+            reduce_init_delta<false>(cb_stats, post_cb_scaler_global, cb_var);
             tile_regs_acquire();
             // striding over cb_stats, consisting [E(X), E(X^2)] from all the distributed devices in interleaved order
             for (uint32_t w = 0; w < num_distributed_blocks; w++) {
                 reduce_tile(
                     cb_stats,
-                    cb_scaler_global,
+                    post_cb_scaler_global,
                     0,
                     scaler0,
                     0);  // reducing E(x) and E(x^2) separately to different dst

@@ -670,49 +670,68 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         output_page_size,                 // tensor0_page_size
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
-        num_links};
-    // compute kernel compile time args
-    std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
-        num_blocks_first_stage,
-        block_wt,
-        subblock_wt,
-        num_subblocks_w,
-        1,
-        block_wt,
-        fp32_dest_acc_en,
-        num_blocks_second_stage,
-        in2_cb_index,
-        pre_in4_cb_index,
-        ex_cb_partial2_index,
-        ex2_cb_index,
-        add_out_cb_index,
-        ex_cb_external2_index,
-        cb_to_allgather_writer,
-        pre_x_cb_index,
-        in1_cb_index,
-        pre_in0_cb_index};
-    std::vector<uint32_t> not_all_to_all_compute_compile_time_args = {
-        num_blocks_first_stage,
-        block_wt,
-        subblock_wt,
-        num_subblocks_w,
-        0,
-        block_wt,
-        fp32_dest_acc_en,
-        num_blocks_second_stage,
-        in2_cb_index,
-        pre_in4_cb_index,
-        ex_cb_partial2_index,
-        ex2_cb_index,
-        add_out_cb_index,
-        ex_cb_external2_index,
-        cb_to_allgather_writer,
-        pre_x_cb_index,
-        in1_cb_index,
-        pre_in0_cb_index};
+        num_links,
+        (std::uint32_t)gamma.has_value(),
+        (std::uint32_t)is_dram(gamma),
+        (std::uint32_t)block_wt,
+        output_reshard_cb_index,
+        output_cb_index,
+        in3_cb_index,
+        in4_cb_index,
+        in5_cb_index};
+    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().get_padded_shape()[-1] * gamma.value().element_size();
+        writer_compile_time_args.push_back(gamma_stick_size);
+    } else {
+        writer_compile_time_args.push_back(0);
+    }
+
+    writer_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
+
+    // write back compile time args
+    writer_compile_time_args.push_back(block_wt * out_single_tile_size);  // out_tensor_stride_w_bytes
+    writer_compile_time_args.push_back(
+        block_wt_resharded * out_single_tile_size);  // out_reshard_tensor_stride_w_bytes: how many bytes to skip to get
+                                                     // to the next data chunk
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+
+    if (!skip_write_back) {
+        reader_noc = NOC::NOC_0;
+        writer_noc = NOC::NOC_1;
+    }
+
+    // compute kernel compile time args
+    std::vector<uint32_t> compute_compile_time_args = {
+        num_blocks_first_stage,
+        block_wt,
+        subblock_wt,
+        num_subblocks_w,
+        1,  // To be overwritten if not an all to all worker
+        block_wt,
+        fp32_dest_acc_en,
+        num_blocks_second_stage,
+        in2_cb_index,
+        pre_in4_cb_index,
+        ex_cb_partial2_index,
+        ex2_cb_index,
+        add_out_cb_index,
+        ex_cb_external2_index,
+        cb_to_allgather_writer,
+        pre_x_cb_index,
+        in1_cb_index,
+        pre_in0_cb_index,
+        output_cb_index,
+        cb_stats_index,
+        in0_cb_index,
+        in3_cb_index,
+        in4_cb_index,
+        cb_var_index,
+        x_cb_index,
+        in5_cb_index,
+        cb_stats_reduced_index,
+        ex_global_cb_index};
 
     // reader kernel
 
@@ -758,7 +777,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     std::string writer_kernel =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/"
         "writer_unary_sharded_rms.cpp";
-    writer_compile_time_args.at(0) = 1;
     auto writer_mcast_sender_kernels_id = CreateKernel(
         program,
         writer_kernel,
@@ -794,8 +812,9 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = all_to_all_except_top_compute_compile_time_args});
+            .compile_args = compute_compile_time_args});
     if (num_none_all_to_all_workers > 0) {
+        compute_compile_time_args.at(4) = 0;
         compute_kernels_id = CreateKernel(
             program,
             compute_kernel_file,
@@ -804,7 +823,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = math_approx_mode,
-                .compile_args = not_all_to_all_compute_compile_time_args});
+                .compile_args = compute_compile_time_args});
     }
 
     // Get AG worker cores
@@ -1469,6 +1488,33 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
         (std::uint32_t)post_reduce_sender_semaphore_id, ex_global_cb_index};
 
+    // writer compile time args
+    std::vector<uint32_t> writer_compile_time_args = {
+        1,  // is_all_to_all_worker
+        (std::uint32_t)gamma.has_value(),
+        (std::uint32_t)is_dram(gamma),
+        (std::uint32_t)block_wt,
+        output_reshard_cb_index,
+        output_cb_index,
+        in3_cb_index,
+        in4_cb_index,
+        in5_cb_index};
+
+    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().get_padded_shape()[-1] * gamma.value().element_size();
+        writer_compile_time_args.push_back(gamma_stick_size);
+    } else {
+        writer_compile_time_args.push_back(0);
+    }
+
+    writer_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
+
+    // write back compile time args
+    writer_compile_time_args.push_back(block_wt * out_single_tile_size);  // out_tensor_stride_w_bytes
+    writer_compile_time_args.push_back(
+        block_wt_resharded * out_single_tile_size);  // out_reshard_tensor_stride_w_bytes: how many bytes to skip to get
+                                                     // to the next data chunk
+
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
 
@@ -1524,32 +1570,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     if (skip_write_back) {
         writer_defines["SKIP_WRITE_BACK"] = "1";
     }
-    // writer compile time args
-    std::vector<uint32_t> writer_compile_time_args = {
-        1,  // is_all_to_all_worker
-        (std::uint32_t)gamma.has_value(),
-        (std::uint32_t)is_dram(gamma),
-        (std::uint32_t)block_wt,
-        output_reshard_cb_index,
-        output_cb_index,
-        in3_cb_index,
-        in4_cb_index,
-        in5_cb_index};
-
-    if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_padded_shape()[-1] * gamma.value().element_size();
-        writer_compile_time_args.push_back(gamma_stick_size);
-    } else {
-        writer_compile_time_args.push_back(0);
-    }
-
-    writer_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
-
-    // write back compile time args
-    writer_compile_time_args.push_back(block_wt * out_single_tile_size);  // out_tensor_stride_w_bytes
-    writer_compile_time_args.push_back(
-        block_wt_resharded * out_single_tile_size);  // out_reshard_tensor_stride_w_bytes: how many bytes to skip to get
-                                                     // to the next data chunk
     // writer kernel
     std::string writer_kernel;
     writer_kernel =
