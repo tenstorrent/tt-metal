@@ -163,7 +163,7 @@ def test_ttnn_mvx_faster_rcnn(device, use_pretrained_weight, reset_seeds):
     batch_data_samples_modified = torch.load(
         "/home/ubuntu/punith/tt-metal/models/experimental/functional_pointpillars/reference/batch_inputs_metas_motdified.pt"
     )  # modified
-    print("batch_data_samples_modified", batch_data_samples_modified)
+    # print("batch_data_samples_modified", batch_data_samples_modified)
 
     reference_output = reference_model(
         batch_inputs_dict=batch_inputs_dict, batch_data_samples=batch_data_samples_modified
@@ -198,10 +198,13 @@ def test_ttnn_mvx_faster_rcnn(device, use_pretrained_weight, reset_seeds):
         parameters=parameters,
         device=device,
     )
-    print("ttnn_model", ttnn_model)
+    # print("ttnn_model", ttnn_model)
     ttnn_output = ttnn_model(
         batch_inputs_dict=ttnn_batch_inputs_dict, batch_data_samples=ttnn_batch_data_samples_modified
     )
+
+    print("reference_ouptut", reference_output)
+    print("ttnn_output", ttnn_output)
 
     # for i in range(len(ttnn_output)):
     #     passing, pcc = assert_with_pcc(reference_output[i], ttnn.to_torch(ttnn_output[i]).permute(0, 3, 1, 2), 0.98)
