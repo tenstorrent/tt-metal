@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 import ttnn
 from loguru import logger
@@ -103,31 +105,46 @@ def assert_quality(
     num_devices: int | None = None,
     pcc: float | None = None,
     mse: float | None = None,
-    shard_dim=None,
+    shard_dim: int | None = None,
 ) -> None:
     if isinstance(a, ttnn.Tensor):
         a = to_torch(a, mesh_device=a.device(), dtype=a.get_dtype(), shard_dim=shard_dim)
-        a = a[0 : a.shape[0] // num_devices, ...]
+        if num_devices is not None:
+            assert shard_dim == 0
+            a = a[0 : a.shape[0] // num_devices, ...]
     if isinstance(b, ttnn.Tensor):
         b = to_torch(b, mesh_device=b.device(), dtype=b.get_dtype(), shard_dim=shard_dim)
-        b = b[0 : b.shape[0] // num_devices, ...]
+        if num_devices is not None:
+            assert shard_dim == 0
+            b = b[0 : b.shape[0] // num_devices, ...]
 
-    if a.dim() > b.dim():
-        a = a.squeeze(0)
-    if b.dim() > a.dim():
-        b = b.squeeze(0)
+    if math.prod(a.shape) != math.prod(b.shape):
+        msg = f"incompatible shapes: {a.shape} != {b.shape}"
+        raise ValueError(msg)
 
-    a = a.to(torch.float32)
-    b = b.to(torch.float32)
+    if a.shape != b.shape:
+        logger.warning(f"shape mismatch: {a.shape} != {b.shape}")
 
-    _, pcc_calculated = comp_pcc(a, b)
+    a = a.detach().flatten().to(torch.float32)
+    b = b.detach().flatten().to(torch.float32)
+
+    cov = torch.cov(torch.stack([a, b])).numpy()
+
+    std_a = math.sqrt(cov[0, 0])
+    std_b = math.sqrt(cov[1, 1])
+    pcc_calculated = cov[0, 1] / (std_a * std_b)
+    beta = cov[0, 1] / cov[0, 0]
+    mean_a = a.mean().item()
+    mean_b = b.mean().item()
+
     mse_calculated = torch.nn.functional.mse_loss(a, b).item()
 
-    logger.info(f"PCC={pcc_calculated:.6f}, MSE={mse_calculated:.6f}")
+    logger.info(f"μ₁ = {mean_a:.3g}, μ₂ = {mean_b:.3g}, σ₁ = {std_a:.3g}, σ₂ = {std_b:.3g}")
+    logger.info(f"PCC = {pcc_calculated * 100:.4f} %, MSE = {mse_calculated:.3g}, β = {beta * 100:.0f} %")
     if pcc is not None:
-        assert pcc_calculated >= pcc, f"PCC={pcc_calculated:.6f}"
+        assert pcc_calculated >= pcc, f"PCC = {pcc_calculated * 100:.4f} % >= {pcc * 100:.4f} %"
     if mse is not None:
-        assert mse_calculated <= mse, f"MSE={mse_calculated:.6f}"
+        assert mse_calculated <= mse, f"MSE = {mse_calculated:.3g} <= {mse:.3g}"
 
 
 def all_gather(
