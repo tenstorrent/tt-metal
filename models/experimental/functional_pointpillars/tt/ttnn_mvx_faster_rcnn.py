@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional, Sequence, Dict
+from typing import List, Optional
 
-from torch import Tensor
+import ttnn
 
 from models.experimental.functional_pointpillars.tt.ttnn_hard_vfe import TtHardVFE
 from models.experimental.functional_pointpillars.tt.ttnn_point_pillars_scatter import TtPointPillarsScatter
@@ -183,7 +183,7 @@ class TtMVXFasterRCNN:
     def _forward(self):
         pass
 
-    def extract_img_feat(self, img: Tensor, input_metas: List[dict]) -> dict:
+    def extract_img_feat(self, img, input_metas: List[dict]) -> dict:
         """Extract features of images."""
         if self.with_img_backbone and img is not None:
             input_shape = img.shape[-2:]
@@ -205,11 +205,11 @@ class TtMVXFasterRCNN:
 
     def extract_pts_feat(
         self,
-        voxel_dict: Dict[str, Tensor],
-        points: Optional[List[Tensor]] = None,
-        img_feats: Optional[Sequence[Tensor]] = None,
+        voxel_dict,
+        points=None,
+        img_feats=None,
         batch_input_metas: Optional[List[dict]] = None,
-    ) -> Sequence[Tensor]:
+    ):
         if not self.with_pts_bbox:
             return None
         voxel_features = self.pts_voxel_encoder(
@@ -217,6 +217,8 @@ class TtMVXFasterRCNN:
         )
         batch_size = voxel_dict["coors"][-1, 0] + 1
         x = self.pts_middle_encoder(voxel_features, voxel_dict["coors"], batch_size)
+        voxel_features = ttnn.deallocate(voxel_features)
+        x = ttnn.permute(x, (0, 2, 3, 1))
         x = self.pts_backbone(x)
         if self.with_pts_neck:
             x = self.pts_neck(x)
@@ -252,7 +254,7 @@ class TtMVXFasterRCNN:
             data_sample.pred_instances = data_instances_2d[i]
         return data_samples
 
-    def predict_imgs(self, x: List[Tensor], batch_data_samples, rescale: bool = True, **kwargs):
+    def predict_imgs(self, x, batch_data_samples, rescale: bool = True, **kwargs):
         if batch_data_samples[0].get("proposals", None) is None:
             rpn_results_list = self.img_rpn_head.predict(x, batch_data_samples, rescale=False)
         else:
@@ -260,10 +262,11 @@ class TtMVXFasterRCNN:
         results_list = self.img_roi_head.predict(x, rpn_results_list, batch_data_samples, rescale=rescale, **kwargs)
         return results_list
 
-    def __call__(self, batch_inputs_dict: Dict[str, Optional[Tensor]], batch_data_samples, **kwargs):
+    def __call__(self, batch_inputs_dict, batch_data_samples, **kwargs):
         # batch_input_metas = [item.metainfo for item in batch_data_samples]
         batch_input_metas = batch_data_samples  # modified and passed
         img_feats, pts_feats = self.extract_feat(batch_inputs_dict, batch_input_metas)
+
         if pts_feats and self.with_pts_bbox:
             results_list_3d = self.pts_bbox_head.predict(pts_feats, batch_data_samples, **kwargs)
         else:
@@ -275,6 +278,6 @@ class TtMVXFasterRCNN:
         else:
             results_list_2d = None
 
-        print("results_list_3d", results_list_3d)
+        # print("results_list_3d", results_list_3d)
         # detsamples = self.add_pred_to_datasample(batch_data_samples, results_list_3d, results_list_2d)
         return results_list_3d
