@@ -25,11 +25,71 @@ ALWI void REL() { release_dst(); }
 // Note that the attention mask will not fit in L1 for the entire tensor
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
-
-void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length, uint32_t blk) {
+void apply_fused_scale_mask(
+    uint32_t cb_in, uint32_t cb_fused_scale_mask, uint32_t cb_out, uint32_t cb_length, uint32_t blk) {
     // Requirements:
     //   cb_length of cb_in and cb_out are the same.
     //   blk is a divisor of cb_length
+    reconfig_data_format(cb_in, cb_fused_scale_mask);
+    pack_reconfig_data_format(cb_out);
+    mul_tiles_bcast_scalar_init_short(cb_in, cb_fused_scale_mask);
+    for (uint32_t cur_blk = 0; cur_blk < cb_length; cur_blk += blk) {
+        tile_regs_acquire();
+        tile_regs_wait();
+        cb_wait_front(cb_in, blk);
+        cb_reserve_back(cb_out, blk);
+        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+            mul_tiles_bcast_scalar(cb_in, cb_fused_scale_mask, cur_dst, 0, cur_dst);
+        }
+        tile_regs_commit();
+        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+            pack_tile(cur_dst, cb_scale_mask);
+        }
+        cb_push_back(cb_out, blk);
+        cb_pop_front(cb_in, blk);
+        tile_regs_release();
+    }
+}
+void apply_fused_attn_mask(
+    uint32_t cb_in, uint32_t cb_fused_attn_mask, uint32_t cb_out, uint32_t cb_length, uint32_t blk) {
+    reconfig_data_format(cb_in, cb_fused_attn_mask);
+    pack_reconfig_data_format(cb_out);
+#ifdef CAUSAL_MASK
+    add_tiles_init(cb_scale_mask, cb_fused_attn);
+#else
+    add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
+#endif
+    for (uint32_t cur_blk = 0; cur_blk < cb_length; cur_blk += blk) {
+        tile_regs_acquire();
+        tile_regs_wait();
+        cb_wait_front(cb_in, blk);
+        cb_wait_front(cb_fused_attn, blk);  // cumulative wait for up to wt tiles
+        cb_reserve_back(cb_out, blk);
+#ifdef CAUSAL_MASK
+        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+            add_tiles(cb_scale_mask, cb_fused_attn, cur_dst, cur_dst, cur_dst);  // tile *= 1/(sum(exp(x)))
+        }
+#else
+        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+        }
+#endif
+        tile_regs_commit();
+        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+            pack_tile(cur_dst, cb_scale_mask);
+        }
+        cb_push_back(cb_out, blk);
+        cb_pop_front(cb_in, blk);
+        cb_pop_front(cb_fused_attn, blk);
+        tile_regs_release();
+    }
+}
+
+void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length, uint32_t blk) {
+    // requirements:
+    //   cb_length of cb_in and cb_out are the same.
+    //   blk is a divisor of cb_length
+    reconfig_data_format_srca(cb_in);
+    pack_reconfig_data_format(cb_out);
     for (uint32_t cur_blk = 0; cur_blk < cb_length; cur_blk += blk) {
         tile_regs_acquire();
         tile_regs_wait();
@@ -56,6 +116,8 @@ void reduce_cb(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, bool use_pre
     // Requirements:
     //   cb_length of cb_in and cb_out are the same.
     //   blk is a divisor of cb_length
+    reconfig_data_format(cb_in, cb_scaler);
+    pack_reconfig_data_format(cb_out);
     const uint32_t dst0 = 0;
     const uint32_t dst1 = 1;
     tile_regs_acquire();
@@ -80,6 +142,28 @@ void reduce_cb(uint32_t cb_in, uint32_t cb_scaler, uint32_t cb_out, bool use_pre
     cb_push_back(cb_out, 1);
     tile_regs_release();
 }
+void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint_32_t cb_out, uint32_t cb_length) {
+    reconfig_data_format(cb_in, cb_recip);
+    pack_reconfig_data_format(cb_out);
+    cb_wait_front(cb_recip, 1);
+    mul_tiles_bcast_scalar_init_short(cb_in, cb_recip);
+    for (uint32_t cur_blk = 0; cur_blk < cb_length; cur_blk += blk) {
+        tile_regs_acquire();
+        tile_regs_wait();
+        cb_wait_front(cb_in, blk);
+        cb_reserve_back(cb_out, blk);
+        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+            mul_tiles_bcast_scalar(cb_in, cb_recip, cur_blk, 0, dst0);
+        }
+        tile_regs_commit();
+        for (uint32_t cur_dst = 0; cur_dst < blk; cur_dst++) {
+            pack_tile(cur_dst, cb_out);
+        }
+        cb_pop_front(cb_in, blk);
+        cb_push_back(cb_out, blk);
+        tile_regs_release();
+    }
+}
 
 namespace NAMESPACE {
 void MAIN {
@@ -89,7 +173,7 @@ void MAIN {
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
-    const uint32_t block = get_arg_val<uint32_t>(6);
+    const uint32_t cb_length = get_arg_val<uint32_t>(6);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
 
     constexpr uint32_t onetile = 1;
@@ -119,16 +203,46 @@ void MAIN {
     cb_wait_front(cb_fused_scale, 1);
 #endif
 
-    uint32_t Wt_blocks = Wt / blocks;
-    Wt_blocks += Wt % blocks == 0 ? 0 : 1;
+    uint32_t num_cb_passes = Wt / cb_length;
+    uint32_t residuals_cb_length = Wt % cb_length;
+    num_cb_passes += residual_cb_length == 0 ? 0 : 1;
 
     // First loop is to parse and find the sum
     constexpr int dst0 = 0;
     uint32_t ht = start_ht;
     bool wait_mask = true;
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        for (uint32_t wt = 0; wt < Wt_blocks; wt) {
-            for (uint32_t wt = 0; wt < Wt; wt++) {
-            }
+        // This and all inner loops are for parsing the length of Wt in terms of chunks of the width that can fit in the
+        // cb This specific loop is for generaating the sum
+        bool use_prev_reduce = false;
+        for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass) {
+            // TODO Flesh this out after basic functionality is confirmed.
+            // if(cur_pass == num_cb_passes - 1 and residuals_cb_length > 0){
+            //      cb_length = residuals_cb_length;
+            //      blk = gcd(cb_length, blk);
+            // }
+            //
+            // #if FUSED_SCALE_MASK
+            //             apply_fused_scale_mask(cb_fused_scale_in, cb_fused_scale_mask, cb_fused_scale_out, cb_length,
+            //             blk);
+            // #endif
+            // #ifdef CASUAL_MASK
+            //             apply_fused_attn_mask(cb_fused_attn_in, cb_fused_attn_mask, cb_attn_out, cb_length, blk);
+            // #else
+            //          //TODO: Add the non causal variation later
+            // #endif
+            // #ifdef NUMERIC_STABLE
+            //          //TODO: Add function that does a max reduce and then
+            // #endif
+            exp_cb(cb_in, cb_out, cb_length, blk);
+            reduce_cb(cb_in, cb_scaler, cb_out, use_prev_reduce, cb_length);
+            use_prev_reduce = true;  // We want to accumulate the previous cb reductions
         }
+        // This specific loop is for generating the final values
+        for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass) {
+            exp_cb(cb_in, cb_recip_in, cb_length, blk);
+            apply_recip(cb_recip_in, cb_recip, cb_out, cb_length);
+        }
+    }
 }  // namespace NAMESPACE
