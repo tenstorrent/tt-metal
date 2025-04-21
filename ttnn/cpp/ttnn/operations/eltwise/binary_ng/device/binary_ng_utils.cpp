@@ -318,60 +318,58 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
     }
 }
 
-tt::tt_metal::KernelDescriptor::Defines OpConfig::as_defines(DataType dtype) const {
-    tt::tt_metal::KernelDescriptor::Defines defines;
+std::unordered_map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
+    std::unordered_map<std::string, std::string> defines;
 
     if (!is_sfpu_op()) {
         auto fpu_binary_op = std::get<FpuBinaryOp>(binary_op);
         auto binary_op_str = magic_enum::enum_name(fpu_binary_op);
-        defines.emplace_back("BINARY_OP", fmt::format("{}_tiles", Lowercase{binary_op_str}));
-        defines.emplace_back("BINARY_OP_TYPE", fmt::format("EltwiseBinaryType::ELW{}", binary_op_str));
+        defines["BINARY_OP"] = fmt::format("{}_tiles", Lowercase{binary_op_str});
+        defines["BINARY_OP_TYPE"] = fmt::format("EltwiseBinaryType::ELW{}", binary_op_str);
         return defines;
     } else {
         auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
-        defines.emplace_back("BINARY_SFPU_INIT", std::move(tile_init));
-        defines.emplace_back("BINARY_SFPU_OP", std::move(tile_fn));
+        defines["BINARY_SFPU_INIT"] = std::move(tile_init);
+        defines["BINARY_SFPU_OP"] = std::move(tile_fn);
         return defines;
     }
 }
 
 void add_activation_defines(
-    tt::tt_metal::KernelDescriptor::Defines& defines,
+    std::unordered_map<std::string, std::string>& defines,
     tt::stl::Span<const unary::UnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype) {
-    defines.emplace_back(
-        fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand),
-        std::accumulate(
-            activations.begin(),
-            activations.end(),
-            std::string{},
-            [&](std::string&& process, const unary::UnaryWithParam& a) {
-                const auto& [op_init, op_func] = unary::utils::get_op_init_and_func(a.op_type, a.params, "i", dtype);
-                process += op_init;
-                process += op_func;
-                unary::utils::update_macro_defines(a.op_type, defines);
-                return std::move(process);
-            }));
+    defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = std::accumulate(
+        activations.begin(),
+        activations.end(),
+        std::string{},
+        [&](std::string&& process, const unary::UnaryWithParam& a) {
+            const auto& [op_init, op_func] = unary::utils::get_op_init_and_func(a.op_type, a.params, "i", dtype);
+            process += op_init;
+            process += op_func;
+            unary::utils::update_macro_defines(a.op_type, defines);
+            return std::move(process);
+        });
 }
 
-tt::tt_metal::KernelDescriptor::Defines make_dataflow_defines(const DataType dtype, const bool is_sfpu_op) {
-    tt::tt_metal::KernelDescriptor::Defines defines;
+std::unordered_map<std::string, std::string> make_dataflow_defines(const DataType dtype, const bool is_sfpu_op) {
+    std::unordered_map<std::string, std::string> defines;
     if (is_sfpu_op && dtype == DataType::FLOAT32) {
-        defines.emplace_back("FILL_TILE_WITH_FIRST_COLUMN", "fill_tile_with_first_column");
-        defines.emplace_back("FILL_TILE_WITH_FIRST_ROW", "fill_tile_with_first_row");
-        defines.emplace_back("FILL_TILE_WITH_FIRST_ELEMENT", "fill_tile_with_first_element<float>");
-        defines.emplace_back("FILL_WITH_VALUE_FLOAT", "fill_with_val<1024, float>");
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
+        defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
     } else if (is_sfpu_op && dtype == DataType::INT32) {
-        defines.emplace_back("FILL_TILE_WITH_FIRST_COLUMN", "fill_tile_with_first_column");
-        defines.emplace_back("FILL_TILE_WITH_FIRST_ROW", "fill_tile_with_first_row");
-        defines.emplace_back("FILL_TILE_WITH_FIRST_ELEMENT", "fill_tile_with_first_element<int32_t>");
-        defines.emplace_back("FILL_WITH_VALUE", "fill_with_val<1024, int32_t>");
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
+        defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
     } else {
-        defines.emplace_back("FILL_TILE_WITH_FIRST_COLUMN", "fill_tile_with_first_column_bfloat16");
-        defines.emplace_back("FILL_TILE_WITH_FIRST_ROW", "fill_tile_with_first_row_bfloat16");
-        defines.emplace_back("FILL_TILE_WITH_FIRST_ELEMENT", "fill_tile_with_first_element_bfloat16");
-        defines.emplace_back("FILL_WITH_VALUE", "fill_with_val_bfloat16");
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
     }
     return defines;
 }

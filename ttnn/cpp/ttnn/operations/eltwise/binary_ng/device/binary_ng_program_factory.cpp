@@ -471,13 +471,13 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create(
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
 
         if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
-            compute_kernel_defines.emplace_back("PROCESS_POST_ACTIVATIONS(i)", "");
+            compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
             if (post_activations[0].op_type == unary::UnaryOpType::RELU) {
-                compute_kernel_defines.emplace_back("PACK_RELU", "1");
+                compute_kernel_defines["PACK_RELU"] = "1";
                 unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
             } else if (post_activations[0].op_type == unary::UnaryOpType::ZERO_POINT) {
                 // Zero-point is passed as the 4th run-time kernel argument
-                compute_kernel_defines.emplace_back("QUANT_ZERO_POINT_RT_ARGS_IDX", "3");
+                compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
                 add_activation_defines(compute_kernel_defines, post_activations, "POST", c.get_dtype());
@@ -506,18 +506,20 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create(
         .buffer = a_sharded ? a_buffer : nullptr,
     });
 
-    // if (!compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
-    auto a_intermediate_format = is_sfpu_op ? a_data_format : op_has_exp ? tt::DataFormat::Float16_b : a_data_format;
-    uint32_t a_intermediate_single_tile_size = tt_metal::detail::TileSize(a_intermediate_format);
-    program.cbs.push_back(CBDescriptor{
-        .total_size = a_intermediate_single_tile_size,
-        .core_ranges = all_device_cores.ranges(),
-        .format_descriptors = {CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_3,
-            .data_format = a_intermediate_format,
-            .page_size = a_intermediate_single_tile_size,
-        }}});
-    //}
+    if (!compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
+        auto a_intermediate_format = is_sfpu_op   ? a_data_format
+                                     : op_has_exp ? tt::DataFormat::Float16_b
+                                                  : a_data_format;
+        uint32_t a_intermediate_single_tile_size = tt_metal::detail::TileSize(a_intermediate_format);
+        program.cbs.push_back(CBDescriptor{
+            .total_size = a_intermediate_single_tile_size,
+            .core_ranges = all_device_cores.ranges(),
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = tt::CBIndex::c_3,
+                .data_format = a_intermediate_format,
+                .page_size = a_intermediate_single_tile_size,
+            }}});
+    }
 
     // If b is a scalar, we only need one tile in the CB
     uint32_t b_num_pages = b_buffer == nullptr ? 1 : (b_sharded ? b_num_tiles_per_shard : 2);
@@ -532,19 +534,21 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create(
         .buffer = b_sharded ? b_buffer : nullptr,
     });
 
-    // if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
-    auto b_intermediate_format = is_sfpu_op ? b_data_format : op_has_exp ? tt::DataFormat::Float16_b : b_data_format;
-    uint32_t b_intermediate_single_tile_size = tt_metal::detail::TileSize(b_intermediate_format);
-    program.cbs.push_back(CBDescriptor{
-        .total_size = b_intermediate_single_tile_size,
-        .core_ranges = all_device_cores.ranges(),
-        .format_descriptors = {CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_4,
-            .data_format = b_intermediate_format,
-            .page_size = b_intermediate_single_tile_size,
-        }},
-    });
-    //}
+    if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
+        auto b_intermediate_format = is_sfpu_op   ? b_data_format
+                                     : op_has_exp ? tt::DataFormat::Float16_b
+                                                  : b_data_format;
+        uint32_t b_intermediate_single_tile_size = tt_metal::detail::TileSize(b_intermediate_format);
+        program.cbs.push_back(CBDescriptor{
+            .total_size = b_intermediate_single_tile_size,
+            .core_ranges = all_device_cores.ranges(),
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = tt::CBIndex::c_4,
+                .data_format = b_intermediate_format,
+                .page_size = b_intermediate_single_tile_size,
+            }},
+        });
+    }
 
     program.cbs.push_back(CBDescriptor{
         .total_size = c_single_tile_size * (c_sharded ? c_num_tiles_per_shard : 2),
@@ -565,7 +569,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create(
 
     // READER KERNEL
     auto reader_defines = make_dataflow_defines(a_dtype, is_sfpu_op);
-    reader_defines.emplace_back("SRC_SHARDED", a_sharded ? "1" : "0");
+    reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
 
     constexpr size_t num_kernels = 3;
     program.kernels.resize(num_kernels);
@@ -574,7 +578,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create(
     reader_kernel.kernel_source = get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op);
     reader_kernel.core_ranges = all_device_cores.ranges();
     reader_kernel.compile_time_args = {a_is_dram, has_sharding};
-    reader_kernel.defines = std::move(reader_defines);
+    reader_kernel.defines = {reader_defines.begin(), reader_defines.end()};
     reader_kernel.config = ReaderConfigDescriptor{};
     reader_kernel.reserve_runtime_args();
 
@@ -587,14 +591,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create(
         compute_kernel_name = kernel_config.compute_kernel;
     }
     auto writer_defines = make_dataflow_defines(b_dtype, is_sfpu_op);
-    writer_defines.emplace_back("SRC_SHARDED", b_sharded ? "1" : "0");
-    writer_defines.emplace_back("DST_SHARDED", c_sharded ? "1" : "0");
+    writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
+    writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
     auto& writer_kernel = program.kernels[1];
     writer_kernel.kernel_source = get_kernel_file_path(writer_kernel_name, is_sfpu_op);
     writer_kernel.core_ranges = all_device_cores.ranges();
     writer_kernel.compile_time_args = {b_is_dram, c_is_dram, has_sharding};
-    writer_kernel.defines = std::move(writer_defines);
+    writer_kernel.defines = {writer_defines.begin(), writer_defines.end()};
     writer_kernel.config = WriterConfigDescriptor{};
     writer_kernel.reserve_runtime_args();
 
@@ -627,7 +631,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create(
         }
     }
 
-    compute_kernel_defines.emplace_back("BCAST_INPUT", kernel_config.bcast_input_str());
+    compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
 
@@ -635,7 +639,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create(
     compute_kernel.kernel_source = get_kernel_file_path(compute_kernel_name, is_sfpu_op);
     compute_kernel.core_ranges = all_device_cores.ranges();
     compute_kernel.compile_time_args = {num_tiles_per_cycle};
-    compute_kernel.defines = std::move(compute_kernel_defines);
+    compute_kernel.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
     compute_kernel.config = ComputeConfigDescriptor{
         .fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = std::move(unpack_to_dest_mode)};
     compute_kernel.reserve_runtime_args();

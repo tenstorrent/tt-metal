@@ -150,19 +150,18 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::BroadcastWidthMultiCore::
     unary_writer_kernel.config = tt_metal::WriterConfigDescriptor{};
     unary_writer_kernel.reserve_runtime_args();
 
-    auto& eltwise_binary_kernel = program.kernels[2];
-    eltwise_binary_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_sfpu_kernel.cpp";
-    eltwise_binary_kernel.core_ranges = {all_device_cores};
-    eltwise_binary_kernel.defines = bcast_op_utils::get_defines_vec(BcastOpDim::W, bcast_math);
-    eltwise_binary_kernel.config = tt_metal::ComputeConfigDescriptor{};
-    eltwise_binary_kernel.reserve_runtime_args();
+    auto& bcast_kernel = program.kernels[2];
+    bcast_kernel.kernel_source = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_w.cpp";
+    bcast_kernel.core_ranges = {all_device_cores};
+    bcast_kernel.defines = bcast_op_utils::get_defines_vec(BcastOpDim::W, bcast_math);
+    bcast_kernel.config = tt_metal::ComputeConfigDescriptor{};
+    bcast_kernel.reserve_runtime_args();
 
     for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_total; i++) {
         const CoreCoord& core = cores.at(i);
 
         auto& binary_reader_args = binary_reader_kernel.runtime_args[core.x][core.y];
-        auto& eltwise_binary_args = eltwise_binary_kernel.runtime_args[core.x][core.y];
+        auto& bcast_args = bcast_kernel.runtime_args[core.x][core.y];
         auto& unary_writer_args = unary_writer_kernel.runtime_args[core.x][core.y];
 
         uint32_t Wt_per_core;
@@ -174,7 +173,7 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::BroadcastWidthMultiCore::
             binary_reader_args = {
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0  // 16
             };
-            eltwise_binary_args = {
+            bcast_args = {
                 0, 0, 0  // 3
             };
             unary_writer_args = {
@@ -204,7 +203,7 @@ tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::BroadcastWidthMultiCore::
             Wt_skip,                    // 15
         };
 
-        eltwise_binary_args = {
+        bcast_args = {
             NC,          // B
             Ht,          // Ht
             Wt_per_core  // Wt

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <map>
+#include <unordered_map>
 #include <string>
 
 #include "unary_op_types.hpp"
@@ -97,6 +98,7 @@ bool is_parametrized_type(T val) {
 
 void update_macro_defines(UnaryOpType op_type, tt::tt_metal::KernelDescriptor::Defines& defines);
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
+void update_macro_defines(UnaryOpType op_type, std::unordered_map<std::string, std::string>& defines);
 
 std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root);
 
