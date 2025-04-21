@@ -1,1 +1,1 @@
-../../../ttnn/integration_tests/UFLD_v2/test_ttnn_UFLD_v2.py
+../../../ttnn/integration_tests/ufld_v2/test_ttnn_UFLD_v2.py
