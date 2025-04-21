@@ -1,5 +1,8 @@
-# python tests/didt/process_profiler_output.py --input-file <profiler-csv>
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
+# SPDX-License-Identifier: Apache-2.0
+
+# python tests/didt/process_profiler_output.py --input-file <profiler-csv>
 import argparse
 import matplotlib.pyplot as plt
 import numpy as np
