@@ -1815,11 +1815,11 @@ void assemble_device_commands(
         device, program, program_transfer_info, kernels_buffer, constants, calculator);
 
     LaunchMessageGenerator launch_message_generator;
-    launch_message_generator.construct_commands(device, program, calculator, constants, sub_device_id);
+    DeviceCommandCalculator launch_message_calculator;
+    launch_message_generator.construct_commands(device, program, launch_message_calculator, constants, sub_device_id);
 
     GoSignalGenerator go_signal_generator;
     DeviceCommandCalculator go_signal_calculator;
-
     go_signal_generator.size_commands(go_signal_calculator, device, sub_device_id, program_transfer_info);
 
     // Start assembling commands into the device_command_sequence.
@@ -1837,7 +1837,10 @@ void assemble_device_commands(
 
     program_binary_command_generator.assemble_commands(device_command_sequence);
 
-    launch_message_generator.assemble_commands(program_command_sequence, device_command_sequence, constants);
+    program_command_sequence.launch_msg_command_sequence =
+        HostMemDeviceCommand(launch_message_calculator.write_offset_bytes());
+    launch_message_generator.assemble_commands(
+        program_command_sequence, program_command_sequence.launch_msg_command_sequence, constants);
 
     program_command_sequence.go_msg_command_sequence = HostMemDeviceCommand(go_signal_calculator.write_offset_bytes());
     go_signal_generator.assemble_commands(
@@ -2227,15 +2230,25 @@ void write_program_command_sequence(
         }
     }
 
+    // Generic function to write data to cq
+    auto write_data_to_cq = [&](uint8_t* data, uint32_t size_bytes) {
+        manager.issue_queue_reserve(size_bytes, command_queue_id);
+        uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+        manager.cq_write(data, size_bytes, write_ptr);
+        manager.issue_queue_push_back(size_bytes, command_queue_id);
+        manager.fetch_queue_reserve_back(command_queue_id);
+        manager.fetch_queue_write(size_bytes, command_queue_id);
+    };
+
+    // Write the launch message
+    uint32_t launch_msg_fetch_size_bytes = program_command_sequence.launch_msg_command_sequence.size_bytes();
+    uint8_t* launch_msg_command_sequence_data = (uint8_t*)program_command_sequence.launch_msg_command_sequence.data();
+    write_data_to_cq(launch_msg_command_sequence_data, launch_msg_fetch_size_bytes);
+
     // Write the go signal
     uint32_t go_msg_fetch_size_bytes = program_command_sequence.go_msg_command_sequence.size_bytes();
     uint8_t* go_msg_command_sequence_data = (uint8_t*)program_command_sequence.go_msg_command_sequence.data();
-    manager.issue_queue_reserve(go_msg_fetch_size_bytes, command_queue_id);
-    uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-    manager.cq_write(go_msg_command_sequence_data, go_msg_fetch_size_bytes, write_ptr);
-    manager.issue_queue_push_back(go_msg_fetch_size_bytes, command_queue_id);
-    manager.fetch_queue_reserve_back(command_queue_id);
-    manager.fetch_queue_write(go_msg_fetch_size_bytes, command_queue_id);
+    write_data_to_cq(go_msg_command_sequence_data, go_msg_fetch_size_bytes);
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
