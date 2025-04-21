@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "unary_sharded_program_factory.hpp"
+#include "tanh_accurate_sharded_pgm_factory.hpp"
 
 #include <algorithm>
 
@@ -10,22 +10,18 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::unary::program {
-
-static const std::string compute_root_sharded = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/";
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
+TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input;
-    const auto& ops_chain = args.op_chain;
 
     tt::tt_metal::Program program = CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
@@ -51,7 +47,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     uint32_t num_tile_per_core = 0;
 
-    if (input.get_dtype() == DataType::BFLOAT8_B || input.get_dtype() == DataType::BFLOAT4_B) {
+    if (input.get_dtype() == DataType::BFLOAT8_B) {
         uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tt::constants::TILE_WIDTH);
         uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
@@ -73,11 +69,63 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
+
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, act_df}})
             .set_page_size(in_cb_id, in_cb_pagesize)
             .set_globally_allocated_address(*input.buffer());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    // intermediate buffers
+
+    // LUT tanh(x)
+    uint32_t im1_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_im1_config =
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im1_cb_index, act_df}})
+            .set_page_size(im1_cb_index, in_cb_pagesize);
+    auto cb_im1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im1_config);
+
+    // exp(2x)
+    uint32_t im2_cb_index = tt::CBIndex::c_3;
+    tt::tt_metal::CircularBufferConfig cb_im2_config =
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im2_cb_index, act_df}})
+            .set_page_size(im2_cb_index, in_cb_pagesize);
+    auto cb_im2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im2_config);
+
+    // exp(2x) - 1
+    uint32_t im3_cb_index = tt::CBIndex::c_4;
+    tt::tt_metal::CircularBufferConfig cb_im3_config =
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im3_cb_index, act_df}})
+            .set_page_size(im3_cb_index, in_cb_pagesize);
+    auto cb_im3 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im3_config);
+
+    // recip(exp(2x) + 1)
+    uint32_t im4_cb_index = tt::CBIndex::c_5;
+    tt::tt_metal::CircularBufferConfig cb_im4_config =
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im4_cb_index, act_df}})
+            .set_page_size(im4_cb_index, in_cb_pagesize);
+    auto cb_im4 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im4_config);
+
+    // exp(2x) - 1 * recip(exp(2x) - 1)
+    uint32_t im5_cb_index = tt::CBIndex::c_6;
+    tt::tt_metal::CircularBufferConfig cb_im5_config =
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im5_cb_index, act_df}})
+            .set_page_size(im5_cb_index, in_cb_pagesize);
+    auto cb_im5 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im5_config);
+
+    // output for x > 3.5
+    uint32_t im6_cb_index = tt::CBIndex::c_7;
+    tt::tt_metal::CircularBufferConfig cb_im6_config =
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im6_cb_index, act_df}})
+            .set_page_size(im6_cb_index, in_cb_pagesize);
+    auto cb_im6 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im6_config);
+
+    // output for x <= 3.5
+    uint32_t im7_cb_index = tt::CBIndex::c_8;
+    tt::tt_metal::CircularBufferConfig cb_im7_config =
+        tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im7_cb_index, act_df}})
+            .set_page_size(im7_cb_index, in_cb_pagesize);
+    auto cb_im7 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im7_config);
 
     // output sharded CB
     uint32_t out_cb_id = tt::CBIndex::c_2;
@@ -119,10 +167,9 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
     }
 
-    bool math_approx_mode = std::all_of(
-        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
-    std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.get_dtype());
-    auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root_sharded);
+    bool math_approx_mode = false;
+    std::map<string, string> unary_defines;
+    auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
@@ -148,7 +195,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     return cached_program_t{std::move(program), {cb_src0, out_cb}};
 }
 
-void UnaryShardedProgramFactory::override_runtime_arguments(
+void TanhAccurateShardedProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
