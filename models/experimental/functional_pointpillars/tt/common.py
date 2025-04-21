@@ -144,6 +144,8 @@ class TtConv:
 
         if self.reshape_tensor:
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            if x.shape[-1] == 256 and x.shape[-2] == 40000:
+                x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x = ttnn.reshape(x, (self.batch_size, out_height, out_width, x.shape[-1]))
             return x
 
