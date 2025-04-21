@@ -67,31 +67,19 @@ std::vector<uint32_t> read_control_buffer_from_core(
     IDevice* device, const CoreCoord& core, const profiler_msg_t* profiler_msg, const ProfilerDumpState state) {
     std::vector<uint32_t> control_buffer;
     if (device->dispatch_firmware_active()) {
-        if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
-            if (MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
-                control_buffer = tt::llrt::read_hex_vec_from_core(
-                    device->id(),
-                    core,
-                    reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
-            }
-        } else {
-            control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
-            device->command_queue().enqueue_read_from_core_l1(
-                core,
-                control_buffer.data(),
-                reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
-                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                true);
-        }
+        control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
+        device->command_queue().enqueue_read_from_core_l1(
+            core,
+            control_buffer.data(),
+            reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+            true);
     } else {
-        if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
-            control_buffer = tt::llrt::read_hex_vec_from_core(
-                device->id(),
-                core,
-                reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
-        }
+        control_buffer = tt::llrt::read_hex_vec_from_core(
+            device->id(),
+            core,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
     }
 
     return control_buffer;
@@ -104,24 +92,15 @@ void write_control_buffer_to_core(
     const ProfilerDumpState state,
     const std::vector<uint32_t>& control_buffer) {
     if (device->dispatch_firmware_active()) {
-        if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
-            if (MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
-                tt::llrt::write_hex_vec_to_core(
-                    device->id(), core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
-            }
-        } else {
-            device->command_queue().enqueue_write_to_core_l1(
-                core,
-                control_buffer.data(),
-                reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
-                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-                true);
-        }
+        device->command_queue().enqueue_write_to_core_l1(
+            core,
+            control_buffer.data(),
+            reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
+            true);
     } else {
-        if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
-            tt::llrt::write_hex_vec_to_core(
-                device->id(), core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
-        }
+        tt::llrt::write_hex_vec_to_core(
+            device->id(), core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
     }
 }
 
@@ -161,8 +140,8 @@ void DeviceProfiler::readRiscProfilerResults(
 
     std::vector<uint32_t> control_buffer = read_control_buffer_from_core(device, worker_core, profiler_msg, state);
 
-    if (control_buffer.empty() || ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
-                                   (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0))) {
+    if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
+        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
         return;
     }
 
