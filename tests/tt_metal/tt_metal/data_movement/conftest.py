@@ -17,7 +17,7 @@ def no_profile(request):
 
 @pytest.fixture
 def verbose_log(request):
-    return request.config.getoption("--verbose_log")
+    return request.config.getoption("--verbose-log")
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ def pytest_addoption(parser):
         action="store_true",
         help="Use existing profiler logs. If not set, profile kernels and use those results.",
     )
-    parser.addoption("--verbose_log", action="store_true", help="Enable verbose logging of profiling results.")
+    parser.addoption("--verbose-log", action="store_true", help="Enable verbose logging of profiling results.")
     parser.addoption(
         "--gtest-filter",
         action="store",
