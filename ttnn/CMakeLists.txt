@@ -1039,15 +1039,9 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/pytensor.cpp
-    ${TT_LIB_SRCS}
-) # TT_LIB_SRCS from tt_eager/tt_lib/CMakeLists.txt for python bindings
+)
 
 set(TTNN_PUBLIC_INCLUDE_DIRS_PYBIND ${Python3_INCLUDE_DIRS})
-
-##################################################
-# Add all subdirectories
-##################################################
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/deprecated)
 
 ##################################################
 # Handle sublibraries
