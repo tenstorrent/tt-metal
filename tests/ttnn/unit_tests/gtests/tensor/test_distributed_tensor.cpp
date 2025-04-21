@@ -17,6 +17,8 @@
 namespace ttnn::distributed::test {
 
 using ::testing::ElementsAre;
+using ::testing::FloatEq;
+using ::testing::Pointwise;
 
 TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype) {
     return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -176,7 +178,6 @@ TEST_F(TensorDistributionT3000Test, Shard2DReplicateDim) {
     std::vector<float> test_data = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0};
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, 1}, DataType::FLOAT32));
-    input_tensor.print();
 
     auto mapper = shard_tensor_to_2d_mesh_mapper(
         *mesh_device_,
@@ -185,7 +186,6 @@ TEST_F(TensorDistributionT3000Test, Shard2DReplicateDim) {
             .row_dim = 1,
         });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
-    sharded_tensor.print();
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -238,6 +238,46 @@ TEST_F(TensorDistributionT3000Test, Shard2D) {
     Tensor expected_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{kNumRows, 1, kNumCols, 3}, DataType::FLOAT32));
     EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
+}
+
+TEST_F(TensorDistributionT3000Test, ShardBorrowedTensor) {
+    constexpr size_t kNumRows = 2;
+    constexpr size_t kNumCols = 4;
+    ASSERT_EQ(mesh_device_->shape(), MeshShape(kNumRows, kNumCols));
+    const int num_devices = kNumRows * kNumCols;
+
+    std::vector<float> test_data;
+    for (int i = 0; i < num_devices * 1024; i++) {
+        test_data.push_back(i);
+    }
+    int num_references_created = 0;
+    Tensor input_tensor = Tensor::from_borrowed_data(
+        tt::stl::Span(test_data),
+        ttnn::Shape{1, kNumRows, kNumCols, 1024},
+        /*on_creation_callback=*/[&num_references_created]() { num_references_created++; },
+        /*on_destruction_callback=*/[]() {});
+    EXPECT_EQ(num_references_created, 1);  // self
+
+    auto mapper = shard_tensor_to_2d_mesh_mapper(
+        *mesh_device_,
+        MeshShape{kNumRows, kNumCols},
+        Shard2dConfig{
+            .row_dim = 1,
+            .col_dim = 2,
+        });
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
+    EXPECT_EQ(
+        num_references_created,
+        1 + kNumRows + kNumRows * kNumCols);  // self + sharding across rows + sharding across cols
+
+    auto composer = concat_2d_mesh_to_tensor_composer(
+        *mesh_device_,
+        Concat2dConfig{
+            .row_dim = 0,
+            .col_dim = 2,
+        });
+    Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
+    EXPECT_THAT(concatenated_tensor.to_vector<float>(), Pointwise(FloatEq(), test_data));
 }
 
 }  // namespace ttnn::distributed::test
