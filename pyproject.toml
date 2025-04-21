@@ -6,36 +6,18 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-# To change to eager, or something similar
 name = "ttnn"
 authors = [
     {name = "Tenstorrent"},
     {email = "info@tenstorrent.com"},
 ]
 dependencies = [
-  "pyyaml>=5.4",
   "numpy>=1.24.4,<2",
-  "loguru==0.6.0",
-  "toolz==0.12.0",
-  "matplotlib==3.7.1",
-  "Pillow==10.3.0",
-  "jupyterlab==4.2.5",
-  "ipywidgets==8.1.1",
-
-  # extra index required https://download.pytorch.org/whl/cpu
-  "torch==2.2.1+cpu",
-  "networkx==3.1",
-  "graphviz==0.20.3",
-  "bokeh==3.1.1",
-
-  # profiler
-  "click==8.1.7",
-  "dash==2.15.0",
-  "pandas==2.0.3",
-  "plotly==5.18.0",
-  "seaborn==0.13.2",
+  "loguru>=0.6.0",
+  "networkx>=3.1",
+  "graphviz>=0.20.3",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 description = "General compute framework for Tenstorrent devices"
 dynamic = ["version"]
 

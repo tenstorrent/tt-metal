@@ -108,7 +108,7 @@ jobs:
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-            pip install pytest
+            pip install 'torch==2.2.1+cpu' 'numpy>=1.24.4,<2' pytest
             ${{ matrix.test_group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
@@ -136,7 +136,7 @@ jobs:
             LATEST_TAG=latest-rc
           fi
           echo "Determined that the current tag is " $LATEST_TAG
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-release-amd64
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
           echo "Tagging the image as " $REPO_IMAGE_NAME:$LATEST_TAG
