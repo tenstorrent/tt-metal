@@ -57,9 +57,9 @@ static int baseline_validate_test_environment(const WriteThroughputStabilityTest
         return 1;
     }
 
-    uint32_t tg_num_devices = 32;
-    if (params.num_links > 2 && tt::tt_metal::GetNumAvailableDevices() < tg_num_devices) {
-        tt::log_warning("This test with {} links can only be run on TG devices", params.num_links);
+    uint32_t galaxy_num_devices = 32;
+    if (params.num_links > 2 && tt::tt_metal::GetNumAvailableDevices() < galaxy_num_devices) {
+        tt::log_warning("This test with {} links can only be run on Galaxy systems", params.num_links);
         return 1;
     }
 
