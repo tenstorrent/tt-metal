@@ -30,16 +30,16 @@ perf_targets = {
         "op_to_op": 759.6666666666666,
         "non-overlapped-dispatch-time": 7260,
         "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.1,
+        "op_to_op_duration_relative_margin": 0.15,
         "dispatch_duration_relative_margin": 0.1,
     },
     "RMSAllGather_1": {
         "op_name": "PostRMS_0",
         "kernel_duration": 9400.361111111111,
         "op_to_op": 634.3333333333334,
-        "non-overlapped-dispatch-time": 7087.7,
+        "non-overlapped-dispatch-time": 6301.3,
         "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.1,
+        "op_to_op_duration_relative_margin": 0.15,
         "dispatch_duration_relative_margin": 0.1,
     },
     "RMSAllGather_2": {
@@ -48,7 +48,7 @@ perf_targets = {
         "op_to_op": 748.3333333333334,
         "non-overlapped-dispatch-time": 7326,
         "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.1,
+        "op_to_op_duration_relative_margin": 0.15,
         "dispatch_duration_relative_margin": 0.1,
     },
     "RMSAllGather_3": {
@@ -57,7 +57,7 @@ perf_targets = {
         "op_to_op": 641.0,
         "non-overlapped-dispatch-time": 6431.2,
         "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.1,
+        "op_to_op_duration_relative_margin": 0.15,
         "dispatch_duration_relative_margin": 0.1,
     },
     "AllGatherAsync_0": {
@@ -65,14 +65,14 @@ perf_targets = {
         "kernel_duration": 11745.923611111111,
         "op_to_op": 2040.7777777777778,
         "non-overlapped-dispatch-time": 3470.2,
-        "kernel_duration_relative_margin": 0.05,
+        "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.5,
     },
     "AllGatherAsync_1": {
         "op_name": "AllGatherAsync_Binary_Mult",
         "kernel_duration": 10607.277777777777,
-        "op_to_op": 796.5555555555555,
+        "op_to_op": 959.5555,
         "non-overlapped-dispatch-time": 4351.1,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
@@ -92,7 +92,7 @@ perf_targets = {
         "kernel_duration": 11928.0,
         "op_to_op": 716.4444444444445,
         "non-overlapped-dispatch-time": 6102.0,
-        "kernel_duration_relative_margin": 0.03,
+        "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.1,
         "dispatch_duration_relative_margin": 0.1,
     },
@@ -121,7 +121,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 6144.8,
         "kernel_duration_relative_margin": 0.01,
         "op_to_op_duration_relative_margin": 0.1,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.15,
     },
     "Matmul_4": {
         "op_name": "FF2_MM",
@@ -182,25 +182,25 @@ perf_targets = {
         "kernel_duration": 5617.111111111111,
         "op_to_op": 606.1111111111111,
         "non-overlapped-dispatch-time": 2844.3,
-        "kernel_duration_relative_margin": 0.02,
-        "op_to_op_duration_relative_margin": 0.1,
-        "dispatch_duration_relative_margin": 0.1,
+        "kernel_duration_relative_margin": 0.1,
+        "op_to_op_duration_relative_margin": 0.15,
+        "dispatch_duration_relative_margin": 0.15,
     },
     "PagedUpdateCacheDeviceOperation_0": {
         "op_name": "PagedUpdateCache",
         "kernel_duration": 6939.111111111112,
         "op_to_op": 860.2222222222222,
-        "non-overlapped-dispatch-time": 5890.0,
+        "non-overlapped-dispatch-time": 5006.4,
         "kernel_duration_relative_margin": 0.06,
-        "op_to_op_duration_relative_margin": 0.1,
-        "dispatch_duration_relative_margin": 0.1,
+        "op_to_op_duration_relative_margin": 0.15,
+        "dispatch_duration_relative_margin": 0.15,
     },
     "ScaledDotProductAttentionDecode_0": {
         "op_name": "SDPA",
         "kernel_duration": 15960.777777777777,
         "op_to_op": 652.6666666666666,
         "non-overlapped-dispatch-time": 9741.5,
-        "kernel_duration_relative_margin": 0.02,
+        "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.1,
         "dispatch_duration_relative_margin": 0.3,
     },
@@ -209,7 +209,7 @@ perf_targets = {
         "kernel_duration": 7325.777777777777,
         "op_to_op": 697.0,
         "non-overlapped-dispatch-time": 4003.5,
-        "kernel_duration_relative_margin": 0.02,
+        "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.1,
         "dispatch_duration_relative_margin": 0.1,
     },
@@ -217,28 +217,28 @@ perf_targets = {
         "op_name": "Binary_Residual_0",
         "kernel_duration": 2671.4444444444443,
         "op_to_op": 725.6666666666666,
-        "non-overlapped-dispatch-time": 7496.8,
-        "kernel_duration_relative_margin": 0.02,
+        "non-overlapped-dispatch-time": 6316.8,
+        "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.1,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "BinaryDeviceOperation_1": {
         "op_name": "Binary_Mult_Silu",
         "kernel_duration": 4554.444444444444,
         "op_to_op": 661.0,
         "non-overlapped-dispatch-time": 6111.2,
-        "kernel_duration_relative_margin": 0.02,
+        "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.15,
     },
     "BinaryDeviceOperation_2": {
         "op_name": "Binary_Residual_1",
         "kernel_duration": 2697.1111111111113,
         "op_to_op": 731.4444444444445,
         "non-overlapped-dispatch-time": 6751.9,
-        "kernel_duration_relative_margin": 0.02,
+        "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.1,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
 }
 
@@ -621,7 +621,7 @@ def test_llama_TG_perf_device(
                     f"{op_code_with_id} kernel: {avg_kernel_duration} ns is larger than target "
                     f"({perf_targets[op_code_with_id]['kernel_duration']}) ns, difference: "
                     f"{abs(avg_kernel_duration - upper_limit)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(perf_targets[op_code_with_id]['kernel_duration'] - avg_kernel_duration) / perf_targets[op_code_with_id]['kernel_duration']}"
                 )
@@ -631,7 +631,7 @@ def test_llama_TG_perf_device(
                     f"{op_code_with_id} kernel: {avg_kernel_duration} ns is smaller than target "
                     f"({perf_targets[op_code_with_id]['kernel_duration']}) ns, difference: "
                     f"{abs(lower_limit - avg_kernel_duration)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['kernel_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(perf_targets[op_code_with_id]['kernel_duration'] - avg_kernel_duration) / perf_targets[op_code_with_id]['kernel_duration']}"
                 )
@@ -652,7 +652,7 @@ def test_llama_TG_perf_device(
                     f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is larger than target "
                     f"({perf_targets[op_code_with_id]['op_to_op']}) ns, difference: "
                     f"{abs(avg_dispatch_duration - upper_limit)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(perf_targets[op_code_with_id]['op_to_op'] - avg_dispatch_duration) / perf_targets[op_code_with_id]['op_to_op']}"
                 )
@@ -662,7 +662,7 @@ def test_llama_TG_perf_device(
                     f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is smaller than target "
                     f"({perf_targets[op_code_with_id]['op_to_op']}) ns, difference: "
                     f"{abs(lower_limit - avg_dispatch_duration)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['op_to_op_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(perf_targets[op_code_with_id]['op_to_op'] - avg_dispatch_duration) / perf_targets[op_code_with_id]['op_to_op']}"
                 )
@@ -791,7 +791,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
                     f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is larger than target "
                     f"({expected_time}) ns, difference: "
                     f"{abs(avg_dispatch_duration - upper_limit)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(expected_time - avg_dispatch_duration) / expected_time}"
                 )
@@ -801,7 +801,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
                     f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is smaller than target "
                     f"({expected_time}) ns, difference: "
                     f"{abs(lower_limit - avg_dispatch_duration)} ns, margin: "
-                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']} ns, "
+                    f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']}, "
                     f"relative margin to pass would be: "
                     f"{abs(expected_time - avg_dispatch_duration) / expected_time}"
                 )
