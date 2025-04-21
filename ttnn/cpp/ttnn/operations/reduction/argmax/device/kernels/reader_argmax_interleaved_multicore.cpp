@@ -282,20 +282,20 @@ void kernel_main() {
         }
 
         find_argmax_for_core<src_is_dram, reduce_all>(
-            /*inner_dim_units=*/inner_dim_units,
-            /*k=*/k,
-            /*src_offset=*/src_offset,
-            /*s_src=*/s_src,
-            /*src_cb_addr=*/src_cb_addr,
-            /*src_read_size=*/src_read_size,
-            /*red_dim_offset=*/red_dim_offset,
-            /*red_dim_units_this_core=*/red_dim_units_this_core,
-            /*in_vals=*/in_vals,
-            /*red_dim_units=*/red_dim_units,
-            /*max_idx=*/max_idx,
-            /*max_val=*/max_val,
-            /*red_idxs=*/red_idxs,
-            /*red_vals=*/red_vals);
+            inner_dim_units,
+            k,
+            src_offset,
+            s_src,
+            src_cb_addr,
+            src_read_size,
+            red_dim_offset,
+            red_dim_units_this_core,
+            in_vals,
+            red_dim_units,
+            max_idx,
+            max_val,
+            red_idxs,
+            red_vals);
 
         if constexpr (not reduce_all) {
             // We now write these local values to the equivalent position in the reduction core
@@ -317,11 +317,11 @@ void kernel_main() {
                 // Find argmax from intermediate outputs and write to output
                 for (uint32_t j = 0; j < inner_dim_units; ++j) {
                     out_idxs[j] = find_argmax_from_intermediate_outputs<num_cores>(
-                        /*j=*/j,
-                        /*red_val_cb_local_base_addr=*/red_val_cb_local_base_addr,
-                        /*red_idx_cb_local_base_addr=*/red_idx_cb_local_base_addr,
-                        /*red_val_size_per_core=*/red_val_size_per_core,
-                        /*red_idx_size_per_core=*/red_idx_size_per_core);
+                        j,
+                        red_val_cb_local_base_addr,
+                        red_idx_cb_local_base_addr,
+                        red_val_size_per_core,
+                        red_idx_size_per_core);
                 }
 
                 const uint64_t dst_noc_addr = get_noc_addr(k, s_dst);
@@ -352,11 +352,11 @@ void kernel_main() {
             }
 
             out_idxs[0] = find_argmax_from_intermediate_outputs<num_cores>(
-                /*j=*/0,  // For reduce_all, we only have one inner_dim_unit
-                /*red_val_cb_local_base_addr=*/red_val_cb_local_base_addr,
-                /*red_idx_cb_local_base_addr=*/red_idx_cb_local_base_addr,
-                /*red_val_size_per_core=*/red_val_size_per_core,
-                /*red_idx_size_per_core=*/red_idx_size_per_core);
+                0,  // For reduce_all, we only have one inner_dim_unit
+                red_val_cb_local_base_addr,
+                red_idx_cb_local_base_addr,
+                red_val_size_per_core,
+                red_idx_size_per_core);
 
             const uint64_t dst_noc_addr = get_noc_addr(0, s_dst);
             noc_async_write(dst_cb_addr, dst_noc_addr, dst_page_size);

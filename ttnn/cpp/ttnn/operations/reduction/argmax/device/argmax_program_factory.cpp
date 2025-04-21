@@ -186,7 +186,7 @@ operation::ProgramWithCallbacks argmax_single_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
-// NOC xactions need to be 32B aligned.
+// NOC transactions need to be 32B aligned.
 // So, for bfloat16 dtype, we need at least 16 units per core to avoid unaligned accesses.
 constexpr uint32_t min_red_dim_units_per_core = 16;
 
