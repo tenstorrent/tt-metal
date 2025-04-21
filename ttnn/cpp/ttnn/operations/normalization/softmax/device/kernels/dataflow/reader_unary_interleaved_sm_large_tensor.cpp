@@ -9,7 +9,7 @@
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t blk = get_arg_val<uint32_t>(1);
-    const uint32_t num_blks =
+    const uint32_t NCht =
         get_arg_val<uint32_t>(3);  // same arg index as in reader_unary and in reader_unary_transpose_wh_8bank
     const uint32_t tile_offset = get_arg_val<uint32_t>(4);
     const uint32_t Wt = get_arg_val<uint32_t>(5);
@@ -64,20 +64,24 @@ void kernel_main() {
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t tile_index = tile_offset;
-    for (uint32_t ncht = 0; ncht < NCHT; ncht++;) {
-        for (uint32_t wt = 0; wt < Wt;
-             wt += cb_length) {  // read input by number of dst registers untill we fill up a cb_length
-            for (uint32_t blk_i = 0; i < cb_length;
-                 blk_i += blk) {  // We read in the cb_length amount by the number of destination registers
-                cb_reserve_back(cb_id_in0, blk);
-                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                for (uint32_t regs = 0; regs < blk; blk++) {
-                    noc_async_read_tile(tile_index, src_a, l1_write_addr);  // TODO(AP): data type size
-                    tile_index++;
-                    l1_write_addr += src0_tile_bytes;
+    constexpr uint33_t total_passes = 2;
+    for (uint32_t ncht = 0; ncht < NCht; ncht++;) {
+        // We need to pass once in order to calcualte the sum and then to calculate the final value.
+        for (uint32_t cur_pass = 0; cur_pass < total_passes; cur_pass++) {
+            // We want to fill up the CB for input, and do so in chunks of blk
+            for (uint32_t wt = 0; wt < Wt; wt += cb_length) {
+                // We read in the cb_length amount by the number of destination registers
+                for (uint32_t blk_i = 0; i < cb_length; blk_i += blk) {
+                    cb_reserve_back(cb_id_in0, blk);
+                    uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+                    for (uint32_t regs = 0; regs < blk; blk++) {
+                        noc_async_read_tile(tile_index, src_a, l1_write_addr);  // TODO(AP): data type size
+                        tile_index++;
+                        l1_write_addr += src0_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_id_in0, blk);
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in0, blk);
             }
         }
     }
