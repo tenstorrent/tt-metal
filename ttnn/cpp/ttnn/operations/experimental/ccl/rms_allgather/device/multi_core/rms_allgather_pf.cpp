@@ -737,10 +737,10 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
     std::string sender_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/"
-        "reader_mcast_sender_unary_sharded_rms.cpp";
+        "reader_mcast_sender_unary_sharded_rms_combined.cpp";
     std::string reciever_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/"
-        "reader_mcast_receiver_unary_sharded_rms.cpp";
+        "reader_mcast_receiver_unary_sharded_rms_combined.cpp";
 
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
@@ -776,7 +776,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     // writer kernel + all gather kernel
     std::string writer_kernel =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/"
-        "writer_unary_sharded_rms.cpp";
+        "writer_unary_sharded_rms_combined.cpp";
     auto writer_mcast_sender_kernels_id = CreateKernel(
         program,
         writer_kernel,
@@ -802,7 +802,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     std::string compute_kernel_file;
     compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/compute/"
-        "rms_sharded_pre.cpp";
+        "rms_sharded_combined.cpp";
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
         program,
