@@ -34,11 +34,9 @@ clean:
 	@rm -rf $(BUILDDIR)
 	@rm -rf $(DOXYGENDIR)
 	@rm -rf $(TTNN_API_DIR)
-	@rm -f ../Doxyfile
 
 build_doxygen: clean
-	@cp Doxyfile ../
-	@cd .. && doxygen
+	@cd .. && doxygen docs/Doxyfile
 
 sphinx_build_dir: clean
 	@mkdir -p $(BUILDDIR)
