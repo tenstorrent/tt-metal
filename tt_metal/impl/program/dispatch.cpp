@@ -1818,7 +1818,9 @@ void assemble_device_commands(
     launch_message_generator.construct_commands(device, program, calculator, constants, sub_device_id);
 
     GoSignalGenerator go_signal_generator;
-    go_signal_generator.size_commands(calculator, device, sub_device_id, program_transfer_info);
+    DeviceCommandCalculator go_signal_calculator;
+
+    go_signal_generator.size_commands(go_signal_calculator, device, sub_device_id, program_transfer_info);
 
     // Start assembling commands into the device_command_sequence.
 
@@ -1837,9 +1839,10 @@ void assemble_device_commands(
 
     launch_message_generator.assemble_commands(program_command_sequence, device_command_sequence, constants);
 
+    program_command_sequence.go_msg_command_sequence = HostMemDeviceCommand(go_signal_calculator.write_offset_bytes());
     go_signal_generator.assemble_commands(
         program_command_sequence,
-        device_command_sequence,
+        program_command_sequence.go_msg_command_sequence,
         constants,
         device,
         sub_device_id,
@@ -2096,11 +2099,11 @@ void write_program_command_sequence(
 
     uint8_t* program_command_sequence_data = (uint8_t*)program_command_sequence.device_command_sequence.data();
 
-    uint32_t total_fetch_size_bytes =
+    uint32_t device_command_sequence_size_bytes =
         stall_fetch_size_bytes + preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
 
-    if (total_fetch_size_bytes <= DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size()) {
-        manager.issue_queue_reserve(total_fetch_size_bytes, command_queue_id);
+    if (device_command_sequence_size_bytes <= DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size()) {
+        manager.issue_queue_reserve(device_command_sequence_size_bytes, command_queue_id);
         uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
 
         manager.cq_write(
@@ -2140,13 +2143,11 @@ void write_program_command_sequence(
             manager.cq_write(program_command_sequence_data, program_fetch_size_bytes, write_ptr);
         }
 
-        manager.issue_queue_push_back(total_fetch_size_bytes, command_queue_id);
+        manager.issue_queue_push_back(device_command_sequence_size_bytes, command_queue_id);
 
         // One fetch queue entry for entire program
         manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(total_fetch_size_bytes, command_queue_id);
-
-        // TODO: We are making a lot of fetch queue entries here, we can pack multiple commands into one fetch q entry
+        manager.fetch_queue_write(device_command_sequence_size_bytes, command_queue_id);
     } else {
         manager.issue_queue_reserve(preamble_fetch_size_bytes, command_queue_id);
         uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
@@ -2225,6 +2226,16 @@ void write_program_command_sequence(
             manager.fetch_queue_write(program_fetch_size_bytes, command_queue_id);
         }
     }
+
+    // Write the go signal
+    uint32_t go_msg_fetch_size_bytes = program_command_sequence.go_msg_command_sequence.size_bytes();
+    uint8_t* go_msg_command_sequence_data = (uint8_t*)program_command_sequence.go_msg_command_sequence.data();
+    manager.issue_queue_reserve(go_msg_fetch_size_bytes, command_queue_id);
+    uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+    manager.cq_write(go_msg_command_sequence_data, go_msg_fetch_size_bytes, write_ptr);
+    manager.issue_queue_push_back(go_msg_fetch_size_bytes, command_queue_id);
+    manager.fetch_queue_reserve_back(command_queue_id);
+    manager.fetch_queue_write(go_msg_fetch_size_bytes, command_queue_id);
 }
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle) {
