@@ -65,7 +65,7 @@ struct OpConfig {
     template <class EnumT>
     OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>);
 
-    std::map<std::string, std::string> as_defines(DataType dtype) const;
+    tt::tt_metal::KernelDescriptor::Defines as_defines(DataType dtype) const;
 
     std::optional<unary::UnaryOpType> process_lhs{};
     std::optional<unary::UnaryOpType> process_rhs{};
@@ -75,13 +75,13 @@ struct OpConfig {
 };
 
 void add_activation_defines(
-    std::map<std::string, std::string>& defines,
+    tt::tt_metal::KernelDescriptor::Defines& defines,
     tt::stl::Span<const unary::UnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype = std::nullopt);
 
 uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op);
 
-std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const bool is_sfpu_op);
+tt::tt_metal::KernelDescriptor::Defines make_dataflow_defines(const DataType dtype, const bool is_sfpu_op);
 
 }  // namespace ttnn::operations::binary_ng

@@ -35,12 +35,6 @@ struct BinaryDeviceOperation {
         const DataType dtype;
         const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
-
-        tt::stl::hash::hash_t to_hash() const {
-            // hash has to exclude the scalar value
-            return tt::stl::hash::hash_objects_with_default_seed(
-                binary_op_type, activations, input_tensor_a_activation, memory_config, dtype, compute_kernel_config);
-        }
     };
     struct tensor_args_t {
         const Tensor& input_tensor_a;
@@ -51,191 +45,60 @@ struct BinaryDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct ElementWiseMultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle eltwise_binary_kernel_id;
-            tt::tt_metal::CBHandle cb_src0;
-            tt::tt_metal::CBHandle cb_src1;
-            tt::tt_metal::CBHandle cb_output;
-            CoreRangeSet all_device_cores;
-            uint32_t src0_single_tile_size;
-            uint32_t src1_single_tile_size;
-            uint32_t dst_single_tile_size;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct ElementWiseMultiCoreSfpu {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle eltwise_binary_kernel_id;
-            tt::tt_metal::CBHandle cb_src0;
-            tt::tt_metal::CBHandle cb_src1;
-            tt::tt_metal::CBHandle cb_output;
-            CoreRangeSet all_device_cores;
-            uint32_t src0_single_tile_size;
-            uint32_t src1_single_tile_size;
-            uint32_t dst_single_tile_size;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
     struct BroadcastWidthMultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle bcast_kernel_id;
-            CoreCoord compute_with_storage_grid_size;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct BroadcastHeightMultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle bcast_kernel_id;
-            CoreCoord compute_with_storage_grid_size;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct BroadcastHeightAndWidthMultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle bcast_kernel_id;
-            CoreCoord compute_with_storage_grid_size;
-            tt::tt_metal::CBHandle cb_src0;
-            uint32_t src0_single_tile_size;
-            uint32_t src1_single_tile_size;
-            uint32_t dst_single_tile_size;
-            tt::tt_metal::CBHandle cb_output;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct BroadcastHeightMultiCoreSharded {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle bcast_kernel_id;
-            uint32_t cb_src0;
-            tt::tt_metal::CBHandle out_cb;
-            uint32_t ncores_x;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct BroadcastHeightMultiCoreShardedOptimized {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle binary_reader_kernel_id;
-            tt::tt_metal::KernelHandle bcast_kernel_id;
-            uint32_t cb_src0;
-            tt::tt_metal::CBHandle out_cb;
-            uint32_t ncores_x;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<
-        ElementWiseMultiCore,
-        ElementWiseMultiCoreSfpu,
-        BroadcastWidthMultiCore,
-        BroadcastHeightMultiCore,
-        BroadcastHeightAndWidthMultiCore,
-        BroadcastHeightMultiCoreSharded,
-        BroadcastHeightMultiCoreShardedOptimized>;
-
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::ProgramDescriptor create_program(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static void validate(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
         const operation_attributes_t& attributes,
@@ -263,6 +126,18 @@ struct BinaryDeviceOperation {
         std::optional<Tensor> optional_output_tensor,
         std::optional<unary::FusedActivations> activations,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation);
+
+private:
+    using program_factory_t = std::variant<
+        ElementWiseMultiCore,
+        ElementWiseMultiCoreSfpu,
+        BroadcastWidthMultiCore,
+        BroadcastHeightMultiCore,
+        BroadcastHeightAndWidthMultiCore,
+        BroadcastHeightMultiCoreSharded,
+        BroadcastHeightMultiCoreShardedOptimized>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::binary

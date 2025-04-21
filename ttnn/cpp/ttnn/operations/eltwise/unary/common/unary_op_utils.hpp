@@ -9,6 +9,7 @@
 
 #include "unary_op_types.hpp"
 #include "cpp/ttnn/tensor/types.hpp"
+
 namespace ttnn::operations::unary::utils {
 
 UnaryWithParam string_to_unary_with_param(const std::string& name);
@@ -29,7 +30,22 @@ std::map<std::string, std::string> get_defines(
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
 
+void append_defines(
+    tt::tt_metal::KernelDescriptor::Defines& defines,
+    UnaryOpType op_type,
+    const std::optional<std::vector<float>>& params = std::nullopt,
+    const std::string& id = "0",
+    const std::string& idst = "0",
+    std::optional<DataType> input_dtype = std::nullopt);
+
 std::map<std::string, std::string> get_block_defines(
+    const std::vector<UnaryWithParam>& op_chain,
+    const std::string& block_id = "0",
+    const std::string& idst = "0",
+    std::optional<DataType> input_dtype = std::nullopt);
+
+void append_block_defines(
+    tt::tt_metal::KernelDescriptor::Defines& defines,
     const std::vector<UnaryWithParam>& op_chain,
     const std::string& block_id = "0",
     const std::string& idst = "0",
@@ -79,6 +95,7 @@ bool is_parametrized_type(T val) {
     return false;
 }
 
+void update_macro_defines(UnaryOpType op_type, tt::tt_metal::KernelDescriptor::Defines& defines);
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
 
 std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root);

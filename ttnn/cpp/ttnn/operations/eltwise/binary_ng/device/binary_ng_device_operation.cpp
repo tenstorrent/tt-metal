@@ -111,22 +111,6 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
     TT_THROW("Invalid subtile broadcast type");
 }
 
-tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
-    // TODO: a more generalized way to skip the hashing of an UnaryWithParam?
-    // Don't hash the quantization scale, otherwise we build the kernel for each different scale
-    return tt::stl::hash::hash_objects_with_default_seed(
-        binary_op_type,
-        lhs_activations,
-        rhs_activations,
-        is_quant_op ? ttnn::SmallVector<unary::UnaryWithParam>{} : post_activations,
-        memory_config,
-        get_dtype(),
-        compute_kernel_config,
-        subtile_broadcast_type,
-        is_sfpu,
-        is_quant_op);
-}
-
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }
@@ -163,8 +147,7 @@ void validate_sharding(
     }
 }
 
-void BinaryNgDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+void BinaryNgDeviceOperation::validate(const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // We don't support sharding for now
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
@@ -173,7 +156,51 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
 
-    BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
+    bool has_shard_spec = input_tensor_a.memory_config().is_sharded() ||
+                          (input_tensor_b.has_value() && input_tensor_b->memory_config().is_sharded()) ||
+                          attributes.memory_config.is_sharded();
+
+    if (output_tensor.has_value() && !has_shard_spec) {
+        compute_output_specs(attributes, tensor_args);
+    }
+
+    const auto& input_shape_a = input_tensor_a.get_logical_shape();
+    const auto& input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : input_shape_a;
+
+    const int rank_a = input_shape_a.rank();
+    const int rank_b = input_shape_b.rank();
+    const int larger_rank = std::max(rank_a, rank_b);
+
+    for (int i = -1; i >= -larger_rank; --i) {
+        auto a_dim = (i >= -rank_a) ? input_shape_a[i] : 1;
+        auto b_dim = (i >= -rank_b) ? input_shape_b[i] : 1;
+        TT_FATAL(
+            a_dim == b_dim || a_dim == 1 || b_dim == 1,
+            "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
+            i,
+            a_dim,
+            b_dim);
+
+        if (i <= -5) {
+            TT_FATAL(
+                a_dim == b_dim,
+                "Broadcasting rule violation for rank >= 5 : dim {}, Broadcast is supported upto rank 4, dim a: {}, "
+                "dim b: {}",
+                i,
+                a_dim,
+                b_dim);
+        }
+
+        if (has_shard_spec and i != -1) {
+            TT_FATAL(
+                a_dim == b_dim,
+                "Cannot broadcast sharded tensors on dims other than W, violation for rank {}, dim a: {}, dim b: "
+                "{}",
+                i,
+                a_dim,
+                b_dim);
+        }
+    }
 
     if (attributes.dtype.has_value() && output_tensor.has_value()) {
         TT_FATAL(
@@ -244,59 +271,6 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             attributes.memory_config.shard_spec.has_value(),
             "Sharded output memory config must have shard spec if neither input is sharded");
-    }
-}
-
-void BinaryNgDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
-    const auto& output_tensor = tensor_args.output_tensor;
-
-    bool has_shard_spec = input_tensor_a.memory_config().is_sharded() ||
-                          (input_tensor_b.has_value() && input_tensor_b->memory_config().is_sharded()) ||
-                          attributes.memory_config.is_sharded();
-
-    if (output_tensor.has_value() && !has_shard_spec) {
-        compute_output_specs(attributes, tensor_args);
-    }
-
-    const auto& input_shape_a = input_tensor_a.get_logical_shape();
-    const auto& input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : input_shape_a;
-
-    const int rank_a = input_shape_a.rank();
-    const int rank_b = input_shape_b.rank();
-    const int larger_rank = std::max(rank_a, rank_b);
-
-    for (int i = -1; i >= -larger_rank; --i) {
-        auto a_dim = (i >= -rank_a) ? input_shape_a[i] : 1;
-        auto b_dim = (i >= -rank_b) ? input_shape_b[i] : 1;
-        TT_FATAL(
-            a_dim == b_dim || a_dim == 1 || b_dim == 1,
-            "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
-            i,
-            a_dim,
-            b_dim);
-
-        if (i <= -5) {
-            TT_FATAL(
-                a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 5 : dim {}, Broadcast is supported upto rank 4, dim a: {}, "
-                "dim b: {}",
-                i,
-                a_dim,
-                b_dim);
-        }
-
-        if (has_shard_spec and i != -1) {
-            TT_FATAL(
-                a_dim == b_dim,
-                "Cannot broadcast sharded tensors on dims other than W, violation for rank {}, dim a: {}, dim b: "
-                "{}",
-                i,
-                a_dim,
-                b_dim);
-        }
     }
 }
 
@@ -379,9 +353,11 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), attributes.memory_config));
 }
 
-BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return ProgramFactory{};
+tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::create_program(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    return ProgramFactory::create(attributes, tensor_args, tensor_return_value);
 }
 
 BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_output_tensors(
@@ -393,34 +369,6 @@ BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_o
 
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
-}
-
-tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
-
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.get_storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.get_storage()));
-
-    if (input_tensor_b.has_value()) {
-        TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->get_storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->get_storage()));
-
-        return operation::hash_operation<BinaryNgDeviceOperation>(
-            attributes,
-            input_tensor_a.dtype(),
-            std::get<DeviceStorage>(input_tensor_a.storage()).memory_config(),
-            input_tensor_b->dtype(),
-            std::get<DeviceStorage>(input_tensor_b->storage()).memory_config());
-    }
-
-    return operation::hash_operation<BinaryNgDeviceOperation>(
-        attributes, input_tensor_a.dtype(), std::get<DeviceStorage>(input_tensor_a.storage()).memory_config());
 }
 
 bool BinaryNgDeviceOperation::skip_launch(
