@@ -428,9 +428,25 @@ def test_all_gather(
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
         # Mixtral Prefill DRAM bf8
-        # (8, 1, [1, 8, 8192, 4096], 1, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)), $ too large on CI
+        (
+            8,
+            1,
+            [1, 8, 8192, 4096],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),  # too large on CI
         # Mixtral Prefill DRAM bf8
-        # (8, 1, [1, 8, 32768, 4096], 1, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)), # too large on CI
+        (
+            8,
+            1,
+            [1, 8, 32768, 4096],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),  # too large on CI
         # Llama 8B, N300 DRAM bf16
         (
             2,
@@ -452,7 +468,15 @@ def test_all_gather(
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
         # Llama 8B, N300 DRAM bf8 [1,1,32,64128] as input
-        # (2, 1, [1, 1, 32, 128256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)), # too large on CI
+        (
+            2,
+            1,
+            [1, 1, 32, 128256],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),  # too large on CI
         # Llama 70, T3K, Prefill  [1,1,128 -> 32768,4096] DRAM bf16
         (
             8,
@@ -517,9 +541,24 @@ def test_all_gather(
             ttnn.bfloat16,
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
-        # too huge to run on CI
-        # (8, 1, [1, 1, 16384, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),),
-        # (8, 1, [1, 1, 32768, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        (
+            8,
+            1,
+            [1, 1, 16384, 4096],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),
+        (
+            8,
+            1,
+            [1, 1, 32768, 4096],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),
         # T3K Falcon 40, Decode DRAM bf16/8
         (
             8,
@@ -576,25 +615,24 @@ def test_all_gather(
             ttnn.bfloat8_b,
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
-        # too huge to run on CI
-        # (
-        #     8,
-        #     1,
-        #     [1, 1, 2048, 32768],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat16,
-        #     ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        # ),
-        # (
-        #     8,
-        #     1,
-        #     [1, 1, 2048, 32768],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     ttnn.bfloat8_b,
-        #     ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        # ),
+        (
+            8,
+            1,
+            [1, 1, 2048, 32768],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),
+        (
+            8,
+            1,
+            [1, 1, 2048, 32768],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
@@ -615,6 +653,8 @@ def test_all_gather_real_workloads(
     function_level_defaults,
     enable_async,
 ):
+    if 2052096 <= (output_shape[0] * output_shape[1] * output_shape[2] * output_shape[3]) / num_devices:
+        pytest.skip(f"Output shape {output_shape} is too slow for CI operation")
     run_all_gather_impl(
         t3k_mesh_device,
         num_devices,
@@ -629,7 +669,6 @@ def test_all_gather_real_workloads(
         num_iters=num_iters,
         enable_async=enable_async,
         rand_tensor=True,
-        teardown_persistent_fabric=True,
         mem_config=mem_config,
     )
 
