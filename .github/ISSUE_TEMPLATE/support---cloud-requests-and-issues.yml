@@ -1,0 +1,31 @@
+name: Support - Cloud requests and issues
+description: Cloud support, such as access issues, HW requests, or bugs etc.
+labels: ["cloud support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        :star2: Thanks for filing a request! :star2:
+  - type: textarea
+    id: support-cloud-request
+    attributes:
+      label: Problem/Purpose
+      description: |
+        Please describe in detail what you are trying to do. You can
+        prescribe solutions, but first try to write down what
+        problem you're trying to solve.
+  - type: textarea
+    id: environment-information
+    attributes:
+      label: Environment information
+      description: |
+        Details about your environment.
+      placeholder: |
+        - BM/VM/Container
+        - TT Silicon information (ex. E150 hang issue)
+  - type: textarea
+    id: additional-notes
+    attributes:
+      label: Additional notes
+      description: |
+        If you would like to add more details, add them here.
