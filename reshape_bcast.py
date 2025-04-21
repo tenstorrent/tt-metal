@@ -4,20 +4,23 @@ import os
 
 # List of CSV files to process
 csv_files = [
-    "output_log_hypot.csv",
-    "output_log_xlogy.csv",
-    "output_log_minimum.csv",
-    "output_log_maximum.csv",
-    "output_log_atan2.csv",
-    "output_log_nextafter.csv",
-    # "output_log_addalpha.csv",
-    "output_log_subalpha.csv",
-    "output_log_isclose.csv",
-    "output_log_remainder.csv",
-    # "output_log_fmod.csv",
-    # "output_log_div.csv",
-    "output_log_div_no_nan.csv",
-    "output_log_scatter.csv" "output_log_outer.csv" "output_log_gcd.csv" "output_log_lcm.csv",
+    "output_log_hypot_bcast.csv",
+    "output_log_xlogy_bcast.csv",
+    "output_log_minimum_bcast.csv",
+    "output_log_maximum_bcast.csv",
+    "output_log_atan2_bcast.csv",
+    "output_log_nextafter_bcast.csv",
+    "output_log_addalpha_bcast.csv",
+    "output_log_subalpha_bcast.csv",
+    "output_log_isclose_bcast.csv",
+    "output_log_remainder_bcast.csv",
+    "output_log_fmod_bcast.csv",
+    "output_log_div_bcast.csv",
+    "output_log_div_no_nan_bcast.csv",
+    "output_log_scatter_bcast.csv",
+    "output_log_outer_bcast.csv",
+    "output_log_gcd_bcast.csv",
+    "output_log_lcm_bcast.csv",
 ]
 
 # Folder path
@@ -42,10 +45,7 @@ dtype_combos = [
     "ttnn.bfloat4_b - ttnn.bfloat4_b",
     "ttnn.bfloat4_b - ttnn.bfloat16",
     "ttnn.bfloat4_b - ttnn.bfloat8_b",
-    "ttnn.bfloat16 - none",
-    "ttnn.float32 - none",
-    "ttnn.bfloat8_b - none",
-    "ttnn.bfloat4_b - none",
+    "ttnn.int32 - ttnn.int32",
 ]
 
 for csv_file in csv_files:
@@ -55,16 +55,19 @@ for csv_file in csv_files:
     result_map = defaultdict(dict)
 
     for _, row in df.iterrows():
-        a_mem, b_mem = row[2], row[3]
-        dtype_a, dtype_b = row[0], row[1]
-        status = "PASS" if row[4] == "True" or row[4] == True else "FAIL"
-        value = row[5]
+        input_shape_a = row[0]
+        input_shape_b = row[1]
+        dtype_a, dtype_b = row[2], row[3]
+        a_mem, b_mem = row[4], row[5]
+        status = "PASS" if row[6] == "True" or row[6] == True else "FAIL"
+        value = row[7]
         key = f"{dtype_a} - {dtype_b}"
-        result_map[(a_mem, b_mem)][key] = (status, value)
+
+        result_map[(input_shape_a, input_shape_b, a_mem, b_mem)][key] = (status, value)
 
     output_rows = []
-    for (a_mem, b_mem), dtype_results in result_map.items():
-        row_data = [a_mem, b_mem]
+    for (input_shape_a, input_shape_b, a_mem, b_mem), dtype_results in result_map.items():
+        row_data = [input_shape_a, input_shape_b, a_mem, b_mem]
         for dtype_combo in dtype_combos:
             if dtype_combo in dtype_results:
                 status, value = dtype_results[dtype_combo]
@@ -73,13 +76,14 @@ for csv_file in csv_files:
             row_data.extend([dtype_combo, status, value])
         output_rows.append(row_data)
 
-    headers = ["a_mem_config", "b_mem_config"]
+    headers = ["input_shape_a", "input_shape_b", "a_mem_config", "b_mem_config"]
     for dtype_combo in dtype_combos:
         headers.extend([f"{dtype_combo}", "pass/fail", "value"])
 
     output_df = pd.DataFrame(output_rows, columns=headers)
 
     output_name = f"reshaped_{csv_file}"
+    os.makedirs(folder_reshaped, exist_ok=True)
     output_path = os.path.join(folder_reshaped, output_name)
     output_df.to_csv(output_path, index=False)
 

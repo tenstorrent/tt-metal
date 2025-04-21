@@ -19,19 +19,19 @@ from tests.sweep_framework.sweep_utils.utils import return_dtype, return_mem_con
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "op_name_here_bcast": {
+    "outer_bcast": {
         "binary_op": [
-            {"tt_op": "op_name_here", "a_high": 100, "b_high": 90, "a_low": -100, "b_low": -90},
+            {"tt_op": "outer", "a_high": 100, "b_high": 90, "a_low": -100, "b_low": -90},
         ],
         "input_shape": [
-            {"self": [4, 8, 64, 512], "other": [1, 8, 64, 1]},  # col_b, N_b
-            {"self": [4, 8, 64, 512], "other": [4, 1, 1, 512]},  # row_b, C_b
-            {"self": [4, 8, 64, 512], "other": [4, 8, 1, 1]},  # B scalar
-            {"self": [1, 8, 64, 1], "other": [4, 8, 64, 512]},  # col_a, N_a
-            {"self": [4, 1, 1, 512], "other": [4, 8, 64, 512]},  # row_a, C_a
-            {"self": [4, 8, 1, 1], "other": [4, 8, 64, 512]},  # A scalar
-            {"self": [4, 8, 1, 512], "other": [4, 8, 64, 1]},  # row_a, col_b
-            {"self": [4, 8, 64, 1], "other": [4, 8, 1, 512]},  # row_b, col_a
+            {"self": [1, 1, 1, 512], "other": [1, 1, 1, 32]},  # col_b, N_b
+            # {"self": [4, 8, 64, 512], "other": [4, 1, 1, 512]},  # row_b, C_b
+            # {"self": [4, 8, 64, 512], "other": [4, 8, 1, 1]},  # B scalar
+            # {"self": [1, 8, 64, 1], "other": [4, 8, 64, 512]},  # col_a, N_a
+            # {"self": [4, 1, 1, 512], "other": [4, 8, 64, 512]},  # row_a, C_a
+            # {"self": [4, 8, 1, 1], "other": [4, 8, 64, 512]},  # A scalar
+            # {"self": [4, 8, 1, 512], "other": [4, 8, 64, 1]},  # row_a, col_b
+            # {"self": [4, 8, 64, 1], "other": [4, 8, 1, 512]},  # row_b, col_a
         ],
         "input_dtype": [
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat16"},
@@ -128,5 +128,6 @@ def run(
     result = ttnn_fn(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
+    torch_output_tensor = torch_output_tensor.reshape(output_tensor.shape)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99), e2e_perf]

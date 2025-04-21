@@ -19,9 +19,9 @@ from tests.sweep_framework.sweep_utils.utils import return_dtype, return_mem_con
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "op_name_here_bcast": {
+    "addalpha_bcast": {
         "binary_op": [
-            {"tt_op": "op_name_here", "a_high": 100, "b_high": 90, "a_low": -100, "b_low": -90},
+            {"tt_op": "addalpha", "a_high": 100, "b_high": 90, "a_low": -100, "b_low": -90},
         ],
         "input_shape": [
             {"self": [4, 8, 64, 512], "other": [1, 8, 64, 1]},  # col_b, N_b
@@ -120,12 +120,12 @@ def run(
         device=device,
         memory_config=return_mem_config(input_b_memory_config),
     )
-
+    alpha = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
     golden_function = ttnn.get_golden_function(ttnn_fn)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, alpha=alpha)
 
     start_time = start_measuring_time()
-    result = ttnn_fn(input_tensor_a, input_tensor_b)
+    result = ttnn_fn(input_tensor_a, input_tensor_b, alpha=alpha)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

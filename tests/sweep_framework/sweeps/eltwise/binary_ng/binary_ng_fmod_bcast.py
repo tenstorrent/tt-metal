@@ -19,9 +19,9 @@ from tests.sweep_framework.sweep_utils.utils import return_dtype, return_mem_con
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "op_name_here_bcast": {
+    "fmod_bcast": {
         "binary_op": [
-            {"tt_op": "op_name_here", "a_high": 100, "b_high": 90, "a_low": -100, "b_low": -90},
+            {"tt_op": "fmod", "a_high": 100, "b_high": 90, "a_low": -100, "b_low": -90},
         ],
         "input_shape": [
             {"self": [4, 8, 64, 512], "other": [1, 8, 64, 1]},  # col_b, N_b
@@ -122,7 +122,7 @@ def run(
     )
 
     golden_function = ttnn.get_golden_function(ttnn_fn)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
     start_time = start_measuring_time()
     result = ttnn_fn(input_tensor_a, input_tensor_b)

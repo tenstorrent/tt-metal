@@ -7,15 +7,19 @@ ops = [
     # "xlogy",
     # "minimum",
     # "maximum",
-    "atan2",
+    # "atan2",
     # "nextafter",
     # "addalpha",
     # "subalpha",
     # "isclose",
-    # "remainder",
-    # "fmod",
+    "remainder",
+    "fmod",
     # "div",
-    # "div_no_nan"
+    # "div_no_nan",
+    # "scatter",
+    # "outer",
+    # "gcd",
+    # "lcm"
 ]
 
 
@@ -43,7 +47,7 @@ for op in ops:
     bitwise = ""
     if op.startswith("bitwise"):
         bitwise = "bitwise."
-    module_name = f"eltwise.binary_ng.{bitwise}binary_ng_{op}"
+    module_name = f"eltwise.binary_ng.{bitwise}binary_ng_{op}_bcast"
     file_path = f"tests/sweep_framework/sweeps/eltwise/binary_ng/binary_ng_{op}.py"  # Assuming file structure
 
     # Modify the file if it exists
