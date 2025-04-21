@@ -170,6 +170,42 @@ std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::ve
         TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
 }
 
+bool AllGatherAsync::is_minimal_interleaved(const Tensor& input_tensor) const {
+    auto input_tensor_shape = input_tensor.get_padded_shape();
+    auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
+    auto input_tensor_page_layout = input_tensor.layout();
+    auto input_tensor_memory_config = input_tensor.memory_config();
+    bool input_is_sharded = input_tensor_memory_config.shard_spec.has_value();
+    auto device = input_tensor.device();
+    const auto& allocator = device->allocator();
+    uint32_t num_banks = allocator->get_num_banks(input_tensor.buffer()->buffer_type());
+
+    bool is_dim3_bf16 = false;
+    bool is_dim3_bf8 = false;
+    bool is_dim2 = false;
+    bool fit_tile_shape = (input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2] % 32 == 0) &&
+                          (input_tensor_shape[3] % 32 == 0);
+    if (dim == 3 && input_tensor_shape[3] % 32 == 0) {
+        uint32_t shape3_tiles = input_tensor_shape[3] / 32;
+        is_dim3_bf16 = input_tensor.dtype() == DataType::BFLOAT16 && fit_tile_shape && shape3_tiles % num_banks == 0;
+
+        // DRAM only yet
+        if (output_mem_config.buffer_type == BufferType::DRAM) {
+            is_dim3_bf8 =
+                input_tensor.dtype() == DataType::BFLOAT8_B && fit_tile_shape && shape3_tiles % num_banks == 0;
+        }
+    }
+    if (0 < dim && dim < 3) {
+        is_dim2 = fit_tile_shape;
+    }
+
+    bool is_interleaved = input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+                          input_tensor_page_layout == tt::tt_metal::Layout::TILE;
+    bool is_tiled = input_tensor_page_layout == tt::tt_metal::Layout::TILE;
+
+    return (is_dim3_bf16 || is_dim3_bf8 || is_dim2) && is_interleaved && is_tiled;
+}
+
 AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor) const {
     auto input_tensor_shape = input_tensor.get_padded_shape();
     auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
@@ -197,21 +233,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] input_shard_num_cores: {}", input_shard_num_cores);
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
-    // Check for minimal interleaved case
-    if ((((dim == 3 &&
-               ((input_tensor.dtype() == DataType::BFLOAT16 && input_tensor_shape[0] == 1 &&
-                 input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0 &&
-                 (((input_tensor_shape[3] / 32) % 12) % 2 == 0 || ((input_tensor_shape[3] / 32) % 56) % 2 == 0))) ||
-           (input_tensor.dtype() == DataType::BFLOAT8_B && output_mem_config.buffer_type == BufferType::DRAM &&
-            ((input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0 &&
-              (input_tensor_shape[3] / 32) % 12 == 0) ||  // llama 8B N300
-             (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0 &&
-              (input_tensor_shape[3] / 32) % 12 == 8) ||  // T3K Falcon 40, Decode/Prefill
-             (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0 &&
-              (input_tensor_shape[3] / 32) % 12 == 4))))) ||
-         (dim < 3 && ((input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2]) % 32 == 0))) &&
-        input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-        input_tensor_page_layout == tt::tt_metal::Layout::TILE) {
+    if (is_minimal_interleaved(input_tensor)) {
         return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
     }
 

@@ -32,8 +32,7 @@ constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_target
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
 constexpr bool last_dim = get_compile_time_arg_val(10);
 constexpr uint32_t num_banks = get_compile_time_arg_val(11);
-constexpr bool optimized_dim3 = get_compile_time_arg_val(12);
-constexpr uint32_t num_links = get_compile_time_arg_val(13);
+constexpr uint32_t num_links = get_compile_time_arg_val(12);
 
 // for performance experiment by dynamic_alternate switch
 inline void fabric_write_wrapper(
@@ -414,42 +413,6 @@ void kernel_main() {
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
-    DPRINT << "ct args: \n";
-    DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
-    DPRINT << "reserved_packet_header_cb_id: " << (uint32_t)reserved_packet_header_cb_id << "\n";
-    DPRINT << "num_packet_headers_storable: " << (uint32_t)num_packet_headers_storable << "\n";
-    DPRINT << "buffer0_type: " << (uint32_t)buffer0_type << "\n";
-    DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << "\n";
-    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
-    DPRINT << "num_targets_forward_direction: " << (uint32_t)num_targets_forward_direction << "\n";
-    DPRINT << "num_targets_backward_direction: " << (uint32_t)num_targets_backward_direction << "\n";
-    DPRINT << "last_dim: " << (uint32_t)last_dim << "\n";
-    DPRINT << "num_banks: " << (uint32_t)num_banks << "\n";
-    DPRINT << "optimized_dim3: " << (uint32_t)optimized_dim3 << "\n";
-    DPRINT << "num_links: " << (uint32_t)num_links << "\n";
-
-    DPRINT << "rt args: \n";
-    DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    DPRINT << "tile_id_start: " << (uint32_t)tile_id_start << "\n";
-    DPRINT << "tile_id_end: " << (uint32_t)tile_id_end << "\n";
-    DPRINT << "wait_output_semaphore: " << (uint32_t)wait_output_semaphore << "\n";
-    DPRINT << "reset_global_semaphore: " << (uint32_t)reset_global_semaphore << "\n";
-    DPRINT << "out_ready_sem_bank_addr: " << (uint32_t)out_ready_sem_bank_addr << "\n";
-    DPRINT << "out_ready_sem_noc0_x: " << (uint32_t)out_ready_sem_noc0_x << "\n";
-    DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y << "\n";
-    DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value << "\n";
-    DPRINT << "num_tiles_per_chip: " << (uint32_t)num_tiles_per_chip << "\n";
-    DPRINT << "ring_size: " << (uint32_t)ring_size << "\n";
-    DPRINT << "tile_cols_per_chip: " << (uint32_t)tile_cols_per_chip << "\n";
-
-    DPRINT << "arg_for_fab: " << (uint32_t)arg_for_fab << "\n";
-    DPRINT << "fabric_connection arg 0" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 1" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 2" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 3" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 4" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-
     // packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
@@ -460,9 +423,6 @@ void kernel_main() {
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
-    DPRINT << "packet_header_buffer_addr_forward: " << (uint32_t)packet_header_buffer_addr_forward << "\n";
-    DPRINT << "packet_header_buffer_addr_backward: " << (uint32_t)packet_header_buffer_addr_backward << "\n";
-    DPRINT << "packet_header_buffer_seminc: " << (uint32_t)packet_header_buffer_seminc << "\n";
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -482,14 +442,6 @@ void kernel_main() {
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open();
     }
-
-    // 1. mcast via fabric to remote tensor addresses
-    DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << "\n";
-    DPRINT << "num_targets_backward_direction: " << num_targets_backward_direction << "\n";
-    DPRINT << "my_chip_id: " << my_chip_id << "\n";
-
-    DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
 
     // when last_dim == true, tile_id coordinate is as follows
     //      |        chip0          |       chip1           |
@@ -511,33 +463,21 @@ void kernel_main() {
 
     if constexpr (num_links == 1) {
         if constexpr (last_dim) {
-            if constexpr (optimized_dim3) {
-                if constexpr (packet_size_in_pages == 2) {  // bf16
-                    fabric_send_dim3_bf16_remain_even<is_dram>(
-                        num_tiles_per_chip,
-                        ring_size,
-                        tile_cols_per_chip,
-                        tensor0_addrgen,
-                        pkt_hdr_forward,
-                        pkt_hdr_backward,
-                        fabric_connection);
-                } else {
-                    fabric_send_dim3_bf8_dram_remain048<is_dram>(
-                        num_tiles_per_chip,
-                        ring_size,
-                        tile_cols_per_chip,
-                        tensor0_addrgen,
-                        pkt_hdr_forward,
-                        pkt_hdr_backward,
-                        fabric_connection);
-                }
-            } else {
-                fabric_send_generic<is_dram>(
+            if constexpr (packet_size_in_pages == 2) {  // bf16
+                fabric_send_dim3_bf16_remain_even<is_dram>(
                     num_tiles_per_chip,
-                    tile_id_start,
-                    tensor0_addrgen,
                     ring_size,
                     tile_cols_per_chip,
+                    tensor0_addrgen,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection);
+            } else {
+                fabric_send_dim3_bf8_dram_remain048<is_dram>(
+                    num_tiles_per_chip,
+                    ring_size,
+                    tile_cols_per_chip,
+                    tensor0_addrgen,
                     pkt_hdr_forward,
                     pkt_hdr_backward,
                     fabric_connection);
@@ -611,6 +551,4 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
-
-    DPRINT << "DONE \n";
 }

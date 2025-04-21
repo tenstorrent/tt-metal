@@ -21,8 +21,7 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(3);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(4);
 constexpr bool last_dim = get_compile_time_arg_val(5);
 constexpr uint32_t num_banks = get_compile_time_arg_val(6);
-constexpr bool optimized_dim3 = get_compile_time_arg_val(7);
-constexpr uint32_t num_links = get_compile_time_arg_val(8);
+constexpr uint32_t num_links = get_compile_time_arg_val(7);
 
 template <bool DRAM>
 inline void pack_full_contig(uint32_t contig_total, uint32_t& tile_id, InterleavedAddrGenFast<DRAM>& addrgen) {
@@ -248,45 +247,18 @@ void kernel_main() {
     uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     uint32_t tile_cols_per_chip = get_arg_val<uint32_t>(arg_idx++);
 
-    // print every compile and runtime arg in uint32_t
-    DPRINT << "ct args: \n";
-    DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
-    DPRINT << "buffer0_type: " << (uint32_t)buffer0_type << "\n";
-    DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << "\n";
-    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
-    DPRINT << "last_dim: " << (uint32_t)last_dim << "\n";
-    DPRINT << "num_banks: " << (uint32_t)num_banks << "\n";
-    DPRINT << "optimized_dim3: " << (uint32_t)optimized_dim3 << "\n";
-    DPRINT << "num_links: " << (uint32_t)num_links << "\n";
-
-    DPRINT << "rt args: \n";
-    DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    DPRINT << "tile_id_start: " << (uint32_t)tile_id_start << "\n";
-    DPRINT << "tile_id_end: " << (uint32_t)tile_id_end << "\n";
-    DPRINT << "num_tiles_per_chip: " << (uint32_t)num_tiles_per_chip << "\n";
-    DPRINT << "ring_size: " << (uint32_t)ring_size << "\n";
-    DPRINT << "tile_cols_per_chip: " << (uint32_t)tile_cols_per_chip << "\n";
-
     // interleaved addrgen
     constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
     auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
         .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
 
-    DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
-
     if constexpr (num_links == 1) {
         if constexpr (last_dim) {
-            if constexpr (optimized_dim3) {
-                if constexpr (packet_size_in_pages == 2) {
-                    pack_dim3_bf16_remain_even(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
-                } else {
-                    pack_dim3_bf8_dram_remain048<is_dram>(
-                        num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
-                }
+            if constexpr (packet_size_in_pages == 2) {
+                pack_dim3_bf16_remain_even(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
             } else {
-                pack_generic<is_dram>(tile_id_start, tile_id_end, tensor0_addrgen);
+                pack_dim3_bf8_dram_remain048<is_dram>(
+                    num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
             }
         } else {
             pack_dim2(num_tiles_per_chip, tile_id_start, tensor0_addrgen);
@@ -294,6 +266,4 @@ void kernel_main() {
     } else {
         pack_generic<is_dram>(tile_id_start, tile_id_end, tensor0_addrgen);
     }
-
-    DPRINT << "DONE \n";
 }

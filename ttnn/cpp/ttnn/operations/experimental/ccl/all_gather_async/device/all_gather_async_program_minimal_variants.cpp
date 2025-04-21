@@ -124,13 +124,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
     const auto output_tensor_page_layout = output_tensor.layout();
 
-    const bool optimized_dim3 = dim == 3 && input_tensor_shape[2] % 32 == 0 &&
-                                ((num_pages_per_packet == 2 && (((input_tensor_shape[3] / 32) % 12) % 2 == 0 ||
-                                                                ((input_tensor_shape[3] / 32) % 56) % 2 == 0)) ||
-                                 (num_pages_per_packet == 4 && output_tensor_buffer_type == BufferType::DRAM &&
-                                      (input_tensor_shape[3] / 32) % 12 == 0 ||
-                                  (input_tensor_shape[3] / 32) % 12 == 4 || (input_tensor_shape[3] / 32) % 12 == 8));
-
     // KERNEL CREATION
     // Reader
     bool last_dim = dim == input_tensor_shape.rank() - 1;
@@ -145,7 +138,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         op_config.get_page_size(),                        // tensor0_page_size
         last_dim,                                         // last_dim
         num_banks,                                        // num_banks
-        optimized_dim3,                                   // optimized_dim3
         num_links,                                        // num_links
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
@@ -176,7 +168,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         dynamic_alternate,                                 // alternate
         last_dim,                                          // last_dim
         num_banks,                                         // num_bansks
-        optimized_dim3,                                    // optimized_dim3
         num_links,                                         // num_links
     };
     for (const auto& arg : writer_kernel_config.compile_args) {
