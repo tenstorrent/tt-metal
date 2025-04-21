@@ -225,8 +225,13 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_0_pkts_completed_id, to_sender_1_pkts_completed_id, to_sender_2_pkts_completed_id});
 
 // Miscellaneous configuration
-constexpr uint32_t DEFAULT_ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS = 32;
+// 25 good
+// 24 bad -- 1.4 GB/s/dir drop in 2k packet size line mcast wtf
+constexpr size_t DEFAULT_ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS = 32;
 constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = 0;
+
+constexpr bool DO_SENDER_WORKER_ACK_OUTSIDE_OF_LOOP = true;  // + 150 MB/s when true for line mcast (2k packet size)
+constexpr bool DO_RECEIVER_ETH_ACK_OUTSIDE_OF_LOOP = false;
 
 namespace tt::tt_fabric {
 static_assert(
