@@ -72,6 +72,7 @@ def profile_results(
 
 
 def run_latency_test(
+    topology,
     line_size,
     latency_measurement_worker_line_index,
     latency_ping_message_size_bytes,
@@ -101,7 +102,8 @@ def run_latency_test(
                 {num_downstream_fabric_congestion_writers} \
                 {congestion_writers_message_size} \
                 {int(congestion_writers_use_mcast)} \
-                {int(enable_fused_payload_with_sync)}"
+                {int(enable_fused_payload_with_sync)} \
+                {topology}"
     rc = os.system(cmd)
     if rc != 0:
         if os.WEXITSTATUS(rc) == 1:
@@ -121,7 +123,7 @@ def run_latency_test(
         congestion_writers_message_size,
         congestion_writers_use_mcast,
     )
-    num_hops = (line_size - 1 - latency_measurement_worker_line_index) * 2
+    num_hops = (line_size - 1 - latency_measurement_worker_line_index) * 2 if topology != "ring" else line_size
     avg_hop_latency = latency_avg_ns / num_hops
     logger.info("latency_ns: {} ns", latency_avg_ns)
     allowable_delta = expected_mean_latency_ns * 0.05
@@ -181,12 +183,12 @@ def run_latency_test(
     ],
 )
 @pytest.mark.parametrize("latency_ping_burst_size", [1])
-@pytest.mark.parametrize("latency_ping_burst_count", [62])
+@pytest.mark.parametrize("latency_ping_burst_count", [200])
 @pytest.mark.parametrize("add_upstream_fabric_congestion_writers", [False])
 @pytest.mark.parametrize("num_downstream_fabric_congestion_writers", [0])
 @pytest.mark.parametrize("congestion_writers_message_size", [0])
 @pytest.mark.parametrize("congestion_writers_use_mcast", [False])
-def test_1D_fabric_latency_on_uncongested_fabric_minimal_packet_size(
+def test_1D_line_fabric_latency_on_uncongested_fabric(
     line_size,
     latency_measurement_worker_line_index,
     enable_fused_payload_with_sync,
@@ -203,6 +205,61 @@ def test_1D_fabric_latency_on_uncongested_fabric_minimal_packet_size(
     expected_avg_hop_latency_ns,
 ):
     run_latency_test(
+        "linear",
+        line_size,
+        latency_measurement_worker_line_index,
+        latency_ping_message_size_bytes,
+        latency_ping_burst_size,
+        latency_ping_burst_count,
+        add_upstream_fabric_congestion_writers,
+        num_downstream_fabric_congestion_writers,
+        congestion_writers_message_size,
+        congestion_writers_use_mcast,
+        enable_fused_payload_with_sync,
+        expected_mean_latency_ns,
+        expected_min_latency_ns,
+        expected_max_latency_ns,
+        expected_avg_hop_latency_ns,
+    )
+
+
+# 1D All-to-All Multicast
+@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize(
+    "latency_ping_message_size_bytes,latency_measurement_worker_line_index,enable_fused_payload_with_sync, expected_mean_latency_ns,expected_min_latency_ns,expected_max_latency_ns,expected_avg_hop_latency_ns",
+    [
+        (0, 0, False, 3320, 2880, 3520, 805),
+        (16, 0, False, 3130, 2840, 3400, 780),
+        (16, 0, True, 3170, 2860, 3420, 790),
+        (1024, 0, False, 3920, 3580, 4310, 975),
+        (2048, 0, False, 4470, 4220, 4730, 1115),
+        (4096, 0, False, 5310, 5050, 5700, 1330),
+    ],
+)
+@pytest.mark.parametrize("latency_ping_burst_size", [1])
+@pytest.mark.parametrize("latency_ping_burst_count", [62])
+@pytest.mark.parametrize("add_upstream_fabric_congestion_writers", [False])
+@pytest.mark.parametrize("num_downstream_fabric_congestion_writers", [0])
+@pytest.mark.parametrize("congestion_writers_message_size", [0])
+@pytest.mark.parametrize("congestion_writers_use_mcast", [False])
+def test_1D_ring_fabric_latency_on_uncongested_fabric(
+    line_size,
+    latency_measurement_worker_line_index,
+    enable_fused_payload_with_sync,
+    latency_ping_message_size_bytes,
+    latency_ping_burst_size,
+    latency_ping_burst_count,
+    add_upstream_fabric_congestion_writers,
+    num_downstream_fabric_congestion_writers,
+    congestion_writers_message_size,
+    congestion_writers_use_mcast,
+    expected_mean_latency_ns,
+    expected_min_latency_ns,
+    expected_max_latency_ns,
+    expected_avg_hop_latency_ns,
+):
+    run_latency_test(
+        "ring",
         line_size,
         latency_measurement_worker_line_index,
         latency_ping_message_size_bytes,
