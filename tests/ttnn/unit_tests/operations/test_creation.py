@@ -423,5 +423,5 @@ def test_zeros_bfp8(device, input_shape, dtype):
 @pytest.mark.parametrize("input_shape, dtype", [([32, 32], ttnn.bfloat4_b), ((5, 96, 64), ttnn.bfloat4_b)])
 def test_zeros_bfp4(device, input_shape, dtype):
     tensor = ttnn.zeros(input_shape, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
-    assert tensor.dtype == ttnn.bfloat8_b, f"Expected dtype {dtype}, but got {tensor.dtype}"
+    assert tensor.dtype == ttnn.bfloat4_b, f"Expected dtype {dtype}, but got {tensor.dtype}"
     assert tensor.storage_type() == ttnn.StorageType.DEVICE
