@@ -29,7 +29,12 @@ std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
 }
 
 uint32_t get_nearest_supported_k_value(uint32_t k) {
-    return tt::constants::TILE_WIDTH * tt::div_up(k, tt::constants::TILE_WIDTH);
+    // LLK only support k = 32, 64 for now
+    if (k <= 32) {
+        return 32;
+    } else {
+        return 64;
+    }
 }
 
 Tensor perform_transpose(

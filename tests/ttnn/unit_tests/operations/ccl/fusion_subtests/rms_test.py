@@ -10,8 +10,6 @@ import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
-    teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -51,14 +49,8 @@ def run_rms_trace(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-        mesh_device,
-        [worker_sub_device],
-        0,
-        0,
-        True,
-        wrap_fabric_around_mesh=True,
-    )
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     torch.manual_seed(1234)
     num_cores = input_shard_grid.num_cores()
@@ -230,7 +222,6 @@ def run_rms_trace(
             ccl_semaphore_handles,
             num_links=num_links,
             topology=ttnn.Topology.Linear,
-            enable_persistent_fabric_mode=True,
             memory_config=ag_memory_config,
         )
 
@@ -258,7 +249,6 @@ def run_rms_trace(
                     ccl_semaphore_handles,
                     num_links=num_links,
                     topology=ttnn.Topology.Linear,
-                    enable_persistent_fabric_mode=True,
                     memory_config=ag_memory_config,
                 )
                 tt_out = ttnn.rms_norm_post_all_gather(
@@ -285,7 +275,6 @@ def run_rms_trace(
                 ccl_semaphore_handles,
                 num_links=num_links,
                 topology=ttnn.Topology.Linear,
-                enable_persistent_fabric_mode=True,
                 memory_config=ag_memory_config,
             )
             tt_out = ttnn.rms_norm_post_all_gather(
@@ -317,7 +306,6 @@ def run_rms_trace(
     signpost("stop")
     time_taken = profiler.get_duration("rms-trace") - profiler.get_duration("rms-trace-warmup")
     mesh_device.reset_sub_device_stall_group()
-    teardown_fabric_interface(mesh_device)
 
 
 def run_rms_fuse_impl(
@@ -346,14 +334,8 @@ def run_rms_fuse_impl(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-        mesh_device,
-        [worker_sub_device],
-        0,
-        0,
-        True,
-        wrap_fabric_around_mesh=True,
-    )
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     torch.manual_seed(1234)
     num_cores = input_shard_grid.num_cores()
@@ -477,7 +459,5 @@ def run_rms_fuse_impl(
         logger.info(output)
         if not passing:
             mesh_device.reset_sub_device_stall_group()
-            teardown_fabric_interface(mesh_device)
         assert passing
     mesh_device.reset_sub_device_stall_group()
-    teardown_fabric_interface(mesh_device)

@@ -100,6 +100,8 @@ public:
 
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
 
+    std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
+
     ARCH arch() const { return this->arch_; }
 
     const metal_SocDescriptor& get_soc_desc(chip_id_t chip) const;
@@ -297,6 +299,9 @@ public:
 
     // Get all fabric ethernet cores
     std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const;
+
+    // Get fabric ethernet cores connecting src to dst
+    std::vector<CoreCoord> get_fabric_ethernet_routers_between_src_and_dest(chip_id_t src_id, chip_id_t dst_id) const;
 
     bool is_worker_core(const CoreCoord& core, chip_id_t chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, chip_id_t chip_id) const;

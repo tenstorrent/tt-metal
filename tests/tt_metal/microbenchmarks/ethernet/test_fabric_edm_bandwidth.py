@@ -397,6 +397,7 @@ def test_fabric_4chip_multi_link_mcast_full_ring_bw(
     )
 
 
+@pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])

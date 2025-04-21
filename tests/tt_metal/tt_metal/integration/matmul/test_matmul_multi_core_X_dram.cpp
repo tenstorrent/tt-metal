@@ -41,7 +41,6 @@
 #include "matmul_test_utils.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include "tests/tt_metal/test_utils/tilization.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "umd/device/types/arch.h"
@@ -277,15 +276,17 @@ bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
                 dram_buffer_dst_addr,
                 dram_buffer_size_out);
 
-            auto activations_tilized = test_utils::tilize(activation_slice, per_core_M * 32, K * 32);
-            auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
+            auto activations_tilized = tilize_swizzled(activation_slice, per_core_M * 32, K * 32);
+            auto activations_tile_layout =
+                convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
             auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
             auto activations_tile_transposed = tt_metal::transpose_tiles(activations, per_core_M, K, in0_block_w);
             pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                 device, dram_src0_channel_id, dram_buffer_src0_addr, activations_tile_transposed);
 
-            auto identity_tilized = test_utils::tilize(weights_slice, K * 32, per_core_N * 32);
-            auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
+            auto identity_tilized = tilize_swizzled(weights_slice, K * 32, per_core_N * 32);
+            auto weights_tile_layout =
+                convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(identity_tilized));
             auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
             pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                 device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
@@ -342,8 +343,8 @@ bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
                 per_core_M * per_core_N * single_tile_size,
                 result_vec);
             auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-            auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
-            auto result_untilized = test_utils::untilize(result_flat_layout, per_core_M * 32, per_core_N * 32);
+            auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
+            auto result_untilized = untilize_swizzled(result_flat_layout, per_core_M * 32, per_core_N * 32);
             pass &= (per_core_golden == result_untilized);
         }
     }
@@ -505,15 +506,16 @@ bool matmul_multi_core_multi_dram(tt_metal::DispatchFixture* fixture, tt_metal::
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
     log_debug(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
-    auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
-    auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
+    auto activations_tilized = tilize_swizzled(tensor.get_values(), M * 32, K * 32);
+    auto activations_tile_layout =
+        convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
 
     auto activation_buffer =
         tt_metal::Buffer::create(device, activations.size() * sizeof(uint32_t), 1024 * 2, tt_metal::BufferType::DRAM);
     pass &= move_tiles_to_dram(device, activations, M, K, activation_buffer);
-    auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
-    auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
+    auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
+    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::MakeConstSpan(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
 
     auto weight_buffer =
@@ -567,7 +569,7 @@ bool matmul_multi_core_multi_dram(tt_metal::DispatchFixture* fixture, tt_metal::
             result_vec.insert(result_vec.end(), result_iter, result_iter + 512);
             result_iter += 512;
             auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-            auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
+            auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
 
             pass &= (golden_tile == result_flat_layout);
         }
