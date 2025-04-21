@@ -227,9 +227,7 @@ class TtLinearParameters:
                         )
                         torch_bias = torch_bias.reshape(bias_h, bias_w_mult * hidden_dim_new)
 
-        if unsqueeze_bias:
-            # TODO: Once the issue is resolved, remove this workaround for https://github.com/tenstorrent/tt-metal/issues/16599
-            torch_bias = torch_bias.unsqueeze(0)
+        torch_weight = weight.transpose(0, 1)
 
         def shuffle_chunks(tensor):
             # Given torch tensor with output features in the last dimension,
@@ -240,17 +238,23 @@ class TtLinearParameters:
             tensor = tensor.reshape(in_dim, -1)
             return tensor
 
-        torch_weight = weight.transpose(0, 1)
+        torch_weight = shuffle_chunks(torch_weight)
+        torch_bias = shuffle_chunks(torch_bias)
+
+        if unsqueeze_bias:
+            # TODO: Once the issue is resolved, remove this workaround for https://github.com/tenstorrent/tt-metal/issues/16599
+            torch_bias = torch_bias.unsqueeze(0)
+
         return cls(
             weight=from_torch(
-                shuffle_chunks(torch_weight),
+                torch_weight,
                 dtype=dtype,
                 mesh_device=device,
                 shard_dim=-1,
                 layout=ttnn.TILE_LAYOUT,
             ),
             bias=from_torch(
-                shuffle_chunks(torch_bias),
+                torch_bias,
                 dtype=dtype,
                 mesh_device=device,
                 shard_dim=-1,
