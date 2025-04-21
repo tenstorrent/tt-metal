@@ -238,7 +238,7 @@ def parse_optimizations(string):
     model_opt = ModelOptimizations(settings)
 
     def apply_settings(model_args):
-        return DecodersPrecision(model_args.n_layers, model_arg.model_name, model_opt)
+        return DecodersPrecision(model_args.n_layers, model_args.model_name, model_opt)
 
     apply_settings.__name__ = model_opt.__name__
     return apply_settings
