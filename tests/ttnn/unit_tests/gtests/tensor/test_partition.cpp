@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <gtest/gtest.h>
+#include <gmock/gmock.h>
+
+#include <cstdint>
 #include <xtensor/xarray.hpp>
 #include <xtensor/xbuilder.hpp>
 #include <xtensor/xexception.hpp>
@@ -15,8 +17,11 @@
 #include <xtensor/xutils.hpp>
 #include <tuple>
 #include <vector>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <signal.h>
+#include <setjmp.h>
 
-#include "gmock/gmock.h"
 #include "ttnn/tensor/xtensor/partition.hpp"
 
 namespace tt {
@@ -169,6 +174,83 @@ TEST(PartitionTest, EmptyInput) {
     std::vector<xt::xarray<int>> input;
     EXPECT_NO_THROW(concat(input, 0));
     EXPECT_TRUE(xt::allclose(concat(input, 0), xt::xarray<int>{}));
+}
+
+TEST(PartitionTest, ShardSpans) {
+    constexpr size_t kNumChunks = 64;
+    constexpr size_t kChunkSize = 4 << 10;
+    std::vector<float> test_data;
+    for (int i = 0; i < kNumChunks * kChunkSize; i++) {
+        test_data.push_back(i);
+    }
+
+    auto chunks = chunk(tt::stl::Span(test_data), ttnn::Shape{1, 1, kNumChunks, kChunkSize}, kNumChunks, 2);
+
+    EXPECT_THAT(chunks, SizeIs(kNumChunks));
+    for (int i = 0; i < kNumChunks; i++) {
+        const auto& [chunk_span, shape] = chunks[i];
+        EXPECT_THAT(chunk_span, SizeIs(kChunkSize));
+        EXPECT_EQ(shape, ttnn::Shape({1, 1, 1, kChunkSize}));
+        for (int j = 0; j < kChunkSize; j++) {
+            EXPECT_EQ(chunk_span[j], i * kChunkSize + j);
+        }
+    }
+}
+
+TEST(PartitionTest, ChunkDoesNotAccessData) {
+    //  Create a read-protected memory region, and point `tt::stl::Span` to it.
+    //  `chunk` should not access the data, and should only calculate offsets and shapes.
+    const long page_size = sysconf(_SC_PAGESIZE);
+    ASSERT_NE(page_size, -1);
+
+    const size_t total_size = 10 * page_size;
+    const int num_chunks = 10;
+
+    // With `PROT_NONE`, the mapped memory cannot be accessed.
+    void* mapped_mem = mmap(
+        /*addr=*/nullptr, total_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, /*fd=*/-1, /*offset=*/0);
+    ASSERT_NE(mapped_mem, MAP_FAILED);
+
+    // Set up signal handler to verify segmentation faults.
+    static sigjmp_buf jmp_env;
+    struct Handler {
+        static void segfault_handler(int signum) { siglongjmp(jmp_env, /*val=*/1); }
+    };
+    struct sigaction old_action;
+    struct sigaction new_action;
+    memset(&new_action, 0, sizeof(new_action));
+    new_action.sa_handler = Handler::segfault_handler;
+    sigemptyset(&new_action.sa_mask);
+    new_action.sa_flags = 0;
+    ASSERT_EQ(sigaction(SIGSEGV, &new_action, &old_action), 0);
+
+    tt::stl::Span<const uint8_t> protected_span(static_cast<uint8_t*>(mapped_mem), total_size);
+
+    // Verify that our set up actually works by attempting to read the protected memory region, and catching a segfault.
+    bool segfault_occurred = false;
+    if (sigsetjmp(jmp_env, /*savemask=*/1) == 0) {
+        // `volatile` ensures the read is not optimized away.
+        volatile uint8_t x = protected_span[0];
+    } else {
+        segfault_occurred = true;
+    }
+    EXPECT_TRUE(segfault_occurred);
+
+    if (sigsetjmp(jmp_env, /*savemask=*/1) == 0) {
+        auto chunks = chunk(protected_span, ttnn::Shape({1, 1, 1, total_size}), num_chunks, /*dim=*/3);
+
+        EXPECT_THAT(chunks, SizeIs(num_chunks));
+        for (const auto& [chunk_span, chunk_shape] : chunks) {
+            EXPECT_THAT(chunk_span, SizeIs(page_size));
+            EXPECT_EQ(chunk_shape, ttnn::Shape({1, 1, 1, page_size}));
+        }
+    } else {
+        FAIL() << "segfault occurred when calling `chunk`";
+    }
+
+    // Cleanup.
+    ASSERT_EQ(sigaction(SIGSEGV, &old_action, nullptr), 0);
+    ASSERT_EQ(munmap(mapped_mem, total_size), 0);
 }
 
 }  // namespace

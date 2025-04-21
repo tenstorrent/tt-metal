@@ -2,24 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/span.hpp>
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
+#include <type_traits>
+#include <xtensor/xadapt.hpp>
 #include <xtensor/xdynamic_view.hpp>
+#include <xtensor/xstorage.hpp>
+#include <xtensor/xtensor_forward.hpp>
+#include <xtensor/xview.hpp>
 
 namespace ttnn::experimental::xtensor {
+namespace {
 
-template <typename T>
-std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& xtensor, int num_chunks, int dim) {
+template <typename XtExpr>
+auto chunk_xexpression(XtExpr& expr, int num_chunks, int dim) {
+    using StridedView = decltype(xt::strided_view(expr, std::declval<xt::xstrided_slice_vector>()));
+
     TT_FATAL(num_chunks > 0, "num_chunks must be > 0; got num_chunks: {}", num_chunks);
     TT_FATAL(
-        dim >= 0 && dim < xtensor.dimension(),
+        dim >= 0 && dim < expr.dimension(),
         "invalid dimension index; got dim: {}, tensor dimension: {}",
         dim,
-        xtensor.dimension());
+        expr.dimension());
 
-    const int size_along_dim = static_cast<int>(xtensor.shape()[dim]);
+    const int size_along_dim = static_cast<int>(expr.shape()[dim]);
     TT_FATAL(
         num_chunks <= size_along_dim,
         "num_chunks cannot exceed the size of the tensor along the given dimension; got num_chunks: {}, "
@@ -28,14 +38,15 @@ std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& xtensor, int num_chunks, i
         size_along_dim);
 
     if (num_chunks == 1) {
-        return {xtensor};
+        xt::xstrided_slice_vector indices(expr.dimension(), xt::all());
+        return std::vector<StridedView>{xt::strided_view(expr, indices)};
     }
 
     const int chunk_size = (size_along_dim + num_chunks - 1) / num_chunks;
     int remaining_size = size_along_dim;
 
-    std::vector<xt::xarray<T>> chunks;
-    chunks.reserve(static_cast<std::size_t>(num_chunks));
+    std::vector<StridedView> chunk_views;
+    chunk_views.reserve(static_cast<std::size_t>(num_chunks));
     int start = 0;
     int end = 0;
     for (int i = 0; i < num_chunks && end < size_along_dim; ++i) {
@@ -44,21 +55,84 @@ std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& xtensor, int num_chunks, i
         end = start + current_chunk_size;
 
         // Build indices for slicing
-        xt::xstrided_slice_vector indices(xtensor.dimension(), xt::all());
+        xt::xstrided_slice_vector indices(expr.dimension(), xt::all());
         indices[dim] = xt::range(start, end);
 
-        auto chunk_view = xt::strided_view(xtensor, indices);
-
-        // TODO: optimize away this copy.
-        // Construct xarray from the view
-        // This forces a copy of that slice into a new xarray
-        chunks.push_back(xt::xarray<T>(chunk_view));
+        auto chunk_view = xt::strided_view(expr, indices);
+        chunk_views.push_back(chunk_view);
         start = end;
     }
 
-    return chunks;
+    return chunk_views;
+}
+}  // namespace
+
+template <typename T>
+std::vector<std::pair<tt::stl::Span<T>, ttnn::Shape>> chunk(
+    tt::stl::Span<T> span, const ttnn::Shape& shape, int num_chunks, int dim) {
+    const std::vector<size_t> shape_vector(shape.cbegin(), shape.cend());
+    auto xtensor = xt::adapt(span.data(), span.size(), xt::no_ownership(), shape_vector);
+    auto chunk_views = chunk_xexpression(xtensor, num_chunks, dim);
+
+    std::vector<std::pair<tt::stl::Span<T>, ttnn::Shape>> chunk_spans;
+    chunk_spans.reserve(chunk_views.size());
+    std::transform(chunk_views.begin(), chunk_views.end(), std::back_inserter(chunk_spans), [](auto&& v) {
+        tt::stl::Span<T> data(v.data() + v.data_offset(), v.size());
+        return std::make_pair(data, get_shape_from_xarray(v));
+    });
+    return chunk_spans;
 }
 
+template <typename T>
+std::vector<xt::xarray<T>> chunk(const xt::xarray<T>& xtensor, int num_chunks, int dim) {
+    auto chunked_views = chunk_xexpression(xtensor, num_chunks, dim);
+    std::vector<xt::xarray<T>> chunked_xtensors;
+    chunked_xtensors.reserve(chunked_views.size());
+    std::transform(chunked_views.begin(), chunked_views.end(), std::back_inserter(chunked_xtensors), [](auto&& v) {
+        return xt::xarray<T>(v);
+    });
+    return chunked_xtensors;
+}
+
+template std::vector<xt::xarray<bfloat16>> chunk(const xt::xarray<bfloat16>&, int, int);
+template std::vector<xt::xarray<float>> chunk(const xt::xarray<float>&, int, int);
+template std::vector<xt::xarray<double>> chunk(const xt::xarray<double>&, int, int);
+template std::vector<xt::xarray<int32_t>> chunk(const xt::xarray<int32_t>&, int, int);
+template std::vector<xt::xarray<uint8_t>> chunk(const xt::xarray<uint8_t>&, int, int);
+template std::vector<xt::xarray<uint16_t>> chunk(const xt::xarray<uint16_t>&, int, int);
+template std::vector<xt::xarray<uint32_t>> chunk(const xt::xarray<uint32_t>&, int, int);
+
+template std::vector<std::pair<tt::stl::Span<bfloat16>, ttnn::Shape>> chunk(
+    tt::stl::Span<bfloat16>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<float>, ttnn::Shape>> chunk(
+    tt::stl::Span<float>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<double>, ttnn::Shape>> chunk(
+    tt::stl::Span<double>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<int32_t>, ttnn::Shape>> chunk(
+    tt::stl::Span<int32_t>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<uint8_t>, ttnn::Shape>> chunk(
+    tt::stl::Span<uint8_t>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<uint16_t>, ttnn::Shape>> chunk(
+    tt::stl::Span<uint16_t>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<uint32_t>, ttnn::Shape>> chunk(
+    tt::stl::Span<uint32_t>, const ttnn::Shape&, int, int);
+
+template std::vector<std::pair<tt::stl::Span<const bfloat16>, ttnn::Shape>> chunk(
+    tt::stl::Span<const bfloat16>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<const float>, ttnn::Shape>> chunk(
+    tt::stl::Span<const float>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<const double>, ttnn::Shape>> chunk(
+    tt::stl::Span<const double>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<const int32_t>, ttnn::Shape>> chunk(
+    tt::stl::Span<const int32_t>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<const uint8_t>, ttnn::Shape>> chunk(
+    tt::stl::Span<const uint8_t>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<const uint16_t>, ttnn::Shape>> chunk(
+    tt::stl::Span<const uint16_t>, const ttnn::Shape&, int, int);
+template std::vector<std::pair<tt::stl::Span<const uint32_t>, ttnn::Shape>> chunk(
+    tt::stl::Span<const uint32_t>, const ttnn::Shape&, int, int);
+
+// TODO: optimize concat to perform concatenation based off views.
 template <typename T>
 xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, int dim) {
     if (v.empty()) {
@@ -136,16 +210,56 @@ Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::Tenso
 template <typename T>
 std::vector<Tensor> chunk_impl(
     const Tensor& tensor, const tt::tt_metal::TensorLayout& layout, int num_chunks, int dim) {
-    xt::xarray<T> xtensor = to_xtensor<T>(tensor);
-    auto xtensor_chunks = chunk<T>(xtensor, num_chunks, dim);
+    // If the physical representation of the tensor matches its logical representation, chunk based off the underlying
+    // buffer directly.
+    const bool data_viewable = layout.get_layout() == ttnn::Layout::ROW_MAJOR &&
+                               tensor.tensor_spec().physical_shape() == tensor.tensor_spec().logical_2d_shape() &&
+                               tensor.tensor_spec().data_type() == tt::tt_metal::convert_to_data_type<T>();
+    if (data_viewable) {
+        auto buffer = std::visit(
+            tt::stl::overloaded{
+                []<tt::tt_metal::OwnedOrBorrowedStorage StorageType>(const StorageType& storage) {
+                    auto buffer = tt::tt_metal::host_buffer::get_as<T>(storage.buffer);
+                    return tt::stl::Span<T>(buffer.data(), buffer.size());
+                },
+                [](const auto& s) {
+                    TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s));
+                    return tt::stl::Span<T>();
+                }},
+            tensor.get_storage());
 
-    std::vector<Tensor> tensors;
-    tensors.reserve(xtensor_chunks.size());
-    for (const auto& c : xtensor_chunks) {
-        TensorSpec chunk_spec(get_shape_from_xarray(c), layout);
-        tensors.push_back(from_xtensor<T>(c, chunk_spec));
+        auto chunk_spans = chunk(buffer, tensor.tensor_spec().logical_shape(), num_chunks, dim);
+
+        auto make_tensor = [&tensor](tt::stl::Span<T> data, const TensorSpec& spec) {
+            if (tensor.storage_type() == tt::tt_metal::StorageType::BORROWED) {
+                const auto& storage = std::get<tt::tt_metal::BorrowedStorage>(tensor.get_storage());
+                return Tensor::from_borrowed_data<T>(
+                    data, spec.logical_shape(), storage.on_creation_callback, storage.on_destruction_callback);
+            } else {
+                return Tensor::from_span<T>(data, spec);
+            }
+        };
+
+        std::vector<Tensor> tensors;
+        tensors.reserve(chunk_spans.size());
+        std::transform(chunk_spans.begin(), chunk_spans.end(), std::back_inserter(tensors), [&](const auto& chunk) {
+            const auto& [data, shape] = chunk;
+            return make_tensor(data, TensorSpec(shape, layout));
+        });
+        return tensors;
+    } else {
+        // Slow path - involves conversion to xtensor and data copying.
+        xt::xarray<T> xtensor = to_xtensor<T>(tensor);
+        auto xtensor_chunks = chunk<T>(xtensor, num_chunks, dim);
+
+        std::vector<Tensor> tensors;
+        tensors.reserve(xtensor_chunks.size());
+        for (const auto& c : xtensor_chunks) {
+            TensorSpec chunk_spec(get_shape_from_xarray(c), layout);
+            tensors.push_back(from_xtensor<T>(c, chunk_spec));
+        }
+        return tensors;
     }
-    return tensors;
 }
 
 }  // namespace
@@ -156,9 +270,10 @@ std::vector<Tensor> chunk(const Tensor& tensor, int num_chunks, int dim) {
     switch (reference_layout.get_data_type()) {
         case tt::tt_metal::DataType::BFLOAT4_B:
         case tt::tt_metal::DataType::BFLOAT8_B:
-        case tt::tt_metal::DataType::BFLOAT16:
         case tt::tt_metal::DataType::FLOAT32:
             return adaptor::chunk_impl<float>(tensor, reference_layout, num_chunks, dim);
+        case tt::tt_metal::DataType::BFLOAT16:
+            return adaptor::chunk_impl<bfloat16>(tensor, reference_layout, num_chunks, dim);
         case tt::tt_metal::DataType::INT32:
             return adaptor::chunk_impl<int32_t>(tensor, reference_layout, num_chunks, dim);
         case tt::tt_metal::DataType::UINT8:
@@ -177,8 +292,8 @@ Tensor concat(const std::vector<Tensor>& tensors, int dim) {
     switch (reference_layout.get_data_type()) {
         case tt::tt_metal::DataType::BFLOAT4_B:
         case tt::tt_metal::DataType::BFLOAT8_B:
-        case tt::tt_metal::DataType::BFLOAT16:
         case tt::tt_metal::DataType::FLOAT32: return adaptor::concat_impl<float>(tensors, reference_layout, dim);
+        case tt::tt_metal::DataType::BFLOAT16: return adaptor::concat_impl<bfloat16>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::INT32: return adaptor::concat_impl<int32_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT8: return adaptor::concat_impl<uint8_t>(tensors, reference_layout, dim);
         case tt::tt_metal::DataType::UINT16: return adaptor::concat_impl<uint16_t>(tensors, reference_layout, dim);
