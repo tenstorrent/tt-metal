@@ -17,10 +17,6 @@ struct UnaryWithParam;
 }
 namespace binary {
 
-ttnn::Tensor typecast_to(ttnn::DataType dtype, const ttnn::Tensor& input);
-
-bool needs_typecast_to_bfloat16(const ttnn::DataType input);
-
 template <BinaryOpType binary_op_type>
 struct BinaryOperation {
     static Tensor invoke(

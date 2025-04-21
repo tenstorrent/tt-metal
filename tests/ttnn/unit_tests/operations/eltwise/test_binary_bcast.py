@@ -889,10 +889,15 @@ def test_inplace_binary_ops_with_tensor(a_shape, b_shape, ttnn_fn, activations, 
         (torch.Size([4, 12, 64, 64]), torch.Size([12, 1, 1])),
     ),
 )
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b])
-@pytest.mark.parametrize("ttnn_fn", ["add_", "sub_", "mul_"])
-@skip_for_grayskull("Possible accuracy issues with grayskull")
-def test_inplace_bf4b_bf8b(a_shape, b_shape, input_dtype, ttnn_fn, device):
+@pytest.mark.parametrize(
+    "input_dtype, pcc",
+    (
+        (ttnn.bfloat4_b, 0.97),
+        (ttnn.bfloat8_b, 0.999),
+    ),
+)
+@pytest.mark.parametrize("ttnn_fn", ["add", "sub", "mul", "add_", "sub_", "mul_"])
+def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     torch.manual_seed(0)
 
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device, min=-1e3, max=1e3)
@@ -919,22 +924,10 @@ def test_inplace_bf4b_bf8b(a_shape, b_shape, input_dtype, ttnn_fn, device):
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
-    ttnn_op(input_tensor_a, input_tensor_b, use_legacy=False)
-    output_tensor = ttnn.to_torch(input_tensor_a)
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b, use_legacy=False)
+    output_tensor = ttnn.to_torch(input_tensor_a if ttnn_fn.endswith("_") else output_tensor)
     assert output_tensor.shape == torch_output_tensor.shape
-
-    def compare(output_tensor, torch_output_tensor, ttnn_fn, input_dtype):
-        imprecise_cases = {
-            "add_": {ttnn.bfloat4_b},
-            "sub_": {ttnn.bfloat4_b},
-            "mul_": {ttnn.bfloat4_b},
-        }
-        if ttnn_fn in imprecise_cases and input_dtype in imprecise_cases[ttnn_fn]:
-            return ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.97
-        else:
-            return ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
-
-    assert compare(output_tensor, torch_output_tensor, ttnn_fn, input_dtype)
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= pcc
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
