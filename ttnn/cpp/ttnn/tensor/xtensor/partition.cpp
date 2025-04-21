@@ -8,6 +8,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
+#include <type_traits>
 #include <xtensor/xadapt.hpp>
 #include <xtensor/xdynamic_view.hpp>
 #include <xtensor/xstorage.hpp>
@@ -17,10 +18,10 @@
 namespace ttnn::experimental::xtensor {
 namespace {
 
-template <
-    typename XtExpr,
-    typename Out = decltype(xt::strided_view(std::declval<XtExpr>(), std::declval<xt::xstrided_slice_vector>()))>
-std::vector<Out> chunk_xexpression(XtExpr&& expr, int num_chunks, int dim) {
+template <typename XtExpr>
+auto chunk_xexpression(XtExpr& expr, int num_chunks, int dim) {
+    using StridedView = decltype(xt::strided_view(expr, std::declval<xt::xstrided_slice_vector>()));
+
     TT_FATAL(num_chunks > 0, "num_chunks must be > 0; got num_chunks: {}", num_chunks);
     TT_FATAL(
         dim >= 0 && dim < expr.dimension(),
@@ -38,13 +39,13 @@ std::vector<Out> chunk_xexpression(XtExpr&& expr, int num_chunks, int dim) {
 
     if (num_chunks == 1) {
         xt::xstrided_slice_vector indices(expr.dimension(), xt::all());
-        return {xt::strided_view(expr, indices)};
+        return std::vector<StridedView>{xt::strided_view(expr, indices)};
     }
 
     const int chunk_size = (size_along_dim + num_chunks - 1) / num_chunks;
     int remaining_size = size_along_dim;
 
-    std::vector<Out> chunk_views;
+    std::vector<StridedView> chunk_views;
     chunk_views.reserve(static_cast<std::size_t>(num_chunks));
     int start = 0;
     int end = 0;
