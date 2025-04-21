@@ -173,16 +173,13 @@ public:
     }
 };
 
-template <typename F>
 void set_or_update_runtime_arguments(
-    Program& program,
-    KernelHandle reader_kernel_id,
-    KernelHandle writer_kernel_id,
-    KernelHandle compute_kernel_id,
+    KernelDescriptor& reader_kernel,
+    KernelDescriptor& writer_kernel,
+    KernelDescriptor& compute_kernel,
     const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
     const BinaryNgDeviceOperation::tensor_args_t& tensor_args,
-    BinaryNgDeviceOperation::tensor_return_value_t& c,
-    F handle_args) {
+    BinaryNgDeviceOperation::tensor_return_value_t& c) {
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
     const auto out_rank = c.logical_shape().rank();
@@ -278,6 +275,10 @@ void set_or_update_runtime_arguments(
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
 
+        auto& reader_runtime_args = reader_kernel.runtime_args[core.x][core.y];
+        auto& writer_runtime_args = writer_kernel.runtime_args[core.x][core.y];
+        auto& compute_runtime_args = compute_kernel.runtime_args[core.x][core.y];
+
         uint32_t a_num_tiles = 0;
         uint32_t b_num_tiles = 0;
         uint32_t c_num_tiles = 0;
@@ -286,9 +287,9 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 13>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
-            handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
+            reader_runtime_args = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};     // 13
+            writer_runtime_args = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};  // 14
+            compute_runtime_args = {0, 0, 0, 0};                               // 4
             continue;
         }
 
@@ -306,7 +307,7 @@ void set_or_update_runtime_arguments(
             c_start_id = start_tile_id;
         }
 
-        std::array reader_runtime_args = {
+        reader_runtime_args = {
             a.buffer()->address(),
             c_start_id,
             a_num_tiles,
@@ -320,7 +321,6 @@ void set_or_update_runtime_arguments(
             cHt,
             cWt,
             cND};
-        handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         const bool is_quant_op = operation_attributes.is_quant_op;
         TT_FATAL(
@@ -336,7 +336,7 @@ void set_or_update_runtime_arguments(
                 auto b_shard_shape = b_shard_shape_generator(core);
                 b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
             }
-            std::array writer_runtime_args = {
+            writer_runtime_args = {
                 b->buffer()->address(),
                 c.buffer()->address(),
                 c_start_id,
@@ -351,19 +351,17 @@ void set_or_update_runtime_arguments(
                 cHt,
                 cWt,
                 cND};
-            handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             auto [freq, counter] =
                 calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
-            std::array compute_runtime_args = {c_num_tiles, freq, counter, quantization_zero_point};
-            handle_args(program, compute_kernel_id, core, compute_runtime_args);
+            compute_runtime_args = {c_num_tiles, freq, counter, quantization_zero_point};
         } else {
             const auto scalar = *operation_attributes.scalar;
             // TODO: technically we should use the b_dtype deduced by ProgramFactory::create here, but currently only
             // quant ops have different dtypes for a & b and we want to force f32 for better accuracy when scale is
             // passed as a scalar, so we'll leave this here
             const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.get_dtype(), is_quant_op);
-            std::array writer_runtime_args = {
+            writer_runtime_args = {
                 packed_scalar,
                 c.buffer()->address(),
                 c_start_id,
@@ -378,10 +376,8 @@ void set_or_update_runtime_arguments(
                 0u,
                 0u,
                 0u};
-            handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
-            std::array compute_runtime_args = {c_num_tiles, 0u, 0u, quantization_zero_point};
-            handle_args(program, compute_kernel_id, core, compute_runtime_args);
+            compute_runtime_args = {c_num_tiles, 0u, 0u, quantization_zero_point};
         }
 
         start_tile_id += c_num_tiles;
@@ -394,7 +390,7 @@ void set_or_update_runtime_arguments(
 namespace ttnn::operations::binary_ng {
 
 // Implements c = a op b
-BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperation::ProgramFactory::create(
+tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
     using namespace tt;
     using namespace tt::tt_metal;
@@ -407,7 +403,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         TT_FATAL(is_sfpu_op, "Quantization op is SFPU-only");
     }
 
-    auto program = CreateProgram();
+    tt::tt_metal::ProgramDescriptor program;
     auto* device = a.device();
 
     const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
@@ -499,51 +495,71 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     bool c_sharded = c.memory_config().is_sharded();
 
     // How many tiles to store per input CB (double buffer)
-    auto [a_cb, a_cb_handle] = create_cb(
-        tt::CBIndex::c_0,
-        program,
-        all_device_cores,
-        a_single_tile_size,
-        a_sharded ? a_num_tiles_per_shard : 2,
-        a_data_format,
-        a_sharded ? a_buffer : nullptr);
+    program.cbs.push_back(CBDescriptor{
+        .total_size = a_single_tile_size * (a_sharded ? a_num_tiles_per_shard : 2),
+        .core_ranges = all_device_cores.ranges(),
+        .format_descriptors = {CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_0,
+            .data_format = a_data_format,
+            .page_size = a_single_tile_size,
+        }},
+        .buffer = a_sharded ? a_buffer : nullptr,
+    });
 
-    if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
+    if (!compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
         auto a_intermediate_format = is_sfpu_op   ? a_data_format
                                      : op_has_exp ? tt::DataFormat::Float16_b
                                                   : a_data_format;
         uint32_t a_intermediate_single_tile_size = tt_metal::detail::TileSize(a_intermediate_format);
-        auto [a_cb_interim, a_cb_interim_handle] = create_cb(
-            tt::CBIndex::c_3, program, all_device_cores, a_intermediate_single_tile_size, 1, a_intermediate_format);
+        program.cbs.push_back(CBDescriptor{
+            .total_size = a_intermediate_single_tile_size,
+            .core_ranges = all_device_cores.ranges(),
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = tt::CBIndex::c_3,
+                .data_format = a_intermediate_format,
+                .page_size = a_intermediate_single_tile_size,
+            }}});
     }
 
     // If b is a scalar, we only need one tile in the CB
-    auto [b_cb, b_cb_handle] = create_cb(
-        tt::CBIndex::c_1,
-        program,
-        all_device_cores,
-        b_single_tile_size,
-        b_buffer == nullptr ? 1 : (b_sharded ? b_num_tiles_per_shard : 2),
-        b_data_format,
-        b_sharded ? b_buffer : nullptr);
+    uint32_t b_num_pages = b_buffer == nullptr ? 1 : (b_sharded ? b_num_tiles_per_shard : 2);
+    program.cbs.push_back(CBDescriptor{
+        .total_size = b_single_tile_size * b_num_pages,
+        .core_ranges = all_device_cores.ranges(),
+        .format_descriptors = {CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_1,
+            .data_format = b_data_format,
+            .page_size = b_single_tile_size,
+        }},
+        .buffer = b_sharded ? b_buffer : nullptr,
+    });
 
     if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
         auto b_intermediate_format = is_sfpu_op   ? b_data_format
                                      : op_has_exp ? tt::DataFormat::Float16_b
                                                   : b_data_format;
         uint32_t b_intermediate_single_tile_size = tt_metal::detail::TileSize(b_intermediate_format);
-        auto [b_cb_interim, b_cb_interim_handle] = create_cb(
-            tt::CBIndex::c_4, program, all_device_cores, b_intermediate_single_tile_size, 1, b_intermediate_format);
+        program.cbs.push_back(CBDescriptor{
+            .total_size = b_intermediate_single_tile_size,
+            .core_ranges = all_device_cores.ranges(),
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = tt::CBIndex::c_4,
+                .data_format = b_intermediate_format,
+                .page_size = b_intermediate_single_tile_size,
+            }},
+        });
     }
 
-    auto [c_cb, c_cb_handle] = create_cb(
-        tt::CBIndex::c_2,
-        program,
-        all_device_cores,
-        c_single_tile_size,
-        c_sharded ? c_num_tiles_per_shard : 2,
-        c_data_format,
-        c_sharded ? c_buffer : nullptr);
+    program.cbs.push_back(CBDescriptor{
+        .total_size = c_single_tile_size * (c_sharded ? c_num_tiles_per_shard : 2),
+        .core_ranges = all_device_cores.ranges(),
+        .format_descriptors = {CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_2,
+            .data_format = c_data_format,
+            .page_size = c_single_tile_size,
+        }},
+        .buffer = c_sharded ? c_buffer : nullptr,
+    });
 
     uint32_t a_is_dram = a_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     uint32_t b_is_dram = false;
@@ -555,29 +571,36 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     auto reader_defines = make_dataflow_defines(a_dtype, is_sfpu_op);
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
 
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
-        all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram, has_sharding}, std::move(reader_defines)));
+    constexpr size_t num_kernels = 3;
+    program.kernels.resize(num_kernels);
+
+    auto& reader_kernel = program.kernels[0];
+    reader_kernel.kernel_source = get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op);
+    reader_kernel.core_ranges = all_device_cores.ranges();
+    reader_kernel.compile_time_args = {a_is_dram, has_sharding};
+    reader_kernel.defines = {reader_defines.begin(), reader_defines.end()};
+    reader_kernel.config = ReaderConfigDescriptor{};
+    reader_kernel.reserve_runtime_args();
 
     // WRITER KERNEL
-    auto writer_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::WriterScalar;
-    auto compute_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar;
+    auto writer_kernel_name = CMAKE_UNIQUE_NAMESPACE::KernelName::WriterScalar;
+    auto compute_kernel_name = CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar;
     if (b.has_value()) {
         b_is_dram = b_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-        writer_kernel = kernel_config.writer_kernel;
-        compute_kernel = kernel_config.compute_kernel;
+        writer_kernel_name = kernel_config.writer_kernel;
+        compute_kernel_name = kernel_config.compute_kernel;
     }
     auto writer_defines = make_dataflow_defines(b_dtype, is_sfpu_op);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
-    auto writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        get_kernel_file_path(writer_kernel, is_sfpu_op),
-        all_device_cores,
-        tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, has_sharding}, std::move(writer_defines)));
+    auto& writer_kernel = program.kernels[1];
+    writer_kernel.kernel_source = get_kernel_file_path(writer_kernel_name, is_sfpu_op);
+    writer_kernel.core_ranges = all_device_cores.ranges();
+    writer_kernel.compile_time_args = {b_is_dram, c_is_dram, has_sharding};
+    writer_kernel.defines = {writer_defines.begin(), writer_defines.end()};
+    writer_kernel.config = WriterConfigDescriptor{};
+    writer_kernel.reserve_runtime_args();
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
@@ -612,53 +635,19 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
 
-    auto compute_kernel_id = tt_metal::CreateKernel(
-        program,
-        get_kernel_file_path(compute_kernel, is_sfpu_op),
-        all_device_cores,
-        tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
-            .compile_args = {num_tiles_per_cycle},
-            .defines = std::move(compute_kernel_defines)});
-
-    auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
-        tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
-    };
+    auto& compute_kernel = program.kernels[2];
+    compute_kernel.kernel_source = get_kernel_file_path(compute_kernel_name, is_sfpu_op);
+    compute_kernel.core_ranges = all_device_cores.ranges();
+    compute_kernel.compile_time_args = {num_tiles_per_cycle};
+    compute_kernel.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
+    compute_kernel.config = ComputeConfigDescriptor{
+        .fp32_dest_acc_en = fp32_dest_acc_en, .unpack_to_dest_mode = std::move(unpack_to_dest_mode)};
+    compute_kernel.reserve_runtime_args();
 
     CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
-        program,
-        reader_kernel_id,
-        writer_kernel_id,
-        compute_kernel_id,
-        operation_attributes,
-        tensor_args,
-        c,
-        set_runtime_args);
+        reader_kernel, writer_kernel, compute_kernel, operation_attributes, tensor_args, c);
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id}};
-}
-
-void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& c) {
-    auto update_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
-        auto& all_args = GetRuntimeArgs(program, kernel_id);
-        auto& core_args = all_args.at(core.x).at(core.y);
-        std::copy(args.begin(), args.end(), core_args.data());
-    };
-
-    CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
-        cached_program.program,
-        cached_program.shared_variables.reader_kernel_id,
-        cached_program.shared_variables.writer_kernel_id,
-        cached_program.shared_variables.compute_kernel_id,
-        operation_attributes,
-        tensor_args,
-        c,
-        update_args);
+    return program;
 }
 
 }  // namespace ttnn::operations::binary_ng

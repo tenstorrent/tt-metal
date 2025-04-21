@@ -16,7 +16,7 @@
 
 namespace ttnn::operations::binary {
 
-BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperation::ElementWiseMultiCore::create(
+tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::ElementWiseMultiCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -33,7 +33,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     std::vector<UnaryWithParam> fused_activations =
         operation_attributes.activations.value_or(std::vector<UnaryWithParam>{});
 
-    Program program{};
+    tt::tt_metal::ProgramDescriptor program;
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
@@ -81,161 +81,152 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = src0_sharded ? num_tiles_per_shard : 2 * max_block_size;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
-            .set_page_size(src0_cb_index, src0_single_tile_size);
-    if (src0_sharded) {
-        cb_src0_config = cb_src0_config.set_globally_allocated_address(*a.buffer());
-    }
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src0_config);
+    program.cbs.push_back(tt_metal::CBDescriptor{
+        .total_size = num_input_tiles * src0_single_tile_size,
+        .core_ranges = all_device_cores.ranges(),
+        .format_descriptors = {CBFormatDescriptor{
+            .buffer_index = src0_cb_index,
+            .data_format = src0_cb_data_format,
+            .page_size = src0_single_tile_size,
+        }},
+        .buffer = src0_sharded ? a.buffer() : nullptr,
+    });
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     num_input_tiles = src1_sharded ? num_tiles_per_shard : 2 * max_block_size;
-    tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
-            .set_page_size(src1_cb_index, src1_single_tile_size);
-    if (src1_sharded) {
-        cb_src1_config = cb_src1_config.set_globally_allocated_address(*b->buffer());
-    }
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
+    program.cbs.push_back(tt_metal::CBDescriptor{
+        .total_size = num_input_tiles * src1_single_tile_size,
+        .core_ranges = all_device_cores.ranges(),
+        .format_descriptors = {CBFormatDescriptor{
+            .buffer_index = src1_cb_index,
+            .data_format = src1_cb_data_format,
+            .page_size = src1_single_tile_size,
+        }},
+        .buffer = src1_sharded ? b->buffer() : nullptr,
+    });
 
-    std::map<string, string> eltwise_defines = utils::get_defines(
-        op_type, a.get_dtype(), output.get_dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
+    tt_metal::KernelDescriptor::Defines eltwise_defines;
+    utils::append_defines(
+        eltwise_defines,
+        op_type,
+        a.get_dtype(),
+        output.get_dtype(),
+        fused_activations,
+        operation_attributes.input_tensor_a_activation);
 
-    if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
+    if (std::find_if(eltwise_defines.begin(), eltwise_defines.end(), [](const auto& define) {
+            return define.first == "SFPU_OP_INIT_PRE_IN0_0";
+        }) != eltwise_defines.end()) {
         if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
             op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb0_format = tt::DataFormat::Float16_b;
         }
         uint32_t interim0_single_tile_size = tt_metal::detail::TileSize(interim_cb0_format);
-        tt_metal::CircularBufferConfig cb_interm_config =
-            tt_metal::CircularBufferConfig(
-                max_block_size * interim0_single_tile_size, {{tt::CBIndex::c_3, interim_cb0_format}})
-                .set_page_size(tt::CBIndex::c_3, interim0_single_tile_size);
-        auto cb_interm = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
+        program.cbs.push_back(tt_metal::CBDescriptor{
+            .total_size = max_block_size * interim0_single_tile_size,
+            .core_ranges = all_device_cores.ranges(),
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = tt::CBIndex::c_3,
+                .data_format = interim_cb0_format,
+                .page_size = interim0_single_tile_size,
+            }},
+        });
     }
-    if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
+    if (std::find_if(eltwise_defines.begin(), eltwise_defines.end(), [](const auto& define) {
+            return define.first == "SFPU_OP_INIT_PRE_IN1_0";
+        }) != eltwise_defines.end()) {
         if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
             op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb1_format = tt::DataFormat::Float16_b;
         }
         uint32_t interim1_single_tile_size = tt_metal::detail::TileSize(interim_cb1_format);
-        tt_metal::CircularBufferConfig cb_interm2_config =
-            tt_metal::CircularBufferConfig(
-                max_block_size * interim1_single_tile_size, {{tt::CBIndex::c_4, interim_cb1_format}})
-                .set_page_size(tt::CBIndex::c_4, interim1_single_tile_size);
-        auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
+        program.cbs.push_back(tt_metal::CBDescriptor{
+            .total_size = max_block_size * interim1_single_tile_size,
+            .core_ranges = all_device_cores.ranges(),
+            .format_descriptors = {CBFormatDescriptor{
+                .buffer_index = tt::CBIndex::c_4,
+                .data_format = interim_cb1_format,
+                .page_size = interim1_single_tile_size,
+            }},
+        });
     }
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = (out_sharded || block_or_width_sharded) ? num_tiles_per_shard : 2 * max_block_size;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
-            .set_page_size(output_cb_index, dst_single_tile_size);
-    if (out_sharded) {
-        cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
-    }
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
-
-    std::map<string, string> reader_defines;
-    if (src0_sharded) {
-        reader_defines["IN0_SHARDED"] = "1";
-    }
-    if (src1_sharded) {
-        reader_defines["IN1_SHARDED"] = "1";
-    }
-    std::map<string, string> writer_defines;
-    if (out_sharded) {
-        writer_defines["OUT_SHARDED"] = "1";
-    }
+    program.cbs.push_back(tt_metal::CBDescriptor{
+        .total_size = num_output_tiles * dst_single_tile_size,
+        .core_ranges = all_device_cores.ranges(),
+        .format_descriptors = {CBFormatDescriptor{
+            .buffer_index = output_cb_index,
+            .data_format = dst_cb_data_format,
+            .page_size = dst_single_tile_size,
+        }},
+        .buffer = out_sharded ? output.buffer() : nullptr,
+    });
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)src0_is_dram, (std::uint32_t)src1_is_dram, (std::uint32_t)block_or_width_sharded};
-
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
-    KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
-        all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+    constexpr size_t num_kernels = 3;
+    program.kernels.resize(num_kernels);
 
-    KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
-        program,
+    auto& binary_reader_kernel = program.kernels[0];
+    binary_reader_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp";
+    binary_reader_kernel.core_ranges = all_device_cores.ranges();
+    binary_reader_kernel.compile_time_args = {
+        (std::uint32_t)src0_is_dram,
+        (std::uint32_t)src1_is_dram,
+        (std::uint32_t)block_or_width_sharded,
+    };
+    binary_reader_kernel.config = tt_metal::ReaderConfigDescriptor{};
+    if (src0_sharded) {
+        binary_reader_kernel.defines.emplace_back("IN0_SHARDED", "1");
+    }
+    if (src1_sharded) {
+        binary_reader_kernel.defines.emplace_back("IN1_SHARDED", "1");
+    }
+    binary_reader_kernel.reserve_runtime_args();
+
+    auto& unary_writer_kernel = program.kernels[1];
+    unary_writer_kernel.kernel_source =
         (block_or_width_sharded and not out_sharded)
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
               "writer_unary_sharded_blocks_interleaved_start_id.cpp"
-            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    unary_writer_kernel.core_ranges = all_device_cores.ranges();
+    unary_writer_kernel.compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    unary_writer_kernel.config = tt_metal::WriterConfigDescriptor{};
+    if (out_sharded) {
+        unary_writer_kernel.defines.emplace_back("OUT_SHARDED", "1");
+    }
+    unary_writer_kernel.reserve_runtime_args();
 
     bool fp32_dest_acc_en = dst_cb_data_format == tt::DataFormat::UInt32 ||
                             dst_cb_data_format == tt::DataFormat::Int32 ||
                             dst_cb_data_format == tt::DataFormat::Float32;
-    auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
-        all_device_cores,
-        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .defines = eltwise_defines});
+    auto& eltwise_binary_kernel = program.kernels[2];
+    eltwise_binary_kernel.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp";
+    eltwise_binary_kernel.core_ranges = all_device_cores.ranges();
+    eltwise_binary_kernel.defines = std::move(eltwise_defines);
+    eltwise_binary_kernel.config = tt_metal::ComputeConfigDescriptor{.fp32_dest_acc_en = fp32_dest_acc_en};
+    eltwise_binary_kernel.reserve_runtime_args();
 
-    set_eltwise_binary_runtime_args<true>(
-        program,
+    set_eltwise_binary_runtime_args(
         a,
         *b,
         output,
-        binary_reader_kernel_id,
-        unary_writer_kernel_id,
-        eltwise_binary_kernel_id,
-        cb_src0,
-        cb_src1,
-        cb_output,
+        binary_reader_kernel,
+        unary_writer_kernel,
+        eltwise_binary_kernel,
         all_device_cores,
         src0_single_tile_size,
         src1_single_tile_size,
         dst_single_tile_size);
 
-    return {
-        std::move(program),
-        {binary_reader_kernel_id,
-         unary_writer_kernel_id,
-         eltwise_binary_kernel_id,
-         cb_src0,
-         cb_src1,
-         cb_output,
-         all_device_cores,
-         src0_single_tile_size,
-         src1_single_tile_size,
-         dst_single_tile_size}};
-}
-
-void BinaryDeviceOperation::ElementWiseMultiCore::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
-    auto& output_tensor = tensor_return_value;
-
-    const auto& shared_variables = cached_program.shared_variables;
-
-    set_eltwise_binary_runtime_args<false>(
-        cached_program.program,
-        input_tensor_a,
-        *input_tensor_b,
-        output_tensor,
-        shared_variables.binary_reader_kernel_id,
-        shared_variables.unary_writer_kernel_id,
-        shared_variables.eltwise_binary_kernel_id,
-        shared_variables.cb_src0,
-        shared_variables.cb_src1,
-        shared_variables.cb_output,
-        shared_variables.all_device_cores,
-        shared_variables.src0_single_tile_size,
-        shared_variables.src1_single_tile_size,
-        shared_variables.dst_single_tile_size);
+    return program;
 }
 }  // namespace ttnn::operations::binary

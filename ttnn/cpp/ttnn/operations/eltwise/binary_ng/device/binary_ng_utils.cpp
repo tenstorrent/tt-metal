@@ -318,8 +318,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
     }
 }
 
-std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
-    std::map<std::string, std::string> defines;
+std::unordered_map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
+    std::unordered_map<std::string, std::string> defines;
 
     if (!is_sfpu_op()) {
         auto fpu_binary_op = std::get<FpuBinaryOp>(binary_op);
@@ -336,7 +336,7 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 }
 
 void add_activation_defines(
-    std::map<std::string, std::string>& defines,
+    std::unordered_map<std::string, std::string>& defines,
     tt::stl::Span<const unary::UnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype) {
@@ -353,8 +353,8 @@ void add_activation_defines(
         });
 }
 
-std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const bool is_sfpu_op) {
-    std::map<std::string, std::string> defines;
+std::unordered_map<std::string, std::string> make_dataflow_defines(const DataType dtype, const bool is_sfpu_op) {
+    std::unordered_map<std::string, std::string> defines;
     if (is_sfpu_op && dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";

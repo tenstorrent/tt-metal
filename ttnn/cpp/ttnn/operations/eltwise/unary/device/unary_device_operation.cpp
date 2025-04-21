@@ -86,21 +86,16 @@ void validate_supported_arch_dtype(
 }
 }  // namespace
 
-UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_factory(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::create_program(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& tensor_return_value) {
     if (tensor_args.input.is_sharded()) {
-        return program::UnaryShardedProgramFactory{};
+        return program::UnaryShardedProgramFactory::create(args, tensor_args, tensor_return_value);
     } else {
-        return program::UnaryProgramFactory{};
+        return program::UnaryProgramFactory::create(args, tensor_args, tensor_return_value);
     }
 }
 
-void UnaryDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
-void UnaryDeviceOperation::validate_on_program_cache_miss(
+void UnaryDeviceOperation::validate(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
@@ -186,22 +181,6 @@ tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
         return *tensor_args.preallocated_output;
     }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
-}
-
-tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.get_padded_shape();
-
-    auto program_factory = select_program_factory(args, tensor_args);
-    operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
-        args,
-        program_factory.index(),
-        input_tensor.dtype(),
-        std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
-        input_shape.volume());
-
-    return hash;
 }
 
 bool UnaryDeviceOperation::skip_launch(

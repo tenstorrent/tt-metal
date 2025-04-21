@@ -382,6 +382,8 @@ void launch_on_worker_thread_with_descriptor(
 
     tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
 
+    device_operation_t::validate(operation_attributes, tensor_args);
+
     tt::tt_metal::ProgramDescriptor program_descriptor = device_operation_t::create_program(operation_attributes, tensor_args, tensor_return_value);
 
     auto& program_cache = device->get_program_cache_v2();

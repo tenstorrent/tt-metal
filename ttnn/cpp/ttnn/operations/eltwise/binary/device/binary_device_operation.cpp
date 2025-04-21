@@ -106,7 +106,13 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
     TT_THROW("ttnn::operations::binary::BinaryDeviceOperation: unsupported broadcast");
 }
 
-void BinaryDeviceOperation::validate_on_program_cache_miss(
+tt::tt_metal::ProgramDescriptor BinaryDeviceOperation::create_program(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    auto factory = select_program_factory(operation_attributes, tensor_args);
+    return std::visit([&](auto&& factory) { return factory.create(operation_attributes, tensor_args, output_tensor); }, factory);
+}
+
+void BinaryDeviceOperation::validate(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor_a = tensor_args.input_tensor_a;
@@ -115,7 +121,34 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
 
-    BinaryDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
+    const auto& input_shape_a = input_tensor_a.get_logical_shape();
+
+    auto batch_size_0_a = input_shape_a.rank() >= 4 ? input_shape_a[-4] : 1;
+    auto batch_size_1_a = input_shape_a.rank() >= 3 ? input_shape_a[-3] : 1;
+    auto height_a = input_shape_a[-2];
+    auto width_a = input_shape_a[-1];
+
+    const auto input_shape_b =
+        tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
+    auto batch_size_0_b = input_shape_b.rank() >= 4 ? input_shape_b[-4] : 1;
+    auto batch_size_1_b = input_shape_b.rank() >= 3 ? input_shape_b[-3] : 1;
+    auto height_b = input_shape_b[-2];
+    auto width_b = input_shape_b[-1];
+
+    // Input shape b must be the same as or broadcastable to input shape a
+    if (batch_size_0_a != batch_size_0_b) {
+        TT_ASSERT(
+            batch_size_0_a > batch_size_0_b and batch_size_0_b == 1,
+            "ttnn::operations::binary::BinaryDeviceOperation: batch size mismatch");
+    }
+    if (batch_size_1_a != batch_size_1_b) {
+        TT_ASSERT(
+            batch_size_1_a > batch_size_1_b and batch_size_1_b == 1,
+            "ttnn::operations::binary::BinaryDeviceOperation: batch size mismatch");
+    }
+
+    TT_FATAL(height_a == height_b || height_a == 1 || height_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: height mismatch");
+    TT_FATAL(width_a == width_b || width_a == 1 || width_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: width mismatch");
 
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Input to eltwise binary must be tilized");
 
@@ -165,41 +198,6 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
             }
         },
         program_factory);
-}
-
-void BinaryDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& output_tensor = tensor_args.output_tensor;
-
-    const auto& input_shape_a = input_tensor_a.get_logical_shape();
-
-    auto batch_size_0_a = input_shape_a.rank() >= 4 ? input_shape_a[-4] : 1;
-    auto batch_size_1_a = input_shape_a.rank() >= 3 ? input_shape_a[-3] : 1;
-    auto height_a = input_shape_a[-2];
-    auto width_a = input_shape_a[-1];
-
-    const auto input_shape_b =
-        tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
-    auto batch_size_0_b = input_shape_b.rank() >= 4 ? input_shape_b[-4] : 1;
-    auto batch_size_1_b = input_shape_b.rank() >= 3 ? input_shape_b[-3] : 1;
-    auto height_b = input_shape_b[-2];
-    auto width_b = input_shape_b[-1];
-
-    // Input shape b must be the same as or broadcastable to input shape a
-    if (batch_size_0_a != batch_size_0_b) {
-        TT_ASSERT(
-            batch_size_0_a > batch_size_0_b and batch_size_0_b == 1,
-            "ttnn::operations::binary::BinaryDeviceOperation: batch size mismatch");
-    }
-    if (batch_size_1_a != batch_size_1_b) {
-        TT_ASSERT(
-            batch_size_1_a > batch_size_1_b and batch_size_1_b == 1,
-            "ttnn::operations::binary::BinaryDeviceOperation: batch size mismatch");
-    }
-
-    TT_FATAL(height_a == height_b || height_a == 1 || height_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: height mismatch");
-    TT_FATAL(width_a == width_b || width_a == 1 || width_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: width mismatch");
 }
 
 BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output_specs(
@@ -278,39 +276,6 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
         return *tensor_args.output_tensor;
     }
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
-}
-
-tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& input_tensor_b = tensor_args.input_tensor_b;
-
-    auto program_factory = select_program_factory(attributes, tensor_args);
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.get_storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.get_storage()));
-
-    if (input_tensor_b.has_value()) {
-        TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->get_storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->get_storage()));
-
-        return operation::hash_operation<BinaryDeviceOperation>(
-            attributes,
-            program_factory.index(),
-            input_tensor_a.dtype(),
-            std::get<DeviceStorage>(input_tensor_a.storage()).memory_config(),
-            input_tensor_b->dtype(),
-            std::get<DeviceStorage>(input_tensor_b->storage()).memory_config());
-    }
-
-    return operation::hash_operation<BinaryDeviceOperation>(
-        attributes,
-        program_factory.index(),
-        input_tensor_a.dtype(),
-        std::get<DeviceStorage>(input_tensor_a.storage()).memory_config());
 }
 
 operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model(

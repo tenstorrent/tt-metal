@@ -394,7 +394,8 @@ std::pair<string, string> get_op_init_and_func_default(
     return op_init_and_name;
 }
 
-std::map<string, string> get_defines_impl(
+void append_defines_impl(
+    tt::tt_metal::KernelDescriptor::Defines& defines,
     UnaryOpType op_type,
     const std::vector<float>& params,
     const std::string& idst,
@@ -402,9 +403,9 @@ std::map<string, string> get_defines_impl(
     std::string func_def,
     std::optional<DataType> input_dtype) {
     std::pair<string, string> op_init_and_name = get_op_init_and_func(op_type, params, idst, input_dtype);
-    std::map<string, string> defines = {{init_def, op_init_and_name.first}, {func_def, op_init_and_name.second}};
+    defines.emplace_back(init_def, op_init_and_name.first);
+    defines.emplace_back(func_def, op_init_and_name.second);
     update_macro_defines(op_type, defines);
-    return defines;
 }
 }  // namespace
 
@@ -459,7 +460,19 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     TT_THROW("Unknown unary op: {}", name);
 }
 
-std::map<string, string> get_defines(
+std::map<std::string, std::string> get_defines(
+    UnaryOpType op_type,
+    const std::optional<std::vector<float>>& params,
+    const std::string& id,
+    const std::string& idst,
+    std::optional<DataType> input_dtype) {
+    tt::tt_metal::KernelDescriptor::Defines defines;
+    append_defines(defines, op_type, params, id, idst, input_dtype);
+    return std::map<std::string, std::string>(defines.begin(), defines.end());
+}
+
+void append_defines(
+    tt::tt_metal::KernelDescriptor::Defines& defines,
     UnaryOpType op_type,
     const std::optional<std::vector<float>>& params,
     const std::string& id,
@@ -467,7 +480,7 @@ std::map<string, string> get_defines(
     std::optional<DataType> input_dtype) {
     std::string init_def = fmt::format("SFPU_OP_INIT_{}", id);
     std::string func_def = fmt::format("SFPU_OP_FUNC_{}", id);
-    return get_defines_impl(op_type, params.value_or(std::vector<float>{}), idst, init_def, func_def, input_dtype);
+    append_defines_impl(defines, op_type, params.value_or(std::vector<float>{}), idst, init_def, func_def, input_dtype);
 }
 
 std::pair<string, string> get_op_init_and_func(
@@ -479,27 +492,43 @@ std::pair<string, string> get_op_init_and_func(
                              : get_op_init_and_func_default(op_type, idst, input_dtype);
 }
 
-std::map<string, string> get_block_defines(
+std::map<std::string, std::string> get_block_defines(
+    const std::vector<UnaryWithParam>& op_chain,
+    const std::string& block_id,
+    const std::string& idst,
+    std::optional<DataType> input_dtype) {
+    tt::tt_metal::KernelDescriptor::Defines defines;
+    append_block_defines(defines, op_chain, block_id, idst, input_dtype);
+    return std::map<std::string, std::string>(defines.begin(), defines.end());
+}
+
+void append_block_defines(
+    tt::tt_metal::KernelDescriptor::Defines& defines,
     const std::vector<UnaryWithParam>& op_chain,
     const std::string& block_id,
     const std::string& idst,
     std::optional<DataType> input_dtype) {
     std::vector<std::pair<string, string>> op_init_and_name;
-    std::map<string, string> block_defines;
     std::string block_define = "";
     for (uint32_t i = 0; i < op_chain.size(); i++) {
         std::string init_def = fmt::format("SFPU_OP_CHAIN_{}_INIT_{}", block_id, i);
         std::string func_def = fmt::format("SFPU_OP_CHAIN_{}_FUNC_{}", block_id, i);
         block_define += init_def + " " + func_def + " ";
-        block_defines.merge(
-            get_defines_impl(op_chain[i].op_type, op_chain[i].params, idst, init_def, func_def, input_dtype));
+        append_defines_impl(defines, op_chain[i].op_type, op_chain[i].params, idst, init_def, func_def, input_dtype);
     }
-    block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
-    return block_defines;
+    defines.emplace_back(fmt::format("SFPU_OP_CHAIN_{}", block_id), block_define);
 }
 
 // update split eltwise ops include macros
+void update_macro_defines(UnaryOpType op_type, tt::tt_metal::KernelDescriptor::Defines& defines) {
+    defines.emplace_back(get_macro_definition(op_type), "1");
+}
+
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines) {
+    defines[get_macro_definition(op_type)] = "1";
+}
+
+void update_macro_defines(UnaryOpType op_type, std::unordered_map<std::string, std::string>& defines) {
     defines[get_macro_definition(op_type)] = "1";
 }
 
