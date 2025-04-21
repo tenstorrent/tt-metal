@@ -637,7 +637,7 @@ def test_all_gather(
 )
 @pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 65536 * 32}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_real_workloads(
     t3k_mesh_device,
     # pcie_mesh_device,
