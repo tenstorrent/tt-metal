@@ -1811,8 +1811,9 @@ void assemble_device_commands(
     const auto kernels_buffer = program.get_kernels_buffer(device);
 
     ProgramBinaryCommandGenerator program_binary_command_generator;
+    DeviceCommandCalculator program_binary_calculator;
     program_binary_command_generator.size_commands(
-        device, program, program_transfer_info, kernels_buffer, constants, calculator);
+        device, program, program_transfer_info, kernels_buffer, constants, program_binary_calculator);
 
     LaunchMessageGenerator launch_message_generator;
     DeviceCommandCalculator launch_message_calculator;
@@ -1833,9 +1834,9 @@ void assemble_device_commands(
     semaphore_command_generator.assemble_unicast_commands(device_command_sequence, program, constants);
 
     // All Previous Cmds Up to This Point Go Into the Kernel Config Buffer
-    program_command_sequence.program_config_buffer_data_size_bytes = device_command_sequence.write_offset_bytes();
-
-    program_binary_command_generator.assemble_commands(device_command_sequence);
+    program_command_sequence.program_binary_command_sequence =
+        HostMemDeviceCommand(program_binary_calculator.write_offset_bytes());
+    program_binary_command_generator.assemble_commands(program_command_sequence.program_binary_command_sequence);
 
     program_command_sequence.launch_msg_command_sequence =
         HostMemDeviceCommand(launch_message_calculator.write_offset_bytes());
@@ -2108,20 +2109,20 @@ void write_program_command_sequence(
 
     uint32_t runtime_args_fetch_size_bytes = program_command_sequence.runtime_args_fetch_size_bytes;
 
-    uint32_t program_fetch_size_bytes = program_command_sequence.device_command_sequence.size_bytes();
+    uint8_t* program_binary_command_sequence_data =
+        (uint8_t*)program_command_sequence.program_binary_command_sequence.data();
+    uint32_t program_binary_fetch_size_bytes = program_command_sequence.program_binary_command_sequence.size_bytes();
 
-    uint32_t program_config_buffer_data_size_bytes = program_command_sequence.program_config_buffer_data_size_bytes;
+    uint32_t device_commands_fetch_size_bytes = program_command_sequence.device_command_sequence.size_bytes();
+    uint8_t* device_command_sequence_data = (uint8_t*)program_command_sequence.device_command_sequence.data();
 
-    uint32_t program_rem_fetch_size_bytes = program_fetch_size_bytes - program_config_buffer_data_size_bytes;
+    uint32_t one_shot_fetch_size_bytes = stall_fetch_size_bytes + runtime_args_fetch_size_bytes +
+                                         device_commands_fetch_size_bytes + program_binary_fetch_size_bytes;
 
-    uint8_t* program_command_sequence_data = (uint8_t*)program_command_sequence.device_command_sequence.data();
-
-    uint32_t device_command_sequence_size_bytes =
-        stall_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
-
-    if (device_command_sequence_size_bytes <= DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size()) {
-        // Write all data in one reserved region
-        manager.issue_queue_reserve(device_command_sequence_size_bytes, command_queue_id);
+    if (one_shot_fetch_size_bytes <= DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size()) {
+        // Do all the writes and then push back the entire command sequence
+        // write_ptr needs to be updated manually
+        manager.issue_queue_reserve(one_shot_fetch_size_bytes, command_queue_id);
         uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
 
         if (stall_first) {
@@ -2138,30 +2139,31 @@ void write_program_command_sequence(
             write_ptr += cmds.size_bytes();
         }
 
-        if (stall_before_program) {
-            if (program_config_buffer_data_size_bytes > 0) {
-                manager.cq_write(program_command_sequence_data, program_config_buffer_data_size_bytes, write_ptr);
-                program_command_sequence_data += program_config_buffer_data_size_bytes;
-                write_ptr += program_config_buffer_data_size_bytes;
-            }
+        if (device_commands_fetch_size_bytes > 0) {
+            manager.cq_write(device_command_sequence_data, device_commands_fetch_size_bytes, write_ptr);
+            write_ptr += device_commands_fetch_size_bytes;
+        }
 
-            // Didn't stall before kernel config data, stall before remaining commands
+        // Didn't stall before kernel config data, stall before remaining commands
+        if (stall_before_program) {
             manager.cq_write(
                 program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
                 stall_fetch_size_bytes,
                 write_ptr);
             write_ptr += stall_fetch_size_bytes;
-
-            manager.cq_write(program_command_sequence_data, program_rem_fetch_size_bytes, write_ptr);
-        } else {
-            manager.cq_write(program_command_sequence_data, program_fetch_size_bytes, write_ptr);
         }
 
-        manager.issue_queue_push_back(device_command_sequence_size_bytes, command_queue_id);
+        // Now write program
+        if (program_binary_fetch_size_bytes > 0) {
+            manager.cq_write(program_binary_command_sequence_data, program_binary_fetch_size_bytes, write_ptr);
+            write_ptr += program_binary_fetch_size_bytes;
+        }
+
+        manager.issue_queue_push_back(one_shot_fetch_size_bytes, command_queue_id);
 
         // One fetch queue entry for entire program
         manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(device_command_sequence_size_bytes, command_queue_id);
+        manager.fetch_queue_write(one_shot_fetch_size_bytes, command_queue_id);
     } else {
         if (stall_first) {
             // Must stall before writing kernel config data
@@ -2179,9 +2181,8 @@ void write_program_command_sequence(
         // Insert a stall between program data that goes on the ring buffer and the rest of the data
         // Otherwise write all data in 1 prefetch entry
         if (stall_before_program) {
-            if (program_config_buffer_data_size_bytes > 0) {
-                write_data_to_cq((uint8_t*)program_command_sequence_data, program_config_buffer_data_size_bytes);
-                program_command_sequence_data += program_config_buffer_data_size_bytes;
+            if (device_commands_fetch_size_bytes > 0) {
+                write_data_to_cq((uint8_t*)device_command_sequence_data, device_commands_fetch_size_bytes);
             }
 
             // Didn't stall before kernel config data, stall before remaining commands
@@ -2189,9 +2190,11 @@ void write_program_command_sequence(
                 (uint8_t*)program_command_sequence.stall_command_sequences[curr_stall_seq_idx].data(),
                 stall_fetch_size_bytes);
 
-            write_data_to_cq((uint8_t*)program_command_sequence_data, program_rem_fetch_size_bytes);
-        } else {
-            write_data_to_cq((uint8_t*)program_command_sequence_data, program_fetch_size_bytes);
+            if (program_binary_fetch_size_bytes > 0) {
+                write_data_to_cq((uint8_t*)program_binary_command_sequence_data, program_binary_fetch_size_bytes);
+            }
+        } else if (program_binary_fetch_size_bytes > 0) {
+            write_data_to_cq((uint8_t*)program_binary_command_sequence_data, program_binary_fetch_size_bytes);
         }
     }
 
