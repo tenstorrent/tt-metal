@@ -202,7 +202,8 @@ constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
 // TRANSACTION IDS
-constexpr uint8_t NUM_TRANSACTION_IDS = 4;
+// TODO: Pass this value from host
+constexpr uint8_t NUM_TRANSACTION_IDS = enable_ring_support ? 8 : 4;
 
 constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
     initialize_receiver_channel_trid_starts<MAX_NUM_RECEIVER_CHANNELS, NUM_TRANSACTION_IDS>();
