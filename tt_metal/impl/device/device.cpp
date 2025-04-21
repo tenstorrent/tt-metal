@@ -90,9 +90,9 @@ uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_typ
     return MetalContext::instance().hal().get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
 }
 
-void IDevice::allow_program_cache_misses() { this->get_program_cache().allow_cache_misses(); }
-
-void IDevice::forbid_program_cache_misses() { this->get_program_cache().forbid_cache_misses(); }
+void IDevice::set_program_cache_misses_allowed(bool allowed) {
+    this->get_program_cache().set_cache_misses_allowed(allowed);
+}
 
 Device::Device(Device&& other) = default;
 Device& Device::operator=(Device&& other) = default;
@@ -1307,6 +1307,7 @@ bool Device::close() {
     this->storage_only_cores_.clear();
     this->ethernet_cores_.clear();
     this->disable_and_clear_program_cache();
+    this->set_program_cache_misses_allowed(true);
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
     this->sysmem_manager_.reset();

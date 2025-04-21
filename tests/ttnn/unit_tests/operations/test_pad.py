@@ -275,8 +275,7 @@ def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        device.forbid_program_cache_misses()
-    device.allow_program_cache_misses()
+        device.set_program_cache_misses_allowed(False)
 
 
 @pytest.mark.parametrize("h", [32])
