@@ -194,7 +194,7 @@ bool AllGatherAsync::is_minimal_interleaved(const Tensor& input_tensor) const {
                 input_tensor.dtype() == DataType::BFLOAT8_B && fit_tile_shape && shape3_tiles % num_banks == 0;
         }
     }
-    if (0 < dim && dim < 3) {
+    if (0 <= dim && dim < 3) {
         is_dim2 = fit_tile_shape;
     }
 
