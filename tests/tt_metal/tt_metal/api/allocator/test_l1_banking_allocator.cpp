@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 // FIXME: ARCH_NAME specific
 #include "dev_mem_map.h"
 #include <tt-metalium/device.hpp>

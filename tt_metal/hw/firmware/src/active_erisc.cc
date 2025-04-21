@@ -113,7 +113,7 @@ int main() {
             // Only include this iteration in the device profile if the launch message is valid. This is because all
             // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
             // "invalid" iterations.
-            DeviceZoneScopedMainN("ACTIVE-ERISC-FW");
+            DeviceZoneScopedMainN("ERISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
 

@@ -8,7 +8,7 @@
 #include <string>
 #include <utility>
 
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/logger.hpp"
@@ -433,7 +433,7 @@ Result conv2d_L1(
         // prepare weights in desired layout and move to device
 
         // TODO: Implement heuristic to decide if weights should be preprocessed on device.
-        if (conv_config.preprocess_weights_on_device == false) {
+        if (!conv_config.preprocess_weights_on_device) {
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
                 weight_tensor,
                 bias_tensor,
@@ -447,6 +447,7 @@ Result conv2d_L1(
                 groups,
                 opt_conv_op_block_config.act_block_h_ntiles,
                 input_width,
+                bias_tensor.has_value(),
                 true);
         } else {
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
@@ -462,7 +463,7 @@ Result conv2d_L1(
                 groups,
                 opt_conv_op_block_config.act_block_h_ntiles,
                 input_width,
-                true);
+                bias_tensor.has_value());
         }
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required

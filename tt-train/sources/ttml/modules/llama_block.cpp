@@ -15,9 +15,9 @@ LlamaMLP::LlamaMLP(uint32_t embedding_size, float dropout_prob) {
     uint32_t multiple_of = 256;
     const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4 * embedding_size) * (2.0F / 3.0F));
     const uint32_t hidden_size = ((unrounded_size + multiple_of - 1) / multiple_of) * multiple_of;
-    m_w1 = std::make_shared<LinearLayer>(embedding_size, hidden_size);
-    m_w3 = std::make_shared<LinearLayer>(embedding_size, hidden_size);
-    m_w2 = std::make_shared<LinearLayer>(hidden_size, embedding_size);
+    m_w1 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
+    m_w3 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
+    m_w2 = std::make_shared<LinearLayer>(hidden_size, embedding_size, /*has_bias=*/false);
     m_dropout = std::make_shared<DropoutLayer>(dropout_prob);
 
     create_name("llama_mlp");
@@ -51,6 +51,7 @@ LlamaBlock::LlamaBlock(
         .num_groups = num_groups,
         .dropout_prob = dropout_prob,
         .rope_params = rope_params,
+        .bias_linears = false,
     });
 
     create_name("llama_block");

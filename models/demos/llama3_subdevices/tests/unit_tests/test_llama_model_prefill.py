@@ -31,9 +31,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (8, 4),
     ],
     indirect=True,
 )
@@ -64,7 +62,11 @@ from models.utility_functions import skip_for_grayskull
         # pytest.param(LlamaOptimizations.performance, id="performance"),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
 def test_llama_model_inference(
     seq_len,
     paged_attention,
@@ -76,9 +78,6 @@ def test_llama_model_inference(
     ensure_gc,
     is_ci_env,
 ):
-    if is_ci_env and optimizations == LlamaOptimizations.accuracy:
-        pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
-
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = True  # Flag to measure KV cache PCC for all layers
 

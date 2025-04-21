@@ -294,7 +294,8 @@ Result conv_transpose2d(
             device,
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
-            input_width);
+            input_width,
+            bias_tensor.has_value());
     }
     if (mm_conv) {
         input_tensor_post_tm = ttnn::to_layout(

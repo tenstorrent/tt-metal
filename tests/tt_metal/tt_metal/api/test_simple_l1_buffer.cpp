@@ -16,7 +16,7 @@
 #include <vector>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include "buffer_test_utils.hpp"
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
