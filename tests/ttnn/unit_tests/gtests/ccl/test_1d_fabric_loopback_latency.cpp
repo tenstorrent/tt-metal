@@ -449,7 +449,7 @@ inline void RunPersistent1dFabricLatencyTest(
     build_and_enqueue(devices_with_workers, programs);
 
     log_info(tt::LogTest, "Waiting for Op finish on all devices");
-    wait_for_worker_subdevice_program_completion(devices_with_workers, subdevice_managers);
+    wait_for_worker_program_completion(devices_with_workers, subdevice_managers);
     log_info(tt::LogTest, "Main op done");
 
     TT_FATAL(
