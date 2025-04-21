@@ -43,6 +43,16 @@ extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
 
 constexpr uint32_t QUICK_PUSH_MARKER_COUNT = 2;
+constexpr uint32_t DISPATCH_META_DATA_COUNT = 2;
+constexpr uint32_t DISPATCH_META_DATA_UINT32_SIZE = 4;
+constexpr uint32_t DISPATCH_PARENT_ZONE_MARKER_COUNT = 2;
+// Space has to be left in the buffer in order to guarantee
+// that the next dispatch command can make it fully populated
+// with its meta data (op id + command type)
+constexpr uint32_t DISPATCH_HEADROOM_SIZE =
+    PROFILER_L1_MARKER_UINT32_SIZE * (DISPATCH_PARENT_ZONE_MARKER_COUNT + QUICK_PUSH_MARKER_COUNT) +
+    DISPATCH_META_DATA_UINT32_SIZE * DISPATCH_META_DATA_COUNT;
+
 constexpr int WALL_CLOCK_HIGH_INDEX = 1;
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
 
@@ -77,7 +87,7 @@ constexpr uint32_t Hash16_CT(const char (&s)[N]) {
     return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
 }
 
-enum class DoingDispatch { DISPATCH, NOT_DISPATCH };
+enum class DoingDispatch { DISPATCH, DISPATCH_META, NOT_DISPATCH };
 
 __attribute__((noinline)) void init_profiler(
     uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0) {
@@ -123,6 +133,8 @@ template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 inline __attribute__((always_inline)) bool bufferHasRoom() {
     bool bufferHasRoom = false;
     if constexpr (dispatch == DoingDispatch::DISPATCH) {
+        bufferHasRoom = wIndex < (PROFILER_L1_VECTOR_SIZE - stackSize - DISPATCH_HEADROOM_SIZE);
+    } else if constexpr (dispatch == DoingDispatch::DISPATCH_META) {
         bufferHasRoom =
             wIndex < (PROFILER_L1_VECTOR_SIZE - stackSize - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE));
     } else {
@@ -333,11 +345,10 @@ struct profileScope {
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
             start_marked = false;
             stackSize -= PROFILER_L1_MARKER_UINT32_SIZE;
-        }
-
-        if constexpr (dispatch == DoingDispatch::DISPATCH) {
-            if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
-                quick_push();
+            if constexpr (dispatch == DoingDispatch::DISPATCH) {
+                if (wIndex >= (PROFILER_L1_VECTOR_SIZE - DISPATCH_HEADROOM_SIZE)) {
+                    quick_push();
+                }
             }
         }
     }
@@ -433,11 +444,11 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
         kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
 
-#define DeviceTimestampedData(name, data)                                                       \
-    {                                                                                           \
-        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                            \
-        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));              \
-        kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH>(data); \
+#define DeviceTimestampedData(name, data)                                                            \
+    {                                                                                                \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                 \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));                   \
+        kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH_META>(data); \
     }
 
 #define DeviceRecordEvent(event_id) kernel_profiler::recordEvent<kernel_profiler::DoingDispatch::DISPATCH>(event_id);
