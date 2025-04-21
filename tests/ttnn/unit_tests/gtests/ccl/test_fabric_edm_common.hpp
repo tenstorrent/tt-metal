@@ -2407,7 +2407,8 @@ void Run1DFabricPacketSendTest(
     const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
     size_t fabric_context_switch_interval =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval) {
-    constexpr bool use_device_init_fabric = std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture>;
+    constexpr bool use_device_init_fabric = std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture> ||
+                                            std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DRingDeviceInitFixture>;
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     TT_FATAL(
@@ -2430,11 +2431,6 @@ void Run1DFabricPacketSendTest(
         return;
     }
 
-    TT_FATAL(
-        !(params.num_fabric_rows > 0 && params.num_fabric_cols > 0),
-        "Only one of num_fabric_rows and num_fabric_cols may be greater than 0. Test support for both axes live at the "
-        "same time is not yet supported");
-
     size_t line_size = params.line_size;
     size_t num_devices_with_workers = params.num_devices_with_workers;
     if (num_devices_with_workers == 0) {
@@ -2442,6 +2438,13 @@ void Run1DFabricPacketSendTest(
     }
     using namespace ttnn::ccl;
     TT_FATAL(num_devices_with_workers <= line_size, "num_devices_with_workers must be less than or equal to line_size");
+    TT_FATAL(
+        !(params.num_fabric_rows > 0 && params.num_fabric_cols > 0),
+        "Only one of num_fabric_rows and num_fabric_cols may be greater than 0. Test support for both axes live at the "
+        "same time is not yet supported");
+    TT_FATAL(
+        use_device_init_fabric ^ (params.num_fabric_rows == 0 && params.num_fabric_cols == 0),
+        "Device init fabric is only supported in this test when launching with multiple fabric rows and/or columns");
 
     ttnn::ccl::Topology topology;
     FabricTestMode fabric_mode = params.fabric_mode;
