@@ -60,7 +60,9 @@ def is_tg_cluster():
     num_pcie = ttnn.GetNumPCIeDevices()
     num_devices = ttnn.GetNumAvailableDevices()
     # TG has 32 available chips and 4 PCIe mapped chips (not exposed to the user)
-    return num_pcie == 4 and num_devices == 32
+    TG_NUM_PCIE_DEVICES = 4
+    TG_NUM_DEVICES = 32
+    return num_pcie == TG_NUM_PCIE_DEVICES and num_devices == TG_NUM_DEVICES
 
 
 def first_available_tg_device():

@@ -218,7 +218,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
     for (auto device : root_devices) {
-        dynamic_cast<Device*>(device)->mesh_device = mesh_device;
+        dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
     // The Device Profiler must be initialized before Fabric is loaded on the Cluster
     DevicePool::instance().init_profiler();
@@ -330,7 +330,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         allocator_config.worker_l1_size,
         allocator_config.l1_bank_remap);
     for (auto device : submesh->get_devices()) {
-        dynamic_cast<Device*>(device)->mesh_device = submesh;
+        dynamic_cast<Device*>(device)->set_mesh_device(submesh);
     }
     if (program_cache_->is_enabled()) {
         submesh->enable_program_cache();

@@ -57,12 +57,10 @@ Tensor tensor_to_device(
 Tensor tensor_to_device(
     const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
-    // GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
-    //  TODO: Add check for main-thread
+    GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
 
     Tensor device_tensor = Tensor(mesh_device);
     if (device_tensor.mesh_device_ != nullptr and device_tensor.mesh_device_ != mesh_device) {
-        // if (device_tensor.storage_type() == StorageType::DEVICE) { careful this is hang
         TT_ASSERT(device_tensor.device() == mesh_device && "Currently do not support moving between devices");
         return input_tensor;
     } else {
