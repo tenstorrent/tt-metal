@@ -74,3 +74,18 @@ huggingface-hub==0.25.2
 pydantic==2.9.2 # Required for Superset benchmarking
 fiftyone==0.25.2 # Required for Yolo benchmarking
 jiwer==3.0.5 # Required for speech recognition evaluation
+toolz==0.12.0 # Required for Save environment data step
+
+# Suff that used to be in pyproject.toml
+# Needed for various tests
+pyyaml>=5.4
+matplotlib==3.7.1
+Pillow==10.3.0
+jupyterlab==4.2.5
+ipywidgets==8.1.1
+bokeh==3.1.1
+click==8.1.7
+dash==2.15.0
+pandas==2.0.3
+plotly==5.18.0
+seaborn==0.13.2
