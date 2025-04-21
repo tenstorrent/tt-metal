@@ -48,6 +48,7 @@ class TtVFELayer:
         )
         x = ttnn.permute(x, (0, 2, 1))
         pointwise = ttnn.relu(x)
+        ttnn.deallocate(x)
         # [K, T, units]
         if self.max_out:
             aggregated = ttnn.max(pointwise, dim=1)
@@ -184,6 +185,8 @@ class TtHardVFE:
             features_ls.append(points_dist)
         # Combine together feature decorations
         voxel_feats = ttnn.concat(features_ls, dim=-1)
+        for i in range(len(features_ls)):
+            ttnn.deallocate(features_ls[i])
         voxel_count = voxel_feats.shape[1]
 
         mask = get_paddings_indicator(ttnn.to_torch(num_points), voxel_count, axis=0)
@@ -192,6 +195,7 @@ class TtHardVFE:
         mask = ttnn.to_dtype(mask, dtype=ttnn.bfloat16)
         mask = ttnn.to_device(mask, device=device)
         voxel_feats = ttnn.multiply(voxel_feats, ttnn.unsqueeze(mask, -1))
+        ttnn.deallocate(mask)
 
         for i, vfe in enumerate(self.vfe_layers):
             voxel_feats = vfe(voxel_feats)

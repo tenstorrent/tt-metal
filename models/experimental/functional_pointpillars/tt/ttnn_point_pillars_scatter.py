@@ -67,7 +67,8 @@ class TtPointPillarsScatter:
         coors = ttnn.to_torch(coors)
         # batch_canvas will be the final output.
         batch_canvas = []
-        for batch_itt in range(batch_size):
+        # print("batch_size",batch_size)
+        for batch_itt in range(1):
             # Create the canvas for this sample
             canvas = torch.zeros(
                 self.in_channels, self.nx * self.ny, dtype=voxel_features.dtype, device=voxel_features.device
@@ -91,7 +92,7 @@ class TtPointPillarsScatter:
         batch_canvas = torch.stack(batch_canvas, 0)
 
         # Undo the column stacking to final 4-dim tensor
-        batch_canvas = batch_canvas.view(batch_size, self.in_channels, self.ny, self.nx)
+        batch_canvas = batch_canvas.view(1, self.in_channels, self.ny, self.nx)
 
         batch_canvas = ttnn.from_torch(batch_canvas, device=self.device, layout=ttnn.TILE_LAYOUT)
         return batch_canvas
