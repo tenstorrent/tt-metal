@@ -170,7 +170,7 @@ def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_
     input_height = 115
     input_width = 115
     batch_size = 16
-    compute_with_storage_grid_size = (8, 8)
+    compute_with_storage_grid_size = (13, 10) if is_blackhole() else (8, 8)
 
     if os.getenv("TT_CONV_6x8") == "1":
         batch_size = 12

@@ -89,7 +89,7 @@ def test_ff1_matmul(
     per_core_N = 72
 
     # Initialize input configurations
-    if simulate_bh_harvesting:
+    if is_blackhole():
         compute_grid = get_blackhole_grid_size(simulate_bh_harvesting)
     else:
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])

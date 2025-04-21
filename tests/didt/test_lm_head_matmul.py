@@ -78,7 +78,7 @@ def test_lm_head_matmul(
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     # Initialize matmul configurations
-    if simulate_bh_harvesting:
+    if is_blackhole():
         compute_grid = get_blackhole_grid_size(simulate_bh_harvesting)
     else:
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
