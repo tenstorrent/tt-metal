@@ -185,16 +185,21 @@ def main():
         data_log_bf16, "log[bf16]", "log", "bfloat16", ax_fun=lambda ax: (ax.set_xlim(-4.0, 8.0), ax.set_ylim(-101, 8))
     )
 
-    if False:
+    if True:
         plot_values(
             data_silu_bf16,
             "silu[bf16]",
             "silu",
             "bfloat16",
-            ax_fun=lambda ax: (ax.set_xlim(-8.0, 4.0), ax.set_ylim(-1.0, 4.0)),
+            ax_fun=lambda ax: (
+                ax.set_xlim(-8.0, 4.0),
+                ax.set_ylim(-1.0, 4.0),
+                ax.axvline(x=-5.0, color="k", linestyle="--", label="x=-5", linewidth=3),
+                plt.text(-5 + 0.2, 3, "x=-5", fontsize=40),
+            ),
         )
 
-    if False:
+    if True:
         plot_accuracy_op(data_all_exp, "accuracy-all-exp-float32", "exp", "float32")
         plot_accuracy_op(data_log_csv, "accuracy-all-log-float32", "log", "float32")
 
