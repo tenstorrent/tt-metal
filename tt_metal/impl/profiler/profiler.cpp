@@ -29,7 +29,6 @@
 #include "profiler.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
-#include "tools/profiler/event_metadata.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"

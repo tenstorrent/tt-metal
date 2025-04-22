@@ -244,7 +244,7 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
-    for (uint16_t i = 0; i < result_vec.size(); i++) {
+    for (std::size_t i = 0; i < result_vec.size(); i++) {
         EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
     }
 }
@@ -321,7 +321,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
-    for (uint16_t i = 0; i < result_vec.size(); i++) {
+    for (std::size_t i = 0; i < result_vec.size(); i++) {
         EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
     }
 }
@@ -387,7 +387,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
     ASSERT_EQ(result_vec.size(), golden_vec.size());
-    for (uint16_t i = 0; i < result_vec.size(); i++) {
+    for (std::size_t i = 0; i < result_vec.size(); i++) {
         EXPECT_TRUE(is_close(result_vec[i].to_float(), golden_vec[i].to_float()));
     }
 }
@@ -533,7 +533,7 @@ TEST_F(MeshEndToEndT3kTraceTests, SimulEltwiseTest) {
 
     EXPECT_THAT(add_dst_vec, Each(Bfloat16Eq(workload_0_src0_val + workload_0_src1_val)));
 
-    uint16_t sub_or_mul_size = mul_sub_dst_vec.size() / 2;
+    std::size_t sub_or_mul_size = mul_sub_dst_vec.size() / 2;
     tt::stl::Span<bfloat16> mul_dst_span(mul_sub_dst_vec.data(), sub_or_mul_size);
     tt::stl::Span<bfloat16> sub_dst_span(mul_sub_dst_vec.data() + sub_or_mul_size, sub_or_mul_size);
 

@@ -5,8 +5,6 @@
 #include <stdexcept>
 #include <cmath>
 
-#include <cmath>
-#include <stdexcept>
 #include <vector>
 
 namespace test_utils {

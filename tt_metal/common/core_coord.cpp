@@ -183,17 +183,7 @@ void swap(CoreRangeSet& first, CoreRangeSet& second) { std::swap(first.ranges_, 
 
 CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) { this->ranges_ = other.ranges_; }
 
-CoreRangeSet& CoreRangeSet::operator=(const CoreRangeSet& other) {
-    this->ranges_ = other.ranges_;
-    return *this;
-}
-
 CoreRangeSet::CoreRangeSet(CoreRangeSet&& other) noexcept { swap(*this, other); }
-
-CoreRangeSet& CoreRangeSet::operator=(CoreRangeSet&& other) noexcept {
-    swap(*this, other);
-    return *this;
-}
 
 CoreRangeSet::CoreRangeSet(std::vector<CoreRange>&& core_ranges) : ranges_(std::move(core_ranges)) {
     ZoneScoped;

@@ -147,11 +147,11 @@ public:
 
     CoreRangeSet(const CoreRangeSet& other);
 
-    CoreRangeSet& operator=(const CoreRangeSet& other);
+    CoreRangeSet& operator=(const CoreRangeSet& other) noexcept = default;
 
     CoreRangeSet(CoreRangeSet&& other) noexcept;
 
-    CoreRangeSet& operator=(CoreRangeSet&& other) noexcept;
+    CoreRangeSet& operator=(CoreRangeSet&& other) noexcept = default;
 
     CoreRangeSet(std::vector<CoreRange>&& core_ranges);
 
