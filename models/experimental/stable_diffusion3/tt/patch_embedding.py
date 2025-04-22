@@ -5,18 +5,15 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
+import torch
 import ttnn
 
 from .conv2d import TtConv2d, TtConv2dParameters
 from .substate import substate
-
-from .utils import from_torch
-
-import torch
-import os
+from .utils import from_torch_fast
 
 
 @dataclass
@@ -49,8 +46,8 @@ class TtPatchEmbedParameters:
             proj=TtConv2dParameters.from_torch(
                 substate(state, "proj"), dtype=ttnn.bfloat16, out_channels=out_channels, device=device
             ),
-            pos_embed=from_torch(
-                pos_embed_param, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_device=device, shard_dim=None
+            pos_embed=from_torch_fast(
+                pos_embed_param, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, shard_dim=None
             ),
         )
 

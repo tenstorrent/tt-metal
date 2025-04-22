@@ -5,11 +5,11 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 
 import torch
-import os
 import tqdm
 import ttnn
 from diffusers.image_processor import VaeImageProcessor
@@ -19,9 +19,9 @@ from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchE
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
 
+from ..tt.utils import from_torch_fast, to_torch
 from .t5_encoder import TtT5Encoder, TtT5EncoderParameters
 from .transformer import TtSD3Transformer2DModel, TtSD3Transformer2DModelParameters
-from ..tt.utils import from_torch, to_torch
 
 TILE_SIZE = 32
 
@@ -677,7 +677,7 @@ def _get_t5_prompt_embeds(
             f" {max_sequence_length} tokens: {removed_text}"
         )
 
-    tt_text_input_ids = from_torch(text_input_ids, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_device=device)
+    tt_text_input_ids = from_torch_fast(text_input_ids, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     tt_prompt_embeds = text_encoder(tt_text_input_ids, device)
     tt_prompt_embeds = ttnn.get_device_tensors(tt_prompt_embeds)[0]
     prompt_embeds = ttnn.to_torch(tt_prompt_embeds)

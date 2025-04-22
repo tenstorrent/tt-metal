@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from . import utils
-from .utils import from_torch, from_torch_fast
+from .utils import from_torch_fast
 
 
 @dataclass
@@ -26,7 +26,7 @@ class TtRmsNormParameters:
         device: ttnn.Device,
     ) -> TtRmsNormParameters:
         return cls(
-            weight=from_torch(state["weight"].unsqueeze(0), layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_device=device)
+            weight=from_torch_fast(state["weight"].unsqueeze(0), layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
         )
 
 

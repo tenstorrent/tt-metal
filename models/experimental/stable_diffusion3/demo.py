@@ -4,15 +4,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-import pytest
 import os
 
-from .tt import TtStableDiffusion3Pipeline
+import pytest
 
 # if TYPE_CHECKING:
 import ttnn
+
+from .tt import TtStableDiffusion3Pipeline
 
 
 @pytest.mark.parametrize(
@@ -46,7 +45,7 @@ def test_sd3(
     pipeline = TtStableDiffusion3Pipeline(
         checkpoint=f"stabilityai/stable-diffusion-3.5-{model_name}",
         device=mesh_device,
-        enable_t5_text_encoder=True,
+        enable_t5_text_encoder=False,
         guidance_cond=guidance_cond,
     )
 
