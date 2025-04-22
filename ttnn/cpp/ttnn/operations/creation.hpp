@@ -102,6 +102,7 @@ static Tensor arange_impl(
     if (device.has_value()) {
         auto devices = device->get_devices();
         if (devices.size() == 1) {
+            // TODO #20966: Remove single device support and branches + dynamic_cast
             if (auto mesh_device = dynamic_cast<MeshDevice*>(devices[0])) {
                 return output.to_device(mesh_device, output_mem_config);
             }
@@ -135,6 +136,7 @@ static Tensor full_impl(
         return host_tensor;
     } else {
         if (devices.size() == 1) {
+            // TODO #20966: Remove single device support and branches + dynamic_cast
             if (auto mesh_device = dynamic_cast<MeshDevice*>(devices[0])) {
                 return host_tensor.to_device(mesh_device, output_mem_config);
             }
@@ -361,6 +363,7 @@ struct EmptyLike {
             devices = device_arg->get_devices();
         } else {
             auto tensor_device = tensor.device();
+            // TODO #20966: Remove single device support and branches + dynamic_cast
             if (auto mesh_device = dynamic_cast<MeshDevice*>(tensor_device)) {
                 return allocate_tensor_on_mesh(
                     TensorSpec(

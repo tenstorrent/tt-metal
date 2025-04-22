@@ -108,7 +108,13 @@ public:
     Buffer* get_device_buffer(const MeshCoordinate& device_coord) const;
 
     // TODO: Remove this method, once there is no need to interop MeshBuffer with Buffer.
+    // The reference buffer allows "casting" the MeshBuffer to a buffer allocated on a
+    // single device. This allows users of this object that only need to query single device
+    // attributes to do so without having to keep track of MeshDevice attributes.
     Buffer* get_reference_buffer() const;
+    // The backing buffer represents the buffer object keeping the MeshBuffer alive/allocated
+    // at its specific address. The backing buffer will not be populated if an address was passed
+    // into the creation API.
     Buffer* get_backing_buffer() const;
 
     uint32_t datum_size_bytes() const;

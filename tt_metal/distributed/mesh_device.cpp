@@ -217,6 +217,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
+    // TODO #20966: Remove these calls
     for (auto device : root_devices) {
         dynamic_cast<Device*>(device)->set_mesh_device(mesh_device);
     }
@@ -329,6 +330,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         allocator_config.trace_region_size,
         allocator_config.worker_l1_size,
         allocator_config.l1_bank_remap);
+    // TODO #20966: Remove these calls
     for (auto device : submesh->get_devices()) {
         dynamic_cast<Device*>(device)->set_mesh_device(submesh);
     }

@@ -994,7 +994,7 @@ void process_go_signal_mcast_cmd() {
     uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
     if constexpr (virtualize_unicast_cores) {
         // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
-        // This chip is virtualizing cores the go signal is uncasted to
+        // This chip is virtualizing cores the go signal is unicasted to
         // In this case, the number of unicasts specified in the command can exceed
         // the number of actual cores on this chip.
         if (cmd->mcast.num_unicast_txns > num_physical_unicast_cores) {

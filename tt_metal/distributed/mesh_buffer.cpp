@@ -226,6 +226,7 @@ AnyBuffer::AnyBuffer(std::shared_ptr<MeshBuffer> buffer) :
     buffer_(buffer->get_reference_buffer()), holder_(std::move(buffer)) {}
 
 AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address) {
+    // TODO #20966: Remove single device support and branches + dynamic_cast
     auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
         if (address.has_value()) {
@@ -246,6 +247,7 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std
 }
 
 AnyBuffer AnyBuffer::create(const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address) {
+    // TODO #20966: Remove single device support and branches + dynamic_cast
     auto mesh_device = dynamic_cast<MeshDevice*>(config.device);
     if (!mesh_device) {
         if (address.has_value()) {

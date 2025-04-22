@@ -40,7 +40,11 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t index)
     TT_THROW("Not supported for slow dispatch");
 }
 
-void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool) {
+void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    if (!blocking) {
+        log_warning(
+            tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload exection.", __FUNCTION__);
+    }
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (auto coord : coord_range) {
             auto device = mesh_device_->get_device(coord);

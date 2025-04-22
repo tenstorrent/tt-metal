@@ -35,6 +35,7 @@ void enable_program_cache(IDevice& device) { device.enable_program_cache(); }
 void disable_and_clear_program_cache(IDevice& device) { device.disable_and_clear_program_cache(); }
 
 void close_device(IDevice& device) {
+    // TODO #20966: Remove single device support and branches + dynamic_cast
     if (auto mesh_device = dynamic_cast<MeshDevice*>(&device)) {
         mesh_device->close();
     } else {
