@@ -21,7 +21,7 @@ This change results in multiple benefits for both TTNN developers and TTNN users
 3. Significant performance improvements 🎉
 4. There’s no need to create multiple threads in neither TTNN or user code, all of the multi-threading is handled internally by TT-Metal 🎉
 
-For more information, please see the TT-Distributed Tech Report.
+For more information, please see the [TT-Distributed Tech Report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/TT-Distributed/TT-Distributed-Architecture-1219.md).
 
 ## Limitations
 
