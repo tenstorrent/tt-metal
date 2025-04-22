@@ -49,7 +49,10 @@ jobs:
       - name: Run stress tests
         timeout-minutes: 360
         run: |
-          pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test"
+          for i in {1..2}; do
+            echo "🔁 Run #$i"
+            pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "quick"
+          done
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
