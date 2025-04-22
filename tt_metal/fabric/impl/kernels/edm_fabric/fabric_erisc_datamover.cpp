@@ -536,6 +536,75 @@ FORCE_INLINE void check_worker_connections(
     }
 }
 
+template <size_t TRANSACTION_ID_START>
+uint8_t FORCE_INLINE receiver_channel_collect_completions(
+    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_channel,
+    ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, TRANSACTION_ID_START>&
+        receiver_channel_trid_tracker,
+    std::array<uint8_t, MAX_NUM_SENDER_CHANNELS>& src_ch_completions,
+    uint8_t rx_ch) {
+    auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
+    auto& completion_counter = receiver_channel_pointers.completion_counter;
+
+    uint8_t distance = wr_sent_counter.counter - completion_counter.counter;
+    auto buffer_slot_index = completion_counter.get_buffer_index();
+    bool keep_going = true;
+    uint8_t advanced = 0;
+    while (advanced < distance && keep_going) {
+        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(buffer_slot_index);
+        keep_going = next_trid_flushed;
+        if (keep_going) {
+            volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+                local_receiver_channel.get_buffer_address(buffer_slot_index));
+            const auto src_id = pkt_header->src_ch_id;
+            src_ch_completions[src_id]++;
+            buffer_slot_index = BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(buffer_slot_index.get())};
+            advanced++;
+        }
+    }
+    completion_counter.increment_n(advanced);
+    return advanced;
+}
+
+// An amortized servicing of receiver channel completions to producer -- conditionally enabled
+void FORCE_INLINE receiver_channels_send_completions_to_producer(
+    std::array<tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& local_receiver_channels,
+    std::array<ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>& receiver_channel_pointers,
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, RX_CH0_TRID_START>&
+        receiver_channel_0_trid_tracker,
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, RX_CH1_TRID_START>&
+        receiver_channel_1_trid_tracker,
+    std::array<uint8_t, MAX_NUM_SENDER_CHANNELS>& src_ch_completions) {
+    uint8_t advanced_outer = receiver_channel_collect_completions<RX_CH0_TRID_START>(
+        local_receiver_channels[0],
+        receiver_channel_pointers[0],
+        receiver_channel_0_trid_tracker,
+        src_ch_completions,
+        0);
+    if constexpr (NUM_RECEIVER_CHANNELS > 1) {
+        advanced_outer += receiver_channel_collect_completions<RX_CH1_TRID_START>(
+            local_receiver_channels[1],
+            receiver_channel_pointers[1],
+            receiver_channel_1_trid_tracker,
+            src_ch_completions,
+            1);
+    }
+    static_assert(
+        NUM_RECEIVER_CHANNELS <= 2,
+        "NUM_RECEIVER_CHANNELS must be <= 2, otherwise this implementation must be extended");
+
+    if (advanced_outer) {
+#pragma unroll
+        for (size_t sc = 0; sc < NUM_SENDER_CHANNELS; sc++) {
+            if (src_ch_completions[sc] > 0) {
+                remote_update_ptr_val(to_sender_packets_completed_streams[sc], src_ch_completions[sc]);
+                src_ch_completions[sc] = 0;
+            }
+        }
+    }
+}
+
 template <bool SKIP_CONNECTION_LIVENESS_CHECK>
 void FORCE_INLINE sender_ch_send_completions_to_producer(
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
@@ -630,31 +699,6 @@ void run_sender_channel_step(
             channel_connection_established,
             sender_channel_index);
     }
-    // if (sender_channel_index != 0) {
-    //     int32_t completions_since_last_check =
-    //     get_ptr_val(to_sender_packets_completed_streams[sender_channel_index]); if (completions_since_last_check) {
-    //         // if ((loop_iteration & 0x1)) {
-    //             auto& sender_rdptr = local_sender_channel_worker_interface.local_rdptr;
-    //             outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
-    //             sender_rdptr.increment_n(completions_since_last_check);
-    //             increment_local_update_ptr_val(
-    //                 to_sender_packets_completed_streams[sender_channel_index], -completions_since_last_check);
-    //             if constexpr (!enable_first_level_ack) {
-    //                 if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
-    //                     local_sender_channel_worker_interface.template
-    //                     update_worker_copy_of_read_ptr<enable_ring_support>(
-    //                         sender_rdptr.get_ptr());
-    //                 } else {
-    //                     if (channel_connection_established) {
-    //                         local_sender_channel_worker_interface.template
-    //                         update_worker_copy_of_read_ptr<enable_ring_support>(
-    //                             sender_rdptr.get_ptr());
-    //                     }
-    //                 }
-    //             }
-    //         // }
-    //     }
-    // }
 
     // Process ACKs from receiver
     // ACKs are processed second to avoid any sort of races. If we process acks second,
@@ -868,8 +912,9 @@ void run_fabric_edm_main_loop(
         sender_channel_counters_ptrs,
     std::array<PacketHeaderRecorder, MAX_NUM_RECEIVER_CHANNELS>& receiver_channel_packet_recorders,
     std::array<PacketHeaderRecorder, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
-    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, 0>& receiver_channel_0_trid_tracker,
-    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, NUM_TRANSACTION_IDS>&
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, RX_CH0_TRID_START>&
+        receiver_channel_0_trid_tracker,
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, RX_CH1_TRID_START>&
         receiver_channel_1_trid_tracker) {
     size_t did_nothing_count = 0;
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
@@ -1000,6 +1045,7 @@ void run_fabric_edm_main_loop(
                     i);
             }
 
+            // Amortize credit sending to upstream -- when enabled
             if constexpr (DO_SENDER_WORKER_ACK_OUTSIDE_OF_LOOP) {
                 // Note: I realize this looks totally stupid that we are masking out and only enabling this ack path
                 // every 4th iteration, instead of adding an inner loop with 4 iterations and placing this code outside
@@ -1017,6 +1063,7 @@ void run_fabric_edm_main_loop(
                 //
                 // ... Therefore we kept the main loop the same but just opt-in with runtime branching :(
                 // (this is all besides the point that we are only doing this specific code for one sender channel)
+                // this (i & 0x3) == 0x0 is empirically determined. Future work to export this to host
                 if ((i & 0x3) == 0x0) {
                     sender_ch_send_completions_to_producer<sender_ch_live_check_skip[0]>(
                         local_sender_channel_worker_interfaces[0],
@@ -1028,81 +1075,14 @@ void run_fabric_edm_main_loop(
 
             if constexpr (DO_RECEIVER_ETH_ACK_OUTSIDE_OF_LOOP) {
                 if ((i & 0x3) == 0x0) {
-                    size_t num_completions = 0;
-                    uint8_t advanced_outer = 0;
-#pragma unroll
-                    for (size_t rx_ch = 0; rx_ch < NUM_RECEIVER_CHANNELS; rx_ch++) {
-                        auto& receiver_channel = receiver_channel_pointers[rx_ch];
-                        auto& wr_sent_counter = receiver_channel.wr_sent_counter;
-                        auto& completion_counter = receiver_channel.completion_counter;
-
-                        uint8_t distance = wr_sent_counter.counter - completion_counter.counter;
-                        auto buffer_slot_index = completion_counter.get_buffer_index();
-                        bool keep_going = true;
-                        uint8_t advanced = 0;
-                        while (advanced < distance && keep_going) {
-                            bool next_trid_flushed =
-                                receiver_channel_0_trid_tracker.transaction_flushed(buffer_slot_index);
-                            keep_going = next_trid_flushed;
-                            if (keep_going) {
-                                volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
-                                    local_receiver_channels[rx_ch].get_buffer_address(buffer_slot_index));
-                                const auto src_id = pkt_header->src_ch_id;
-                                src_ch_completions[src_id]++;
-                                buffer_slot_index =
-                                    BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(buffer_slot_index.get())};
-                                advanced++;
-                            }
-                        }
-                        // if (advanced) {
-                        completion_counter.increment_n(advanced);
-                        advanced_outer += advanced;
-                        // }
-                    }
-
-                    if (advanced_outer) {
-#pragma unroll
-                        for (size_t sc = 0; sc < NUM_SENDER_CHANNELS; sc++) {
-                            if (src_ch_completions[sc] > 0) {
-                                remote_update_ptr_val(to_sender_packets_completed_streams[sc], src_ch_completions[sc]);
-                                src_ch_completions[sc] = 0;
-                            }
-                        }
-                    }
-
-                    // // -----------
-                    // size_t num_completions = 0;
-                    // for (size_t rx_ch = 0; rx_ch < NUM_RECEIVER_CHANNELS; rx_ch++) {
-                    //     auto& receiver_channel = receiver_channel_pointers[rx_ch];
-                    //     auto& wr_sent_counter = receiver_channel.wr_sent_counter;
-                    //     // Currently unclear if it's better to loop here or not... Also unclear if merging these
-                    //     // two pointers is better or not... Seems to be maybe 5-10% better merged but need more data
-                    //     auto& completion_counter = receiver_channel.completion_counter;
-
-                    //     bool caught_up = false;
-                    //     while (!caught_up) {
-                    //         bool ptrs_caught_up = completion_counter.is_caught_up_to(wr_sent_counter);
-                    //         auto receiver_buffer_index = completion_counter.get_buffer_index();
-                    //         bool next_trid_flushed =
-                    //         receiver_channel_0_trid_tracker.transaction_flushed(receiver_buffer_index); caught_up =
-                    //         !next_trid_flushed || ptrs_caught_up; if (!caught_up) {
-                    //             completion_counter.increment();
-                    //             num_completions++;
-                    //             volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
-                    //                 local_receiver_channels[rx_ch].get_buffer_address(receiver_buffer_index));
-                    //             const auto src_id = pkt_header->src_ch_id;
-                    //             src_ch_completions[src_id]++;
-                    //         }
-                    //     }
-                    // }
-                    // if (num_completions > 0) {
-                    //     for (size_t sc = 0; sc < NUM_SENDER_CHANNELS; sc++) {
-                    //         if (src_ch_completions[sc] > 0) {
-                    //             remote_update_ptr_val(to_sender_packets_completed_streams[sc],
-                    //             src_ch_completions[sc]); src_ch_completions[sc] = 0;
-                    //         }
-                    //     }
-                    // }
+                    receiver_channels_send_completions_to_producer(
+                        local_receiver_channels,
+                        receiver_channel_pointers,
+                        // TODO: pack these together into a nicer ct-container so we can iterate over them at compile
+                        // time without having to manually unroll in code
+                        receiver_channel_0_trid_tracker,
+                        receiver_channel_1_trid_tracker,
+                        src_ch_completions);
                 }
             }
         }
@@ -1496,8 +1476,9 @@ void kernel_main() {
         local_sender_channel_worker_interfaces,
         local_sender_flow_control_semaphores);
 
-    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, 0> receiver_channel_0_trid_tracker;
-    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, NUM_TRANSACTION_IDS>
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, RX_CH0_TRID_START>
+        receiver_channel_0_trid_tracker;
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS, RX_CH1_TRID_START>
         receiver_channel_1_trid_tracker;
 
     if (has_downstream_edm_vc0_buffer_connection) {

@@ -23,8 +23,8 @@
  */
 // clang-format on
 template <size_t NUM_RECEIVER_CHANNELS, size_t NUM_TRANSACTION_IDS_PER_CHANNEL>
-constexpr auto initialize_receiver_channel_trid_starts() -> std::array<uint8_t, NUM_RECEIVER_CHANNELS> {
-    std::array<uint8_t, NUM_RECEIVER_CHANNELS> arr{};
+constexpr auto initialize_receiver_channel_trid_starts() -> std::array<size_t, NUM_RECEIVER_CHANNELS> {
+    std::array<size_t, NUM_RECEIVER_CHANNELS> arr{};
     size_t trid_start = 0;
     for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
         arr[i] = trid_start;

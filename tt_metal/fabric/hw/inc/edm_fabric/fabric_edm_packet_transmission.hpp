@@ -89,8 +89,8 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 
 FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
     if constexpr (enable_ring_support) {
-        auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
-        auto end_trid = start_trid + NUM_TRANSACTION_IDS;
+        int start_trid = RX_CH_TRID_STARTS[rx_channel_id];
+        int end_trid = start_trid + NUM_TRANSACTION_IDS;
         for (int i = start_trid; i < end_trid; i++) {
             if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
                 while (
