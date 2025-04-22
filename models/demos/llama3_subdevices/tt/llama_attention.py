@@ -369,14 +369,7 @@ class TtLlamaAttention(LightweightModule):
         # attn_output_1G4D_sharded.deallocate(True)
 
         # Note: Persistent output buffer used, do not deallocate output!
-        attn_output_gathered_sharded = self.tt_ccl.line_all_gather(
-            attn_output_1G4D_sharded,
-            dim=1,
-            cluster_axis=1,
-            num_links=3,
-            memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
-            buffer_key="SDPA",
-        )
+
         # ttnn.deallocate(attn_output_1G4D)
 
         # attn_output_gathered_sharded = ttnn.to_memory_config(
@@ -384,17 +377,17 @@ class TtLlamaAttention(LightweightModule):
         # )
         # ttnn.deallocate(attn_output_gathered)
 
-        attn_output_cat_0 = ttnn.experimental.nlp_concat_heads_decode(
-            attn_output_gathered_sharded,
+        attn_output_cat = self.tt_ccl.all_gather_concat(
+            attn_output_1G4D_sharded,
+            dim=1,
+            cluster_axis=1,
+            num_links=3,
+            memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
             num_heads=self.n_local_heads,
         )
         # print("done concat heads")
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
-        attn_output_cat = ttnn.to_memory_config(
-            attn_output_cat_0, self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"]
-        )
-        attn_output_cat_0.deallocate(True)
         dense_out_ttnn = ttnn.matmul(
             attn_output_cat,
             self.wo,
@@ -406,7 +399,6 @@ class TtLlamaAttention(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         # [1, 1, 32, 2304]
-        ttnn.deallocate(attn_output_cat)
         # print("done matmul")
 
         dense_out_reduced = self.tt_ccl.line_all_reduce(
