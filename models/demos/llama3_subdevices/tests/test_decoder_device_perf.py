@@ -26,8 +26,8 @@ DECODE_OP_END_INDEX = -12
 perf_targets = {
     "RMSAllGather_0": {
         "op_name": "RMS_0",
-        "kernel_duration": 11694.534722222223,
-        "op_to_op": 759.6666666666666,
+        "kernel_duration": 19022.35763888889,
+        "op_to_op": 781.8888888888889,
         "non-overlapped-dispatch-time": 7260,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
@@ -35,8 +35,8 @@ perf_targets = {
     },
     "RMSAllGather_1": {
         "op_name": "RMS_1",
-        "kernel_duration": 9400.361111111111,
-        "op_to_op": 634.3333333333334,
+        "kernel_duration": 18967.993055555555,
+        "op_to_op": 747.8888888888889,
         "non-overlapped-dispatch-time": 6301.3,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
