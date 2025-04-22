@@ -80,7 +80,7 @@ perf_targets = {
     },
     "Matmul_0": {
         "op_name": "QKV_MM",
-        "kernel_duration": 11928.0,
+        "kernel_duration": 10623,
         "op_to_op": 716.4444444444445,
         "non-overlapped-dispatch-time": 6102.0,
         "kernel_duration_relative_margin": 0.05,
@@ -89,7 +89,7 @@ perf_targets = {
     },
     "Matmul_1": {
         "op_name": "DO_MM",
-        "kernel_duration": 9686.888888888889,
+        "kernel_duration": 8902,
         "op_to_op": 723.0,
         "non-overlapped-dispatch-time": 6412.2,
         "kernel_duration_relative_margin": 0.05,
@@ -98,7 +98,7 @@ perf_targets = {
     },
     "Matmul_2": {
         "op_name": "FF1_MM",
-        "kernel_duration": 11791.888888888889,
+        "kernel_duration": 10829,
         "op_to_op": 711.8888888888889,
         "non-overlapped-dispatch-time": 6109.0,
         "kernel_duration_relative_margin": 0.05,
@@ -107,7 +107,7 @@ perf_targets = {
     },
     "Matmul_3": {
         "op_name": "FF3_MM",
-        "kernel_duration": 11586.555555555555,
+        "kernel_duration": 10848,
         "op_to_op": 688.7777777777778,
         "non-overlapped-dispatch-time": 6144.8,
         "kernel_duration_relative_margin": 0.01,
@@ -179,16 +179,16 @@ perf_targets = {
     },
     "PagedUpdateCacheDeviceOperation_0": {
         "op_name": "PagedUpdateCache",
-        "kernel_duration": 6939.111111111112,
+        "kernel_duration": 5963,
         "op_to_op": 860.2222222222222,
         "non-overlapped-dispatch-time": 5890.0,
-        "kernel_duration_relative_margin": 0.1,
+        "kernel_duration_relative_margin": 0.15,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
     },
     "ScaledDotProductAttentionDecode_0": {
         "op_name": "SDPA",
-        "kernel_duration": 15960.777777777777,
+        "kernel_duration": 13338,
         "op_to_op": 652.6666666666666,
         "non-overlapped-dispatch-time": 9741.5,
         "kernel_duration_relative_margin": 0.07,
@@ -197,7 +197,7 @@ perf_targets = {
     },
     "BinaryDeviceOperation_0": {
         "op_name": "Binary_Residual_0",
-        "kernel_duration": 2671.4444444444443,
+        "kernel_duration": 1759,
         "op_to_op": 725.6666666666666,
         "non-overlapped-dispatch-time": 6316.8,
         "kernel_duration_relative_margin": 0.1,
@@ -206,7 +206,7 @@ perf_targets = {
     },
     "BinaryDeviceOperation_1": {
         "op_name": "Binary_Mult_Silu",
-        "kernel_duration": 4554.444444444444,
+        "kernel_duration": 2929,
         "op_to_op": 661.0,
         "non-overlapped-dispatch-time": 6111.2,
         "kernel_duration_relative_margin": 0.1,
@@ -215,7 +215,7 @@ perf_targets = {
     },
     "BinaryDeviceOperation_2": {
         "op_name": "Binary_Residual_1",
-        "kernel_duration": 2697.1111111111113,
+        "kernel_duration": 2298,
         "op_to_op": 731.4444444444445,
         "non-overlapped-dispatch-time": 6751.9,
         "kernel_duration_relative_margin": 0.1,
