@@ -161,7 +161,7 @@ prep_ubuntu_build()
     echo "Preparing ubuntu ..."
     # Update the list of available packages
     apt-get update
-    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg
+    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg jq
     # The below is to bring cmake from kitware
     wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
     echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $UBUNTU_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
@@ -245,17 +245,19 @@ install() {
 	case "$mode" in
             runtime)
                 prep_ubuntu_runtime
-		install_sfpi
+                install_sfpi
                 ;;
             build)
                 prep_ubuntu_build
                 install_llvm
-		install_gcc
+                install_gcc
                 ;;
             baremetal)
+                prep_ubuntu_runtime
+                install_sfpi
                 prep_ubuntu_build
                 install_llvm
-		install_gcc
+                install_gcc
                 configure_hugepages
                 ;;
         esac
