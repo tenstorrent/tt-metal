@@ -336,7 +336,7 @@ class TT_CCL:
                         dtype=ttnn.bfloat8_b,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                        cache_file_name=self.weight_cache_path / (f"pf_rs_00_{key}_{i}_{seqlen}"),
+                        cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_{i}_{seqlen}"),
                     )
                     check_mesh_tensor_alloc(tt_buffer)
                     tt_buffers.append(tt_buffer)
@@ -348,7 +348,7 @@ class TT_CCL:
                         dtype=ttnn.bfloat8_b,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                        cache_file_name=self.weight_cache_path / (f"pf_rs_01_{key}_{i}_{seqlen}"),
+                        cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_{i}_{seqlen}"),
                     )
                     check_mesh_tensor_alloc(tt_buffer)
                     tt_buffers.append(tt_buffer)
@@ -360,7 +360,7 @@ class TT_CCL:
                         dtype=ttnn.bfloat8_b,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                        cache_file_name=self.weight_cache_path / (f"pf_rs_02_{key}_{i}_{seqlen}"),
+                        cache_file_name=self.weight_cache_path / (f"pb_rs_02_{key}_{i}_{seqlen}"),
                     )
                     check_mesh_tensor_alloc(tt_buffer)
                     tt_buffers.append(tt_buffer)
@@ -396,7 +396,7 @@ class TT_CCL:
                     dtype=ttnn.bfloat16 if key == "LAYERNORM" else ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    cache_file_name=self.weight_cache_path / ("pf_ag_" + key + str(seqlen)),
+                    cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
                 )
                 check_mesh_tensor_alloc(tt_buffer)
                 ag_persistent_buffers[key] = tt_buffer
