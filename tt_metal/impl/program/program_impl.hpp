@@ -200,7 +200,6 @@ private:
         const CoreRangeSet& core_range_set,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
-    CBHandle add_circular_buffer(const CBDescriptor& descriptor);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);

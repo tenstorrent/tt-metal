@@ -215,7 +215,7 @@ Program::Program(const ProgramDescriptor& descriptor) : pimpl_(std::make_unique<
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 
     for (auto& cb_descriptor : descriptor.cbs) {
-        add_circular_buffer(cb_descriptor);
+        pimpl_->add_circular_buffer_(std::make_shared<CircularBuffer>(cb_descriptor));
     }
 
     for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
@@ -721,11 +721,6 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     return add_circular_buffer_(circular_buffer);
 }
 
-CBHandle detail::ProgramImpl::add_circular_buffer(const CBDescriptor& descriptor) {
-    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(descriptor);
-    return add_circular_buffer_(circular_buffer);
-}
-
 CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
     return pimpl_->add_circular_buffer(core_range_set, config);
 }
@@ -735,10 +730,6 @@ CBHandle Program::add_circular_buffer(
     const CircularBufferConfig& config,
     const experimental::GlobalCircularBuffer& global_circular_buffer) {
     return pimpl_->add_circular_buffer(core_range_set, config, global_circular_buffer);
-}
-
-CBHandle Program::add_circular_buffer(const CBDescriptor& descriptor) {
-    return pimpl_->add_circular_buffer(descriptor);
 }
 
 std::shared_ptr<CircularBuffer> detail::ProgramImpl::get_circular_buffer(CBHandle cb_id) const {
