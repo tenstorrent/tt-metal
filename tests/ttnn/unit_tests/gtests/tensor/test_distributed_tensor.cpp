@@ -240,6 +240,36 @@ TEST_F(TensorDistributionT3000Test, Shard2D) {
     EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
 }
 
+TEST_F(TensorDistributionT3000Test, ShardND) {
+    constexpr size_t kNumRows = 2;
+    constexpr size_t kNumCols = 2;
+    auto submesh = mesh_device_->create_submesh(MeshShape(kNumRows, kNumCols));
+    ASSERT_EQ(submesh->shape(), MeshShape(kNumRows, kNumCols));
+
+    std::vector<float> test_data = {
+        0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0};
+    Tensor input_tensor = Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{2, 8}, DataType::FLOAT32));
+
+    auto mapper = nd_mesh_mapper(
+        *submesh,
+        NdMapperConfig{
+            .placements = {NdMapperConfig::Replicate{}, NdMapperConfig::Shard{1}},
+        });
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *submesh);
+
+    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
+    EXPECT_EQ(device_tensors.size(), submesh->num_devices());
+    int i = 0;
+    for (int i = 0; i < device_tensors.size(); i++) {
+        std::cout << "device_tensors[" << i << "]: " << std::endl;
+
+        for (int d : device_tensors[i].to_vector<float>()) {
+            std::cout << d << " ";
+        }
+        std::cout << std::endl;
+    }
+}
+
 TEST_F(TensorDistributionT3000Test, ShardBorrowedTensor) {
     constexpr size_t kNumRows = 2;
     constexpr size_t kNumCols = 4;
