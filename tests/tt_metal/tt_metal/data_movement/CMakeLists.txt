@@ -2,6 +2,7 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dm_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dram_unary/test_unary_dram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/one_to_one/test_one_to_one.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/one_from_one/test_one_from_one.cpp
 )
 
 add_executable(unit_tests_data_movement ${UNIT_TESTS_DATA_MOVEMENT_SRC})
