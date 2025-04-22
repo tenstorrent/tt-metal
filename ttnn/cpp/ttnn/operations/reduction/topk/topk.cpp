@@ -43,6 +43,17 @@ std::vector<Tensor> post_topk_transform_tensor(
     Shape final_lshape = original_lshape;
     final_lshape[dim] = std::min(original_lshape[dim], k);
 
+    // K is not a supported shape
+    if (adjusted_k != k) {
+        // slicing into padded shapes that will allow reshape below to work
+        auto output_shape = result[0].get_padded_shape();
+        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
+        result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
+        result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+    }
+
     // rank is not 4
     if (orig_rank < 4) {
         result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
