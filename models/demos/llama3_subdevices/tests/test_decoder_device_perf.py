@@ -25,7 +25,7 @@ DECODE_OP_END_INDEX = -12
 
 perf_targets = {
     "RMSAllGather_0": {
-        "op_name": "PreRMS_0",
+        "op_name": "RMS_0",
         "kernel_duration": 11694.534722222223,
         "op_to_op": 759.6666666666666,
         "non-overlapped-dispatch-time": 7260,
@@ -34,28 +34,10 @@ perf_targets = {
         "dispatch_duration_relative_margin": 0.1,
     },
     "RMSAllGather_1": {
-        "op_name": "PostRMS_0",
+        "op_name": "RMS_1",
         "kernel_duration": 9400.361111111111,
         "op_to_op": 634.3333333333334,
         "non-overlapped-dispatch-time": 6301.3,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
-    },
-    "RMSAllGather_2": {
-        "op_name": "PreRMS_1",
-        "kernel_duration": 11078.270833333334,
-        "op_to_op": 748.3333333333334,
-        "non-overlapped-dispatch-time": 7326,
-        "kernel_duration_relative_margin": 0.05,
-        "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
-    },
-    "RMSAllGather_3": {
-        "op_name": "PostRMS_1",
-        "kernel_duration": 9197.204861111111,
-        "op_to_op": 641.0,
-        "non-overlapped-dispatch-time": 6431.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.1,
