@@ -37,7 +37,7 @@ datatypes_parameters = {
 }
 
 target_type = "bfloat16"
-operation_name = "log"
+operation_name = "exp"
 
 
 parameters = datatypes_parameters[target_type]
@@ -162,10 +162,10 @@ for i in range(0, repeats):
     actual_torch_output = ttnn.to_torch(ttnn_output)
 
     # Flatten tensors for data analsis (we only used 2D for ttnn and TILE_LAYOUT)
-    torch_input_1d = torch_input_f32.flatten()
-    actual_torch_output_1d = actual_torch_output.flatten()
-    torch_ref = torch_output_ref.flatten()
-    torch_exponent_f32 = torch_exponent.flatten().view(TORCH_TYPE)
+    np_flat_input = torch_input_f32.to(torch.float32).flatten().numpy()
+    np_flat_output = actual_torch_output.to(torch.float32).flatten().numpy()
+    np_flat_ref = torch_output_ref.to(torch.float32).flatten().numpy()
+    # np_flat_exponent = torch_exponent.flatten().view(TORCH_TYPE).numpy()
 
     for j in range(0, sub_batches):
         chunk_size = TENSOR_WIDTH * TENSOR_HEIGHT // sub_batches
@@ -175,24 +175,34 @@ for i in range(0, repeats):
         # TODO: Handle NaN/inf
 
         # Get sub-range
-        torch_sub_input = torch_input_1d[beg_index:end_index]
-        actual_sub_output = actual_torch_output_1d[beg_index:end_index]
-        torch_sub_ref = torch_ref[beg_index:end_index]
+        np_sub_input = np_flat_input[beg_index:end_index]
+        np_sub_output = np_flat_output[beg_index:end_index]
+        np_sub_ref = np_flat_ref[beg_index:end_index]
 
         # Measure abs error
-        torch_diff = torch.abs(torch_sub_ref - actual_sub_output)
+        np_diff = np.abs(np_sub_ref - np_sub_output)
 
         # Compare actual and expected output
         # TODO: Cast data to float32 or even float64 to reduce measurement errors
         # mse_value      = mse_loss(actual_sub_output, torch_sub_ref)
-        max_abs_error = torch_diff.max()
-        max_rel_error = (torch_diff / torch.abs(torch_sub_ref)).max()
-        mean_rel_error = (torch_diff / torch.abs(torch_sub_ref)).mean()
+        np_diff_curated = np_diff[~np.isfinite(np_diff)]
+        np_sub_ref_abs = np.abs(np_sub_ref[~np.isfinite(np_sub_ref)])
+
+        if len(np_diff) > 0 and len(np_sub_ref_abs) > 0:
+            # Reduces edge cases
+            max_abs_error = np_diff_curated.max()
+            max_rel_error = np.max(np_diff_curated / np_sub_ref_abs)  # Ignore NaN
+            mean_rel_error = np.mean(np_diff_curated / np_sub_ref_abs)
+
+        else:  # Batch only contains infinite value
+            max_abs_error = np_diff.max()
+            max_rel_error = np.max(np_diff / np.abs(np_sub_ref))  # Ignore NaN
+            mean_rel_error = np.mean(np_diff / np.abs(np_sub_ref))
 
         # Write output data at given sub-batches / sub-samples
-        x_array[res_i] = torch_sub_input[0].item()
-        y_array[res_i] = actual_sub_output[0].item()
-        yref_array[res_i] = torch_sub_ref[0].item()
+        x_array[res_i] = np_sub_input[0].item()
+        y_array[res_i] = np_sub_output[0].item()
+        yref_array[res_i] = np_sub_ref[0].item()
         # mse_array           [res_i] = mse_value.item()
         max_abs_error_array[res_i] = max_abs_error.item()
         max_rel_error_array[res_i] = max_rel_error.item()
