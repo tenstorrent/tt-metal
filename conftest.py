@@ -20,7 +20,7 @@ from datetime import datetime
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result
-from tests.scripts.common import get_updated_device_params
+from tests.scripts.common import get_dispatch_core_type, get_updated_device_params
 
 # Constants for device configurations
 GALAXY_NUM_DEVICES = 32
@@ -138,32 +138,6 @@ def get_tt_cache_path():
             return default_path
 
     return get_tt_cache_path_
-
-
-def get_dispatch_core_type():
-    import ttnn
-
-    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
-    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if (("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml") or (
-        "TT_METAL_ETH_DISPATCH" in os.environ
-    ):
-        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
-    return dispatch_core_type
-
-
-def get_updated_device_params(device_params):
-    import ttnn
-
-    dispatch_core_type = get_dispatch_core_type()
-    new_device_params = device_params.copy()
-    dispatch_core_axis = new_device_params.pop(
-        "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if ttnn.get_arch_name() == "blackhole" else ttnn.DispatchCoreAxis.ROW,
-    )
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
-    new_device_params["dispatch_core_config"] = dispatch_core_config
-    return new_device_params
 
 
 @pytest.fixture(scope="function")
@@ -308,6 +282,7 @@ def mesh_device(request, silicon_arch_name, device_params):
         ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
     del mesh_device
 
 
