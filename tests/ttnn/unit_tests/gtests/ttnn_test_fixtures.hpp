@@ -68,9 +68,13 @@ protected:
     }
 
     void TearDown() override { CloseDevice(device_); }
+
+    TTNNFixtureWithDevice() : TTNNFixtureBase() {}
+
+    TTNNFixtureWithDevice(int trace_region_size, int l1_small_size) :
+        TTNNFixtureBase(trace_region_size, l1_small_size) {}
 };
 
-// TODO: deduplicate the code with `TTNNFixtureWithDevice`.
 class MultiCommandQueueSingleDeviceFixture : public TTNNFixtureBase {
 protected:
     IDevice* device_;
@@ -88,15 +92,9 @@ protected:
             0, 2, trace_region_size_, l1_small_size_, DispatchCoreConfig{dispatch_core_type});
     }
 
-    void TearDown() override { device_->close(); }
-
-    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
-    tt::ARCH arch_;
-    size_t num_devices_;
+    void TearDown() override { CloseDevice(device_); }
 };
 
-// TODO: deduplicate the code with `TTNNFixtureWithDevice`.
 class MultiCommandQueueT3KFixture : public TTNNFixtureBase {
 protected:
     std::map<chip_id_t, tt::tt_metal::IDevice*> devs;
