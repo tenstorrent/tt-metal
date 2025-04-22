@@ -41,12 +41,8 @@ public:
     }
 
 public:
-    TTNNFixtureBase() : trace_region_size_(DEFAULT_TRACE_REGION_SIZE), l1_small_size_(DEFAULT_L1_SMALL_SIZE) {
-        std::srand(0);
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        num_devices_ = GetNumAvailableDevices();
-    }
-
+    TTNNFixtureBase() : TTNNFixtureBase(DEFAULT_TRACE_REGION_SIZE, DEFAULT_L1_SMALL_SIZE) { }
+    
     TTNNFixtureBase(int trace_region_size, int l1_small_size) :
         trace_region_size_(trace_region_size), l1_small_size_(l1_small_size) {
         std::srand(0);
