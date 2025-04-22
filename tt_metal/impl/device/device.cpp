@@ -13,7 +13,6 @@
 #include <sub_device_manager_tracker.hpp>
 #include <sub_device_types.hpp>
 #include <trace.hpp>
-#include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
@@ -1035,19 +1034,16 @@ void Device::configure_command_queue_programs() {
              tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(device_id)) {
             uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
                 serviced_device_id);
-            CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-            uint32_t host_issue_q_rd_ptr = DispatchMemMap::get(dispatch_core_type)
-                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
-            uint32_t host_issue_q_wr_ptr = DispatchMemMap::get(dispatch_core_type)
-                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-            uint32_t host_completion_q_wr_ptr =
-                DispatchMemMap::get(dispatch_core_type)
-                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-            uint32_t host_completion_q_rd_ptr =
-                DispatchMemMap::get(dispatch_core_type)
-                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
-            uint32_t cq_start = DispatchMemMap::get(dispatch_core_type)
-                                    .get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+            uint32_t host_issue_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+                CommandQueueHostAddrType::ISSUE_Q_RD);
+            uint32_t host_issue_q_wr_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+                CommandQueueHostAddrType::ISSUE_Q_WR);
+            uint32_t host_completion_q_wr_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+                CommandQueueHostAddrType::COMPLETION_Q_WR);
+            uint32_t host_completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+                CommandQueueHostAddrType::COMPLETION_Q_RD);
+            uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
+                CommandQueueHostAddrType::UNRESERVED);
             pointers.resize(cq_start/sizeof(uint32_t));
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 // Reset the host manager's pointer for this command queue

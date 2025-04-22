@@ -16,8 +16,9 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
+#include <magic_enum/magic_enum.hpp>
 
-#include <unordered_map>
+#include <array>
 #include <unordered_set>
 #include <vector>
 
@@ -64,7 +65,7 @@ private:
     std::unique_ptr<Hal> hal_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
-    std::unordered_map<CoreType, std::unique_ptr<DispatchMemMap>> dispatch_mem_map_;
+    std::array<std::unique_ptr<DispatchMemMap>, magic_enum::enum_count<CoreType>()> dispatch_mem_map_;
 };
 
 }  // namespace tt::tt_metal

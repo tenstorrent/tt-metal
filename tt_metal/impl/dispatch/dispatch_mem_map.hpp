@@ -7,17 +7,12 @@
 #include <stdint.h>
 #include <tt-metalium/command_queue_common.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
-#include <tt_stl/indestructible.hpp>
 #include <utility>
 #include <vector>
 
 #include <umd/device/tt_core_coordinates.h>
 
 namespace tt {
-namespace stl {
-template <typename T>
-class Indestructible;
-}  // namespace stl
 namespace tt_metal {
 enum class CommandQueueDeviceAddrType : uint8_t;
 }  // namespace tt_metal

@@ -3,16 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <magic_enum/magic_enum.hpp>
-#include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/tt_align.hpp>
 #include <optional>
 
+#include "dispatch_mem_map.hpp"
 #include "assert.hpp"
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"
-#include <tt_stl/indestructible.hpp>
 #include "impl/context/metal_context.hpp"
 #include "utils.hpp"
 

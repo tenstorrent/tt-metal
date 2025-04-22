@@ -40,7 +40,6 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "hal_types.hpp"
 #include "kernel.hpp"
 #include "math.hpp"
@@ -496,8 +495,6 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 void insert_stall_cmds(
     ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* /*device*/) {
     // Initialize stall command sequences for this program.
-    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    auto dispatch_core_type = dispatch_core_config.get_core_type();
     tt::tt_metal::DeviceCommandCalculator calculator;
     calculator.add_dispatch_wait_with_prefetch_stall();
     const uint32_t uncached_stall_cmd_sizeB = calculator.write_offset_bytes();
@@ -512,7 +509,7 @@ void insert_stall_cmds(
     program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx].add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(*sub_device_id),
+        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
         0);
     // Empty wait command initialized here. Will get updated when program is enqueued.
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx] =
@@ -520,7 +517,7 @@ void insert_stall_cmds(
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx].add_dispatch_wait(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(*sub_device_id),
+        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
         0);
 }
 
@@ -1212,7 +1209,8 @@ public:
         const CommandConstants& constants,
         DeviceCommandCalculator& calculator) {
         const auto& hal = MetalContext::instance().hal();
-        const uint32_t max_length_per_sub_cmd = DispatchMemMap::get(constants.dispatch_core_type).scratch_db_size() / 2;
+        const uint32_t max_length_per_sub_cmd =
+            MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).scratch_db_size() / 2;
         const uint32_t max_paged_length_per_sub_cmd =
             max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
         for (const auto& [cores, num_mcast_dests, kg_transfer_info] : program_transfer_info.kernel_bins) {
@@ -1759,14 +1757,17 @@ public:
         // Dispatch X/Y resolved when the program is enqueued
         run_program_go_signal.master_x = 0;
         run_program_go_signal.master_y = 0;
-        run_program_go_signal.dispatch_message_offset =
-            DispatchMemMap::get(constants.dispatch_core_type).get_dispatch_message_update_offset(sub_device_index);
+        run_program_go_signal.dispatch_message_offset = MetalContext::instance()
+                                                            .dispatch_mem_map(constants.dispatch_core_type)
+                                                            .get_dispatch_message_update_offset(sub_device_index);
         uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
         // Num Workers Resolved when the program is enqueued
         device_command_sequence.add_dispatch_go_signal_mcast(
             0,
             *reinterpret_cast<uint32_t*>(&run_program_go_signal),
-            DispatchMemMap::get(constants.dispatch_core_type).get_dispatch_stream_index(sub_device_index),
+            MetalContext::instance()
+                .dispatch_mem_map(constants.dispatch_core_type)
+                .get_dispatch_stream_index(sub_device_index),
             num_noc_mcast_txns,
             num_noc_unicast_txns,
             noc_data_start_idx,
@@ -1784,7 +1785,8 @@ void assemble_device_commands(
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     constants.dispatch_core_type = dispatch_core_config.get_core_type();
     constants.noc_index = k_dispatch_downstream_noc;
-    constants.max_prefetch_command_size = DispatchMemMap::get(constants.dispatch_core_type).max_prefetch_command_size();
+    constants.max_prefetch_command_size =
+        MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).max_prefetch_command_size();
     constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     BatchedTransfers batched_transfers =
         assemble_runtime_args_commands(program_command_sequence, program, device, constants);
@@ -2054,8 +2056,9 @@ void update_program_dispatch_commands(
     run_program_go_signal.signal = RUN_MSG_GO;
     run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
     run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
-    run_program_go_signal.dispatch_message_offset =
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(*sub_device_id);
+    run_program_go_signal.dispatch_message_offset = MetalContext::instance()
+                                                        .dispatch_mem_map(dispatch_core_type)
+                                                        .get_dispatch_message_update_offset(*sub_device_id);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal =
         *reinterpret_cast<uint32_t*>(&run_program_go_signal);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
@@ -2099,7 +2102,8 @@ void write_program_command_sequence(
     uint32_t total_fetch_size_bytes =
         stall_fetch_size_bytes + preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
 
-    if (total_fetch_size_bytes <= DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size()) {
+    if (total_fetch_size_bytes <=
+        MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size()) {
         manager.issue_queue_reserve(total_fetch_size_bytes, command_queue_id);
         uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
 
@@ -2296,8 +2300,6 @@ void reset_worker_dispatch_state_on_device(
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     if (reset_launch_msg_state) {
         if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
             uint16_t index_bitmask = 0;
@@ -2313,13 +2315,13 @@ void reset_worker_dispatch_state_on_device(
         reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)dispatch_core.y;
         for (uint32_t i = 0; i < num_sub_devices; ++i) {
             reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
-                DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(i);
+                MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i);
             // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
             SubDeviceId sub_device_id(static_cast<uint8_t>(i));
             command_sequence.add_dispatch_go_signal_mcast(
                 expected_num_workers_completed[i],
                 *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
-                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(i),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
                 device->num_noc_mcast_txns(sub_device_id),
                 device->num_noc_unicast_txns(sub_device_id),
                 device->noc_data_start_index(sub_device_id),
@@ -2340,14 +2342,14 @@ void reset_worker_dispatch_state_on_device(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
-                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(i),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
                 expected_num_workers,
                 1);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(i),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
             expected_num_workers);
     }
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
