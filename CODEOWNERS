@@ -232,6 +232,7 @@ models/experimental/mobilenetv2 @tenstorrent/cse-developer-ttnn
 models/experimental/yolov8s_world @tenstorrent/cse-developer-ttnn
 models/experimental/yolov10 @tenstorrent/cse-developer-ttnn
 models/experimental/functional_yolov9c @tenstorrent/cse-developer-ttnn
+models/experimental/yolov8x @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
