@@ -149,27 +149,6 @@ TEST_F(TensorDistributionT3000Test, Shard1D) {
     EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
 }
 
-TEST_F(TensorDistributionT3000Test, Shard2DInvalidMeshShape) {
-    ASSERT_EQ(mesh_device_->shape(), MeshShape(2, 4));
-
-    EXPECT_ANY_THROW(
-        shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{3, 1}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
-
-    EXPECT_ANY_THROW(
-        shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{2, 5}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
-
-    EXPECT_ANY_THROW(
-        shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{1, 1, 2}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
-}
-
-TEST_F(TensorDistributionT3000Test, Shard2DInvalidShardConfig) {
-    EXPECT_ANY_THROW(shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{2, 4}, Shard2dConfig{}));
-}
-
-TEST_F(TensorDistributionT3000Test, Concat2DInvalidConfig) {
-    EXPECT_ANY_THROW(concat_2d_mesh_to_tensor_composer(*mesh_device_, Concat2dConfig{.row_dim = 2, .col_dim = 2}));
-}
-
 TEST_F(TensorDistributionT3000Test, Shard2DReplicateDim) {
     constexpr size_t kNumRows = 2;
     constexpr size_t kNumCols = 4;

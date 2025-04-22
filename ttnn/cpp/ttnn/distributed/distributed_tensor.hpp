@@ -49,7 +49,9 @@ struct Concat2dConfig {
 };
 std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config);
 
-// TODO: ND mapper will supercede all existing mapper types.
+// TODO: #20895 - ND `create_mesh_mapper` and `create_mesh_composer` are generalized ND interfaces that will supercede
+// all existing mapper and composer types.
+
 struct MeshMapperConfig {
     // Specifies the tensor should be replicated across devices.
     struct Replicate {};
@@ -107,6 +109,10 @@ struct MeshComposerConfig {
     // Specifies dimension of the tensor to concatenate.
     std::vector<int> dims;
 };
+
+// Creates an ND mesh composer that aggregates a tensor according to the `config`.
+// If `shape` is not provided, the shape of `mesh_device` is used.
+// Otherwise, the size of the shape must match the size of the mesh device shape.
 std::unique_ptr<MeshToTensor> create_mesh_composer(
     MeshDevice& mesh_device,
     const MeshComposerConfig& config,
