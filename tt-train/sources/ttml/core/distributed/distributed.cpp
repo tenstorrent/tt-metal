@@ -79,16 +79,13 @@ void broadcast_tensor(ttnn::Tensor& tensor, int root) {
 // @dmakoviichuk TODO:
 // optimize this code
 void reduce_tensor(ttnn::Tensor& tensor, std::span<int> client_ranks) {
-    // Grab MPI context (in case you need it later)
-    auto& mpiContext = autograd::ctx().get_mpi_context();
-
-    bool isFirst = true;
+    bool is_first = true;
     ttnn::Tensor temp = ttnn::empty_like(tensor);
     for (int rank : client_ranks) {
-        if (isFirst) {
+        if (is_first) {
             // First client: receive directly into `tensor`
             recv_tensor(tensor, rank);
-            isFirst = false;
+            is_first = false;
         } else {
             recv_tensor(temp, rank);
 
