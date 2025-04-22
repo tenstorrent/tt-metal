@@ -92,7 +92,7 @@ AllGatherConcat create_all_gather_concat_struct(
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
+    const MemoryConfig& memory_config,
     const std::vector<IDevice*>& devices,
     const ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
@@ -151,8 +151,8 @@ Tensor all_gather_concat(
     const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_heads,
+    const MemoryConfig& memory_config,
     const std::optional<uint32_t> num_links = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
