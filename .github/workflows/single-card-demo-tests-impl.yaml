@@ -38,6 +38,7 @@ jobs:
           { name: "stable_diffusion", runner-label: "N150", performance: false, cmd: run_stable_diffusion_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
           { name: "segformer", runner-label: "N150", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas (vguduruTT)
           { name: "yolov9c", runner-label: "N150", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
+          { name: "yolov8s_world", runner-label: "N150", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           { name: "falcon7b", runner-label: "N300", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
           { name: "mistral7b", runner-label: "N300", performance: false, cmd: run_mistral7b_func, owner_id: U03PUAKE719}, # Miguel Tairum
           { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
@@ -59,6 +60,7 @@ jobs:
           { name: "whisper", runner-label: "N300", performance: true, cmd: run_whisper_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
           { name: "mamba", runner-label: "N300", performance: true, cmd: run_mamba_perf, owner_id: U06ECNVR0EN}, # Evan Smal
           { name: "segformer", runner-label: "N300", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas (vguduruTT)
+          { name: "yolov8s_world", runner-label: "N300", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
         ]
     name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}-${{ (matrix.test-group.performance && 'perf') || 'func' }}
     env:
