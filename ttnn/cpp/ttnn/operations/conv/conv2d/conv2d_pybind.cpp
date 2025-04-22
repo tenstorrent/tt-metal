@@ -32,12 +32,12 @@ void py_bind_conv2d(py::module& module) {
         :param ttnn.Tensor weight_tensor: The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w
         :param ttnn.Tensor, None bias_tensor:   Optional bias tensor. Default: None
         :param ttnn.IDevice device:  The device to use.
-        :param int: in_channels:  Number of input channels.
-        :param int: out_channels:  Number of output channels.
-        :param int: batch_size:  Batch size.
-        :param int: input_height:  Height of the input tensor.
-        :param int: input_width:  Width of the input tensor.
-        :param tuple[int  , int] kernel_size: Size of the convolving kernel.
+        :param int in_channels:  Number of input channels.
+        :param int out_channels:  Number of output channels.
+        :param int batch_size:  Batch size.
+        :param int input_height:  Height of the input tensor.
+        :param int input_width:  Width of the input tensor.
+        :param tuple[int, int] kernel_size: Size of the convolving kernel.
         :param tuple[int, int] stride: Stride of the cross-correlation.
         :param tuple[int, int] or tuple[int, int, int, int]) padding: Zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
         :param tuple[int, int] dilation: Spacing between kernel elements.
@@ -205,12 +205,12 @@ void py_bind_conv2d(py::module& module) {
         :param ttnn.MemoryConfig input_memory_config: the memory configuration for the input tensor.
         :param ttnn.Tensor input_layout: the layout of the input tensor.
         :param ttnn.Tensor weights_format: the format of the weights tensor. Currently only supports OIHW. (out_channels, in_channels, kernel_height, kernel_width)
-        :param int: in_channels:  number of input channels.
-        :param int: out_channels:  number of output channels.
-        :param int: batch_size:  batch size.
-        :param int: input_height:  height of the input tensor.
-        :param int: input_width:  width of the input tensor.
-        :param tuple[int  , int] kernel_size: size of the convolving kernel.
+        :param int in_channels:  number of input channels.
+        :param int out_channels:  number of output channels.
+        :param int batch_size:  batch size.
+        :param int input_height:  height of the input tensor.
+        :param int input_width:  width of the input tensor.
+        :param tuple[int, int] kernel_size: size of the convolving kernel.
         :param tuple[int, int] stride: stride of the cross-correlation.
         :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
         :param tuple[int, int] dilation: spacing between kernel elements.
@@ -279,11 +279,11 @@ void py_bind_conv2d(py::module& module) {
         :param ttnn.MemoryConfig input_memory_config: the memory configuration for the input tensor.
         :param ttnn.Tensor input_layout: the layout of the input tensor.
         :param ttnn.Tensor weights_format: the format of the weights tensor. Currently only supports OIHW. (out_channels, in_channels, kernel_height, kernel_width)
-        :param int: in_channels:  number of input channels.
-        :param int: out_channels:  number of output channels.
-        :param int: batch_size:  batch size.
-        :param int: input_height:  height of the input tensor.
-        :param int: input_width:  width of the input tensor.
+        :param int in_channels:  number of input channels.
+        :param int out_channels:  number of output channels.
+        :param int batch_size:  batch size.
+        :param int input_height:  height of the input tensor.
+        :param int input_width:  width of the input tensor.
         :param tuple[int  , int] kernel_size: size of the convolving kernel.
         :param tuple[int, int] stride: stride of the cross-correlation.
         :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].

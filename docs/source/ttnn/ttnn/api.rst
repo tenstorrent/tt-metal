@@ -510,8 +510,6 @@ Convolution
    ttnn.conv2d
    ttnn.experimental.conv3d
    ttnn.conv_transpose2d
-   ttnn.prepare_conv_weights
-   ttnn.prepare_conv_bias
 
 .. autosummary::
    :toctree: api
