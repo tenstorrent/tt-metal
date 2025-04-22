@@ -15,6 +15,7 @@ struct circular_buffer_attributes_t {
     uint32_t total_size;
     uint32_t page_size;
     std::variant<tt::DataFormat, ttnn::DataType> data_format;
+    std::optional<uint32_t> set_globally_allocated_address = std::nullopt;
 };
 
 using cb_attr_map = std::unordered_map<tt::CBIndex, circular_buffer_attributes_t>;
