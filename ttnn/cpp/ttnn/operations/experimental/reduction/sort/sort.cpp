@@ -55,7 +55,8 @@ Tensor pre_sort_transform_tensor(
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
     // Fill implicit tile padding with the appropriate value
     const Tensor padded_tensor = ttnn::fill_implicit_tile_padding(
-        transformed_tensor, descending ? std::numeric_limits<float>::lowest() : std::numeric_limits<float>::max());
+        transformed_tensor,
+        descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity());
 
     // Check for need of manual padding - Bitonic sort works on dataset that are the size of power of two - add manual
     // padding if needed
@@ -71,7 +72,7 @@ Tensor pre_sort_transform_tensor(
         tt::tt_metal::Array4D(
             {current_padded_shape[0], current_padded_shape[1], current_padded_shape[2], padded_last_dim}),
         tt::tt_metal::Array4D({0, 0, 0, 0}),
-        descending ? std::numeric_limits<float>::lowest() : std::numeric_limits<float>::max());
+        descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity());
 
     return padded_output_tensor;
 }
