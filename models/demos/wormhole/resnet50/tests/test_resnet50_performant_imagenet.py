@@ -26,7 +26,7 @@ from models.utility_functions import (
 )
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 def test_run_resnet50_trace_2cqs_inference(
-    device,
+    mesh_device,
     use_program_cache,
     batch_size_per_device,
     iterations,
@@ -36,15 +36,15 @@ def test_run_resnet50_trace_2cqs_inference(
     enable_async_mode,
     model_location_generator,
 ):
-    batch_size = batch_size_per_device * device.get_num_devices()
-    iterations = iterations // device.get_num_devices()
+    batch_size = batch_size_per_device * mesh_device.get_num_devices()
+    iterations = iterations // mesh_device.get_num_devices()
     profiler.clear()
     with torch.no_grad():
         resnet50_trace_2cq = ResNet50Trace2CQ()
 
         profiler.start(f"compile")
         resnet50_trace_2cq.initialize_resnet50_trace_2cqs_inference(
-            device,
+            mesh_device,
             batch_size_per_device,
             act_dtype,
             weight_dtype,
@@ -80,7 +80,7 @@ def test_run_resnet50_trace_2cqs_inference(
                 mesh_mapper=resnet50_trace_2cq.test_infra.inputs_mesh_mapper,
             )
             output = resnet50_trace_2cq.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
-            output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+            output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
             prediction = output[:, 0, 0, :].argmax(dim=-1)
             profiler.end(f"run")
             total_inference_time += profiler.get(f"run")
