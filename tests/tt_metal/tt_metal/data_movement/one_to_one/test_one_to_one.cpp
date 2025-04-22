@@ -142,15 +142,19 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     detail::LaunchProgram(device, program);
     detail::ReadFromBuffer(slave_l1_buffer, packed_output);
 
-    // Print output and golden vectors
-    log_info("Golden vector");
-    print_vector<uint32_t>(packed_golden);
-    log_info("Output vector");
-    print_vector<uint32_t>(packed_output);
-
-    // Return comparison
-    return is_close_packed_vectors<bfloat16, uint32_t>(
+    // Results comparison
+    bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+
+    if (!pcc) {
+        log_error("PCC Check failed");
+        log_info("Golden vector");
+        print_vector<uint32_t>(packed_golden);
+        log_info("Output vector");
+        print_vector<uint32_t>(packed_output);
+    }
+
+    return pcc;
 }
 }  // namespace unit_tests::dm::core_to_core
 
