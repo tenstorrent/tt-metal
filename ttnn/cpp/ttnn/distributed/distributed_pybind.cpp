@@ -250,6 +250,12 @@ void py_module(py::module& module) {
             R"doc(
                Disable program cache across all devices in the mesh.
            )doc")
+        .def(
+            "set_program_cache_misses_allowed",
+            &MeshDevice::set_program_cache_misses_allowed,
+            R"doc(
+               Set whether program cache misses are allowed across all devices in the mesh.
+           )doc")
         .def_property_readonly(
             "shape",
             &MeshDevice::shape,
