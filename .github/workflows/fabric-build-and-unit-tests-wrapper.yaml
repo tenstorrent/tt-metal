@@ -1,4 +1,4 @@
-name: "[post-commit] Fabric unit tests"
+name: "[post-commit] Fabric Build and Unit Tests"
 
 on:
   workflow_dispatch:

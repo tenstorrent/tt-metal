@@ -1,4 +1,4 @@
-name: "(Blackhole) Blackhole nightly tests"
+name: "(Blackhole) Nightly Tests"
 
 on:
   workflow_dispatch:

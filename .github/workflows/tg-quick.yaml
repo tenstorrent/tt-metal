@@ -1,4 +1,4 @@
-name: "zzz TG Quick tests"
+name: "[internal] (TG) Quick Tests"
 
 on:
   workflow_call:

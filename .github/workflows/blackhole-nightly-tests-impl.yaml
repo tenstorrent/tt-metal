@@ -1,4 +1,4 @@
-name: "[internal] Blackhole nightly tests impl"
+name: "[internal] Blackhole Nightly Tests Impl"
 
 on:
   workflow_call:

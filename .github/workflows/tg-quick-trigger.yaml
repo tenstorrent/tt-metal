@@ -1,4 +1,4 @@
-name: "Galaxy Quick"
+name: "(TG) Quick Tests"
 
 on:
   workflow_dispatch:

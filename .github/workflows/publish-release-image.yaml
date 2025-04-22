@@ -1,4 +1,4 @@
-name: "[internal] Create and Publish Release Docker Image"
+name: "[internal] Publish Release Image"
 
 on:
   workflow_call:

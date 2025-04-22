@@ -1,4 +1,4 @@
-name: "[post-commit] metal - Run profiler regression"
+name: "[post-commit] Run Profiler Regression"
 
 on:
   workflow_dispatch:

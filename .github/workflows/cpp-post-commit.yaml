@@ -1,4 +1,4 @@
-name: "[internal] C++ tests impl"
+name: "[internal] CPP Post Commit"
 
 on:
   workflow_call:

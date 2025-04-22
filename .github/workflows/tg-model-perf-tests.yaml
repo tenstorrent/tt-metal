@@ -1,4 +1,4 @@
-name: "(TG) TG model perf tests"
+name: "(TG) Model Perf Tests"
 
 on:
   workflow_dispatch:

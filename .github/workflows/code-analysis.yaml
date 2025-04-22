@@ -1,4 +1,4 @@
-name: "Code analysis"
+name: "Code Analysis"
 
 on:
   schedule:

@@ -1,4 +1,4 @@
-name: "(T3K) T3000 perplexity tests"
+name: "(T3000) Perplexity Tests"
 
 on:
   workflow_dispatch:

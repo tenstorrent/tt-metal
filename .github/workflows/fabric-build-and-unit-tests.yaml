@@ -1,4 +1,4 @@
-name: "[internal] Fabric unit tests impl"
+name: "[internal] Fabric Build and Unit Tests"
 
 on:
   workflow_call:

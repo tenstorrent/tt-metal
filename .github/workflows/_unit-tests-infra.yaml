@@ -1,4 +1,4 @@
-name: "[internal] Infra tools unit tests"
+name: "[internal] Unit Tests Infra"
 
 on:
   workflow_dispatch:

@@ -1,4 +1,4 @@
-name: "(Single-card) Frequent model and ttnn tests"
+name: "(Single-card) (Nightly) Fast Dispatch Full Regressions and Models"
 
 on:
   workflow_dispatch:

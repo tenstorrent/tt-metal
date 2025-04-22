@@ -1,4 +1,4 @@
-name: "[internal] Single-card Device perf regressions impl"
+name: "[internal] (Single-card) Device Perf Regressions Impl"
 
 on:
   workflow_call:

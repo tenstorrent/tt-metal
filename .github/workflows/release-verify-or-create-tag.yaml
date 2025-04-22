@@ -1,4 +1,4 @@
-name: Verify/create new release tag
+name: "[internal] Release Verify or Create Tag"
 
 on:
   workflow_call:

@@ -1,4 +1,4 @@
-name: "[internal] Remove Stale Branches"
+name: "Remove Stale Branches"
 
 on:
   schedule:

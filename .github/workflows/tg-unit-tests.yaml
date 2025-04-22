@@ -1,4 +1,4 @@
-name: "(TG) TG unit tests"
+name: "(TG) Unit Tests"
 
 on:
   workflow_dispatch:

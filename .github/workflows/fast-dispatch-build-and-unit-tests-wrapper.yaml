@@ -1,4 +1,4 @@
-name: "[post-commit] Fast Dispatch unit tests"
+name: "[post-commit] Fast Dispatch Build and Unit Tests"
 
 on:
   workflow_dispatch:

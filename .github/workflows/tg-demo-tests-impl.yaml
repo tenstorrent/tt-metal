@@ -1,4 +1,4 @@
-name: "[internal] TG demo tests impl"
+name: "[internal] (TG) Demo Tests Impl"
 
 on:
   workflow_call:

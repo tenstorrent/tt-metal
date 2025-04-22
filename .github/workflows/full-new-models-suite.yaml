@@ -1,4 +1,4 @@
-name: "(Single-card) Tests for new models"
+name: "(Single-card) Full New Models Suite"
 
 on:
   workflow_dispatch:

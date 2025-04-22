@@ -1,4 +1,4 @@
-name: "[internal] T3000 perplexity tests impl"
+name: "[internal] (T3000) Perplexity Tests Impl"
 
 on:
   workflow_call:

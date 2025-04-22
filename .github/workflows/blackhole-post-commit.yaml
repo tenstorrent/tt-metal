@@ -1,4 +1,4 @@
-name: "Blackhole post-commit tests"
+name: "(Blackhole) Post Commit"
 
 on:
   workflow_call:

@@ -1,4 +1,4 @@
-name: "[internal] TG frequent tests"
+name: "[internal] (TG) Frequent Tests"
 
 on:
   workflow_call:

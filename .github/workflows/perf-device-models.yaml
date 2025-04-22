@@ -1,4 +1,4 @@
-name: "(Single-card) Device perf regressions"
+name: "(Single-card) Device Perf Regressions"
 
 on:
   workflow_dispatch:

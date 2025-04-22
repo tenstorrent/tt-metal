@@ -1,4 +1,4 @@
-name: "[post-commit] models tests"
+name: "[post-commit] Models Post Commit"
 
 on:
   workflow_call:

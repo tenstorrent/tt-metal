@@ -1,4 +1,4 @@
-name: "All post-commit tests"
+name: "All Post Commit Workflows"
 
 on:
   workflow_call:

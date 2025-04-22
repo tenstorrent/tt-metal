@@ -1,4 +1,4 @@
-name: "[internal] metal - Run microbenchmarks impl"
+name: "[internal] Metal Run Microbenchmarks Impl"
 
 on:
   workflow_call:

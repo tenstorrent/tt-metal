@@ -1,4 +1,4 @@
-name: "zzz Smoke tests"
+name: "[internal] Smoke Tests"
 
 on:
   workflow_call:

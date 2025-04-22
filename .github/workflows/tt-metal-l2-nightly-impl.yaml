@@ -1,4 +1,4 @@
-name: "[impl] Nightly tt-metal L2 tests impl"
+name: "[internal] tt-metal L2 Nightly Impl"
 
 on:
   workflow_call:

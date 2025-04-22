@@ -1,4 +1,4 @@
-name: "[internal] Auto-retry post-commit"
+name: "[internal] Auto Retry Post Commit"
 
 on:
   workflow_dispatch:

@@ -1,4 +1,4 @@
-name: Compute Public API Surface
+name: Metal API Surface
 
 on:
   workflow_dispatch:

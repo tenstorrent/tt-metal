@@ -1,4 +1,4 @@
-name: "Nightly tt-metal L2 tests"
+name: "tt-metal L2 Nightly Tests"
 
 on:
   workflow_dispatch:

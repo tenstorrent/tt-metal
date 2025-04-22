@@ -1,4 +1,4 @@
-name: "metal - Run microbenchmarks"
+name: "Metal Run Microbenchmarks"
 
 on:
   schedule:

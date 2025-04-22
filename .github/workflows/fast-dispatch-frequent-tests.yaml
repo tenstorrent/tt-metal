@@ -1,4 +1,4 @@
-name: "(Single-card) Fast dispatch frequent tests"
+name: "(Single-card) Fast Dispatch Frequent Tests"
 
 on:
   workflow_dispatch:

@@ -1,4 +1,4 @@
-name: "(TG) TG nightly tests"
+name: "(TG) Nightly Tests"
 
 on:
   workflow_dispatch:

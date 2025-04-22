@@ -1,4 +1,4 @@
-name: "zzz Basic tests"
+name: "[internal] Basic Tests"
 
 on:
   workflow_call:

@@ -1,4 +1,4 @@
-name: "[internal] T3000 model perf tests impl"
+name: "[internal] (T3000) Model Perf Tests Impl"
 
 on:
   workflow_call:

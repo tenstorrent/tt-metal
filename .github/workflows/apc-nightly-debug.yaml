@@ -1,4 +1,4 @@
-name: "apc nightly debug run"
+name: "APC Nightly Debug Run"
 
 on:
   schedule:

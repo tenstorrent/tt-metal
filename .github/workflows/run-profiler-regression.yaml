@@ -1,4 +1,4 @@
-name: "[internal] metal - Run profiler regression impl"
+name: "[internal] Run Profiler Regression"
 
 on:
   workflow_call:
@@ -9,38 +9,6 @@ on:
       runner-label:
         required: true
         type: string
-      timeout:
-        required: false
-        type: number
-        default: 35
-      build-artifact-name:
-        required: true
-        type: string
-      wheel-artifact-name:
-        required: true
-        type: string
-      docker-image:
-        required: true
-        type: string
-      enable-watcher:
-        description: 'Enable watcher'
-        default: false
-        type: boolean
-  workflow_dispatch:
-    inputs:
-      arch:
-        required: true
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-      runner-label:
-        required: true
-        type: choice
-        options:
-          - N150
-          - N300
-          - BH
       timeout:
         required: false
         type: number

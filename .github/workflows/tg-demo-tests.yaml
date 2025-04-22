@@ -1,4 +1,4 @@
-name: "(TG) TG demo tests"
+name: "(TG) Demo Tests"
 
 on:
   workflow_dispatch:

@@ -1,4 +1,4 @@
-name: "(TG) TG frequent tests"
+name: "(TG) Frequent Tests"
 
 on:
   workflow_dispatch:

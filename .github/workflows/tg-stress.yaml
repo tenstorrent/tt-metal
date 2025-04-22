@@ -1,4 +1,4 @@
-name: "zzz TG Stress tests"
+name: "[internal] (TG) Stress Tests"
 
 on:
   workflow_call:

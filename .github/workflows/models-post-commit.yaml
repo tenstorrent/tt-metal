@@ -1,4 +1,4 @@
-name: "[internal] models tests impl"
+name: "[internal] Models Post Commit"
 
 on:
   workflow_call:

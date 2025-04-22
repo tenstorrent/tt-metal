@@ -1,4 +1,4 @@
-name: "(T3K) T3000 model perf tests"
+name: "(T3000) Model Perf Tests"
 
 on:
   workflow_dispatch:

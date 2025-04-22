@@ -1,4 +1,4 @@
-name: "[internal] UMD Unit tests"
+name: "[internal] UMD Unit Tests"
 
 on:
   workflow_call:

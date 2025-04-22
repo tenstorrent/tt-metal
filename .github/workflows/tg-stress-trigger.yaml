@@ -1,4 +1,4 @@
-name: "TG Stress"
+name: "(TG) Stress Tests"
 
 on:
   schedule:

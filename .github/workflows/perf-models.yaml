@@ -1,4 +1,4 @@
-name: "(Single-card) Model perf tests"
+name: "(Single-card) Perf Models"
 
 on:
   workflow_dispatch:

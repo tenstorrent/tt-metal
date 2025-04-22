@@ -1,4 +1,4 @@
-name: "PR - All post-commit tests"
+name: "All Post Commit PR Workflow"
 
 on:
   pull_request:

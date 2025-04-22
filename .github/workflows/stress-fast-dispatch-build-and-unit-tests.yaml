@@ -1,4 +1,4 @@
-name: "Stress fast dispatch tests"
+name: "Stress Fast Dispatch Build and Unit Tests"
 
 on:
   workflow_dispatch:

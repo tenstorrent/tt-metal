@@ -1,4 +1,4 @@
-name: "ttnn - Run sweeps"
+name: "TTNN Run Sweeps"
 
 on:
   workflow_dispatch:

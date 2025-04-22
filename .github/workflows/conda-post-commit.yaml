@@ -1,4 +1,4 @@
-name: "conda post commit"
+name: "Conda Post Commit"
 
 on:
   workflow_call:

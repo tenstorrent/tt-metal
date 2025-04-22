@@ -1,4 +1,4 @@
-name: "[internal] T3000 profiler tests impl"
+name: "[internal] (T3000) Profiler Tests Impl"
 
 on:
   workflow_call:

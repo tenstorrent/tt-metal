@@ -1,4 +1,4 @@
-name: "[internal] Fast dispatch unit tests impl"
+name: "[internal] Fast Dispatch Build and Unit Tests"
 
 on:
   workflow_call:

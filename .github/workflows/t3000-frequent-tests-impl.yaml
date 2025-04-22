@@ -1,4 +1,4 @@
-name: "[internal] T3000 frequent tests impl"
+name: "[internal] (T3000) Frequent Tests Impl"
 
 on:
   workflow_call:

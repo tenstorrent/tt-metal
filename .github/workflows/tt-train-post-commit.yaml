@@ -1,4 +1,4 @@
-name: "[internal] tt-train C++ tests impl"
+name: "[internal] TT Train Post Commit"
 
 on:
   workflow_call:

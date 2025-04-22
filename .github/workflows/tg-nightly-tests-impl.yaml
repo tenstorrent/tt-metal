@@ -1,4 +1,4 @@
-name: "[internal] TG nightly tests impl"
+name: "[internal] (TG) Nightly Tests Impl"
 
 on:
   workflow_call:

@@ -1,4 +1,4 @@
-name: "(Blackhole) Demo tests"
+name: "(Blackhole) Demo Tests"
 
 on:
   workflow_dispatch:

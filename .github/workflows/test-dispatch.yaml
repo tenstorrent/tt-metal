@@ -1,4 +1,4 @@
-name: "Custom test dispatch"
+name: "Test Dispatch"
 
 on:
   workflow_dispatch:

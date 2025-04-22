@@ -1,4 +1,4 @@
-name: "[internal] ttnn unit tests impl"
+name: "[internal] TTNN Post Commit"
 
 on:
   workflow_call:
@@ -9,39 +9,6 @@ on:
       runner-label:
         required: true
         type: string
-      timeout:
-        required: false
-        type: number
-        default: 45
-      num-groups:
-        required: false
-        type: number
-        default: 12
-      docker-image:
-        required: true
-        type: string
-      build-artifact-name:
-        required: true
-        type: string
-      wheel-artifact-name:
-        required: true
-        type: string
-
-  workflow_dispatch:
-    inputs:
-      arch:
-        required: true
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-      runner-label:
-        required: true
-        type: choice
-        options:
-          - N150
-          - N300
-          - BH
       timeout:
         required: false
         type: number

@@ -1,4 +1,4 @@
-name: "[post-commit] Python wheels build and test"
+name: "[post-commit] Build and Test Wheels"
 
 on:
   workflow_dispatch:

@@ -1,4 +1,4 @@
-name: "Build TT-Metalium across all configs"
+name: "Build Wrapper"
 
 on:
   workflow_call:

@@ -1,7 +1,6 @@
-name: "[post-commit] all - Static checks, linters etc."
+name: "[internal] All Static Checks"
 
 on:
-  workflow_dispatch:
   workflow_call:
   pull_request:
     branches:

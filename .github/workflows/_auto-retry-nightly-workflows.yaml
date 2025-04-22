@@ -1,4 +1,4 @@
-name: "[internal] Auto-retry nightly workflows"
+name: "[internal] Auto Retry Nightly Workflows"
 
 on:
   workflow_dispatch:

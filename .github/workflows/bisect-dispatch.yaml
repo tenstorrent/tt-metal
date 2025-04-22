@@ -1,4 +1,4 @@
-name: "Git bisect dispatch"
+name: "Bisect Dispatch"
 
 on:
   workflow_dispatch:

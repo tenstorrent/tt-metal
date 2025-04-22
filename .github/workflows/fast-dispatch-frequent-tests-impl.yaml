@@ -1,4 +1,4 @@
-name: "[internal] Fast dispatch frequent tests impl"
+name: "[internal] Fast Dispatch Frequent Tests Impl"
 
 on:
   workflow_call:
