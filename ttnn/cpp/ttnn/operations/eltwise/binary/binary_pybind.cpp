@@ -241,6 +241,7 @@ void bind_binary_unary_max_operation(
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             activations (List[str], optional): list of activation functions to apply to the output tensor{4}Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
+            use_legacy (bool, optional): Set to `False` to support broadcasting when shape of tensors input_tensor_b and input_tensor_a are not same. Defaults to `True`.
 
         Returns:
             ttnn.Tensor: the output tensor.
