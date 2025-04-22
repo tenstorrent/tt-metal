@@ -52,11 +52,6 @@ Tensor handle_zero_volume_matmul(
     const Tensor& input_tensor_b,
     const MemoryConfig& memory_config,
     const std::optional<DataType>& dtype) {
-    // If both tensors are 1D and only one has a volume, throw an error
-    if (input_tensor_a.get_logical_shape().rank() == 1 && input_tensor_b.get_logical_shape().rank() == 1) {
-        TT_THROW("ttnn.matmul: Both tensors are 1D and only one has a volume");
-    }
-
     // Calculate the expected output shape
     ttnn::Shape output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
 
