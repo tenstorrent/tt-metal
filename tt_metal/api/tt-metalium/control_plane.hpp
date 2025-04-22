@@ -11,6 +11,10 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
+#define SET_ROUTING_MODE(control_plane, mode) control_plane->set_routing_mode((uint16_t)mode)
+
+#define GET_ROUTING_MODE(control_plane) (tt::tt_fabric::RoutingMode) control_plane->get_routing_mode()
+
 namespace tt::tt_fabric {
 
 class ControlPlane {
@@ -65,11 +69,11 @@ public:
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
         mesh_id_t mesh_id, chip_id_t chip_id) const;
 
-    void set_routing_mode(RoutingMode mode);
-    RoutingMode get_routing_mode() const;
+    void set_routing_mode(uint16_t mode);
+    uint16_t get_routing_mode() const;
 
 private:
-    RoutingMode routing_mode_;
+    uint16_t routing_mode_;
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
     std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     // map[mesh_id][chip_id][direction] has a list of ethernet channels in that direction

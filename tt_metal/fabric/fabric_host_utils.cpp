@@ -12,6 +12,7 @@
 #include <set>
 #include <vector>
 #include <algorithm>
+#include "tt_metal/fabric/fabric_routing_mode.h"
 
 namespace tt::tt_fabric {
 
@@ -60,7 +61,7 @@ std::vector<chan_id_t> get_ordered_fabric_eth_chans(chip_id_t chip_id, const std
 void set_routing_mode(RoutingMode routing_mode) {
     // override for forced routing mode
     uint16_t mode = (uint16_t)routing_mode;
-    if (routing_mode != RoutingMode::RoutingModeUndefined) {
+    if (routing_mode != RoutingMode::Undefined) {
         return;
     }
 
@@ -96,7 +97,7 @@ void set_routing_mode(RoutingMode routing_mode) {
         "2D routing mode cannot be combined with LINE or RING topology");
 
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
-    control_plane->set_routing_mode(routing_mode);
+    SET_ROUTING_MODE(control_plane, routing_mode);
 }
 
 void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {

@@ -12,7 +12,7 @@
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
-#include <tt-metalium/fabric_types.hpp>
+#include "tt_metal/fabric/fabric_routing_mode.h"
 #else
 #include <tt-metalium/assert.hpp>
 #endif
