@@ -32,7 +32,6 @@ class TtStableDiffusion3Pipeline:
     ) -> None:
         self._device = device
         device.enable_async(True)
-        torch_dtype = torch.float32
         ttnn_dtype = ttnn.bfloat16  # ttnn.bfloat8_b
 
         logger.info("loading models...")
@@ -46,7 +45,9 @@ class TtStableDiffusion3Pipeline:
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint, subfolder="scheduler")
         self._vae = AutoencoderKL.from_pretrained(checkpoint, subfolder="vae")
         torch_transformer = SD3Transformer2DModel.from_pretrained(
-            checkpoint, subfolder="transformer", torch_dtype=torch_dtype
+            checkpoint,
+            subfolder="transformer",
+            torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
         )
         torch_transformer.eval()
 
