@@ -249,7 +249,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
-    ex_partial_CB_size = ex_partial_CB_size;
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
@@ -284,7 +283,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     if (use_two_stage_reduce) {
         ex_external_CB_size = (num_blocks_first_stage + num_blocks_second_stage - 1) * single_tile_size;
     }
-    ex_external_CB_size = ex_external_CB_size;
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
 
     CoreCoord start_core = {0, 0};
@@ -1093,7 +1091,6 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
-    ex_partial_CB_size = ex_partial_CB_size;
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
