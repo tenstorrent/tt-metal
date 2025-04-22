@@ -50,7 +50,7 @@ struct Concat2dConfig {
 std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config);
 
 // TODO: ND mapper will supercede all existing mapper types.
-struct NdMapperConfig {
+struct MeshMapperConfig {
     // Specifies the tensor should be replicated across devices.
     struct Replicate {};
 
@@ -95,11 +95,22 @@ struct NdMapperConfig {
     std::vector<std::variant<Replicate, Shard>> placements;
 };
 
-// Creates an ND mapper that distributes a tensor according to the `config`.
+// Creates an ND mesh mapper that distributes a tensor according to the `config`.
 // If `shape` is not provided, the shape of `mesh_device` is used.
 // Otherwise, the size of the shape must match the size of the mesh device shape.
-std::unique_ptr<TensorToMesh> nd_mesh_mapper(
-    MeshDevice& mesh_device, const NdMapperConfig& config, const std::optional<ttnn::MeshShape>& shape = std::nullopt);
+std::unique_ptr<TensorToMesh> create_mesh_mapper(
+    MeshDevice& mesh_device,
+    const MeshMapperConfig& config,
+    const std::optional<ttnn::MeshShape>& shape = std::nullopt);
+
+struct MeshComposerConfig {
+    // Specifies dimension of the tensor to concatenate.
+    std::vector<int> dims;
+};
+std::unique_ptr<MeshToTensor> create_mesh_composer(
+    MeshDevice& mesh_device,
+    const MeshComposerConfig& config,
+    const std::optional<ttnn::MeshShape>& shape = std::nullopt);
 
 // Distributes a host tensor onto multi-device configuration according to the `mapper`.
 Tensor distribute_tensor(

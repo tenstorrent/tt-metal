@@ -240,34 +240,92 @@ TEST_F(TensorDistributionT3000Test, Shard2D) {
     EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
 }
 
-TEST_F(TensorDistributionT3000Test, ShardND) {
+TEST_F(TensorDistributionT3000Test, NdMapperInvalidShape) {
+    EXPECT_ANY_THROW(create_mesh_mapper(
+        *mesh_device_,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Replicate{}},
+        },
+        MeshShape{1, 9}));
+}
+
+TEST_F(TensorDistributionT3000Test, NdMapperInvalidPlacements) {
+    EXPECT_ANY_THROW(create_mesh_mapper(
+        *mesh_device_,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Replicate{}},
+        }));
+
+    EXPECT_ANY_THROW(create_mesh_mapper(
+        *mesh_device_,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
+        }));
+}
+
+TEST_F(TensorDistributionT3000Test, NdComposerInvalidShape) {
+    EXPECT_ANY_THROW(create_mesh_composer(
+        *mesh_device_,
+        MeshComposerConfig{
+            .dims = {0, 1, 2},
+        },
+        MeshShape{1, 9}));
+}
+
+TEST_F(TensorDistributionT3000Test, NdComposerInvalidDims) {
+    EXPECT_ANY_THROW(create_mesh_composer(
+        *mesh_device_,
+        MeshComposerConfig{
+            .dims = {0, 1, 2, 3},
+        }));
+}
+
+TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
     constexpr size_t kNumRows = 2;
-    constexpr size_t kNumCols = 2;
-    auto submesh = mesh_device_->create_submesh(MeshShape(kNumRows, kNumCols));
-    ASSERT_EQ(submesh->shape(), MeshShape(kNumRows, kNumCols));
+    constexpr size_t kNumCols = 4;
+    ASSERT_EQ(mesh_device_->shape(), MeshShape(kNumRows, kNumCols));
 
-    std::vector<float> test_data = {
-        0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0};
-    Tensor input_tensor = Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{2, 8}, DataType::FLOAT32));
+    std::vector<float> test_data;
+    for (int i = 0; i < 4 * kNumRows * kNumCols * 7; ++i) {
+        test_data.push_back(static_cast<float>(i));
+    }
+    Tensor input_tensor =
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{4, kNumRows, kNumCols, 7}, DataType::FLOAT32));
 
-    auto mapper = nd_mesh_mapper(
-        *submesh,
-        NdMapperConfig{
-            .placements = {NdMapperConfig::Replicate{}, NdMapperConfig::Shard{1}},
-        });
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *submesh);
+    auto mapper = create_mesh_mapper(
+        *mesh_device_,
+        MeshMapperConfig{
+            .placements =
+                {
+                    MeshMapperConfig::Replicate{},
+                    MeshMapperConfig::Shard{2},
+                    MeshMapperConfig::Shard{1},
+                },
+        },
+        MeshShape(2, 2, 2));
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
-    EXPECT_EQ(device_tensors.size(), submesh->num_devices());
-    int i = 0;
-    for (int i = 0; i < device_tensors.size(); i++) {
-        std::cout << "device_tensors[" << i << "]: " << std::endl;
-
-        for (int d : device_tensors[i].to_vector<float>()) {
-            std::cout << d << " ";
-        }
-        std::cout << std::endl;
+    EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
+    for (const auto& tensor : device_tensors) {
+        EXPECT_EQ(tensor.get_logical_shape(), ttnn::Shape({4, 1, 2, 7}));
     }
+
+    // Expect the first dim to be replicated.
+    std::vector<float> expected_data;
+    expected_data.reserve(2 * test_data.size());
+    std::copy(test_data.begin(), test_data.end(), std::back_inserter(expected_data));
+    std::copy(test_data.begin(), test_data.end(), std::back_inserter(expected_data));
+
+    auto composer = create_mesh_composer(
+        *mesh_device_,
+        MeshComposerConfig{
+            .dims = {0, 2, 1},
+        },
+        MeshShape(2, 2, 2));
+    Tensor aggregated_tensor = aggregate_tensor(sharded_tensor, *composer);
+    EXPECT_EQ(aggregated_tensor.get_logical_shape(), ttnn::Shape({8, kNumRows, kNumCols, 7}));
+    EXPECT_THAT(aggregated_tensor.to_vector<float>(), Pointwise(FloatEq(), expected_data));
 }
 
 TEST_F(TensorDistributionT3000Test, ShardBorrowedTensor) {

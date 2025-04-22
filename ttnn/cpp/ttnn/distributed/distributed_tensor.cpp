@@ -147,7 +147,7 @@ private:
 
 class NdTensorToMesh : public TensorToMesh {
 public:
-    NdTensorToMesh(const ttnn::MeshShape& shape, const NdMapperConfig& config) : shape_(shape), config_(config) {}
+    NdTensorToMesh(const ttnn::MeshShape& shape, const MeshMapperConfig& config) : shape_(shape), config_(config) {}
 
     std::vector<Tensor> map(const Tensor& tensor) const override {
         std::vector<Tensor> current_tensors = {tensor};
@@ -161,12 +161,12 @@ public:
             for (const auto& current_tensor : current_tensors) {
                 std::visit(
                     tt::stl::overloaded{
-                        [&](const NdMapperConfig::Replicate&) {
+                        [&](const MeshMapperConfig::Replicate&) {
                             for (size_t i = 0; i < mesh_dim_size; ++i) {
                                 next_tensors.push_back(current_tensor);
                             }
                         },
-                        [&](const NdMapperConfig::Shard& shard) {
+                        [&](const MeshMapperConfig::Shard& shard) {
                             auto chunks = experimental::xtensor::chunk(current_tensor, mesh_dim_size, shard.dim);
                             next_tensors.insert(
                                 next_tensors.end(),
@@ -190,13 +190,61 @@ public:
     }
 
     tt::tt_metal::DistributedTensorConfig config() const override {
-        // TODO(omilyutin): `AllGatherTensor` doesn't need to be here.
+        // TODO(omilyutin): `AllGatherTensor` here simplifies the code, `DistributedTensorConfig` should be
+        // simplified to not require these details.
         return tt::tt_metal::DistributedTensorConfig{tt::tt_metal::AllGatherTensor{}};
     }
 
 private:
     ttnn::MeshShape shape_;
-    NdMapperConfig config_;
+    MeshMapperConfig config_;
+};
+
+class NdMeshToTensor : public MeshToTensor {
+public:
+    NdMeshToTensor(const ttnn::MeshShape& shape, const MeshComposerConfig& config) : shape_(shape), config_(config) {}
+
+    Tensor compose(const std::vector<Tensor>& tensors) const override {
+        TT_FATAL(
+            tensors.size() == shape_.mesh_size(),
+            "NdMeshToTensor: Composition failed. Expected {} tensors for mesh shape {}, but got {}.",
+            shape_.mesh_size(),
+            shape_,
+            tensors.size());
+
+        std::vector<Tensor> current_tensors = tensors;
+        size_t outer_stride = shape_.mesh_size();
+
+        for (int mesh_dim_idx = shape_.dims() - 1; mesh_dim_idx >= 0; --mesh_dim_idx) {
+            const size_t mesh_dim_size = shape_[mesh_dim_idx];
+            const int concat_dim = config_.dims[mesh_dim_idx];
+            outer_stride /= mesh_dim_size;
+
+            std::vector<Tensor> next_tensors;
+            next_tensors.reserve(outer_stride);
+
+            for (size_t outer_idx = 0; outer_idx < outer_stride; ++outer_idx) {
+                std::vector<Tensor> group_to_concat;
+                group_to_concat.reserve(mesh_dim_size);
+                size_t group_start_idx = outer_idx * mesh_dim_size;
+                for (size_t inner_idx = 0; inner_idx < mesh_dim_size; ++inner_idx) {
+                    group_to_concat.push_back(current_tensors[outer_idx * mesh_dim_size + inner_idx]);
+                }
+                next_tensors.push_back(experimental::xtensor::concat(group_to_concat, concat_dim));
+            }
+            current_tensors = std::move(next_tensors);
+        }
+
+        TT_FATAL(
+            current_tensors.size() == 1,
+            "NdMeshToTensor: Composition failed. Expected 1 final tensor, but got {}.",
+            current_tensors.size());
+        return current_tensors[0];
+    }
+
+private:
+    ttnn::MeshShape shape_;
+    MeshComposerConfig config_;
 };
 
 }  // namespace
@@ -240,8 +288,8 @@ std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh
     return std::make_unique<Concat2dMeshToTensor>(mesh_device.shape()[0], mesh_device.shape()[1], config);
 }
 
-std::unique_ptr<TensorToMesh> nd_mesh_mapper(
-    MeshDevice& mesh_device, const NdMapperConfig& config, const std::optional<ttnn::MeshShape>& shape) {
+std::unique_ptr<TensorToMesh> create_mesh_mapper(
+    MeshDevice& mesh_device, const MeshMapperConfig& config, const std::optional<ttnn::MeshShape>& shape) {
     const auto distributed_shape = shape.value_or(mesh_device.shape());
     TT_FATAL(
         mesh_device.shape().mesh_size() == distributed_shape.mesh_size(),
@@ -256,6 +304,24 @@ std::unique_ptr<TensorToMesh> nd_mesh_mapper(
         config);
 
     return std::make_unique<NdTensorToMesh>(distributed_shape, config);
+}
+
+std::unique_ptr<MeshToTensor> create_mesh_composer(
+    MeshDevice& mesh_device, const MeshComposerConfig& config, const std::optional<ttnn::MeshShape>& shape) {
+    const auto distributed_shape = shape.value_or(mesh_device.shape());
+    TT_FATAL(
+        mesh_device.shape().mesh_size() == distributed_shape.mesh_size(),
+        "The size of the supplied mesh shape {} does not match the device shape size {}",
+        distributed_shape,
+        mesh_device.shape());
+    TT_FATAL(
+        distributed_shape.dims() == config.dims.size(),
+        "The number of dimensions in the mesh shape {} does not match the "
+        "number of dimensions in the config {}",
+        distributed_shape,
+        config);
+
+    return std::make_unique<NdMeshToTensor>(distributed_shape, config);
 }
 
 Tensor distribute_tensor(
