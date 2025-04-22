@@ -182,6 +182,10 @@ void device_module(py::module& m_device) {
                 &IDevice::disable_and_clear_program_cache,
                 "Disable and clear program cache for this device")
             .def(
+                "set_program_cache_misses_allowed",
+                &IDevice::set_program_cache_misses_allowed,
+                "Set whether program cache misses are allowed for this device")
+            .def(
                 "num_program_cache_entries",
                 &IDevice::num_program_cache_entries,
                 "Number of entries in the program cache for this device")
