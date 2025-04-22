@@ -112,6 +112,7 @@ def run_llama3_demo(
     layers,
     stress_test,
     start_pos,
+    enable_prefetcher_performance_mode=True,
 ):
     # Creat batch output file
     benchmark_data = BenchmarkData()
@@ -206,6 +207,7 @@ def run_llama3_demo(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        enable_prefetcher_performance_mode=enable_prefetcher_performance_mode,
     )
     tt_embd = TtLlamaEmbedding(
         mesh_device=mesh_device,
@@ -669,6 +671,7 @@ def test_llama_demo(
     use_program_cache,
     is_ci_env,
     reset_seeds,
+    request,
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
@@ -686,6 +689,8 @@ def test_llama_demo(
         )
     else:
         paged_attention_config = None
+
+    enable_pf_perf_mode = not request.config.getoption("--disable_pf_perf_mode")
 
     return run_llama3_demo(
         user_input=input_prompts,
@@ -705,4 +710,5 @@ def test_llama_demo(
         layers=layers,
         stress_test=stress_test,
         start_pos=start_pos,
+        enable_prefetcher_performance_mode=enable_pf_perf_mode,
     )

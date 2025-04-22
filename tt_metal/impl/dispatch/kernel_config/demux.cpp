@@ -17,7 +17,6 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "eth_tunneler.hpp"
 #include "hal.hpp"
 #include <umd/device/tt_xy_pair.h>
@@ -26,7 +25,7 @@
 using namespace tt::tt_metal;
 
 void DemuxKernel::GenerateStaticConfigs() {
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
         servicing_device_id_);  // TODO: this can be mmio
     logical_core_ = MetalContext::instance().get_dispatch_core_manager().demux_core(
