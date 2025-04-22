@@ -290,7 +290,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             if (dtype == DataType::INT32) {
                 return {"add_int32_tile_init();", "add_int32_tile"};
             } else if (dtype == DataType::UINT16) {
-                return {"add_int16_tile_init();", "add_int16_tile"};
+                return {"add_uint16_tile_init();", "add_uint16_tile"};
             } else {
                 return {"add_binary_tile_init();", "add_binary_tile"};
             }

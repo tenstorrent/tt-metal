@@ -11,7 +11,7 @@
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
 #include "compute_kernel_api/binary_shift.h"
 #include "compute_kernel_api/add_int32_sfpu.h"
-#include "compute_kernel_api/add_int16_sfpu.h"
+#include "compute_kernel_api/add_uint16_sfpu.h"
 #include "compute_kernel_api/sub_int32_sfpu.h"
 #include "compute_kernel_api/quantization.h"
 
