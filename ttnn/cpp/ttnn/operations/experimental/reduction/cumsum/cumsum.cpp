@@ -29,23 +29,23 @@ Tensor CumSumOperation::invoke(
     const auto& input_shape = input_tensor.get_logical_shape();
     int tensor_rank = input_shape.rank();
 
-    Tensor adjusted_input_tensor = input_tensor;
+    Tensor adjusted_input_tensor = input_tensor;  // Tensor copy, but simplifies code (temporary solution)
     const auto& input_dtype = input_tensor.dtype();
 
-    // TODO: Handle type conversion (convert input_tensor if necessary)
-    // TODO: ttnn::to_dtype() does not seem to work with DeviceStorage (?)
     if (dtype.has_value() && input_dtype != dtype.value()) {
         // auto converted_tensor = ttnn::to_dtype(input_tensor, DataType::BFLOAT16);
         // adjusted_input_tensor = converted_tensor;
 
-        // Create new tensor with proper dtype
-        TensorSpec converted_specs = TensorSpec(
-            input_tensor.get_logical_shape(),
-            tt::tt_metal::TensorLayout(
-                dtype.value(), tt::tt_metal::PageConfig(input_tensor.layout()), input_tensor.memory_config()));
-        Tensor converted_tensor = tt::tt_metal::create_device_tensor(converted_specs, input_tensor.device());
+        // Ideally, we would use `ttnn::to_dtype()` directly on input_tensor (DeviceStorage)
+        // However, as of writing `ttnn::to_dtype()` does not support this.
+        // The (provisional) workaround is to move the tensor to CPU, do the type conversion
+        // and bring it back to the device.
+        Tensor cpu_tensor = input_tensor.cpu();
+        Tensor cpu_converted_tensor = ttnn::to_dtype(cpu_tensor, dtype.value());
 
-        // Manually convert dtype
+        Tensor converted_tensor = cpu_converted_tensor.to_device(input_tensor.device(), input_tensor.memory_config());
+
+        adjusted_input_tensor = converted_tensor;
     }
 
     if (tensor_rank == 0 || adjusted_input_tensor.get_logical_volume() == 0) {  // empty input tensor => nothing to do
@@ -102,6 +102,13 @@ Tensor CumSumOperation::invoke(
         // if initial input tensor was 1D or 2D, then also reshape output to 1D or 2D
         if (initial_tensor_rank <= 2) {
             output_tensor = ttnn::reshape(output_tensor, input_shape);
+        }
+
+        if (optional_output_tensor.has_value()) {
+            std::clog << "Copying back output tensor" << std::endl;
+
+            auto& out_tensor = optional_output_tensor.value();
+            out_tensor.populate_buffers_and_metadata(output_tensor);
         }
 
         return output_tensor;
