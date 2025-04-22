@@ -90,6 +90,29 @@ tt::tt_metal::Tensor ttml_create_owned_tensor(
     return {std::move(storage), shape, data_type, layout};
 }
 
+template <typename T>
+std::vector<tt::tt_metal::borrowed_buffer::Buffer<T>> get_as(const ttnn::Tensor& tensor) {
+    return std::visit(
+        [](auto&& storage) -> std::vector<tt::tt_metal::borrowed_buffer::Buffer<T>> {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, tt::tt_metal::OwnedStorage>) {
+                return {tt::tt_metal::host_buffer::get_as<T>(storage.buffer)};
+            } else if constexpr (std::is_same_v<StorageType, tt::tt_metal::MultiDeviceHostStorage>) {
+                std::vector<tt::tt_metal::borrowed_buffer::Buffer<T>> res;
+                res.reserve(storage.buffers.size());
+                for (const auto& buffer : storage.buffers) {
+                    res.push_back(tt::tt_metal::host_buffer::get_as<T>(buffer));
+                }
+                return res;
+            } else if constexpr (std::is_same_v<StorageType, tt::tt_metal::BorrowedStorage>) {
+                return {tt::tt_metal::host_buffer::get_as<T>(storage.buffer)};
+            } else {
+                throw std::runtime_error("Tensor must have OwnedStorage or BorrowedStorage");
+            }
+        },
+        tensor.get_storage());
+}
+
 }  // namespace
 namespace ttml::core {
 
@@ -334,4 +357,51 @@ template tt::tt_metal::Tensor from_xtensor<uint32_t, ttnn::DataType::UINT32>(
     const XTensorToMeshVariant<uint32_t>& composer,
     ttnn::Layout layout);
 
+std::vector<std::span<std::byte>> get_bytes_from_cpu_tensor(ttnn::Tensor& tensor) {
+    std::vector<std::span<std::byte>> res;
+    auto cpu_tensor = tensor;
+    switch (cpu_tensor.get_dtype()) {
+        case ttnn::DataType::BFLOAT16: {
+            auto buffers = get_as<bfloat16>(cpu_tensor);
+            res.reserve(buffers.size());
+            for (auto& buffer : buffers) {
+                auto span = std::as_writable_bytes(std::span{buffer});
+                res.push_back(span);
+            }
+            return res;
+        }
+        case ttnn::DataType::FLOAT32: {
+            auto buffers = get_as<float>(cpu_tensor);
+            res.reserve(buffers.size());
+            for (auto& buffer : buffers) {
+                auto span = std::as_writable_bytes(std::span{buffer});
+                res.push_back(span);
+            }
+            return res;
+        }
+        case ttnn::DataType::UINT32: {
+            auto buffers = get_as<uint32_t>(cpu_tensor);
+            res.reserve(buffers.size());
+            for (auto& buffer : buffers) {
+                auto span = std::as_writable_bytes(std::span{buffer});
+                res.push_back(span);
+            }
+            return res;
+        }
+        case ttnn::DataType::INT32: {
+            auto buffers = get_as<uint32_t>(cpu_tensor);
+            res.reserve(buffers.size());
+            for (auto& buffer : buffers) {
+                auto span = std::as_writable_bytes(std::span{buffer});
+                res.push_back(span);
+            }
+            return res;
+        }
+        default: {
+            throw std::runtime_error(fmt::format(
+                "Unsupported data type {0} for conversion to bytes", magic_enum::enum_name(cpu_tensor.get_dtype())));
+        }
+    }
+    return {};
+}
 }  // namespace ttml::core

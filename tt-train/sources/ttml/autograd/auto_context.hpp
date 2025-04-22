@@ -11,6 +11,10 @@
 #include "core/mesh_device.hpp"
 #include "graph.hpp"
 
+namespace ttml::core::distributed {
+class MPIContext;
+}
+
 namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
@@ -51,6 +55,9 @@ public:
 
     void close_device();
 
+    void init_mpi_context(int argc, char** argv);
+    [[nodiscard]] core::distributed::MPIContext& get_mpi_context() const;
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
@@ -61,6 +68,8 @@ private:
     Graph m_graph;
     tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);
     std::unique_ptr<core::MeshDevice> m_device;
+
+    std::unique_ptr<ttml::core::distributed::MPIContext> m_mpi_context;
 
     friend class tt::stl::Indestructible<AutoContext>;
 };

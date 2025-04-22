@@ -1,9 +1,8 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/core.h>
-#include <mpi.h>
 
 #include <array>
 #include <cstdio>  // for popen, pclose
@@ -13,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
 struct board_entry {
     std::string pci_dev_id;
     std::string board_type;
@@ -88,21 +88,6 @@ std::vector<board_entry> get_tt_smi_boards() {
 }
 
 int main(int argc, char** argv) {
-    std::cout << "Starting MPI init" << std::endl;
-    MPI_Init(&argc, &argv);
-    std::cout << "MPI init complete" << std::endl;
-    int world_size = 0;
-    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-
-    int world_rank = 0;
-    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
-
-    char processor_name[MPI_MAX_PROCESSOR_NAME] = {};
-    int name_len = 0;
-    MPI_Get_processor_name(processor_name, &name_len);
-
-    std::cout << "Hello world from processor " << processor_name << ", rank " << world_rank << " out of " << world_size
-              << " processors" << std::endl;
     try {
         std::vector<board_entry> boards = get_tt_smi_boards();
         std::cout << "Parsed boards:\n";
@@ -116,7 +101,5 @@ int main(int argc, char** argv) {
     } catch (const std::exception& ex) {
         std::cerr << "Error: " << ex.what() << std::endl;
     }
-    // Finalize the MPI environment
-    MPI_Finalize();
     return 0;
 }
