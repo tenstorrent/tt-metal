@@ -159,29 +159,28 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         input_tensor = ttnn::permute(input_tensor, SmallVector<int64_t>{0, 2, 3, 1});
 
         // Run Conv2D
-        auto [output_tensor, output_dimensions] =
-            std::get<std::tuple<ttnn::Tensor, std::tuple<OutputHeight, OutputWidth>>>(ttnn::conv2d(
-                DefaultQueueId,
-                input_tensor,
-                weight_tensor,
-                device,
-                param.input_channels,
-                param.output_channels,
-                param.batch_size,
-                param.input_height,
-                param.input_width,
-                param.kernel_size,
-                param.stride,
-                param.padding,
-                std::array<uint32_t, 2>{1, 1},  // dilation
-                1,                              // groups
-                std::nullopt,                   // bias tensor
-                std::nullopt,                   // conv config
-                std::nullopt,                   // compute config
-                std::nullopt,                   // memory config
-                std::nullopt,                   // slice config
-                true                            // return_output_dim
-                ));
+        auto [output_tensor, output_dimensions] = std::get<OUTPUT_DIM>(ttnn::conv2d(
+            DefaultQueueId,
+            input_tensor,
+            weight_tensor,
+            device,
+            param.input_channels,
+            param.output_channels,
+            param.batch_size,
+            param.input_height,
+            param.input_width,
+            param.kernel_size,
+            param.stride,
+            param.padding,
+            std::array<uint32_t, 2>{1, 1},  // dilation
+            1,                              // groups
+            std::nullopt,                   // bias tensor
+            std::nullopt,                   // conv config
+            std::nullopt,                   // compute config
+            std::nullopt,                   // memory config
+            std::nullopt,                   // slice config
+            true                            // return_output_dim
+            ));
 
         // move output tensor to dram
         output_tensor = ttnn::to_memory_config(output_tensor, dram_mem_config);

@@ -77,11 +77,8 @@ Result conv1d(
         };
     };
 
-    auto [output_tensor, output_dimensions, weights_and_bias] = std::get<std::tuple<
-        ttnn::Tensor,
-        std::tuple<OutputHeight, OutputWidth>,
-        std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>(
-        ttnn::conv2d(
+    auto [output_tensor, output_dimensions, weights_and_bias] =
+        std::get<ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS>(ttnn::conv2d(
             queue_id,
             input_tensor_4d,
             weight_tensor,
