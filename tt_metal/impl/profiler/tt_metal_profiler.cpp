@@ -174,8 +174,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     auto phys_core = soc_desc.translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
 
-    deviceHostTimePair[device_id] = std::vector<std::pair<uint64_t, uint64_t>>{};
-    smallestHostime[device_id] = 0;
+    deviceHostTimePair.emplace(device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
+    smallestHostime.emplace(device_id, 0);
 
     constexpr uint16_t sampleCount = 249;
     // TODO(MO): Always recreate a new program until subdevice
@@ -364,8 +364,10 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         delay,
         frequencyFit);
 
+    double host_timestamp = hostStartTime;
+    double device_timestamp = delay + (host_timestamp - smallestHostime[device_id]) * frequencyFit * tracyToSecRatio;
     tt_metal_device_profiler_map.at(device_id).device_core_sync_info[phys_core] =
-        std::make_tuple(smallestHostime[device_id], delay, frequencyFit);
+        std::make_tuple(host_timestamp, device_timestamp, frequencyFit);
 }
 void setShift(int device_id, int64_t shift, double scale) {
     if (std::isnan(scale)) {
