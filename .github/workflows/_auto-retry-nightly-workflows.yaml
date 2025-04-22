@@ -13,19 +13,19 @@ on:
         type: number
   workflow_run:
     workflows:
-      - "(T3K) T3000 demo tests"
-      - "(T3K) T3000 frequent tests"
-      - "(T3K) T3000 model perf tests"
-      - "(T3K) T3000 nightly tests"
-      - "(T3K) T3000 perplexity tests"
-      - "(T3K) T3000 profiler tests"
-      - "(T3K) T3000 unit tests"
-      - "(TG) TG demo tests"
-      - "(TG) TG frequent tests"
-      - "(TG) TG model perf tests"
-      - "(TG) TG nightly tests"
-      - "(TG) TG unit tests"
-      - "Package and release"
+      - "(T3000) Demo Tests"
+      - "(T3000) Frequent Tests"
+      - "(T3000) Model Perf Tests"
+      - "(T3000) Nightly Tests"
+      - "(T3000) Perplexity Tests"
+      - "(T3000) Profiler Tests"
+      - "(T3000) Unit Tests"
+      - "(TG) Demo Tests"
+      - "(TG) Frequent Tests"
+      - "(TG) Model Perf Tests"
+      - "(TG) Nightly Tests"
+      - "(TG) Unit Tests"
+      - "Package and Release"
     types:
       - completed
     branches:

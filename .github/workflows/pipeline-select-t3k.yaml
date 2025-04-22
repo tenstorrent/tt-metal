@@ -1,4 +1,4 @@
-name: "(T3K) Choose your pipeline"
+name: "(T3000) Choose your pipeline"
 
 on:
   workflow_dispatch:
