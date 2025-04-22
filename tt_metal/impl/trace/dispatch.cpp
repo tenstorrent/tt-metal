@@ -11,7 +11,6 @@
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "launch_message_ring_buffer_state.hpp"
@@ -98,8 +97,6 @@ void issue_trace_commands(
         command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
     }
-    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    auto dispatch_core_type = dispatch_core_config.get_core_type();
 
     go_msg_t reset_launch_message_read_ptr_go_signal;
     reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
@@ -118,13 +115,13 @@ void issue_trace_commands(
             desc.num_traced_programs_needing_go_signal_unicast ? device->num_noc_unicast_txns(id) : 0;
         auto index = *id;
         reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(index);
+            MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index);
 
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
             expected_num_workers_completed[index],
             *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(index),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
             num_noc_mcast_txns,
             num_noc_unicast_txns,
             noc_data_start_idx,
@@ -148,14 +145,14 @@ void issue_trace_commands(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
-                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(index),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
                 expected_num_workers,
                 1);
         }
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(index),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
             expected_num_workers);
     }
 

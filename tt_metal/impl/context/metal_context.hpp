@@ -14,9 +14,11 @@
 #include <llrt/hal.hpp>
 #include <llrt/rtoptions.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
+#include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
+#include <magic_enum/magic_enum.hpp>
 
-#include <unordered_map>
+#include <array>
 #include <unordered_set>
 #include <vector>
 
@@ -41,6 +43,8 @@ public:
     const Hal& hal() const;
     dispatch_core_manager& get_dispatch_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
+    const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
+    const DispatchMemMap& dispatch_mem_map(const CoreType& core_type) const;  // DispatchMemMap for specific core type.
 
     void initialize(
         const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, const BankMapping& l1_bank_remap);
@@ -61,6 +65,7 @@ private:
     std::unique_ptr<Hal> hal_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
+    std::array<std::unique_ptr<DispatchMemMap>, magic_enum::enum_count<CoreType>()> dispatch_mem_map_;
 };
 
 }  // namespace tt::tt_metal

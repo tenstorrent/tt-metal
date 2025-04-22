@@ -33,7 +33,6 @@
 #include <tt-metalium/device.hpp>
 #include "dispatch/memcpy.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
@@ -259,9 +258,8 @@ int main(int argc, char** argv) {
             tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(mmio_device_id, channel);
         uint32_t host_write_ptr = 0;
 
-        CoreType dispatch_core_type = get_dispatch_core_type();
-        uint32_t prefetch_q_base = DispatchMemMap::get(dispatch_core_type)
-                                       .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::UNRESERVED);
 
         uint32_t reg_addr = prefetch_q_base;
         uint32_t num_reg_entries = 128;

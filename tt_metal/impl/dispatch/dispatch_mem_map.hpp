@@ -7,17 +7,12 @@
 #include <stdint.h>
 #include <tt-metalium/command_queue_common.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
-#include <tt_stl/indestructible.hpp>
 #include <utility>
 #include <vector>
 
 #include <umd/device/tt_core_coordinates.h>
 
 namespace tt {
-namespace stl {
-template <typename T>
-class Indestructible;
-}  // namespace stl
 namespace tt_metal {
 enum class CommandQueueDeviceAddrType : uint8_t;
 }  // namespace tt_metal
@@ -37,16 +32,7 @@ public:
     DispatchMemMap& operator=(DispatchMemMap&& other) noexcept = delete;
     DispatchMemMap(const DispatchMemMap&) = delete;
     DispatchMemMap(DispatchMemMap&& other) noexcept = delete;
-
-    //
-    // Returns the instance. The instance is reset if the core_type and/or num_hw_cqs changed from
-    // the last call. The memory region sizes can be configured using DispatchSettings.
-    //
-    // If the settings changed, then force_reinit_with_settings will recreate the instance with
-    // the settings for the given core_type / num_hw_cqs.
-    //
-    static const DispatchMemMap& get(
-        const CoreType& core_type, const uint32_t num_hw_cqs = 0, const bool force_reinit_with_settings = false);
+    DispatchMemMap(const CoreType& core_type, const uint32_t num_hw_cqs);
 
     uint32_t prefetch_q_entries() const;
 
@@ -94,12 +80,6 @@ public:
     uint8_t get_dispatch_message_update_offset(uint32_t index) const;
 
 private:
-    friend class tt::stl::Indestructible<DispatchMemMap>;
-
-    DispatchMemMap() = default;
-
-    static DispatchMemMap& get_instance();
-
     // Reset the instance using the settings for the core_type and num_hw_cqs.
     void reset(const CoreType& core_type, const uint32_t num_hw_cqs);
 

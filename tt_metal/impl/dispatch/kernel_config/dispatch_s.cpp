@@ -18,7 +18,6 @@
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "prefetch.hpp"
@@ -33,7 +32,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
 
     uint32_t dispatch_s_buffer_base = 0xff;
     if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -136,7 +135,7 @@ void DispatchSKernel::ConfigureCore() {
     }
     // Just need to clear the dispatch message
     std::vector<uint32_t> zero = {0x0};
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     uint32_t dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
