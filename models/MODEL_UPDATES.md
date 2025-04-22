@@ -4,6 +4,11 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## April 22, 2025
+
+### [TT-Transformers](tt_transformers)
+- Added support for non-uniform data format configurations in different decoder layers via json files.
+
 ## April 7, 2025
 
 ### [Llama 3.1-70B - Galaxy](demos/llama3_subdevices)
