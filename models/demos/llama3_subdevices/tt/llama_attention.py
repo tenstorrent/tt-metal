@@ -273,7 +273,6 @@ class TtLlamaAttention(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         ttnn.deallocate(x)
-        # print("done matmul")
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
         ###
