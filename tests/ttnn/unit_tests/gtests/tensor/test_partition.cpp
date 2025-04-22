@@ -184,13 +184,13 @@ TEST(PartitionTest, ShardSpans) {
         test_data.push_back(i);
     }
 
-    auto chunks = chunk(tt::stl::Span(test_data), ttnn::Shape{1, 1, kNumChunks, kChunkSize}, kNumChunks, 2);
+    auto chunks = chunk(tt::stl::Span(test_data), ttnn::Shape{kNumChunks, kChunkSize}, kNumChunks);
 
     EXPECT_THAT(chunks, SizeIs(kNumChunks));
     for (int i = 0; i < kNumChunks; i++) {
         const auto& [chunk_span, shape] = chunks[i];
         EXPECT_THAT(chunk_span, SizeIs(kChunkSize));
-        EXPECT_EQ(shape, ttnn::Shape({1, 1, 1, kChunkSize}));
+        EXPECT_EQ(shape, ttnn::Shape({1, kChunkSize}));
         for (int j = 0; j < kChunkSize; j++) {
             EXPECT_EQ(chunk_span[j], i * kChunkSize + j);
         }
@@ -237,12 +237,12 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     EXPECT_TRUE(segfault_occurred);
 
     if (sigsetjmp(jmp_env, /*savemask=*/1) == 0) {
-        auto chunks = chunk(protected_span, ttnn::Shape({1, 1, 1, total_size}), num_chunks, /*dim=*/3);
+        auto chunks = chunk(protected_span, ttnn::Shape({total_size}), num_chunks);
 
         EXPECT_THAT(chunks, SizeIs(num_chunks));
         for (const auto& [chunk_span, chunk_shape] : chunks) {
             EXPECT_THAT(chunk_span, SizeIs(page_size));
-            EXPECT_EQ(chunk_shape, ttnn::Shape({1, 1, 1, page_size}));
+            EXPECT_EQ(chunk_shape, ttnn::Shape({page_size}));
         }
     } else {
         FAIL() << "segfault occurred when calling `chunk`";
