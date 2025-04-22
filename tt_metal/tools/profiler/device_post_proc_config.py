@@ -74,6 +74,16 @@ class default_setup(metaclass=MergeMetaclass):
             "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
             "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
         },
+        "device_kernel_duration_dm_start": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_name": [f"{risc}-KERNEL" for risc in ["BRISC", "NCRISC", "ERISC"]],
+            },
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+        },
         "device_brisc_kernel_duration": {
             "across": "ops",
             "type": "op_first_last",
