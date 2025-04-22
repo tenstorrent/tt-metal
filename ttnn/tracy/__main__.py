@@ -57,6 +57,13 @@ def main():
         default=False,
     )
     parser.add_option(
+        "--profile-dispatch-cores",
+        dest="profile_dispatch_cores",
+        action="store_true",
+        help="Collect dispatch cores profiling data",
+        default=False,
+    )
+    parser.add_option(
         "--collect-noc-traces",
         dest="collect_noc_traces",
         action="store_true",
@@ -96,6 +103,9 @@ def main():
             del os.environ[opInfoCacheStr]
     else:
         os.environ[opInfoCacheStr] = "1"
+
+    if options.profile_dispatch_cores:
+        os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
 
     if options.collect_noc_traces:
         os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS"] = "1"
@@ -162,8 +172,6 @@ def main():
             testCommand = f"python3 -m tracy {osCmd}"
 
             envVars = dict(os.environ)
-            # No Dispatch cores for op_report
-            envVars["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "0"
             if options.device:
                 envVars["TT_METAL_DEVICE_PROFILER"] = "1"
             else:

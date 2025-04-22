@@ -159,10 +159,15 @@ inline ttnn::Tensor full_impl(
     const std::vector<IDevice*>& workers_to_use =
         optional_output_tensor.has_value() ? optional_output_tensor->get_workers(/*blocking=*/true) : workers;
 
-    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
-                                                             : layout.value_or(ttnn::ROW_MAJOR_LAYOUT);
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
+    auto get_default_layout = [dtype_value]() {
+        return (dtype_value == DataType::BFLOAT4_B || dtype_value == DataType::BFLOAT8_B) ? ttnn::TILE_LAYOUT
+                                                                                          : ttnn::ROW_MAJOR_LAYOUT;
+    };
+
+    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout()
+                                                             : layout.value_or(get_default_layout());
     ttnn::Shape shape_value =
         optional_output_tensor.has_value() ? optional_output_tensor.value().get_logical_shape() : shape;
     MemoryConfig mem_cfg = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
@@ -179,6 +184,16 @@ inline ttnn::Tensor full_impl(
         case DataType::UINT32: return concrete_full.template operator()<uint32_t>(fill_value);
         case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT8_B: {
+            TensorSpec tensor_spec(shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
+            std::vector<float> fill_value_vec(shape_value.volume(), static_cast<float>(fill_value));
+            auto output = tt::tt_metal::Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
+            if (!workers_to_use.empty()) {
+                output = output.to_device(workers_to_use, mem_cfg);
+            }
+            return output;
+        }
         default: TT_THROW("Unsupported DataType!");
     }
 }

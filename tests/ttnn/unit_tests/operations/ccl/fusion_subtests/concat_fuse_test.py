@@ -201,7 +201,7 @@ def run_concat_fuse_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             )
             output_mem_config = ttnn.MemoryConfig(
-                tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
             )
     ###
 
@@ -226,8 +226,24 @@ def run_concat_fuse_impl(
 
         intermediate_core_range_set = ttnn.CoreRangeSet(
             {
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 4)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 1), ttnn.CoreCoord(6, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 2), ttnn.CoreCoord(6, 2)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 4), ttnn.CoreCoord(6, 4)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 5), ttnn.CoreCoord(5, 5)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 6), ttnn.CoreCoord(5, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 7), ttnn.CoreCoord(5, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(5, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
             }
         )
         intermediate_mem_config = ttnn.MemoryConfig(
@@ -301,9 +317,9 @@ def run_concat_fuse_impl(
             logger.info(f"Checking for device {t.device().id()}")
 
             if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_output_tensor, output_tensor_concat)
+                eq, output = comp_equal(tt_output_tensor[:, :, :, :1024], output_tensor_concat)
             else:
-                eq, output = comp_pcc(tt_output_tensor, output_tensor_concat)
+                eq, output = comp_pcc(tt_output_tensor[:, :, :, :1024], output_tensor_concat)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
                 passed = False

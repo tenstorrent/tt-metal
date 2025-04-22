@@ -21,7 +21,6 @@ from models.tt_transformers.tt.common import (
     sample_host,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -703,47 +702,47 @@ def test_demo_text(
         "decode_t/s/u": target_decode_tok_s_u,
     }
     if repeat_batches > 1:
-        assert avg_time_to_first_token * 1000 > 119, f"TTFT {avg_time_to_first_token} ms is too low, should be > 119."
+        assert avg_time_to_first_token * 1000 < 121, f"TTFT {avg_time_to_first_token} ms is too high, should be < 121."
 
     # Save benchmark data for CI dashboard
-    if is_ci_env:
-        # Instead of running warmup iterations, the demo profiles the initial compile iteration
-        bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
-        benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
+    # if is_ci_env:
+    #     # Instead of running warmup iterations, the demo profiles the initial compile iteration
+    #     bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
+    #     benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
 
-        # Save the decode performance of every iteration for plotting in superset
-        for i in range(1, iteration):
-            benchmark_data.add_measurement(
-                profiler,
-                0,
-                "inference_decode",
-                f"time_to_token_{i}",
-                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
-                step_warm_up_num_iterations=None,
-                target=None,
-            )
+    #     # Save the decode performance of every iteration for plotting in superset
+    #     for i in range(1, iteration):
+    #         benchmark_data.add_measurement(
+    #             profiler,
+    #             0,
+    #             "inference_decode",
+    #             f"time_to_token_{i}",
+    #             profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+    #             step_warm_up_num_iterations=None,
+    #             target=None,
+    #         )
 
-        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
-        inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
-        )
-        benchmark_data.add_measurement(
-            profiler,
-            0,
-            "inference_decode",
-            "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / 127,
-            step_warm_up_num_iterations=None,
-            target=None,
-        )
+    #     # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+    #     inference_decode_time_first_128 = sum(
+    #         profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
+    #     )
+    #     benchmark_data.add_measurement(
+    #         profiler,
+    #         0,
+    #         "inference_decode",
+    #         "avg_decode_time_first_128",
+    #         inference_decode_time_first_128 * 1000 / 127,
+    #         step_warm_up_num_iterations=None,
+    #         target=None,
+    #     )
 
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type=f"{tt_device_name}-demo",
-            ml_model_name=model_args.base_model_name,
-            ml_model_type="llm",
-            num_layers=model_args.n_layers,
-            batch_size=batch_size,
-            input_sequence_length=max(prefill_lens),
-            output_sequence_length=num_tokens_generated_decode[0],
-        )
+    #     benchmark_data.save_partial_run_json(
+    #         profiler,
+    #         run_type=f"{tt_device_name}-demo",
+    #         ml_model_name=model_args.base_model_name,
+    #         ml_model_type="llm",
+    #         num_layers=model_args.n_layers,
+    #         batch_size=batch_size,
+    #         input_sequence_length=max(prefill_lens),
+    #         output_sequence_length=num_tokens_generated_decode[0],
+    #     )

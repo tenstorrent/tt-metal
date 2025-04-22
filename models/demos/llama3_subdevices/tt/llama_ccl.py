@@ -26,9 +26,11 @@ class TT_CCL:
         self.sub_device_crs = all_crs if mode == "prefill" else model_args.sub_core_grids
         self.worker_sub_device_id = worker_sub_device_id
         self.model_config = model_args.model_config
+        self.weight_cache_path = model_args.weight_cache_path(ttnn.bfloat8_b)
         self.num_cbs = 2
         self.from_remote_semaphore_handles = []
         self.to_remote_semaphore_handles = []
+        self.all_gather_concat_inter_tensor = self.get_all_gather_concat_inter_buffer()
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
@@ -57,6 +59,7 @@ class TT_CCL:
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
         if mode == "prefill":
+            self.support_seqlens = [8192, 4096, 1024, 2048, 128]
             self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
             self.all_gather_buffers = self.get_prefill_all_gather_buffers()
 
@@ -64,6 +67,52 @@ class TT_CCL:
         self.gather_idx = [0, 0]
         self.buffer_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
+
+    def get_all_gather_concat_inter_buffer(self):
+        intermediate_core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 4)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 1), ttnn.CoreCoord(6, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 2), ttnn.CoreCoord(6, 2)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 4), ttnn.CoreCoord(6, 4)),
+                ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 5), ttnn.CoreCoord(5, 5)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 6), ttnn.CoreCoord(5, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 7), ttnn.CoreCoord(5, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 9), ttnn.CoreCoord(5, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 1), ttnn.CoreCoord(5, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
+            }
+        )
+        intermediate_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                intermediate_core_range_set,
+                [32, 128],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        temp_shape = [8, 128, 32, 128]
+        intermediate_tensor = torch.zeros(temp_shape, dtype=torch.bfloat16)
+        tt_intermediate_tensor = ttnn.from_torch(
+            intermediate_tensor,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=intermediate_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=[8, 4]),
+        )
+        check_mesh_tensor_alloc(tt_intermediate_tensor)
+        tt_intermediate_tensors = [tt_intermediate_tensor]
+        return tt_intermediate_tensors
 
     def get_all_gather_buffers(self):
         """
@@ -263,58 +312,61 @@ class TT_CCL:
         - FF2/WO: (1, 1, 128, 2048)
 
         """
+        persistent_buffers_all = {}
+        for seqlen in self.support_seqlens:
+            persistent_buffers = {}
 
-        persistent_buffers = {}
+            if self.model_config is None:
+                return persistent_buffers
 
-        if self.model_config is None:
-            return persistent_buffers
-
-        M = 128 if self.mode == "prefill" else 32
-        buffers_dict = {
-            "QKV": [(1, 1, 128, 1280), (1, 1, 128, 1280 // 4)],
-            "WO": [(1, 1, 128, 2048), (1, 1, 128, 2048 // 8)],
-            "FF1": [(1, 1, 128, 3584), (1, 1, 128, 3584 // 4)],
-            "FF3": [(1, 1, 128, 3584), (1, 1, 128, 3584 // 4)],
-            "FF2": [(1, 1, 128, 2048), (1, 1, 128, 2048 // 8)],
-        }
-        for key, shape in buffers_dict.items():
-            tt_buffers = []
-            for i in range(1):
-                tt_buffer = ttnn.from_torch(
-                    torch.zeros(shape[1]),
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
-                check_mesh_tensor_alloc(tt_buffer)
-                tt_buffers.append(tt_buffer)
-            for i in range(2):
-                tt_buffer = ttnn.from_torch(
-                    torch.zeros(shape[0]),
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
-                check_mesh_tensor_alloc(tt_buffer)
-                tt_buffers.append(tt_buffer)
-            for i in range(2):
-                tt_buffer = ttnn.from_torch(
-                    torch.zeros(shape[1]),
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
-                check_mesh_tensor_alloc(tt_buffer)
-                tt_buffers.append(tt_buffer)
-            persistent_buffers[key] = tt_buffers
-
-        return persistent_buffers
+            buffers_dict = {
+                "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+            }
+            for key, shape in buffers_dict.items():
+                tt_buffers = []
+                for i in range(1):
+                    tt_buffer = ttnn.as_tensor(
+                        torch.zeros(shape[1]),
+                        device=self.mesh_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat8_b,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                        cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_{i}_{seqlen}"),
+                    )
+                    check_mesh_tensor_alloc(tt_buffer)
+                    tt_buffers.append(tt_buffer)
+                for i in range(2):
+                    tt_buffer = ttnn.as_tensor(
+                        torch.zeros(shape[0]),
+                        device=self.mesh_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat8_b,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                        cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_{i}_{seqlen}"),
+                    )
+                    check_mesh_tensor_alloc(tt_buffer)
+                    tt_buffers.append(tt_buffer)
+                for i in range(2):
+                    tt_buffer = ttnn.as_tensor(
+                        torch.zeros(shape[1]),
+                        device=self.mesh_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat8_b,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                        cache_file_name=self.weight_cache_path / (f"pb_rs_02_{key}_{i}_{seqlen}"),
+                    )
+                    check_mesh_tensor_alloc(tt_buffer)
+                    tt_buffers.append(tt_buffer)
+                persistent_buffers[key] = tt_buffers
+            persistent_buffers_all[seqlen] = persistent_buffers
+        return persistent_buffers_all
 
     def get_prefill_all_gather_buffers(self):
         """
@@ -323,32 +375,33 @@ class TT_CCL:
         Creates double buffered persistent CCL buffers for each cluster axis.
 
         """
+        ag_persistent_buffers_all = {}
+        for seqlen in self.support_seqlens:
+            ag_persistent_buffers = {}
 
-        ag_persistent_buffers = {}
-
-        M = 128 if self.mode == "prefill" else 32
-        buffers_dict = {
-            "QKV": [(1, 1, 128, 1280)],
-            "WO": [(1, 1, 128, 2048)],
-            "FF1": [(1, 1, 128, 3584)],
-            "FF3": [(1, 1, 128, 3584)],
-            "FF2": [(1, 1, 128, 2048)],
-            "LAYERNORM": [(1, 1, 128, 128)],
-            # "SAMPLING": [(1, 1, 32, 128 * 1024)]
-        }
-        for key, shape in buffers_dict.items():
-            tt_buffer = ttnn.from_torch(
-                torch.zeros(shape[0]),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16 if key == "LAYERNORM" else ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            check_mesh_tensor_alloc(tt_buffer)
-            ag_persistent_buffers[key] = tt_buffer
-
-        return ag_persistent_buffers
+            buffers_dict = {
+                "QKV": [(1, 1, seqlen, 1280)],
+                "WO": [(1, 1, seqlen, 2048)],
+                "FF1": [(1, 1, seqlen, 3584)],
+                "FF3": [(1, 1, seqlen, 3584)],
+                "FF2": [(1, 1, seqlen, 2048)],
+                "LAYERNORM": [(1, 1, seqlen, 128)],
+                # "SAMPLING": [(1, 1, 32, 128 * 1024)]
+            }
+            for key, shape in buffers_dict.items():
+                tt_buffer = ttnn.as_tensor(
+                    torch.zeros(shape[0]),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16 if key == "LAYERNORM" else ttnn.bfloat8_b,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
+                )
+                check_mesh_tensor_alloc(tt_buffer)
+                ag_persistent_buffers[key] = tt_buffer
+            ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
+        return ag_persistent_buffers_all
 
     def line_all_reduce(
         self, input_tensor_mesh, cluster_axis, num_links, memory_config, dtype=None, lm_head=False, buffer_key=None
@@ -470,7 +523,13 @@ class TT_CCL:
         buffer_key=None,
     ):
         if self.mode == "prefill":
-            persistent_buffers = self.persistent_buffers.get(buffer_key, None)
+            # reshape input to [1, 1, S, x]
+            B = input_tensor_mesh.shape[1]
+            input_tensor_mesh = ttnn.reshape(
+                input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
+            )
+            seqlen = input_tensor_mesh.shape[-2]
+            persistent_buffers = self.persistent_buffers[seqlen].get(buffer_key, None)
 
             ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
                 input_tensor_mesh,
@@ -490,7 +549,10 @@ class TT_CCL:
                 subdevice_id=self.worker_sub_device_id,
                 persistent_output_tensors=persistent_buffers,
             )
+            # reshape input back
+            ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+
         else:
             persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
                 self.reduce_scatter_buffer_idx[cluster_axis]
@@ -514,7 +576,19 @@ class TT_CCL:
         return ttnn_tensor_out
 
     def line_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None):
-        persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
+        if self.mode == "prefill":
+            if buffer_key is None:
+                persistent_buffer = None
+            else:
+                # reshape input to [1, 1, S, x]
+                B = input_tensor_mesh.shape[1]
+                input_tensor_mesh = ttnn.reshape(
+                    input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
+                )
+                seqlen = input_tensor_mesh.shape[-2]
+                persistent_buffer = self.all_gather_buffers[seqlen].get(buffer_key, None)
+        else:
+            persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
@@ -528,8 +602,29 @@ class TT_CCL:
             memory_config=memory_config,
             subdevice_id=self.worker_sub_device_id,
         )
+        if self.mode == "prefill" and buffer_key is not None:
+            # reshape input back
+            ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
+
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
+        return ttnn_tensor_out
+
+    def all_gather_concat(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, num_heads=8):
+        ttnn_tensor_out = ttnn.experimental.all_gather_concat(
+            input_tensor_mesh,
+            self.all_gather_concat_inter_tensor[0],
+            dim,
+            cluster_axis=cluster_axis,
+            mesh_device=self.mesh_device,
+            topology=ttnn.Topology.Linear,
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            num_links=num_links,
+            num_heads=num_heads,
+            memory_config=memory_config,
+            subdevice_id=self.worker_sub_device_id,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
     def line_all_reduce_host(self, input_tensor_mesh, cluster_axis, num_links, memory_config):

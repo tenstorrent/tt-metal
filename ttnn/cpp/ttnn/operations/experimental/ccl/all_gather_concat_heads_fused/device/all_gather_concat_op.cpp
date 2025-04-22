@@ -19,7 +19,7 @@ AllGatherConcat create_all_gather_concat_struct(
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
+    const MemoryConfig& memory_config,
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
@@ -51,7 +51,7 @@ AllGatherConcat create_all_gather_concat_struct(
         num_links,
         num_devices,
         device_index,
-        memory_config.value_or(input_tensor.memory_config()),
+        memory_config,
         topology,
         semaphore.value(),
         sub_device_id,
@@ -127,18 +127,9 @@ std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::v
     auto hidden_dim = num_heads * head_dim;
 
     Shape output_shape({sequence_length, 1, batch, hidden_dim});
-
-    CoreRangeSet output_core_grid;
-    auto core_range_1 = CoreRange(CoreCoord{1, 0}, CoreCoord{3, 1});
-    auto core_range_2 = CoreRange(CoreCoord{1, 2}, CoreCoord{2, 2});
-    output_core_grid = CoreRangeSet(std::vector{core_range_1, core_range_2});
-    tt::tt_metal::ShardSpec shard_spec{output_core_grid, {batch, head_dim}};
-    auto mem_config =
-        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, tt::tt_metal::BufferType::L1};
-    mem_config.shard_spec = shard_spec;
-
     return {TensorSpec(
-        output_shape, tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::Layout::TILE, mem_config))};
+        output_shape,
+        tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::Layout::TILE, this->output_mem_config))};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
@@ -196,8 +187,8 @@ Tensor all_gather_concat(
     const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_heads,
+    const MemoryConfig& memory_config,
     const std::optional<uint32_t> num_links,
-    const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     TT_FATAL(
