@@ -8,13 +8,14 @@ run_tg_llama3_tests() {
   echo "LOG_METAL: Running run_tg_llama3_tests"
 
   # Llama3.1-70B
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
   # Run all Llama3 tests for 1B, 3B, 8B, 11B and 70B weights
   # for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
   for llama_dir in "$llama70b"; do
-    LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/demo_decode.py -k "full" --timeout 5000; fail+=$?;
-    LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "repeat" --timeout 5000; fail+=$?;
+    LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/demo_decode.py -k "full" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "repeat" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/demo/text_demo.py -k "long" --timeout 1000; fail+=$?;
 
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
