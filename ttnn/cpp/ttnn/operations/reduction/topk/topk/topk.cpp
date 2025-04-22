@@ -15,15 +15,30 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
-#include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 
 namespace ttnn::operations::reduction {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
+template <class Tuple, class T = std::decay_t<std::tuple_element_t<0, std::decay_t<Tuple>>>>
+std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
+    return std::apply(
+        [](auto&&... elems) { return std::vector<std::optional<T>>{std::forward<decltype(elems)>(elems)...}; },
+        std::forward<Tuple>(tuple));
+}
+
 uint32_t get_nearest_supported_k_value(uint32_t k) {
     return tt::constants::TILE_WIDTH * tt::div_up(k, tt::constants::TILE_WIDTH);
+}
+
+Tensor perform_transpose(
+    const Tensor& input_tensor, const bool is_dim_last_idx, const int8_t dim1 = -1, const int8_t dim2 = -1) {
+    return is_dim_last_idx ? input_tensor : ttnn::transpose(input_tensor, dim1, dim2, input_tensor.memory_config());
+}
+
+Tensor transform_to_4d_tensor(const Tensor& input_tensor, const bool is_rank_le_4d) {
+    return is_rank_le_4d ? ttnn::unsqueeze_to_4D(input_tensor) : data_movement::squeeze_from_ND_to_4D(input_tensor);
 }
 
 // one stop for all transformations needed after executing top-k
@@ -42,6 +57,17 @@ std::vector<Tensor> post_topk_transform_tensor(
 
     Shape final_lshape = original_lshape;
     final_lshape[dim] = std::min(original_lshape[dim], k);
+
+    // K is not a supported shape
+    if (adjusted_k != k) {
+        // slicing into padded shapes that will allow reshape below to work
+        auto output_shape = result[0].get_padded_shape();
+        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
+        result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
+        result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+    }
 
     // rank is not 4
     if (orig_rank < 4) {
@@ -108,9 +134,9 @@ std::vector<Tensor> ExecuteTopK::invoke(
     // K must be a supported shape
     uint32_t adjusted_k = CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k);
     // if dim is not last dimension, transpose it
-    Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    Tensor transposed_tensor = CMAKE_UNIQUE_NAMESPACE::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
     // if input is not 4d, convert it to 4d
-    Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
+    Tensor transformed_tensor = CMAKE_UNIQUE_NAMESPACE::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
     // add padding if needed
     Tensor padded_tensor = ttnn::fill_implicit_tile_padding(
         transformed_tensor, largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max());
@@ -120,7 +146,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
         {padded_tensor},
         {},
         optional_output_tensors.has_value()
-            ? reduction_common::tuple_to_vector_optional(optional_output_tensors.value())
+            ? CMAKE_UNIQUE_NAMESPACE::tuple_to_vector_optional(optional_output_tensors.value())
             : std::vector<std::optional<Tensor>>{},
         queue_id);
 

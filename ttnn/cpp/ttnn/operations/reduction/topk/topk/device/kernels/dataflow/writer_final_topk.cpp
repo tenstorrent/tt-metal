@@ -10,8 +10,8 @@ void kernel_main() {
 
     constexpr uint32_t values_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(1);
-    constexpr bool values_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool output_ind_is_dram = get_compile_time_arg_val(3) == 1;
+    constexpr bool values_is_dram = (bool)get_compile_time_arg_val(2);
+    constexpr bool output_ind_is_dram = (bool)get_compile_time_arg_val(3);
     constexpr uint32_t Ht = get_compile_time_arg_val(4);
     constexpr uint32_t Kt = get_compile_time_arg_val(5);
 

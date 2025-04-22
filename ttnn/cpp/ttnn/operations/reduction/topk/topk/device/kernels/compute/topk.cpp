@@ -87,7 +87,7 @@ void MAIN {
         which stores up to (k+31)/32 tiles, this var is output_tiles. Lets assume for this explanation that k is 128.
         Therefore number of result tiles is 4.  After first sort, 2 tiles will be added to result buffer (2 slots still
         empty).
-        2. Count is set to 2 to acknowledge the first two tiles we consumed. ktiles_saved now equals 2 as well.
+        2. Initial count is set to 1 to acknowledge the first two tiles we consumed. ktiles_saved now equals 2 as well.
         3. Subsequently, one tile at a time is read from input buffer, transposed, and sorted into the already sorted
         buffer at result_prep using insertion sort.
         4. The insertion sort is done by merging the new tile with the result buffer, from left to right.
@@ -107,6 +107,7 @@ void MAIN {
         will just be 1.
         */
 
+        // all steps had to be refactored into one loop or otherwise TRISC2 runs out of space
         uint32_t input_take = 2;
         for (uint32_t count = 1; count < Wt;
              count++) {  // start from 1 since initially we will take 2 input tiles and not just 1
