@@ -315,7 +315,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/tilize_compute.cpp",
         q_cores_updated,
-        tt::tt_metal::ComputeConfig{.compile_args = {1, 2}});
+        tt::tt_metal::ComputeConfig{.compile_args = {1, 2, tt::CBIndex::c_17, tt::CBIndex::c_16}});
 
     // KERNEL CREATION
     // Reader

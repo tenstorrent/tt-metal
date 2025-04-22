@@ -120,22 +120,23 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-
-    uint32_t q_start_addr = get_arg_val<uint32_t>(0);
-    uint32_t tensor_address0 = get_arg_val<uint32_t>(1);
-    const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(2));
-    const uint32_t signal_semaphore_addr2 = get_semaphore(get_arg_val<uint32_t>(3));
+    uint32_t arg_idx = 0;
+    uint32_t q_start_addr = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t tensor_address0 = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t signal_semaphore_addr2 = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr2 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr2);
 
-    uint32_t arg_idx = 4 + 2 * in_num_cores;
-    uint32_t second_half_core = get_arg_val<uint32_t>(arg_idx);
-    uint32_t start_row = get_arg_val<uint32_t>(arg_idx + 1);
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(4));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(4 + in_num_cores));
+    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += in_num_cores;
+    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += in_num_cores;
+    uint32_t second_half_core = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t start_row = get_arg_val<uint32_t>(arg_idx++);
 
     std::array<uint32_t, 8> core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
     std::array<uint32_t, 8> core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
