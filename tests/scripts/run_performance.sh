@@ -43,6 +43,7 @@ run_perf_models_other() {
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/ufld_v2/tests -m $test_marker
 
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/yolov8x/tests -m $test_marker
     fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
