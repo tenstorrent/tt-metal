@@ -2,8 +2,8 @@ name: "(T3K) T3000 unit tests"
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
+  push:
+    branches: ["main"]
 
 jobs:
   build-artifact:
