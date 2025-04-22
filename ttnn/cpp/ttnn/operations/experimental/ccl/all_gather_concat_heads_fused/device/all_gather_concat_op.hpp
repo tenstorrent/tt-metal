@@ -136,8 +136,8 @@ Tensor all_gather_concat(
     const MeshDevice& mesh_device,
     const GlobalSemaphore& global_semaphore,
     const uint32_t num_heads,
+    const MemoryConfig& memory_config,
     const std::optional<uint32_t> num_links = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 

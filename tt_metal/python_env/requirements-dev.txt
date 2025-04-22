@@ -79,7 +79,7 @@ toolz==0.12.0 # Required for Save environment data step
 # Suff that used to be in pyproject.toml
 # Needed for various tests
 pyyaml>=5.4
-matplotlib==3.7.1
+matplotlib
 Pillow==10.3.0
 jupyterlab==4.2.5
 ipywidgets==8.1.1
