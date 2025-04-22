@@ -35,7 +35,7 @@ This major change comes with a few limitations. Specifically:
 
 ## Migration Steps
 
-### Update Device Management
+### 1. Update Device Management
 For cases where you want to explicitly control each physical device, instead of seeing a Virtualized MeshDevice, please follow the steps below.
 
 Replace all usages of `CreateDevice` as follows:
@@ -57,13 +57,13 @@ tt::tt_metal::CloseDevice(device);
 
 If you need to close the device before destroying the object, you should simply call `device->close();`.
 
-### Remove Device/IDevice
+### 2. Remove Device/IDevice
 You should replace all mentions of `tt::tt_metal::IDevice` or `tt::tt_metal::Device` in your codebase with `tt::tt_metal::distributed::MeshDevice
 
-### Remove command_queue() calls
+### 3. Remove command_queue() calls
 All calls to `device->command_queue()` are fundamentally incompatible with MeshDevice, and an exception will be thrown on any such call. You should replace all usages of `command_queue()` with `mesh_command_queue()` in your codebase. Some specific use-cases may require special attention as listed below.
 
-### Event synchronization
+### 4. Event synchronization
 
 With migration to MeshDevice, event synchronization calls should be updated as well:
 ```cpp
@@ -81,7 +81,7 @@ ttnn::event_synchronize(event);
 auto event = ttnn::record_event(device->mesh_command_queue(*io_cq));
 ttnn::wait_for_event(device->mesh_command_queue(*op_cq), event);
 ```
-### Manual calls to Metal APIs
+### 5. Manual calls to Metal APIs
 Ideally, TTNN users should use Tensors and TT-NN OPs instead of direct access to Metal buffers/programs. However, if you have direct calls to those APIs in your codebase, they would need to be updated as follows:
 
 ```cpp
