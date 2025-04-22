@@ -31,23 +31,25 @@ void kernel_main() {
     constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(11);
     constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(12);
 
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
-    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(4);
+    constexpr uint32_t base_post_rt = 0;
+
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(base_post_rt + 2);
+    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(base_post_rt + 3);
 
     // Reshard writer
 #ifndef SKIP_WRITE_BACK
-    const uint32_t num_segments_to_write_back = get_arg_val<uint32_t>(5);
-    const uint32_t storage_core_start_offset = get_arg_val<uint32_t>(6);
-    tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
+    const uint32_t num_segments_to_write_back = get_arg_val<uint32_t>(base_post_rt + 4);
+    const uint32_t storage_core_start_offset = get_arg_val<uint32_t>(base_post_rt + 5);
+    tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(base_post_rt + 6));
 #endif
 
     if constexpr (is_all_to_all_worker) {
-        const uint32_t scalar_c = get_arg_val<uint32_t>(0);
+        const uint32_t scalar_c = get_arg_val<uint32_t>(base_post_rt + 0);
         wh_generate_reduce_scaler<true>(post_cb_in_4, scalar_c);
     }
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
-    const uint32_t eps = get_arg_val<uint32_t>(2);
+    const uint32_t eps = get_arg_val<uint32_t>(base_post_rt + 1);
     generate_bcast_col_scalar(eps_cb_id, eps);
 
     if constexpr (fuse_gamma) {

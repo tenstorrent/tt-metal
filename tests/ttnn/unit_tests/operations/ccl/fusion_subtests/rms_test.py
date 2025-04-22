@@ -390,6 +390,18 @@ def run_rms_fuse_impl(
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    ag_shape = [1, 1, 32, 256]
+    stats_tensor = torch.zeros(ag_shape, dtype=torch.bfloat16)
+    tt_stats = ttnn.from_torch(
+        stats_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ag_memory_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, dims=(None, 3), mesh_shape=list(ttnn.MeshShape(1, num_devices))
+        ),
+    )
     output_pad_width = math.ceil(padded_dim_per_core / num_devices / 32) * 32
     if output_shard_grid is None:
         output_shard_grid = input_shard_grid
@@ -444,14 +456,7 @@ def run_rms_fuse_impl(
             )
         )
     for i in range(num_iters):
-        tt_stats = ttnn.fused_rms_1_1_32_8192(
-            input_tensor[i],
-            layer_norm_config,
-            1,
-            mesh_device,
-            ccl_semaphore_handles[i],
-            is_pre=True,
-        )
+        # TODO: Change OP infra so that pre makes the post shape, also create external tensor
         tt_out = ttnn.fused_rms_1_1_32_8192(
             input_tensor[i],
             layer_norm_config,
@@ -463,10 +468,9 @@ def run_rms_fuse_impl(
             epsilon=epsilon,
             weight=gamma_tensor[i],
             stats=tt_stats,
-            is_pre=False,
+            is_pre=True,
         )
         tt_out_array.append(tt_out)
-        ttnn.deallocate(tt_stats)
     for i in range(num_iters):
         tt_out_torch = ttnn.to_torch(
             tt_out_array[i],

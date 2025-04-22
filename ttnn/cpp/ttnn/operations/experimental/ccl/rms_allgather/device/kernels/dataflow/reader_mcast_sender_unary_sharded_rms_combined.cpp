@@ -122,4 +122,35 @@ void kernel_main() {
         }
     };
     global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2);
+
+    const uint64_t post_reduce_sender_semaphore_noc_addr = multicast_data_noc | post_reduce_sender_semaphore_addr;
+
+    volatile tt_l1_ptr uint32_t* post_reduce_sender_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_reduce_sender_semaphore_addr);
+    const auto& global_semaphore_set = [&]() __attribute__((always_inline)) {
+        *post_reduce_sender_semaphore_addr_ptr = VALID;
+
+        noc_semaphore_set_multicast_loopback_src(
+            post_reduce_sender_semaphore_addr, post_reduce_sender_semaphore_noc_addr, num_blocks, false, false);
+    };
+
+    const auto& post_global_reduce_sender = [&](const uint32_t cb_ex, const uint32_t cb_ex_global)
+                                                __attribute__((always_inline)) {
+                                                    uint32_t l1_read_addr_ex = get_read_ptr(cb_ex);
+                                                    uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
+                                                    noc_async_write_multicast_loopback_src(
+                                                        l1_read_addr_ex,
+                                                        multicast_data_noc | l1_read_addr_ex_global,
+                                                        single_tile_size_bytes,
+                                                        num_blocks,
+                                                        false,
+                                                        false);
+                                                    noc_async_write_barrier();
+                                                };
+    cb_wait_front(cb_stats_reduced, 1);
+    cb_reserve_back(cb_ex_global, 1);
+    post_global_reduce_sender(cb_stats_reduced, cb_ex_global);
+    cb_push_back(cb_ex_global, 1);
+    cb_pop_front(cb_stats_reduced, 1);
+    global_semaphore_set();
 }
