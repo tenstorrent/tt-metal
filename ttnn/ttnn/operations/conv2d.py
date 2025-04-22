@@ -112,11 +112,8 @@ def _golden_function(
         groups=groups,
     )
 
-    output_tensor = (
-        get_torch_act_func_from_string(conv_config.activation)(output_tensor)
-        if conv_config is not None
-        else output_tensor
-    )
+    act_func = get_torch_act_func_from_string(conv_config.activation) if conv_config is not None else None
+    output_tensor = act_func(output_tensor) if act_func is not None else output_tensor
 
     N, C, H, W = output_tensor.shape
     output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
