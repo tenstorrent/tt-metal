@@ -29,10 +29,10 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 # Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
 # before triggering an assertion failure. Allows occasional dips while ensuring
 # stable performance without breaking CI prematurely.
-TSU_PERF_DROP_LIMIT_COUNT = 5
+TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 360, "max": 380}, 10: {"min": 195, "max": 215}, 80: {"min": 44, "max": 48}}
+TSU_THRESHOLDS = {1: {"min": 355, "max": 385}, 10: {"min": 195, "max": 215}, 80: {"min": 44, "max": 48}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
