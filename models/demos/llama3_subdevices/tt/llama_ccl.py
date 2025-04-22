@@ -102,7 +102,7 @@ class TT_CCL:
         tt_intermediate_tensor = ttnn.from_torch(
             intermediate_tensor,
             device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=intermediate_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=[8, 4]),

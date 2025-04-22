@@ -44,9 +44,9 @@ perf_targets = {
     },
     "AllGatherConcat_0": {
         "op_name": "AllGatherConcat",
-        "kernel_duration": 16953.190972222223,
+        "kernel_duration": 12419.194444444445,
         "op_to_op": 796.8888888888889,
-        "non-overlapped-dispatch-time": 11465.5,
+        "non-overlapped-dispatch-time": 12541.7,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.5,
@@ -203,6 +203,15 @@ perf_targets = {
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.2,
+    },
+    "Untilize_0": {
+        "op_name": "Untilize",
+        "kernel_duration": 2641.3333333333335,
+        "op_to_op": 996.8888888888889,
+        "non-overlapped-dispatch-time": 3113.6,
+        "kernel_duration_relative_margin": 0.05,
+        "op_to_op_duration_relative_margin": 0.2,
+        "dispatch_duration_relative_margin": 0.5,
     },
 }
 
