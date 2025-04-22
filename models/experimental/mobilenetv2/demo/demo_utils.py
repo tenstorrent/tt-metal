@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from PIL import Image
 import torch
 import os
 import glob
+from PIL import Image
 from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
 from datasets import load_dataset
 from torchvision import transforms
