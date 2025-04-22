@@ -5,7 +5,7 @@
 
 </h1>
 
-<img src="./docs/common/_static/tt_llk_logo.png" alt="llk logo" height="180"/>
+<img src="./docs/common/_static/tt_llk_refresh_llk_logo.png" alt="llk logo" height="180"/>
 
 <br><br>
 **TT-LLK** is Tenstorrent's Low Level Kernel library.
