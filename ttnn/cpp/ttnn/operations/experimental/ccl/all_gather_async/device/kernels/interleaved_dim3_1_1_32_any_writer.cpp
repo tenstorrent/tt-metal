@@ -45,10 +45,10 @@ inline void fabric_write_wrapper(
     write_and_advance_local_read_address_for_fabric_write(
         noc0_dest_noc_addr, pkt_hdr_forward, pkt_hdr_backward, fabric_connection, l1_read_addr, tensor_size);
     if constexpr (dynamic_alternate) {
-       // In ring mode, it's more performant to balance traffic in left/right directions. For example, a ring size of 4
-       // would have a chip send 2 hops in one direction and 1 hop in the other. By alternating, we which balance
-       // traffic because the # bytes being sent 2 hops are now shared across 2 links/directions instead of just the 
-       // one that would come from not alternating
+        // In ring mode, it's more performant to balance traffic in left/right directions. For example, a ring size of 4
+        // would have a chip send 2 hops in one direction and 1 hop in the other. By alternating, we which balance
+        // traffic because the # bytes being sent 2 hops are now shared across 2 links/directions instead of just the
+        // one that would come from not alternating
         std::swap(
             pkt_hdr_forward->routing_fields.value,
             pkt_hdr_backward->routing_fields.value);  // alternate the packet header distance for better balancing
