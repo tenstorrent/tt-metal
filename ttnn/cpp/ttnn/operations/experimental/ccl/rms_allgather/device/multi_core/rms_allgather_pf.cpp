@@ -1246,12 +1246,12 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
                     runtime_args[8] = semaphore.address();
                     runtime_args[10] = dst_buffer->address();
                     // runtime_args[0] holds the start of the post arguments, apply that offset
-                    runtime_args[runtime_args[0] + 3] = gamma_address;
+                    runtime_args[runtime_args[0] + 2] = gamma_address;
                 } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
                     auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
                     runtime_args[8] = semaphore.address();
                     runtime_args[10] = dst_buffer->address();
-                    runtime_args[runtime_args[0] + 3] = gamma_address;
+                    runtime_args[runtime_args[0] + 2] = gamma_address;
                 }
             }
             UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *src_buffer_a);
@@ -2082,11 +2082,11 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
 
                 if (writer_kernel_id == writer_mcast_sender_kernels_id) {
                     auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
-                    runtime_args[3] = gamma_address;
+                    runtime_args[2] = gamma_address;
 
                 } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
                     auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
-                    runtime_args[3] = gamma_address;
+                    runtime_args[2] = gamma_address;
                 }
             }
         };
