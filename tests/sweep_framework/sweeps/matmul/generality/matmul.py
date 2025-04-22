@@ -18,7 +18,7 @@ TIMEOUT = 30
 random.seed(0)
 
 # Possible tensor dimensions for matmul
-DIM_SIZES = [32, 1, 0]  # 64]
+DIM_SIZES = [32, 1, 0]
 
 # Create parameter combinations for different test scenarios
 parameters = {
