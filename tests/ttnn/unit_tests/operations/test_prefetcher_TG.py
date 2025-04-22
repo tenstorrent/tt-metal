@@ -119,4 +119,5 @@ def test_run_prefetcher_llama_perf(
         num_layers,
         num_reader_cores,
         dtypes,
+        enable_performance_mode=True,
     )
