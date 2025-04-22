@@ -46,7 +46,7 @@ static inline bool verify_single_core_cost(const std::vector<Tensor>& input_tens
     uint32_t cb_in_units = 2 * num_cb_unit;
     uint32_t Ktiles = tt::div_up(k, tt::constants::TILE_WIDTH);
     uint32_t input_cb_tile_count = cb_in_units;
-    uint32_t transposed_cb_tile_count = 2;
+    uint32_t transposed_cb_tile_count = 4;
     uint32_t result_prep_cb_tile_count = 2 * Ktiles;  // intermediate output
     uint32_t output_cb_tile_count = Ktiles;
 
