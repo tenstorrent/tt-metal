@@ -14,12 +14,14 @@ using tt::tt_metal::BufferType;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
+constexpr uint32_t my_ring_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
 constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(2));
 constexpr uint32_t cb0_id = get_compile_time_arg_val(3);
 constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -48,7 +50,7 @@ void kernel_main() {
 
     // print every compile and runtime arg in uint32_t
     DPRINT << "ct args: \n";
-    DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
+    DPRINT << "my_ring_id: " << (uint32_t)my_ring_id << "\n";
     DPRINT << "buffer0_type: " << (uint32_t)buffer0_type << "\n";
     DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
     DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << "\n";
@@ -75,8 +77,19 @@ void kernel_main() {
     DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
     DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
 
-    for (uint32_t dst_ring_id = receiver_ring_id_start; dst_ring_id != my_chip_id;
-         dst_ring_id = (dst_ring_id + 1) % ring_size) {
+    bool cur_is_forward = num_targets_forward_direction > num_targets_backward_direction;
+    uint32_t forward_hops = num_targets_forward_direction;
+    uint32_t backward_hops = num_targets_backward_direction;
+    uint32_t dst_ring_id;
+    for (uint32_t i = 0; i < ring_size - 1; ++i) {
+        if (cur_is_forward) {
+            dst_ring_id = (my_ring_id + forward_hops) % ring_size;
+            forward_hops--;
+        } else {
+            dst_ring_id = (my_ring_id - backward_hops + ring_size) % ring_size;
+            backward_hops--;
+        }
+
         DPRINT << "dst_ring_id: " << (uint32_t)dst_ring_id << "\n";
         uint32_t shard_row_start_id = dst_ring_id * input_row_device_stride;
         uint32_t shard_col_start_id = dst_ring_id * input_col_device_stride;
@@ -103,10 +116,12 @@ void kernel_main() {
                 cb_push_back(cb0_id, packet_size_in_pages);
             }
         }
+
+        cur_is_forward = !cur_is_forward;
     }
 
     // LOCAL COPY
-    uint32_t dst_ring_id = my_chip_id;
+    dst_ring_id = my_ring_id;
     DPRINT << "dst_ring_id: " << (uint32_t)dst_ring_id << "\n";
     uint32_t shard_row_start_id = dst_ring_id * input_row_device_stride;
     uint32_t shard_col_start_id = dst_ring_id * input_col_device_stride;

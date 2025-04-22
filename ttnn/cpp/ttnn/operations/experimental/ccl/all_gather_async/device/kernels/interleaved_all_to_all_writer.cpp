@@ -17,7 +17,7 @@ using tt::tt_metal::BufferType;
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
+constexpr uint32_t my_ring_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(2);
 constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(3);
@@ -67,7 +67,7 @@ void kernel_main() {
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
     DPRINT << "ct args: \n";
-    DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
+    DPRINT << "my_ring_id: " << (uint32_t)my_ring_id << "\n";
     DPRINT << "reserved_packet_header_cb_id: " << (uint32_t)reserved_packet_header_cb_id << "\n";
     DPRINT << "num_packet_headers_storable: " << (uint32_t)num_packet_headers_storable << "\n";
     DPRINT << "buffer0_type: " << (uint32_t)buffer0_type << "\n";
@@ -136,24 +136,22 @@ void kernel_main() {
     // 1. mcast via fabric to remote tensor addresses
     DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << "\n";
     DPRINT << "num_targets_backward_direction: " << num_targets_backward_direction << "\n";
-    DPRINT << "my_chip_id: " << my_chip_id << "\n";
+    DPRINT << "my_ring_id: " << my_ring_id << "\n";
 
     DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
     DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
 
-    // uint32_t tile_id = tile_id_start;
-    // while (tile_id < tile_id_end) {
-    for (uint32_t dst_ring_id = receiver_ring_id_start; dst_ring_id != my_chip_id;
-         dst_ring_id = (dst_ring_id + 1) % ring_size) {
-        // TODO: Determine if we use the forward or backward connection
-        uint32_t forward_distance = (dst_ring_id - my_chip_id + ring_size) % ring_size;
-        uint32_t backward_distance = (my_chip_id - dst_ring_id + ring_size) % ring_size;
-        bool use_forward_path = forward_distance <= num_targets_forward_direction;
-
-        if (use_forward_path) {
-            pkt_hdr_forward->to_chip_unicast(forward_distance);
+    bool cur_is_forward = num_targets_forward_direction > num_targets_backward_direction;
+    uint32_t forward_hops = num_targets_forward_direction;
+    uint32_t backward_hops = num_targets_backward_direction;
+    uint32_t dst_ring_id;
+    for (uint32_t i = 0; i < ring_size - 1; ++i) {
+        if (cur_is_forward) {
+            pkt_hdr_forward->to_chip_unicast(forward_hops);
+            forward_hops--;
         } else {
-            pkt_hdr_backward->to_chip_unicast(backward_distance);
+            pkt_hdr_backward->to_chip_unicast(backward_hops);
+            backward_hops--;
         }
 
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
@@ -183,7 +181,7 @@ void kernel_main() {
                     //     l1_read_addr,
                     //     contig_pages_advanced * tensor0_page_size);
 
-                    if (use_forward_path) {
+                    if (cur_is_forward) {
                         pkt_hdr_forward->to_noc_unicast_write(
                             tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
                         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
@@ -210,6 +208,8 @@ void kernel_main() {
                 cb_pop_front(cb0_id, packet_size_in_pages);
             }
         }
+
+        cur_is_forward = !cur_is_forward;
     }
 
     // 2. mcast output ready semaphore

@@ -124,6 +124,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         src0_cb_index,                                    // cb0_id
         num_pages_per_packet,                             // packet_size_in_pages
         op_config.get_page_size(),                        // tensor0_page_size
+        num_targets_forward,                              // num_targets_forward_direction
+        num_targets_backward                              // num_targets_backward_direction
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
     for (const auto& arg : reader_kernel_config.compile_args) {
