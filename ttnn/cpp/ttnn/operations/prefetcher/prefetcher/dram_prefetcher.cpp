@@ -14,14 +14,16 @@ namespace ttnn::operations::dram_prefetcher {
 Tensor ExecuteDramPrefetcher::invoke(
     std::vector<ttnn::Tensor>& tensors,
     const uint32_t num_layers,
-    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb) {
+    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb,
+    const bool enable_performance_mode) {
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output(tensors))};
     tt::tt_metal::operation::launch_op(
-        [num_layers, global_cb](
+        [num_layers, global_cb, enable_performance_mode](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            return tt::tt_metal::operation::run(DramPrefetcher{global_cb, num_layers}, input_tensors);
+            return tt::tt_metal::operation::run(
+                DramPrefetcher{global_cb, num_layers, enable_performance_mode}, input_tensors);
         },
         tensors,
         output_tensors);

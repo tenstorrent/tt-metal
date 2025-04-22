@@ -260,6 +260,7 @@ def run_prefetcher_mm(
     num_reader_cores,
     dtypes,
     is_functional_test=False,
+    enable_performance_mode=False,
 ):
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, num_layers={num_layers}")
     assert len(input_shapes) == len(dtypes)
@@ -551,6 +552,7 @@ def run_prefetcher_mm(
             tt_tensors,
             num_layers,
             global_cb=global_circular_buffer,
+            enable_performance_mode=enable_performance_mode,
         )
         device.set_sub_device_stall_group([worker_sub_device_id])
 
