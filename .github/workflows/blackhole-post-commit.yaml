@@ -33,6 +33,10 @@ on:
         description: 'Enable watcher in BH Post commit'
         default: false
         type: boolean
+      run-demo-tests:
+        description: 'Run blackhole demo tests'
+        default: true
+        type: boolean
   schedule:
     - cron: "0 */4 * * *"
   # Pause this since not enough runners to support every commit to main
@@ -134,7 +138,16 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-
+  blackhole-demo-tests:
+    # Issue 20998: Due to capacity constraints, only run blackhole demo tests on workflow_dispatch events
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-demo-tests == true }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 #   profiler-regression:
 #     needs: build-artifact-profiler
 #     uses: ./.github/workflows/run-profiler-regression.yaml
