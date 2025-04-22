@@ -12,7 +12,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode runtime
 
-
 #############################################################
 
 FROM base AS ci-build
@@ -34,7 +33,7 @@ RUN mkdir -p /tmp/boost \
     && ./b2 install --prefix=/usr/local \
     && rm -rf /tmp/boost
 
-ARG FMT_VERSION=11.0.1
+ARG FMT_VERSION=11.1.4
 RUN mkdir -p /tmp/fmt \
     && wget -O /tmp/fmt/fmt-${FMT_VERSION}.tar.gz "https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz" \
     && tar -xzf /tmp/fmt/fmt-${FMT_VERSION}.tar.gz -C /tmp/fmt --strip-components=1 \
@@ -300,7 +299,18 @@ RUN [ "$UBUNTU_VERSION" != "24.04" ] \
 
 #############################################################
 
-FROM dev AS release
+FROM base AS release
+
+# Set up virtual environment
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN python3 -m venv $PYTHON_ENV_DIR
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 RUN mkdir -p /etc && \
     echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf

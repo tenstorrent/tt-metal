@@ -13,12 +13,12 @@ from loguru import logger
 from ultralytics import YOLO
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import disable_persistent_kernel_cache
-from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8xModel, Conv, C2f, SPPF, DFL
-from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
+from models.experimental.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel, TtConv, TtC2f, TtSppf, TtDFL
+from models.experimental.yolov8x.tt.ttnn_yolov8x_utils import (
     ttnn_decode_bboxes,
     custom_preprocessor,
 )
-from models.experimental.functional_yolov8x.reference import yolov8x
+from models.experimental.yolov8x.reference import yolov8x
 
 
 def decode_bboxes(distance, anchor_points, xywh=True, dim=1):
@@ -55,21 +55,14 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
     ids=["input_tensor1"],
 )
 @pytest.mark.parametrize(
-    "use_pretrained_weight",
-    [
-        False,
-        True,
-    ],
-    ids=[
-        "pretrained_weight_false",
-        "pretrained_weight_true",
-    ],
+    "use_weights_from_ultralytics",
+    [True],
 )
-def test_yolov8x_640(device, input_tensor, use_pretrained_weight):
+def test_yolov8x_640(device, input_tensor, use_weights_from_ultralytics):
     disable_persistent_kernel_cache()
 
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
-    if use_pretrained_weight:
+    if use_weights_from_ultralytics:
         torch_model = YOLO("yolov8x.pt")
         torch_model = torch_model.model
         torch_model.eval()
@@ -79,7 +72,7 @@ def test_yolov8x_640(device, input_tensor, use_pretrained_weight):
         torch_model.eval()
         state_dict = torch_model.state_dict()
     parameters = custom_preprocessor(device, state_dict, inp_h, inp_w)
-    ttnn_model = YOLOv8xModel(device=device, parameters=parameters)
+    ttnn_model = TtYolov8xModel(device=device, parameters=parameters)
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
 
     ttnn_input = input_tensor.permute((0, 2, 3, 1))
@@ -114,7 +107,7 @@ def test_Conv(device, input_tensor):
     parameters = custom_preprocessor(device, state_dict)
 
     with torch.inference_mode():
-        conv_0 = Conv(
+        conv_0 = TtConv(
             device,
             parameters,
             "model.0",
@@ -160,7 +153,7 @@ def test_C2f(device, input_tensor, reset_seeds):
     }
 
     with torch.inference_mode():
-        c2f_2 = C2f(
+        c2f_2 = TtC2f(
             device,
             parameters,
             "model.2",
@@ -204,7 +197,7 @@ def test_SPPF(device, input_tensor, reset_seeds):
     sppf_configs = {"input_params": ((1, 1, 0, 320, 640), (1, 1, 0, 640, 1280))}
 
     with torch.inference_mode():
-        sppf = SPPF(device, parameters, "model.9", input_params=sppf_configs["input_params"], batch_size=1)
+        sppf = TtSppf(device, parameters, "model.9", input_params=sppf_configs["input_params"], batch_size=1)
         ttnn_model_output, out_h, out_w = sppf(ttnn_input)
         ttnn_model_output = ttnn.to_torch(ttnn_model_output)
         ttnn_model_output = ttnn_model_output.reshape((1, out_h, out_w, ttnn_model_output.shape[-1]))
@@ -235,7 +228,7 @@ def test_DFL(device, input_tensor, reset_seeds):
     parameters = custom_preprocessor(device, state_dict)
 
     with torch.inference_mode():
-        dfl = DFL(device, parameters, "model.22.dfl", input_params=[1, 1, 0, 1, 16])
+        dfl = TtDFL(device, parameters, "model.22.dfl", input_params=[1, 1, 0, 1, 16])
         ttnn_model_output = dfl(ttnn_input)
         ttnn_model_output = ttnn.to_torch(ttnn_model_output)
 

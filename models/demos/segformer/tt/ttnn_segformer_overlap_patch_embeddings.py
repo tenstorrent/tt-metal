@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,19 +15,13 @@ class TtSegformerOverlapPatchEmbeddings:
 
     def __call__(
         self,
+        device,
         pixel_values: ttnn.Tensor,
         parameters,
     ):
-        device = pixel_values.device()
-
-        if pixel_values.shape[-1] == 3:
-            pixel_values_rm = ttnn.from_device(pixel_values)
-            pixel_values_rm = ttnn.to_layout(pixel_values_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
-        else:
-            pixel_values_rm = pixel_values
-
-        embeddings, input_height, input_width = self.proj(device, pixel_values_rm)
+        embeddings, input_height, input_width = self.proj(device, pixel_values)
         embeddings = ttnn.to_memory_config(embeddings, memory_config=ttnn.L1_MEMORY_CONFIG)
+
         ttnn.deallocate(pixel_values)
         embeddings = ttnn.reallocate(embeddings)
 

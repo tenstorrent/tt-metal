@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -43,7 +43,8 @@ class Conv:
             weights_dtype=ttnn.bfloat16,
             activation=self.activation,
             shard_layout=self.shard_layout,
-            input_channels_alignment=16 if input_tensor.shape[3] < 16 else 32,
+            # TODO: remove after issue #20808 is fixed
+            input_channels_alignment=16 if input_tensor.shape[3] <= 16 else 32,
             transpose_shards=False,
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,

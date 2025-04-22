@@ -232,7 +232,11 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         case BinaryOpType::MAXIMUM:
             new_defines.insert({"BINOP_INIT", fmt::format("binary_max_tile_init();")});
-            op_name = "binary_max_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                op_name = "binary_max_int32_tile";
+            } else {
+                op_name = "binary_max_tile";
+            }
             break;
         case BinaryOpType::MINIMUM:
             new_defines.insert({"BINOP_INIT", fmt::format("binary_min_tile_init();")});

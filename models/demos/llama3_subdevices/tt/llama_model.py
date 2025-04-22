@@ -181,7 +181,7 @@ class TtTransformer(LightweightModule):
                 self.args.head_dim,
                 self.args.max_seq_len,
                 self.mesh_device,
-                seq_len=S,
+                seq_len=self.args.max_seq_len,
                 scale_factor=self.args.rope_scaling_factor,
             )
             self.tt_rot_mats_prefill = tt_rot_mats_prefill
@@ -331,7 +331,7 @@ class TtTransformer(LightweightModule):
             num_links=3,
             cluster_axis=0,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="SAMPLING",
+            # buffer_key="SAMPLING",
         )
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
