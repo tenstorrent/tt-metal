@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -32,10 +31,10 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
                 circular_buffer_attributes.total_size, {{buffer_index, resolved_data_format}})
                 .set_page_size(buffer_index, circular_buffer_attributes.page_size);
 
-        // WIP: Sharding
-        // if (circular_buffer_attributes.set_globally_allocated_address.has_value()) {
-        //     cb_config.set_globally_allocated_address(*tensor_args.io_tensors[circular_buffer_attributes.set_globally_allocated_address.value()].buffer());
-        // }
+        if (circular_buffer_attributes.set_globally_allocated_address.has_value()) {
+            uint32_t index = circular_buffer_attributes.set_globally_allocated_address.value();
+            cb_config.set_globally_allocated_address(*(tensor_args.io_tensors[index]).buffer());
+        }
 
         tt::tt_metal::CreateCircularBuffer(program, circular_buffer_attributes.core_spec, cb_config);
     }
