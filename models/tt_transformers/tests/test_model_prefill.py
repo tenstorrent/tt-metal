@@ -12,7 +12,7 @@ from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision, ModelOptimizations
+from models.tt_transformers.tt.model_config import ModelArgs, DecodersPrecision
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -98,12 +98,13 @@ def test_model_inference(
 
     perf_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.73}
     acc_pcc_map = {"Mistral-7B-Instruct-v0.3": 0.75}
+
     # This sets the minimum PCC for each iteration based on optimization mode
-    if optimizations == ModelOptimizations.accuracy:
+    if "accuracy" in test_id:
         default_pcc = 0.91  # TODO Look on improving PCC
         pcc = acc_pcc_map.get(model_args.model_name, default_pcc)
     else:  # performance mode
-        assert optimizations == ModelOptimizations.performance
+        assert "performance" in test_id
         default_pcc = 0.869  # TODO Look on improving PCC
         pcc = perf_pcc_map.get(model_args.model_name, default_pcc)
 
