@@ -49,6 +49,12 @@ Tensor CumSumOperation::invoke(
     }
 
     if (tensor_rank == 0 || adjusted_input_tensor.get_logical_volume() == 0) {  // empty input tensor => nothing to do
+
+        if (optional_output_tensor.has_value()) {
+            auto& out_tensor = optional_output_tensor.value();
+            out_tensor.populate_buffers_and_metadata(adjusted_input_tensor);
+        }
+
         return adjusted_input_tensor;
     }
 
@@ -59,6 +65,8 @@ Tensor CumSumOperation::invoke(
 
     // If dim is x or y axis (last or second last dimension)
     if (dim == tensor_rank - 1 || dim == tensor_rank - 2) {
+        auto opt_output = optional_output_tensor;
+
         int initial_tensor_rank = tensor_rank;
         if (initial_tensor_rank <= 2) {  // 1D or 2D tensor
             // reshape tensor => make 3D or 4D
@@ -68,8 +76,8 @@ Tensor CumSumOperation::invoke(
 
             adjusted_input_tensor = ttnn::reshape(adjusted_input_tensor, new_shape);
 
-            if (optional_output_tensor.has_value()) {
-                optional_output_tensor = ttnn::reshape(optional_output_tensor.value(), new_shape);
+            if (opt_output.has_value()) {
+                opt_output = ttnn::reshape(optional_output_tensor.value(), new_shape);
             }
 
             tensor_rank += 2;
@@ -88,13 +96,12 @@ Tensor CumSumOperation::invoke(
         Tensor permuted_tensor =
             ttnn::permute(adjusted_input_tensor, permutation, adjusted_input_tensor.memory_config());
 
-        if (optional_output_tensor.has_value()) {
-            optional_output_tensor =
-                ttnn::permute(optional_output_tensor.value(), permutation, optional_output_tensor->memory_config());
+        if (opt_output.has_value()) {
+            opt_output = ttnn::permute(opt_output.value(), permutation, opt_output->memory_config());
         }
 
         // Compute cumsum on permuted tensor (now accumulation is on dim=0)
-        Tensor output_tensor = ttnn::prim::cumsum(queue_id, permuted_tensor, 0, dtype, optional_output_tensor);
+        Tensor output_tensor = ttnn::prim::cumsum(queue_id, permuted_tensor, 0, dtype, opt_output);
 
         // Apply backward permutation to restore initial shape
         output_tensor = ttnn::permute(output_tensor, permutation, output_tensor.memory_config());
@@ -104,9 +111,7 @@ Tensor CumSumOperation::invoke(
             output_tensor = ttnn::reshape(output_tensor, input_shape);
         }
 
-        if (optional_output_tensor.has_value()) {
-            std::clog << "Copying back output tensor" << std::endl;
-
+        if (opt_output.has_value()) {
             auto& out_tensor = optional_output_tensor.value();
             out_tensor.populate_buffers_and_metadata(output_tensor);
         }

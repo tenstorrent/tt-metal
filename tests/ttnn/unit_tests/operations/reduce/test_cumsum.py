@@ -54,6 +54,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (torch.float32, None),
         (torch.bfloat16, ttnn.bfloat16),
         (torch.float32, ttnn.float32),
+        (torch.float32, ttnn.bfloat16),
     ],
 )
 def test_cumsum(size, dim, dtype, device):
@@ -65,7 +66,7 @@ def test_cumsum(size, dim, dtype, device):
     # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
     # which are not handled yet
     torch_input_tensor = torch.randint(-2, 3, size=size, dtype=host_dtype)
-    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=dev_dtype, layout=ttnn.Layout.TILE)
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
 
     output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dev_dtype)
 
@@ -126,6 +127,7 @@ def test_cumsum(size, dim, dtype, device):
         (torch.float32, None),
         (torch.bfloat16, ttnn.bfloat16),
         (torch.float32, ttnn.float32),
+        (torch.float32, ttnn.bfloat16),
     ],
 )
 def test_cumsum_with_preallocated_output(size, dim, dtype, device):
@@ -151,4 +153,9 @@ def test_cumsum_with_preallocated_output(size, dim, dtype, device):
     assert output_tensor.shape == (size)
     assert preallocated_output_tensor.shape == (size)
 
+    assert preallocated_output_tensor == output_tensor
+
+    preallocated_torch = ttnn.to_torch(preallocated_output_tensor, dtype=host_dtype)
+
     assert_with_pcc(expected_output, torch_output)
+    assert_with_pcc(expected_output, preallocated_torch)
