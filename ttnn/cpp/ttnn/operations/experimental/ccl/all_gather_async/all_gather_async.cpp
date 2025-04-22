@@ -80,6 +80,19 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
         memory_config,
         num_preferred_links,
         subdevice_id);
+// Add the implementation for ExecuteAllToAllAsync::invoke
+ttnn::Tensor ExecuteAllToAllAsync::invoke(
+    const ttnn::Tensor& input_tensor,
+    const int32_t in_dim,
+    const int32_t out_dim,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    // Forward the call to the underlying all_to_all_async implementation (to be created)
+    return ttnn::operations::experimental::ccl::all_to_all_async(
+        input_tensor, in_dim, out_dim, multi_device_global_semaphore, num_links, memory_config, topology, subdevice_id);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

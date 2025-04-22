@@ -83,6 +83,45 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("subdevice_id") = std::nullopt});
 }
 
+template <typename ccl_operation_t>
+void bind_all_to_all_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
+    namespace py = pybind11;
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const ccl_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               const int32_t in_dim,
+               const int32_t out_dim,
+               const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               const uint32_t num_links,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const ttnn::ccl::Topology topology,
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    in_dim,
+                    out_dim,
+                    multi_device_global_semaphore,
+                    num_links,
+                    memory_config,
+                    topology,
+                    subdevice_id);
+            },
+            py::arg("input_tensor"),
+            py::arg("in_dim"),
+            py::arg("out_dim"),
+            py::arg("multi_device_global_semaphore"),
+            py::kw_only(),
+            py::arg("num_links") = 1,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("topology") = ttnn::ccl::Topology::Ring,
+            py::arg("subdevice_id") = std::nullopt});
+}
+
 }  // namespace detail
 
 void py_bind_all_gather_async(pybind11::module& module) {
@@ -123,6 +162,45 @@ void py_bind_all_gather_async(pybind11::module& module) {
                             mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
             >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
+
+        )doc");
+}
+
+void py_bind_all_to_all_async(pybind11::module& module) {
+    detail::bind_all_to_all_async(
+        module,
+        ttnn::experimental::all_to_all_async,
+        R"doc(
+
+        Performs an all-to-all operation on multi-device :attr:`input_tensor` across all devices using asynchronous kernels.
+        Input tensor is assumed to be sharded along :attr:`in_dim`, and the output tensor
+        will be sharded along :attr:`out_dim`.
+
+        Args:
+            input_tensor (ttnn.Tensor): multi-device tensor sharded along in_dim.
+            in_dim (int): Dimension along which the input tensor is sharded.
+            out_dim (int): Dimension along which the output tensor should be sharded.
+            cluster_axis (int): For Linear Topology with MeshDevice, the axis corresponding to the MeshDevice dim to perform the operation on.
+            mesh_device (MeshDevice): Device mesh to perform the operation on (only applicable for Linear Topology).
+            multi_device_global_semaphore (MultiDeviceGlobalSemaphore): Semaphore required for managing asynchronous execution across devices.
+
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+
+        Keyword Args:
+            num_links (int, optional): Number of links to use for the operation (older API). Defaults to `1`.
+            num_preferred_links (int, optional): Number of links to use for the operation (MeshDevice API). Defaults to `std::nullopt`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to `input tensor memory config`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            persistent_output_tensor (ttnn.Tensor, optional): Persistent tensor to store the output.
+            subdevice_id (SubDeviceId, optional): Target specific subdevice within the device for the operation.
+
+        Returns:
+            ttnn.Tensor: the output tensor, sharded along out_dim.
+
+        Example:
+            >>> # Assume input `ttnn_tensor` is sharded along dim 2 across 8 devices on a mesh
+            >>> # output = ttnn.experimental.all_to_all_async(ttnn_tensor, in_dim=2, out_dim=3, multi_device_global_semaphore=sem, topology=ttnn.Topology.Ring)
+            >>> # `output` will be sharded along dim 3 across 8 devices.
 
         )doc");
 }

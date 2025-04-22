@@ -1,0 +1,265 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "all_gather_async_op.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/math.hpp"
+#include "cpp/ttnn/global_semaphore.hpp"
+
+#include "ttnn/tensor/tensor_utils.hpp"
+
+namespace ttnn {
+
+namespace ccl {
+// Using the same detail namespace for now, consider renaming if structure evolves
+namespace all_gather_async_detail {
+
+// Factory function for AllToAllAsync struct
+ttnn::AllToAllAsync create_all_to_all_async_struct(
+    const Tensor& input_tensor,
+    const uint32_t in_dim,
+    const uint32_t out_dim,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::vector<IDevice*>& devices,
+    const ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphores,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    uint32_t num_devices = devices.size();
+
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<GlobalSemaphore> semaphore = std::nullopt;
+    uint32_t device_index = 0;
+    for (uint32_t i = 0; i < num_devices; ++i) {
+        if (devices.at(i) == input_tensor.device()) {
+            device_index = i;
+            semaphore = semaphores.at(i);
+            if (i != 0) {
+                backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(num_devices - 1);
+            }
+            if (i != num_devices - 1) {
+                forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
+            }
+        }
+    }
+
+    return ttnn::AllToAllAsync{
+        forward_device,
+        backward_device,
+        in_dim,
+        out_dim,
+        num_links,
+        num_devices,
+        device_index,
+        memory_config.value_or(input_tensor.memory_config()),
+        topology,
+        semaphore.value(),
+        sub_device_id};
+}
+
+}  // namespace all_gather_async_detail
+}  // namespace ccl
+
+// Implementation of AllToAllAsync methods
+
+void AllToAllAsync::validate_with_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    TT_FATAL(input_tensors.size() == 1, "AllToAllAsync: Input tensor size must be 1, but is {}", input_tensors.size());
+    const auto& input_tensor = input_tensors[0];
+    const auto& layout = input_tensor.get_layout();
+    const auto& dtype = input_tensor.get_dtype();
+    const auto& page_size = input_tensor.buffer()->page_size();
+    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");
+
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_to_all_async must be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_to_all_async must be allocated in buffers on device!");
+    TT_FATAL(this->num_links > 0, "Number of links must be greater than 0, but is {}", this->num_links);
+    TT_FATAL(
+        this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
+        "Worker cores used by links are parallelized over rows, num_links ({}) exceeds available rows ({})",
+        this->num_links,
+        input_tensor.device()->compute_with_storage_grid_size().y);
+
+    TT_FATAL(
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        "Unsupported input memory layout {}.",
+        input_tensor.memory_config().memory_layout);
+
+    TT_FATAL(this->in_dim == 2 || this->in_dim == 3, "AllToAllAsync: in_dim must be 2 or 3, but is {}", this->in_dim);
+    TT_FATAL(
+        this->out_dim == 2 || this->out_dim == 3, "AllToAllAsync: out_dim must be 2 or 3, but is {}", this->out_dim);
+    TT_FATAL(
+        this->in_dim != this->out_dim,
+        "AllToAllAsync: in_dim and out_dim must be different, but are both {}",
+        this->in_dim);
+    TT_FATAL(
+        input_tensor.get_padded_shape()[this->out_dim] % this->ring_size == 0,
+        "AllToAllAsync: input tensor dimension {} must be divisible by ring_size {}",
+        input_tensor.get_padded_shape()[this->out_dim],
+        this->ring_size);
+
+    // Basic validation for output tensor if provided
+    if (output_tensors.size() > 0 && output_tensors[0].has_value()) {
+        TT_FATAL(
+            output_tensors.size() == 1,
+            "AllToAllAsync: Number of output tensors must be 1, but is {}",
+            output_tensors.size());
+        const auto& output_tensor = output_tensors[0].value();
+        TT_FATAL(
+            output_tensor.storage_type() == StorageType::DEVICE,
+            "Output tensor for all_to_all_async must be on device!");
+        TT_FATAL(output_tensor.get_layout() == layout, "Output tensor layout must match input tensor layout");
+        TT_FATAL(output_tensor.get_dtype() == dtype, "Output tensor dtype must match input tensor dtype");
+        TT_FATAL(
+            output_tensor.memory_config() == this->output_mem_config,
+            "Output tensor memory config must match specified output_mem_config");
+
+        // For AllToAll, the shape of the *local* tensor shard should typically be the same.
+        // Global logical shape also remains the same.
+        auto output_shape = output_tensor.get_padded_shape();
+        auto input_shape = input_tensor.get_padded_shape();
+        TT_FATAL(
+            output_shape == input_shape,
+            "Output tensor shape {} must match input tensor shape {} for AllToAllAsync",
+            output_shape,
+            input_shape);
+    }
+}
+
+std::vector<ttnn::TensorSpec> AllToAllAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors[0];
+    auto shape = input_tensor.get_padded_shape();
+    shape[this->in_dim] *= this->ring_size;
+    shape[this->out_dim] /= this->ring_size;
+    return {TensorSpec(
+        shape,
+        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
+}
+
+tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    // Assuming a single implementation for now (no version selection)
+    log_trace(tt::LogOp, "Running generic all_to_all_async_minimal");
+    return all_to_all_async_minimal(
+        input_tensors[0],
+        this->forward_device,
+        this->backward_device,
+        output_tensors[0],
+        this->in_dim,
+        this->out_dim,
+        this->num_links,
+        this->ring_size,
+        this->ring_index,
+        this->topology,
+        this->semaphore,
+        this->sub_device_id);
+}
+
+tt::tt_metal::operation::Hash AllToAllAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors[0];
+    auto input_shape = input_tensor.get_padded_shape();
+    auto input_memory_layout = input_tensor.get_layout();
+    auto input_dtype = input_tensor.get_dtype();
+    auto input_memory_config = input_tensor.memory_config();
+    uint32_t semaphore_address = this->semaphore.address();  // Hash semaphore address
+
+    return tt::tt_metal::operation::hash_operation<AllToAllAsync>(
+        this->in_dim,
+        this->out_dim,
+        this->num_links,
+        this->ring_size,
+        this->ring_index,
+        this->output_mem_config,
+        this->topology,
+        input_shape,
+        input_memory_layout,
+        input_dtype,
+        input_memory_config,
+        semaphore_address);
+}
+
+namespace operations {
+namespace experimental {
+namespace ccl {
+
+// Top-level API function for AllToAllAsync
+Tensor all_to_all_async(
+    const Tensor& input_tensor,
+    const int32_t in_dim,   // Changed from dim
+    const int32_t out_dim,  // Added
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    TT_FATAL(
+        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
+        "all_to_all_async op is only supported for Fast Dispatch");
+
+    auto devices = input_tensor.get_workers();
+    uint32_t num_devices = devices.size();
+    TT_FATAL(num_devices > 0, "all_to_all_async requires at least one device, but has {}", num_devices);
+
+    ttnn::ccl::Topology ccl_topology = topology;
+    if (num_devices == 1) {
+        TT_THROW("all_to_all_async is a collective operation and requires more than 1 device.");
+    }
+    if (num_devices == 2 && topology == ttnn::ccl::Topology::Ring) {
+        log_warning(tt::LogOp, "Using Linear topology for AllToAllAsync with 2 devices instead of Ring.");
+        ccl_topology = ttnn::ccl::Topology::Linear;
+    }
+
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
+
+    // Normalizing dims here before passing to the struct/op implementation
+    int32_t rank = input_tensor.get_logical_shape().rank();
+    int32_t norm_in_dim = (in_dim < 0) ? rank + in_dim : in_dim;
+    int32_t norm_out_dim = (out_dim < 0) ? rank + out_dim : out_dim;
+
+    TT_FATAL(norm_in_dim >= 0 && norm_in_dim < rank, "Invalid in_dim: {}", in_dim);
+    TT_FATAL(norm_out_dim >= 0 && norm_out_dim < rank, "Invalid out_dim: {}", out_dim);
+
+    tt::tt_metal::operation::launch_op(
+        [norm_in_dim, norm_out_dim, num_links, memory_config, devices, ccl_topology, semaphores, sub_device_id](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            const auto& input_tensor = input_tensors.at(0);
+            // Using the factory function defined earlier
+            return tt::tt_metal::operation::run(
+                ttnn::ccl::all_gather_async_detail::create_all_to_all_async_struct(
+                    input_tensor,
+                    norm_in_dim,
+                    norm_out_dim,
+                    num_links,
+                    memory_config,
+                    devices,
+                    ccl_topology,
+                    semaphores,
+                    sub_device_id),
+                {input_tensor},
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {input_tensor},
+        output_tensors,
+        {},
+        {});
+
+    return output_tensors.at(0);
+}
+
+}  // namespace ccl
+}  // namespace experimental
+}  // namespace operations
+}  // namespace ttnn

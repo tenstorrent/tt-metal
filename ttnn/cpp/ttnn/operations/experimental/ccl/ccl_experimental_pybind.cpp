@@ -21,6 +21,7 @@ void py_module(pybind11::module& module) {
     ccl::py_bind_all_gather_matmul(module);
     ccl::py_bind_all_reduce(module);
     ccl::py_bind_all_gather_async(module);
+    ccl::py_bind_all_to_all_async(module);
     ccl::py_bind_all_gather_concat(module);
     ccl::py_bind_reduce_scatter_async(module);
     ccl::py_bind_all_reduce_async(module);

@@ -55,6 +55,18 @@ struct ExecuteAllGatherAsync {
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
 };
 
+struct ExecuteAllToAllAsync {
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const int32_t in_dim,
+        const int32_t out_dim,
+        const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+        const uint32_t num_links = 1,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
+};
+
 }  // namespace operations::experimental::ccl
 
 namespace experimental {
@@ -62,6 +74,10 @@ namespace experimental {
 constexpr auto all_gather_async = ttnn::register_operation<
     "ttnn::experimental::all_gather_async",
     ttnn::operations::experimental::ccl::ExecuteAllGatherAsync>();
+
+constexpr auto all_to_all_async = ttnn::register_operation<
+    "ttnn::experimental::all_to_all_async",
+    ttnn::operations::experimental::ccl::ExecuteAllToAllAsync>();
 
 }  // namespace experimental
 }  // namespace ttnn
