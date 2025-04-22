@@ -195,15 +195,6 @@ perf_targets = {
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.3,
     },
-    # "NLPConcatHeadsDecodeDeviceOperation_0": {
-    #     "op_name": "ConcatHeads",
-    #     "kernel_duration": 7325.777777777777,
-    #     "op_to_op": 697.0,
-    #     "non-overlapped-dispatch-time": 4003.5,
-    #     "kernel_duration_relative_margin": 0.05,
-    #     "op_to_op_duration_relative_margin": 0.2,
-    #     "dispatch_duration_relative_margin": 0.1,
-    # },
     "BinaryDeviceOperation_0": {
         "op_name": "Binary_Residual_0",
         "kernel_duration": 2671.4444444444443,
@@ -830,7 +821,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             if avg_dispatch_duration > upper_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is larger than target "
+                    f"{op_code_with_id} dispatch: {avg_dispatch_duration} ns is larger than target "
                     f"({expected_time}) ns, difference: "
                     f"{abs(avg_dispatch_duration - upper_limit)} ns, margin: "
                     f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']}, "
@@ -840,7 +831,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             elif avg_dispatch_duration < lower_limit:
                 passing = False
                 logger.info(
-                    f"{op_code_with_id} op_to_op: {avg_dispatch_duration} ns is smaller than target "
+                    f"{op_code_with_id} dispatch: {avg_dispatch_duration} ns is smaller than target "
                     f"({expected_time}) ns, difference: "
                     f"{abs(lower_limit - avg_dispatch_duration)} ns, margin: "
                     f"{perf_targets[op_code_with_id]['dispatch_duration_relative_margin']}, "
