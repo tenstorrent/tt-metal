@@ -50,13 +50,13 @@ def test_vae_midblock(
 
     # Prepare ttnn input
     ttnn_input = ttnn.from_torch(
-        torch_input.permute([0, 2, 3, 1]), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        torch_input.permute([0, 2, 3, 1]), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
     )
 
     # Run ttnn model twice to test program cache and weights reuse
     ttnn_output = ttnn_model(ttnn_input)
     ttnn_input = ttnn.from_torch(
-        torch_input.permute([0, 2, 3, 1]), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        torch_input.permute([0, 2, 3, 1]), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
     )
     ttnn_output = ttnn_model(ttnn_input)
 
