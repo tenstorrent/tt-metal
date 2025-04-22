@@ -38,7 +38,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
@@ -91,7 +90,9 @@ constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
 constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
 
-constexpr CoreType DISPATCH_CORE_TYPE = CoreType::WORKER;
+constexpr CoreType DISPATCH_CORE_TYPE =
+    CoreType::WORKER;  // If this changes, need to pass it into CreateDevice. TODO: Clean this up when when we clean up
+                       // single device creation.
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -1890,8 +1891,9 @@ void configure_for_single_chip(
     uint32_t& packetized_path_test_results_addr,
     uint32_t packetized_path_test_results_size,
     uint32_t dev_hugepage_base_g) {
-    uint32_t dispatch_buffer_pages = DispatchMemMap::get(DISPATCH_CORE_TYPE, 1).dispatch_buffer_block_size_pages() *
-                                     DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t dispatch_buffer_pages =
+        MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).dispatch_buffer_block_size_pages() *
+        DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
     uint32_t num_compute_cores =
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 
@@ -1959,9 +1961,11 @@ void configure_for_single_chip(
     uint32_t* host_hugepage_completion_buffer = (uint32_t*)host_hugepage_completion_buffer_base_g;
     vector<uint32_t> tmp = {dev_hugepage_completion_buffer_base >> 4};
     CoreCoord phys_dispatch_host_core = split_dispatcher_g ? phys_dispatch_h_core : phys_dispatch_core;
-    uint32_t completion_q_wr_ptr = DispatchMemMap::get(DISPATCH_CORE_TYPE)
+    uint32_t completion_q_wr_ptr = MetalContext::instance()
+                                       .dispatch_mem_map(DISPATCH_CORE_TYPE)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-    uint32_t completion_q_rd_ptr = DispatchMemMap::get(DISPATCH_CORE_TYPE)
+    uint32_t completion_q_rd_ptr = MetalContext::instance()
+                                       .dispatch_mem_map(DISPATCH_CORE_TYPE)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_wr_ptr);
     tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_rd_ptr);
@@ -2304,20 +2308,23 @@ void configure_for_single_chip(
             my_noc_index);
     }
 
-    uint32_t host_completion_queue_wr_ptr =
-        DispatchMemMap::get(DISPATCH_CORE_TYPE).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+    uint32_t host_completion_queue_wr_ptr = MetalContext::instance()
+                                                .dispatch_mem_map(DISPATCH_CORE_TYPE)
+                                                .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
     uint32_t dev_completion_queue_wr_ptr =
-        DispatchMemMap::get(DISPATCH_CORE_TYPE)
+        MetalContext::instance()
+            .dispatch_mem_map(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
     uint32_t dev_completion_queue_rd_ptr =
-        DispatchMemMap::get(DISPATCH_CORE_TYPE)
+        MetalContext::instance()
+            .dispatch_mem_map(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
 
     std::vector<uint32_t> dispatch_compile_args = {
         dispatch_buffer_base,
         DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE,
         DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS *
-            DispatchMemMap::get(DISPATCH_CORE_TYPE, 1).dispatch_buffer_block_size_pages(),
+            MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).dispatch_buffer_block_size_pages(),
         dispatch_cb_sem,  // overridden below for h
         split_prefetcher_g ? prefetch_d_downstream_cb_sem
                            : prefetch_downstream_cb_sem,  // overridden below for dispatch_h
@@ -2352,7 +2359,7 @@ void configure_for_single_chip(
         0,
         0,
         0,
-        DispatchMemMap::get(DISPATCH_CORE_TYPE).get_dispatch_stream_index(0),
+        MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).get_dispatch_stream_index(0),
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
@@ -2604,8 +2611,9 @@ void configure_for_multi_chip(
     uint32_t& packetized_path_test_results_addr,
     uint32_t packetized_path_test_results_size,
     uint32_t dev_hugepage_base_g) {
-    uint32_t dispatch_buffer_pages = DispatchMemMap::get(DISPATCH_CORE_TYPE, 1).dispatch_buffer_block_size_pages() *
-                                     DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
+    uint32_t dispatch_buffer_pages =
+        MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).dispatch_buffer_block_size_pages() *
+        DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
     uint32_t num_compute_cores =
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
     TT_ASSERT(
@@ -2689,9 +2697,11 @@ void configure_for_multi_chip(
     uint32_t* host_hugepage_completion_buffer = (uint32_t*)host_hugepage_completion_buffer_base_g;
     vector<uint32_t> tmp = {dev_hugepage_completion_buffer_base >> 4};
     CoreCoord phys_dispatch_host_core = split_dispatcher_g ? phys_dispatch_h_core : phys_dispatch_core;
-    uint32_t completion_q_wr_ptr = DispatchMemMap::get(DISPATCH_CORE_TYPE)
+    uint32_t completion_q_wr_ptr = MetalContext::instance()
+                                       .dispatch_mem_map(DISPATCH_CORE_TYPE)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-    uint32_t completion_q_rd_ptr = DispatchMemMap::get(DISPATCH_CORE_TYPE)
+    uint32_t completion_q_rd_ptr = MetalContext::instance()
+                                       .dispatch_mem_map(DISPATCH_CORE_TYPE)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_wr_ptr);
     tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_rd_ptr);
@@ -3182,19 +3192,22 @@ void configure_for_multi_chip(
             my_noc_index);
     }
 
-    uint32_t host_completion_queue_wr_ptr =
-        DispatchMemMap::get(DISPATCH_CORE_TYPE).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+    uint32_t host_completion_queue_wr_ptr = MetalContext::instance()
+                                                .dispatch_mem_map(DISPATCH_CORE_TYPE)
+                                                .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
     uint32_t dev_completion_queue_wr_ptr =
-        DispatchMemMap::get(DISPATCH_CORE_TYPE)
+        MetalContext::instance()
+            .dispatch_mem_map(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
     uint32_t dev_completion_queue_rd_ptr =
-        DispatchMemMap::get(DISPATCH_CORE_TYPE)
+        MetalContext::instance()
+            .dispatch_mem_map(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     std::vector<uint32_t> dispatch_compile_args = {
         dispatch_buffer_base,
         DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE,
         DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS *
-            DispatchMemMap::get(DISPATCH_CORE_TYPE, 1).dispatch_buffer_block_size_pages(),
+            MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).dispatch_buffer_block_size_pages(),
         dispatch_cb_sem,  // overridden below for h
         split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
         DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS,
@@ -3532,8 +3545,9 @@ int main(int argc, char** argv) {
         CoreCoord phys_dispatch_relay_mux_core;
         CoreCoord phys_dispatch_relay_demux_core;
         uint32_t packetized_path_test_results_addr;
-        uint32_t cq_start =
-            DispatchMemMap::get(DISPATCH_CORE_TYPE).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+        uint32_t cq_start = MetalContext::instance()
+                                .dispatch_mem_map(DISPATCH_CORE_TYPE)
+                                .get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t dev_hugepage_base_g = 2 * (cq_start * sizeof(uint32_t));  // HOST_CQ uses some at the start address
 
         if (test_device_id_g == 0) {
