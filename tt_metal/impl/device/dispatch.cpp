@@ -132,8 +132,8 @@ void read_l1_data_from_completion_queue(
                 sysmem_manager.get_completion_queue_limit(cq_id) - completion_q_read_ptr;
         }
 
-        const uint32_t num_bytes_to_copy =
-            std::min(num_bytes_to_read - num_bytes_read, num_bytes_available_in_completion_queue);
+        const uint32_t num_bytes_to_copy = std::min(
+            num_bytes_to_read - num_bytes_read, num_bytes_available_in_completion_queue - completion_queue_read_offset);
 
         tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
             (char*)(uint64_t(read_descriptor.dst) + num_bytes_read),
