@@ -556,7 +556,7 @@ def main(stdscr):
                                 or (m == "70b" and d in ["n150", "n300", "p150", "p300"])
                                 or (m == "70b-r1" and d in ["n150", "n300", "p150", "p300"])
                                 or (m == "q72b" and d in ["n150", "n300", "p150", "p300"])
-                                or (m == "q7b" and d in ["n300", "p300"])
+                                or (m == "q7b" and d in ["n150", "t3k"])
                                 or ("vision" in c and m not in ["11b", "11b-b"])
                             )
                         ]
@@ -1306,7 +1306,7 @@ def export_results_to_markdown(output_entries, stdscr):
 
     # Collect results from entries in their original order
     for entry in output_entries:
-        if entry.status == "Finished":
+        if entry.status in ["Finished", "Error"]:
             key = (entry.model, entry.device)
 
             if entry.command_name == "demo" or entry.command_name == "accuracy":
@@ -1401,7 +1401,7 @@ def export_results_to_markdown(output_entries, stdscr):
     if perf_entries:
         markdown_lines.extend(
             [
-                "## LlamaOptimizations.performance",
+                "## Performance",
                 "",
                 "This configuration uses bfp4 MLP FF1+FF3 for all models.",
                 "",
@@ -1419,7 +1419,7 @@ def export_results_to_markdown(output_entries, stdscr):
         markdown_lines.extend(
             [
                 "",
-                "## LlamaOptimizations.accuracy",
+                "## Accuracy",
                 "",
                 "This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model.",
                 "",
