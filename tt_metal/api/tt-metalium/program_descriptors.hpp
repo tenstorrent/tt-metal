@@ -10,10 +10,9 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/small_vector.hpp>
 
 #include <umd/device/tt_core_coordinates.h>
-
-#include <boost/container/small_vector.hpp>
 
 #include <optional>
 
@@ -44,7 +43,7 @@ struct CBFormatDescriptor {
 };
 
 struct CBDescriptor {
-    using FormatDescriptors = boost::container::small_vector<CBFormatDescriptor, 1>;
+    using FormatDescriptors = tt::stl::SmallVector<CBFormatDescriptor, 1>;
 
     uint32_t total_size = 0;
     CoreRangeSet core_ranges;
@@ -85,11 +84,11 @@ struct EthernetConfigDescriptor {
 };
 
 struct KernelDescriptor {
-    using CompileTimeArgs = boost::container::small_vector<uint32_t, 16>;
-    using Defines = boost::container::small_vector<std::pair<std::string, std::string>, 16>;
-    using CoreRuntimeArgs = boost::container::small_vector<uint32_t, 16>;
-    using RuntimeArgs = boost::container::small_vector<boost::container::small_vector<CoreRuntimeArgs, 8>, 8>;
-    using CommonRuntimeArgs = boost::container::small_vector<uint32_t, 16>;
+    using CompileTimeArgs = tt::stl::SmallVector<uint32_t, 16>;
+    using Defines = tt::stl::SmallVector<std::pair<std::string, std::string>, 16>;
+    using CoreRuntimeArgs = tt::stl::SmallVector<uint32_t, 16>;
+    using RuntimeArgs = tt::stl::SmallVector<tt::stl::SmallVector<CoreRuntimeArgs, 8>, 8>;
+    using CommonRuntimeArgs = tt::stl::SmallVector<uint32_t, 16>;
     using ConfigDescriptor = std::variant<
         ReaderConfigDescriptor,
         WriterConfigDescriptor,
@@ -116,9 +115,9 @@ struct KernelDescriptor {
 };
 
 struct ProgramDescriptor {
-    using KernelDescriptors = boost::container::small_vector<KernelDescriptor, 3>;
-    using SemaphoreDescriptors = boost::container::small_vector<SemaphoreDescriptor, 3>;
-    using CBDescriptors = boost::container::small_vector<CBDescriptor, 5>;
+    using KernelDescriptors = tt::stl::SmallVector<KernelDescriptor, 3>;
+    using SemaphoreDescriptors = tt::stl::SmallVector<SemaphoreDescriptor, 3>;
+    using CBDescriptors = tt::stl::SmallVector<CBDescriptor, 5>;
 
     KernelDescriptors kernels;
     SemaphoreDescriptors semaphores;
