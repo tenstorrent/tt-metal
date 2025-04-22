@@ -6,6 +6,8 @@ import ttnn
 import torch
 from loguru import logger
 from typing import List
+from collections import defaultdict
+
 from llama_models.llama3.api.datatypes import (
     InterleavedTextMedia,
     StopReason,
@@ -47,6 +49,9 @@ class Generator:
             self.model_args = self.model_args[0]
         if isinstance(self.model, List):
             self.model = self.model[0]
+        self.trace_id_prefill = defaultdict(lambda: None)
+        self.trace_inputs_prefill = defaultdict(lambda: None)
+        self.trace_output_prefill = defaultdict(lambda: None)
 
     def prefill_forward_text(
         self,
@@ -91,7 +96,7 @@ class Generator:
                 "last_token_idx": last_token_idx,
             }
             if enable_trace:
-                tt_logits = self._easy_trace_prefill(**prefill_kwargs)
+                tt_logits = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
                 tt_logits = self.prefill_forward_single_user_text(**prefill_kwargs)
 
@@ -188,23 +193,23 @@ class Generator:
 
             return logits
 
-    def _easy_trace_prefill(self, tokens, last_token_idx, page_table=None, kv_cache=None, user_id=0):
+    def _easy_trace_prefill(self, tokens, last_token_idx, prefill_seq_len, page_table=None, kv_cache=None, user_id=0):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
-        if not hasattr(self, "trace_id_prefill"):
+        if self.trace_id_prefill[prefill_seq_len] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 tokens, last_token_idx, page_table=page_table, kv_cache=kv_cache, user_id=user_id
             )
-            self.trace_id_prefill = trace_id
-            self.trace_inputs_prefill = device_inputs
-            self.trace_output_prefill = tt_out_trace
+            self.trace_id_prefill[prefill_seq_len] = trace_id
+            self.trace_inputs_prefill[prefill_seq_len] = device_inputs
+            self.trace_output_prefill[prefill_seq_len] = tt_out_trace
 
         logger.info("Executing prefill trace")
         tt_out_trace = self._prefill_forward_trace_text(
-            self.trace_id_prefill,
-            self.trace_inputs_prefill,
-            self.trace_output_prefill,
+            self.trace_id_prefill[prefill_seq_len],
+            self.trace_inputs_prefill[prefill_seq_len],
+            self.trace_output_prefill[prefill_seq_len],
             tokens,
             page_table=page_table,
         )
