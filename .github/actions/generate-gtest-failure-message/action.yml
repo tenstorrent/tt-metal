@@ -16,7 +16,7 @@ runs:
   steps:
     - name: Generate gtest failure messages
       id: generate-gtest-message
-      working-directory: ${{ inputs.metal-checkout-path || '/work' }}
+      working-directory: ${{ inputs.metal-checkout-path }}
       shell: bash
       run: |
         set +e
