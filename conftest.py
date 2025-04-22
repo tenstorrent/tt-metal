@@ -54,6 +54,7 @@ def is_single_card_n300(device):
     return num_pcie == 1 and num_devices == 2 and device.arch().name == "WORMHOLE_B0"
 
 
+# TODO: Remove this when TG clusters are deprecated.
 def is_tg_cluster():
     import ttnn
 
