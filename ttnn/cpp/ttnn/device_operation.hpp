@@ -524,6 +524,10 @@ void launch_operation_with_adapter(
         // Use device_operation's compute_program_hash if available
         program_hash = mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
         program_cache_hit = program_cache.contains(program_hash);
+        if (!program_cache_hit && !program_cache.cache_misses_allowed()) {
+            auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+            TT_THROW("Device operation \"{}\": program cache miss occurred, but cache misses are forbidden", op_name);
+        }
     }
 
     log_operation<mesh_device_operation_t>(mesh_device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
