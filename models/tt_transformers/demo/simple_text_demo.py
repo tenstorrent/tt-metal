@@ -15,7 +15,7 @@ import ttnn
 
 
 from models.tt_transformers.tt.generator import Generator, SamplingParams
-from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json, CheckpointType, ModelOptimizations
+from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
 
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
