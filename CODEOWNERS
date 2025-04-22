@@ -192,7 +192,7 @@ models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT
 models/demos/wormhole @uaydonat
 models/demos/t3000 @uaydonat
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
-models/demos/llama3_subdevices @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt
+models/demos/llama3_subdevices @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt @mtairum
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @uaydonat
 models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
