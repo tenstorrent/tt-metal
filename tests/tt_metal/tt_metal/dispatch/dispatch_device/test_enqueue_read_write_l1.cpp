@@ -83,9 +83,11 @@ TEST_F(CommandQueueSingleCardFixture, TestInvalidReadWriteAddressL1) {
     const std::vector<uint32_t>& src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     const CoreCoord logical_core = {0, 0};
-    const DeviceAddr address =
+    const DeviceAddr l1_end_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
-        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) + 256;
+        MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    const DeviceAddr l1_end_address_offset = 256;
+    const DeviceAddr address = l1_end_address + l1_end_address_offset;
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
