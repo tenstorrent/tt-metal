@@ -130,9 +130,9 @@ class UNetConv2D:
         weights_dtype=ttnn.bfloat8_b,
         output_layout=ttnn.TILE_LAYOUT,
         reshard_if_not_optimal=False,
-        mesh_mapper=None,
         reallocate_halo_output=False,
         override_core_grid=None,
+        mesh_mapper=None,
     ):
         assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
 
@@ -154,6 +154,11 @@ class UNetConv2D:
             if self.use_1d_systolic_array
             else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
+
+        assert (not reshard_if_not_optimal) or (
+            reshard_if_not_optimal or override_core_grid
+        ), f"Cannot enable `reshard_if_not_optimal` (was {reshard_if_not_optimal}) and `override_core_grid` (was {override_core_grid}) at the same time "
+
         self.conv_config = ttnn.Conv2dConfig(
             dtype=activation_dtype,
             weights_dtype=weights_dtype,
@@ -296,7 +301,7 @@ class UNetUpblock:
         bn3,
         device,
         mesh_mapper=None,
-        reshard=True,
+        reshard_if_not_optimal=True,
         final_block=False,
         override_core_grid=None,
     ):
@@ -307,7 +312,7 @@ class UNetUpblock:
             conv1,
             bn1,
             device,
-            reshard_if_not_optimal=reshard,
+            reshard_if_not_optimal=reshard_if_not_optimal,
             mesh_mapper=mesh_mapper,
             reallocate_halo_output=True,
             override_core_grid=override_core_grid,
@@ -360,6 +365,7 @@ class UNetUpblock:
         y = concatenate(x_upsampled, residual_rm, dim=-1, final_block=self.final_block)
         ttnn.deallocate(x_upsampled)
         ttnn.deallocate(residual_rm)
+
         if self.final_block:
             y = ttnn.move(y)
 
@@ -381,8 +387,9 @@ class UNet:
             parameters.b1_2,
             parameters.p1,
             device,
-            mesh_mapper=mesh_mapper,
             override_core_grid=63,
+            reshard_if_not_optimal=False,
+            mesh_mapper=mesh_mapper,
         )
         self.downblock2 = UNetDownblock(
             parameters.c2,
@@ -435,8 +442,8 @@ class UNet:
             parameters.c5_3,
             parameters.b5_3,
             device,
-            mesh_mapper=mesh_mapper,
             final_block=False,
+            mesh_mapper=mesh_mapper,
         )
         self.upblock2 = UNetUpblock(
             parameters.c6,
@@ -446,8 +453,8 @@ class UNet:
             parameters.c6_3,
             parameters.b6_3,
             device,
-            mesh_mapper=mesh_mapper,
             final_block=False,
+            mesh_mapper=mesh_mapper,
         )
         self.upblock3 = UNetUpblock(
             parameters.c7,
@@ -457,9 +464,10 @@ class UNet:
             parameters.c7_3,
             parameters.b7_3,
             device,
-            mesh_mapper=mesh_mapper,
             override_core_grid=63,
+            reshard_if_not_optimal=False,
             final_block=False,
+            mesh_mapper=mesh_mapper,
         )
         self.upblock4 = UNetUpblock(
             parameters.c8,
@@ -469,9 +477,9 @@ class UNet:
             parameters.c8_3,
             parameters.b8_3,
             device,
-            mesh_mapper=mesh_mapper,
-            reshard=False,
+            reshard_if_not_optimal=False,
             final_block=True,  # Special case due to high memory pressure in final upblock
+            mesh_mapper=mesh_mapper,
         )
 
         self.output_layer = UNetConv2D(
