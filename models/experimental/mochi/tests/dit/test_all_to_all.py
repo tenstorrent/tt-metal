@@ -333,6 +333,60 @@ def test_all_gather_minimal(
     )
 
 
+def run_with_trace(
+    mesh_device,
+    all_gather_topology,
+    input_tensor_mesh,
+    in_dim,
+    out_dim,
+    num_links,
+    output_mem_config,
+    multi_device_global_semaphore,
+    num_iter=20,
+    subdevice_id=None,
+):
+    # Compile Run
+    logger.info("Compiling model")
+    tt_out_tensor = ttnn.experimental.all_to_all_async(
+        input_tensor_mesh,
+        in_dim,
+        out_dim,
+        multi_device_global_semaphore=multi_device_global_semaphore,
+        num_links=num_links,
+        memory_config=output_mem_config,
+        topology=all_gather_topology,
+        subdevice_id=subdevice_id,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture trace
+    logger.info("Capturing trace")
+    output_tensors = []
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for i in range(num_iter):
+        tt_out_tensor = ttnn.experimental.all_to_all_async(
+            input_tensor_mesh,
+            in_dim,
+            out_dim,
+            multi_device_global_semaphore=multi_device_global_semaphore,
+            num_links=num_links,
+            memory_config=output_mem_config,
+            topology=all_gather_topology,
+            subdevice_id=subdevice_id,
+        )
+        output_tensors.append(tt_out_tensor)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Run the op
+    logger.info("Starting Trace perf test...")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
+
+    return output_tensors
+
+
 def run_all_to_all_impl(
     mesh_device,
     num_devices,
@@ -349,6 +403,7 @@ def run_all_to_all_impl(
     enable_async=False,
     trace_mode=False,
     mem_config=None,
+    do_check=True,
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -412,19 +467,18 @@ def run_all_to_all_impl(
 
     tt_out_tensor_list = []
     if trace_mode:
-        pass
-        # tt_out_tensor = run_with_trace(
-        #     mesh_device,
-        #     all_gather_topology,
-        #     input_tensor_mesh_list[0],
-        #     dim,
-        #     num_links,
-        #     output_mem_config,
-        #     multi_device_global_semaphore=ccl_semaphore_handles[0],
-        #     num_iter=num_iters,
-        #     subdevice_id=worker_sub_device_id,
-        # )
-        # tt_out_tensor_list.append(tt_out_tensor)
+        tt_out_tensor_list = run_with_trace(
+            mesh_device,
+            all_gather_topology,
+            input_tensor_mesh_list[0],
+            in_dim,
+            out_dim,
+            num_links,
+            output_mem_config,
+            multi_device_global_semaphore=ccl_semaphore_handles[0],
+            num_iter=num_iters,
+            subdevice_id=worker_sub_device_id,
+        )
     else:
         for i in range(num_iters):
             tt_out_tensor = ttnn.experimental.all_to_all_async(
@@ -437,46 +491,38 @@ def run_all_to_all_impl(
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
             )
-            tensors = ttnn.get_device_tensors(tt_out_tensor)
-
-            # for i in range(len(tensors)):
-            #     start_slice = [0] * len(logical_shape)
-            #     end_slice = list(logical_shape)
-            #     shard_dim = logical_shape[out_dim] // num_devices
-            #     start_slice[out_dim] = i * shard_dim
-            #     end_slice[out_dim] = start_slice[out_dim] + shard_dim
-            #     tensors[i] = ttnn.slice(tensors[i], start_slice, end_slice)
-            tt_out_tensor_list.append(ttnn.aggregate_as_tensor(tensors))
+            tt_out_tensor_list.append(tt_out_tensor)
 
         logger.info(f"Waiting for op")
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done op")
 
     passed = True
-    for tensor_index in range(len(tt_out_tensor_list)):
-        tt_out_tensor = tt_out_tensor_list[tensor_index]
-        output_tensors = output_tensor_goldens_list[tensor_index]
-        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-            output_tensor = output_tensors[i]
-            logger.info(f"Checking for device {t.device().id()}")
-            if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_output_tensor, output_tensor)
-            else:
-                eq, output = comp_pcc(tt_output_tensor, output_tensor)
-            if not eq:
-                logger.error(f"output mismatch for tensor {i}")
-                passed = False
+    if do_check:
+        for tensor_index in range(len(tt_out_tensor_list)):
+            tt_out_tensor = tt_out_tensor_list[tensor_index]
+            output_tensors = output_tensor_goldens_list[tensor_index]
+            for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+                tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+                output_tensor = output_tensors[i]
+                logger.info(f"Checking for device {t.device().id()}")
+                if input_dtype == ttnn.bfloat16:
+                    eq, output = comp_equal(tt_output_tensor, output_tensor)
+                else:
+                    eq, output = comp_pcc(tt_output_tensor, output_tensor)
+                if not eq:
+                    logger.error(f"output mismatch for tensor {i}")
+                    passed = False
 
-    # for i in range(num_devices):
-    #     assert (
-    #         mesh_device.get_devices()[i].num_program_cache_entries() == 1
-    #         or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-    #     ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+    for i in range(num_devices):
+        assert (
+            mesh_device.get_devices()[i].num_program_cache_entries() == 1
+            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
+        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
-    if not passed:
+    if do_check and not passed:
         assert eq, f"{i} FAILED: {output}"
 
 
@@ -501,7 +547,7 @@ def run_all_to_all_impl(
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("num_iters", [2])
+@pytest.mark.parametrize("num_iters, do_check", [(2, True), (6, False)], ids=["check", "perf"])
 @pytest.mark.parametrize("enable_async", [True])
 def test_all_to_all(
     t3k_mesh_device,
@@ -517,6 +563,7 @@ def test_all_to_all(
     use_program_cache,
     function_level_defaults,
     enable_async,
+    do_check,
 ):
     run_all_to_all_impl(
         t3k_mesh_device,
@@ -533,4 +580,6 @@ def test_all_to_all(
         num_iters=num_iters,
         enable_async=enable_async,
         mem_config=mem_config,
+        do_check=do_check,
+        trace_mode=False,
     )
