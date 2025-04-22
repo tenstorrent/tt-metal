@@ -168,7 +168,6 @@ def run_rms_trace(
             epsilon=epsilon,
             weight=gamma_tensor,
             stats=tt_stats,
-            is_pre=True,
         )
 
         logger.info("Capturing trace")
@@ -186,7 +185,6 @@ def run_rms_trace(
                     epsilon=epsilon,
                     weight=gamma_tensor,
                     stats=tt_stats,
-                    is_pre=True,
                 )
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             logger.info("Done warmup")
@@ -204,7 +202,6 @@ def run_rms_trace(
                 epsilon=epsilon,
                 weight=gamma_tensor,
                 stats=tt_stats,
-                is_pre=True,
             )
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     else:
@@ -456,7 +453,6 @@ def run_rms_fuse_impl(
             epsilon=epsilon,
             weight=gamma_tensor[i],
             stats=tt_stats,
-            is_pre=True,
         )
         tt_out_array.append(tt_out)
     for i in range(num_iters):

@@ -23,8 +23,7 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     float epsilon,
     const std::optional<const ttnn::Tensor>& weight,
-    const std::optional<const ttnn::Tensor>& stats,
-    bool is_pre) {
+    const std::optional<const ttnn::Tensor>& stats) {
     auto arch = is_tensor_on_device_or_multidevice(input_tensor)
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
@@ -52,8 +51,7 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
          epsilon,
          program_config,
          kernel_config_val,
-         dtype,
-         is_pre](
+         dtype](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -77,8 +75,7 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
                     epsilon,
                     program_config,
                     kernel_config_val,
-                    dtype,
-                    is_pre),
+                    dtype),
                 {input_tensor},
                 optional_input_tensors,
                 optional_output_tensors);

@@ -16,7 +16,7 @@
 
 namespace ttnn::operations::fused::normalization {
 
-tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     const Tensor& a,
     const std::optional<const Tensor>& b,      // residual
     const std::optional<const Tensor>& gamma,  // weight
@@ -58,7 +58,6 @@ struct RMSAllGather {
     const DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     const ttnn::ccl::Topology topology;
-    const bool is_pre;
     const uint32_t num_links;
     const uint32_t ring_size;
     const uint32_t ring_index;
@@ -82,7 +81,6 @@ struct RMSAllGather {
         const DeviceComputeKernelConfig compute_kernel_config,
         std::optional<DataType> dtype,
         ::ttnn::ccl::Topology topology,
-        const bool is_pre,
         uint32_t num_links,
         uint32_t ring_size,
         uint32_t ring_index,
@@ -96,7 +94,6 @@ struct RMSAllGather {
         compute_kernel_config(compute_kernel_config),
         dtype(dtype),
         topology(topology),
-        is_pre(is_pre),
         num_links(num_links),
         ring_size(ring_size),
         ring_index(ring_index),
@@ -112,7 +109,6 @@ struct RMSAllGather {
         attrs.emplace_back("program_config", program_config);
         attrs.emplace_back("compute_kernel_config", compute_kernel_config);
         attrs.emplace_back("dtype", dtype);
-        attrs.emplace_back("is_pre", is_pre);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("ring_index", ring_index);
@@ -138,7 +134,6 @@ RMSAllGather create_rms_struct(
     float epsilon,
     const ttnn::operations::normalization::LayerNormProgramConfig program_config,
     const DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<DataType> dtype,
-    const bool is_pre);
+    std::optional<DataType> dtype);
 
 }  // namespace ttnn::operations::fused::normalization

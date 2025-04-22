@@ -27,8 +27,7 @@ RMSAllGather create_rms_struct(
     float epsilon,
     const ttnn::operations::normalization::LayerNormProgramConfig program_config,
     const DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<DataType> dtype,
-    const bool is_pre) {
+    std::optional<DataType> dtype) {
     uint32_t num_devices = devices.size();
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
@@ -57,7 +56,6 @@ RMSAllGather create_rms_struct(
         compute_kernel_config,
         dtype,
         topology,
-        is_pre,
         num_links,
         num_devices,
         device_index,
@@ -122,11 +120,9 @@ void RMSAllGather::validate(
         TT_FATAL(b.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "device is not same!");
     }
-    if (!this->is_pre) {
-        TT_FATAL(
-            gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR,
-            "Post all gather requires a weight which is row major");
-    }
+    TT_FATAL(
+        gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR,
+        "RMS all gather requires a weight which is row major");
 
     if (gamma.has_value()) {
         if (gamma.value().get_layout() == Layout::TILE) {
@@ -258,11 +254,6 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
     auto output_shape = input_tensor.get_logical_shape();
     auto output_padded_shape = input_tensor.get_padded_shape();
 
-    // WARNING!!!!! This line is ONLY true when only doing pre-allgather only
-    // if (this->is_pre) {
-    //    output_shape[3] = input_tensor.get_tensor_spec().tile().get_tile_shape()[1] * this->ring_size;
-    //}
-
     return std::visit(
         [&](const auto& program_config) -> std::vector<TensorSpec> {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -334,7 +325,7 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program(
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
-                return frmsnorm_pre_multi_core_sharded(
+                return frmsnorm_multi_core_sharded(
                     a,
                     b,
                     gamma,
@@ -362,7 +353,7 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program(
                 uint32_t num_cores_y = 1;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
-                return frmsnorm_pre_multi_core_sharded(
+                return frmsnorm_multi_core_sharded(
                     a,
                     b,
                     gamma,
