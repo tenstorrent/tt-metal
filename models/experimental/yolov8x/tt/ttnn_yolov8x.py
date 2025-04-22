@@ -540,7 +540,7 @@ class TtDetectionModel:
             },
         }
 
-        self.conv_0 = Conv(
+        self.conv_0 = TtConv(
             device,
             parameters,
             "model.0",

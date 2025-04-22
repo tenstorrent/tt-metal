@@ -13,6 +13,8 @@ from models.experimental.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrac
 
 
 @run_for_wormhole_b0()
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
