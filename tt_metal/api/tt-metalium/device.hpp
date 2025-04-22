@@ -32,6 +32,7 @@ namespace tt_metal {
 
 namespace program_cache::detail {
 class ProgramCache;
+class ProgramCacheV2;
 }
 /*
 MemoryBlockTable is a list of memory blocks in the following format:
@@ -191,13 +192,15 @@ public:
     virtual void disable_and_clear_program_cache() = 0;
     void set_program_cache_misses_allowed(bool allowed);
     virtual program_cache::detail::ProgramCache& get_program_cache() = 0;
+    virtual program_cache::detail::ProgramCacheV2& get_program_cache_v2() = 0;
     virtual std::size_t num_program_cache_entries() = 0;
 
     virtual HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const = 0;
 
     uint64_t get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
 
-    virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) = 0;
+    virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
+        const CoreRangeVector& ranges, const CoreType core_type) = 0;
 
     virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;

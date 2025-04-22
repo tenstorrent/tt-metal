@@ -47,6 +47,7 @@ class SystemMemoryManager;
 namespace program_cache {
 namespace detail {
 struct ProgramCache;
+struct ProgramCacheV2;
 }  // namespace detail
 }  // namespace program_cache
 }  // namespace tt_metal
@@ -237,10 +238,11 @@ public:
     void enable_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
+    program_cache::detail::ProgramCacheV2& get_program_cache_v2() override;
     std::size_t num_program_cache_entries() override;
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
-        const std::vector<CoreRange>& ranges, const CoreType core_type) override;
+        const CoreRangeVector& ranges, const CoreType core_type) override;
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
     uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;

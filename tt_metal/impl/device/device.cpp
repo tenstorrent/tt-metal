@@ -345,7 +345,7 @@ void Device::initialize_default_sub_device_state(
     // Create the default sub-device manager representing the entire chip
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
     const auto& active_eth_cores = this->get_active_ethernet_cores(true);
-    std::vector<CoreRange> active_eth_core_ranges;
+    CoreRangeVector active_eth_core_ranges;
     active_eth_core_ranges.reserve(active_eth_cores.size());
     for (const auto& core : active_eth_cores) {
         active_eth_core_ranges.emplace_back(core, core);
@@ -1647,10 +1647,11 @@ void Device::disable_and_clear_program_cache() {
         program_cache_.disable();
     }
     program_cache_.clear();
+    program_cache_v2_.cache.clear();
 }
 std::size_t Device::num_program_cache_entries() {
     this->synchronize();
-    return program_cache_.num_entries();
+    return program_cache_.num_entries() + program_cache_v2_.cache.size();
 }
 
 void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
@@ -1839,7 +1840,8 @@ HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_cor
 
 // TODO: Find a better home for this function
 // Extracts all the pairs of noc multicast encodings given a set of core ranges
-std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) {
+std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_multicast_info(
+    const CoreRangeVector& ranges, const CoreType core_type) {
     std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
     dst_noc_multicast_info.reserve(ranges.size());
     for (const CoreRange& core_range : ranges) {

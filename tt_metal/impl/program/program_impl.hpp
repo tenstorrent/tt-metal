@@ -71,7 +71,7 @@ public:
     void release_buffers();
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord& core) const;
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_corerange(const CoreRange& cr) const;
-    std::vector<CoreRange> circular_buffers_unique_coreranges() const;
+    CoreRangeVector circular_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
     size_t num_semaphores() const;
@@ -108,6 +108,8 @@ public:
     void set_last_used_command_queue_for_testing(CommandQueue* queue);
     CommandQueue* get_last_used_command_queue() const;
     void populate_dispatch_data(IDevice* device);
+
+    void update_runtime_info_from_descriptor(ProgramDescriptor&& descriptor);
 
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
@@ -200,6 +202,7 @@ private:
         const CoreRangeSet& core_range_set,
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
+    CBHandle add_circular_buffer(CBDescriptor&& descriptor);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
@@ -209,9 +212,9 @@ private:
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
 
-    void set_cb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+    void set_cb_data_fmt(const CoreRangeVector& crs, JitBuildOptions& build_options) const;
 
-    void set_cb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+    void set_cb_tile_dims(const CoreRangeVector& crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 

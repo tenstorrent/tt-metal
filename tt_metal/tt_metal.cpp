@@ -51,6 +51,7 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
+#include "tt_stl/overloaded.hpp"
 
 namespace tt {
 
@@ -1415,6 +1416,104 @@ void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::S
             }
         }
     }
+}
+
+Program CreateProgram(ProgramDescriptor&& descriptor) {
+    Program program;
+
+    for (auto& cb_descriptor : descriptor.cbs) {
+        program.add_circular_buffer(std::move(cb_descriptor));
+    }
+
+    for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
+        auto& semaphore_descriptor = descriptor.semaphores[i];
+        program.add_semaphore(
+            CoreRangeSet(std::move(semaphore_descriptor.core_ranges)),
+            i,
+            semaphore_descriptor.initial_value,
+            semaphore_descriptor.core_type);
+    }
+
+    for (auto& kernel_descriptor : descriptor.kernels) {
+        auto source_type = kernel_descriptor.source_type == KernelDescriptor::SourceType::FILE_PATH
+                               ? KernelSource::FILE_PATH
+                               : KernelSource::SOURCE_CODE;
+        KernelSource kernel_source(std::move(kernel_descriptor.kernel_source), source_type);
+        std::vector<uint32_t> compile_args(
+            kernel_descriptor.compile_time_args.begin(), kernel_descriptor.compile_time_args.end());
+        std::map<std::string, std::string> defines(kernel_descriptor.defines.begin(), kernel_descriptor.defines.end());
+
+        auto kernel_handle = std::visit(
+            tt::stl::overloaded{
+                [&](const ReaderConfigDescriptor&) {
+                    auto reader_config = ReaderDataMovementConfig(
+                        std::move(compile_args),
+                        std::move(defines),
+                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2));
+                    return CreateDataMovementKernel(
+                        program, kernel_source, CoreRangeSet(std::move(kernel_descriptor.core_ranges)), reader_config);
+                },
+                [&](const WriterConfigDescriptor&) {
+                    auto writer_config = WriterDataMovementConfig(
+                        std::move(compile_args),
+                        std::move(defines),
+                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2));
+                    return CreateDataMovementKernel(
+                        program, kernel_source, CoreRangeSet(std::move(kernel_descriptor.core_ranges)), writer_config);
+                },
+                [&](const DataMovementConfigDescriptor& dm_descriptor) {
+                    auto dm_config = DataMovementConfig{
+                        .processor = dm_descriptor.processor,
+                        .noc = dm_descriptor.noc,
+                        .noc_mode = dm_descriptor.noc_mode,
+                        .compile_args = std::move(compile_args),
+                        .defines = std::move(defines),
+                        .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                    };
+                    return CreateDataMovementKernel(
+                        program, kernel_source, CoreRangeSet(std::move(kernel_descriptor.core_ranges)), dm_config);
+                },
+                [&](const ComputeConfigDescriptor& compute_descriptor) {
+                    auto compute_config = ComputeConfig{
+                        .math_fidelity = compute_descriptor.math_fidelity,
+                        .fp32_dest_acc_en = compute_descriptor.fp32_dest_acc_en,
+                        .dst_full_sync_en = compute_descriptor.dst_full_sync_en,
+                        .unpack_to_dest_mode = compute_descriptor.unpack_to_dest_mode,
+                        .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
+                        .math_approx_mode = compute_descriptor.math_approx_mode,
+                        .compile_args = std::move(compile_args),
+                        .defines = std::move(defines),
+                        .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
+                    };
+                    return CreateComputeKernel(
+                        program, kernel_source, CoreRangeSet(std::move(kernel_descriptor.core_ranges)), compute_config);
+                },
+                [&](const EthernetConfigDescriptor& ethernet_descriptor) {
+                    auto ethernet_config = EthernetConfig{
+                        .eth_mode = ethernet_descriptor.eth_mode,
+                        .noc = ethernet_descriptor.noc,
+                        .processor = ethernet_descriptor.processor,
+                        .compile_args = std::move(compile_args),
+                        .defines = std::move(defines),
+                        .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::Os),
+                    };
+                    return CreateEthernetKernel(
+                        program,
+                        kernel_source,
+                        CoreRangeSet(std::move(kernel_descriptor.core_ranges)),
+                        ethernet_config);
+                },
+            },
+            kernel_descriptor.config);
+
+        for (size_t i = 0; i < kernel_descriptor.runtime_args.size(); i++) {
+            for (size_t j = 0; j < kernel_descriptor.runtime_args[i].size(); j++) {
+                SetRuntimeArgs(program, kernel_handle, CoreCoord(i, j), kernel_descriptor.runtime_args[i][j]);
+            }
+        }
+        SetCommonRuntimeArgs(program, kernel_handle, kernel_descriptor.common_runtime_args);
+    }
+    return program;
 }
 
 namespace experimental {

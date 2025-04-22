@@ -5,8 +5,7 @@
 #include "clone_device_operation.hpp"
 
 namespace ttnn::operations::data_movement::clone {
-void CloneOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void CloneOperation::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     if (operation_attributes.dtype != input.get_dtype()) {
         TT_FATAL(input.get_layout() == Layout::TILE, "Clone: data type conversion is only supported with tile layout");
@@ -21,20 +20,12 @@ void CloneOperation::validate_inputs(
         "Clone: not currently support sharding");
 }
 
-CloneOperation::program_factory_t CloneOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return ProgramFactory{};
+tt::tt_metal::ProgramDescriptor CloneOperation::create_program(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    return ProgramFactory::create(operation_attributes, tensor_args, output);
 }
-
-void CloneOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void CloneOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
 
 CloneOperation::spec_return_value_t CloneOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

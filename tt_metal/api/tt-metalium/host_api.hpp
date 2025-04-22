@@ -14,6 +14,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/lightmetal_binary.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 /** @file */
 
@@ -133,6 +134,19 @@ bool CloseDevice(IDevice* device);
  */
 // clang-format on
 Program CreateProgram();
+
+// clang-format off
+/**
+ * Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device
+ *
+ * Return value: Program
+ *
+ * | Argument     | Description                                                                                                                                 | Type                                                     | Valid Range | Required |
+ * |--------------|---------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
+ * | descriptor   | Descriptor for the program                                                                                                                 | ProgramDescriptor &                                      |             | Yes      |
+ */
+// clang-format on
+Program CreateProgram(ProgramDescriptor&& descriptor);
 
 // clang-format off
 /**

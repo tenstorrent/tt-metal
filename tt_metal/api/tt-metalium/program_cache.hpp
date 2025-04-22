@@ -133,4 +133,9 @@ private:
     std::unordered_map<uint64_t, CachedProgramFactory> cache_{};
 };
 
+class ProgramCacheV2 {
+public:
+    std::unordered_map<uint64_t, tt::tt_metal::Program> cache;
+};
+
 }  // namespace tt::tt_metal::program_cache::detail

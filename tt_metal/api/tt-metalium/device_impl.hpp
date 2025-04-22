@@ -169,11 +169,13 @@ public:
     void enable_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override { return program_cache_; }
+    program_cache::detail::ProgramCacheV2& get_program_cache_v2() override { return program_cache_v2_; }
     std::size_t num_program_cache_entries() override;
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
 
-    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
+    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
+        const CoreRangeVector& ranges, const CoreType core_type) override;
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
@@ -274,6 +276,7 @@ private:
     std::vector<uint16_t> l1_bank_to_noc_xy_;
 
     program_cache::detail::ProgramCache program_cache_;
+    program_cache::detail::ProgramCacheV2 program_cache_v2_;
 
     uint32_t trace_buffers_size_ = 0;
     bool uninitialized_error_fired_ =

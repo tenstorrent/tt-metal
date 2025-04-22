@@ -632,6 +632,11 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     return add_circular_buffer_(circular_buffer);
 }
 
+CBHandle detail::ProgramImpl::add_circular_buffer(CBDescriptor&& descriptor) {
+    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(std::move(descriptor));
+    return add_circular_buffer_(circular_buffer);
+}
+
 CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
     return pimpl_->add_circular_buffer(core_range_set, config);
 }
@@ -641,6 +646,10 @@ CBHandle Program::add_circular_buffer(
     const CircularBufferConfig& config,
     const experimental::GlobalCircularBuffer& global_circular_buffer) {
     return pimpl_->add_circular_buffer(core_range_set, config, global_circular_buffer);
+}
+
+CBHandle Program::add_circular_buffer(CBDescriptor&& descriptor) {
+    return pimpl_->add_circular_buffer(std::move(descriptor));
 }
 
 std::shared_ptr<CircularBuffer> detail::ProgramImpl::get_circular_buffer(CBHandle cb_id) const {
@@ -678,8 +687,8 @@ std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers_on_corera
     return pimpl_->circular_buffers_on_corerange(cr);
 }
 
-std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges() const {
-    std::vector<CoreRange> core_ranges;
+CoreRangeVector detail::ProgramImpl::circular_buffers_unique_coreranges() const {
+    CoreRangeVector core_ranges;
     for (const auto& circular_buffer : circular_buffers_) {
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             if (std::find(core_ranges.begin(), core_ranges.end(), core_range) == core_ranges.end()) {
@@ -690,7 +699,7 @@ std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges()
     return core_ranges;
 }
 
-std::vector<CoreRange> Program::circular_buffers_unique_coreranges() const {
+CoreRangeVector Program::circular_buffers_unique_coreranges() const {
     return pimpl_->circular_buffers_unique_coreranges();
 }
 
@@ -890,7 +899,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
     }
 }
 
-void detail::ProgramImpl::set_cb_data_fmt(const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+void detail::ProgramImpl::set_cb_data_fmt(const CoreRangeVector& crs, JitBuildOptions& build_options) const {
     //ZoneScoped;
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
@@ -903,7 +912,7 @@ void detail::ProgramImpl::set_cb_data_fmt(const std::vector<CoreRange> &crs, Jit
     }
 }
 
-void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+void detail::ProgramImpl::set_cb_tile_dims(const CoreRangeVector& crs, JitBuildOptions& build_options) const {
     //ZoneScoped;
     for (const auto &logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
@@ -1193,6 +1202,10 @@ void Program::generate_dispatch_commands(IDevice* device) {
 }
 
 void Program::allocate_kernel_bin_buf_on_device(IDevice* device) { pimpl_->allocate_kernel_bin_buf_on_device(device); }
+
+void Program::update_runtime_info_from_descriptor(ProgramDescriptor&& descriptor) {
+    pimpl_->update_runtime_info_from_descriptor(std::move(descriptor));
+}
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     //ZoneScoped;
@@ -1490,6 +1503,58 @@ std::vector<uint32_t> &Program::get_program_config_sizes() const noexcept { retu
 
 std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_program_command_sequences() noexcept {
     return pimpl_->cached_program_command_sequences_;
+}
+
+void detail::ProgramImpl::update_runtime_info_from_descriptor(ProgramDescriptor&& descriptor) {
+    auto copy_runtime_args = [](Kernel& kernel_to, const KernelDescriptor& kernel_from) {
+        auto& runtime_args_to = kernel_to.runtime_args_data();
+        for (size_t i = 0; i < kernel_from.runtime_args.size(); i++) {
+            for (size_t j = 0; j < kernel_from.runtime_args[i].size(); j++) {
+                const auto& runtime_arg_from = kernel_from.runtime_args[i][j];
+                if (runtime_arg_from.empty()) {
+                    continue;
+                }
+                std::memcpy(
+                    runtime_args_to[i][j].data(),
+                    runtime_arg_from.data(),
+                    runtime_arg_from.size() * sizeof(runtime_arg_from[0]));
+            }
+        }
+        auto common_to = kernel_to.common_runtime_args_data();
+        if (!kernel_from.common_runtime_args.empty()) {
+            std::memcpy(
+                common_to.data(),
+                kernel_from.common_runtime_args.data(),
+                kernel_from.common_runtime_args.size() * sizeof(kernel_from.common_runtime_args[0]));
+        }
+    };
+
+    for (size_t kernels_idx = 0; kernels_idx < kernels_.size(); ++kernels_idx) {
+        auto& kernels = kernels_[kernels_idx];
+        for (auto& [id, kernel] : kernels) {
+            copy_runtime_args(*kernel, descriptor.kernels[id]);
+        }
+    }
+
+    bool should_invalidate_cb_allocation = false;
+    for (size_t circular_buffers_idx = 0; circular_buffers_idx < circular_buffers_.size(); ++circular_buffers_idx) {
+        auto& circular_buffer = circular_buffers_[circular_buffers_idx];
+        auto& descriptor_cb = descriptor.cbs.at(circular_buffers_idx);
+        if (!circular_buffer->globally_allocated()) {
+            should_invalidate_cb_allocation |= circular_buffer->config().total_size() != descriptor_cb.total_size;
+        }
+        circular_buffer->config() = CircularBufferConfig(descriptor_cb);
+        if (descriptor_cb.global_circular_buffer) {
+            circular_buffer->set_global_circular_buffer(*descriptor_cb.global_circular_buffer);
+        }
+        if (circular_buffer->globally_allocated()) {
+            circular_buffer->assign_global_address();
+        }
+    }
+
+    if (should_invalidate_cb_allocation) {
+        invalidate_circular_buffer_allocation();
+    }
 }
 
 }  // namespace tt::tt_metal
