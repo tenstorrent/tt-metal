@@ -12,7 +12,7 @@ import ttnn
 
 from .linear import TtLinear, TtLinearParameters
 from .substate import indexed_substates, substate
-from .utils import from_torch_fast, from_torch, to_torch
+from .utils import from_torch_fast
 
 
 @dataclass
@@ -44,11 +44,11 @@ class TtT5EncoderParameters:
         device: ttnn.Device,
     ) -> TtT5EncoderParameters:
         return cls(
-            token_embedding=from_torch(
+            token_embedding=from_torch_fast(
                 state["encoder.embed_tokens.weight"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 dtype=dtype,
-                mesh_device=device,
+                device=device,
                 shard_dim=None,
             ),
             blocks=[
@@ -58,11 +58,11 @@ class TtT5EncoderParameters:
             norm=TtT5LayerNormParameters.from_torch(
                 substate(state, "encoder.final_layer_norm"), dtype=dtype, device=device
             ),
-            attention_bias=from_torch(
+            attention_bias=from_torch_fast(
                 state["encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight"],
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 dtype=dtype,
-                mesh_device=device,
+                device=device,
                 shard_dim=None,
             ),
         )
@@ -304,7 +304,7 @@ class TtT5LayerNormParameters:
         device: ttnn.Device,
     ) -> TtT5LayerNormParameters:
         return cls(
-            weight=from_torch(state["weight"], layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_device=device),
+            weight=from_torch_fast(state["weight"], layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device),
         )
 
 
@@ -367,8 +367,8 @@ def _compute_bias(
     output = output.permute([2, 0, 1]).unsqueeze(0)
     output = output[:, :, -seq_length:, :]
 
-    return from_torch(
-        output, mesh_device=device, dtype=relative_attention_bias.get_dtype(), shard_dim=None, layout=ttnn.TILE_LAYOUT
+    return from_torch_fast(
+        output, device=device, dtype=relative_attention_bias.get_dtype(), shard_dim=None, layout=ttnn.TILE_LAYOUT
     )
 
 

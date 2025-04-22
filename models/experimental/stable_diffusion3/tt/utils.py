@@ -9,34 +9,12 @@ import math
 import torch
 import ttnn
 from loguru import logger
-from models.utility_functions import comp_pcc
 
 
 def allocate_tensor_on_device_like(
     t: ttnn.Tensor, *, device: ttnn.Device, memory_config: ttnn.MemoryConfig | None = None
 ) -> ttnn.Tensor:
     return ttnn.allocate_tensor_on_device(t.shape, t.dtype, t.layout, device, memory_config=memory_config)
-
-
-def from_torch(tensor, layout, mesh_device, dtype, shard_dim=None):
-    if shard_dim is None:
-        return ttnn.from_torch(
-            tensor,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=layout,
-        )
-    else:
-        return ttnn.as_tensor(
-            tensor,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
-            dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=layout,
-        )
 
 
 def to_torch(tensor, mesh_device, dtype, shard_dim=-1):
@@ -52,7 +30,11 @@ def from_torch_fast(
     memory_config: ttnn.MemoryConfig | None = None,
     to_host: bool = False,
     mesh_mapper: ttnn.TensorToMesh | None = None,
+    shard_dim: int | None = None,
 ) -> ttnn.Tensor:
+    if shard_dim is not None:
+        mesh_mapper = ttnn.ShardTensorToMesh(device, dim=shard_dim)
+
     if isinstance(device, ttnn.MeshDevice) and mesh_mapper is None:
         mesh_mapper = ttnn.ReplicateTensorToMesh(device)
 

@@ -11,7 +11,7 @@ import ttnn
 
 from ..reference import SD3Transformer2DModel
 from ..tt.transformer_block import TtTransformerBlock, TtTransformerBlockParameters
-from ..tt.utils import assert_quality, from_torch
+from ..tt.utils import assert_quality, from_torch_fast
 
 if TYPE_CHECKING:
     from ..reference.transformer_block import TransformerBlock
@@ -102,8 +102,9 @@ def test_transformer_block(
         spatial_padded_4d = torch.nn.functional.pad(
             spatial_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
         )
-    tt_spatial = from_torch(
-        spatial_padded_4d, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
+    # tt_spatial = from_torch_fast(spatial_padded_4D, dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=None)
+    tt_spatial = from_torch_fast(
+        spatial_padded_4d, dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
     )
 
     ##
@@ -119,19 +120,20 @@ def test_transformer_block(
         prompt_padded_4d = torch.nn.functional.pad(
             prompt_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
         )
-    tt_prompt = from_torch(
-        prompt_padded_4d, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
+    # tt_prompt =from_torch_fast(prompt_padded_4D, dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=None)
+    tt_prompt = from_torch_fast(
+        prompt_padded_4d, dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
     )
 
     ##
     if pad_embedding_dim:
         time_padded_2d = torch.nn.functional.pad(time, pad=(0, hidden_dim_padding), mode="constant", value=0)
-        tt_time = from_torch(
-            time_padded_2d.unsqueeze(1).unsqueeze(1), dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT
+        tt_time = from_torch_fast(
+            time_padded_2d.unsqueeze(1).unsqueeze(1), dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
         )
     else:
-        tt_time = from_torch(
-            time.unsqueeze(1).unsqueeze(1), dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT
+        tt_time = from_torch_fast(
+            time.unsqueeze(1).unsqueeze(1), dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT
         )
 
     with torch.no_grad():

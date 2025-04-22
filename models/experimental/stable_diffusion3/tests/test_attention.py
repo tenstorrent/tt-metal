@@ -11,7 +11,7 @@ import ttnn
 
 from ..reference import SD3Transformer2DModel
 from ..tt.attention import TtAttention, TtAttentionParameters
-from ..tt.utils import assert_quality, from_torch
+from ..tt.utils import assert_quality, from_torch_fast
 
 if TYPE_CHECKING:
     from ..reference.attention import Attention
@@ -99,7 +99,7 @@ def test_attention(
         spatial_padded_4d = torch.nn.functional.pad(
             spatial_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
         )
-    tt_spatial = from_torch(spatial_padded_4d, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    tt_spatial = from_torch_fast(spatial_padded_4d, dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT)
 
     if joint_attention:
         prompt_extra = prompt_sequence_length % TILE_SIZE
@@ -111,7 +111,7 @@ def test_attention(
             prompt_padded_4d = torch.nn.functional.pad(
                 prompt_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
             )
-        tt_prompt = from_torch(prompt_padded_4d, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
+        tt_prompt = from_torch_fast(prompt_padded_4d, dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT)
     else:
         tt_prompt = None
 

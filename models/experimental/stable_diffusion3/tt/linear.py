@@ -4,15 +4,14 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-
-import ttnn
-
-from .utils import from_torch
 
 # if TYPE_CHECKING:
 import torch
-import os
+import ttnn
+
+from .utils import from_torch_fast
 
 
 @dataclass
@@ -74,17 +73,17 @@ class TtLinearParameters:
             bias = bias.unsqueeze(0)
 
         return cls(
-            weight=from_torch(
+            weight=from_torch_fast(
                 weight.transpose(0, 1),
                 dtype=dtype,
-                mesh_device=device,
+                device=device,
                 shard_dim=shard_dim,
                 layout=ttnn.TILE_LAYOUT,
             ),
-            bias=from_torch(
+            bias=from_torch_fast(
                 bias,
                 dtype=dtype,
-                mesh_device=device,
+                device=device,
                 shard_dim=shard_dim,
                 layout=ttnn.TILE_LAYOUT,
             )
@@ -137,17 +136,17 @@ class TtLinearParameters:
             return tensor
 
         return cls(
-            weight=from_torch(
+            weight=from_torch_fast(
                 shuffle_heads(torch_weight),
                 dtype=dtype,
-                mesh_device=device,
+                device=device,
                 shard_dim=-1,
                 layout=ttnn.TILE_LAYOUT,
             ),
-            bias=from_torch(
+            bias=from_torch_fast(
                 shuffle_heads(torch_bias),
                 dtype=dtype,
-                mesh_device=device,
+                device=device,
                 shard_dim=-1,
                 layout=ttnn.TILE_LAYOUT,
             )
@@ -204,17 +203,17 @@ class TtLinearParameters:
             torch_bias = torch_bias.unsqueeze(0)
 
         return cls(
-            weight=from_torch(
+            weight=from_torch_fast(
                 torch_weight,
                 dtype=dtype,
-                mesh_device=device,
+                device=device,
                 shard_dim=-1,
                 layout=ttnn.TILE_LAYOUT,
             ),
-            bias=from_torch(
+            bias=from_torch_fast(
                 torch_bias,
                 dtype=dtype,
-                mesh_device=device,
+                device=device,
                 shard_dim=-1,
                 layout=ttnn.TILE_LAYOUT,
             )
