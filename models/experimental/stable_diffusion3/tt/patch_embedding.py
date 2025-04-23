@@ -57,7 +57,7 @@ class TtPatchEmbedParameters:
 
     @property
     def patch_size(self) -> int:
-        return list(self.proj.weight.shape)[-2]
+        return self.proj.kernel_size[0]
 
 
 class TtPatchEmbed:
@@ -67,16 +67,16 @@ class TtPatchEmbed:
         self._pos_embed_max_size = parameters.pos_embed_max_size
         self._proj = TtConv2d(parameters.proj, device=mesh_device)
         self._pos_embed = parameters.pos_embed
-        self._out_height = parameters.patch_size
-        self._out_width = parameters.patch_size
+        self._patch_size = parameters.patch_size
 
     def __call__(self, latent: ttnn.Tensor) -> ttnn.Tensor:
-        batch_size = latent.shape[0]
-        c = latent.shape[3]
+        batch_size_, in_height, in_width, c_ = latent.shape
+        out_height = in_height // self._patch_size
+        out_width = in_width
 
         latent = self._proj(latent)
         latent = ttnn.squeeze(latent, 0)
-        pos_embed = self._cropped_pos_embed(self._out_height, self._out_width)
+        pos_embed = self._cropped_pos_embed(out_height, out_width)
         return latent + pos_embed
 
     def _cropped_pos_embed(self, height: int, width: int) -> ttnn.Tensor:

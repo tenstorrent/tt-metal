@@ -4,16 +4,15 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import torch
 import ttnn
 from models.utility_functions import (
     nearest_32,
 )
-
-import torch
-import os
 
 
 @dataclass
@@ -21,7 +20,7 @@ class TtConv2dParameters:
     weight: ttnn.Tensor
     bias: ttnn.Tensor | None
     out_channels: int
-    kernel_size: int
+    kernel_size: tuple[int, int]
 
     @classmethod
     def from_torch(
@@ -94,17 +93,15 @@ class TtConv2dParameters:
                 else None
             ),
             out_channels=out_channels,
-            kernel_size=state["weight"].shape[-1],
+            kernel_size=(kh, kw),
         )
 
 
 class TtConv2d:
     def __init__(self, parameters: TtConv2dParameters, device) -> None:
-        self._kernel_size = parameters.kernel_size
-
         self._weight = parameters.weight
         self._bias = parameters.bias
-        self._unfold = torch.nn.Unfold(kernel_size=(self._kernel_size,) * 2, stride=(self._kernel_size,) * 2)
+        self._unfold = torch.nn.Unfold(kernel_size=parameters.kernel_size, stride=parameters.kernel_size)
         self._device = device
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
