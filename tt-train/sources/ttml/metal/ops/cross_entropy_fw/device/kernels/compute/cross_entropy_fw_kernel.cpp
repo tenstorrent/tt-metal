@@ -216,11 +216,11 @@ void calculate_sum_exp_x() {
                 copy_tile_init(cb_mask);
                 copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
-                // mask_tile_init();
-                // mask_tile(working_register, mask_register);  // mask should be next to tile register
+                mask_tile_init();
+                mask_tile(working_register, mask_register);  // mask should be next to tile register
 
-                mul_binary_tile_init();
-                mul_binary_tile(working_register, mask_register);  // choose (x - max(x)) by index
+                // mul_binary_tile_init();
+                // mul_binary_tile(working_register, mask_register);  // choose (x - max(x)) by index
             }
         }
 
@@ -460,15 +460,6 @@ void MAIN {
             const uint32_t reduction_register = 0;
             tile_regs_acquire();
 
-            // reconfig_data_format(cb_max_value_after_reduction, cb_exp_sum_after_reduction);
-            // add_tiles_init(cb_max_value_after_reduction, cb_exp_sum_after_reduction, /* acc_to_dest */ true);
-            // add_tiles(
-            //     cb_max_value_after_reduction,
-            //     cb_exp_sum_after_reduction,
-            //     /* tile_idx */ 0,
-            //     /* tile_idx */ 0,
-            //     reduction_register + 1U);
-
             // reconfig_data_format(cb_output_before_reduction, cb_scaler);
             // reduce_init_delta<false, PoolType::SUM, ReduceDim::REDUCE_ROW>(
             //     cb_output_before_reduction, cb_scaler, cb_output_before_reduction);
@@ -479,33 +470,35 @@ void MAIN {
             //     /* tile_idx */ 0,
             //     /* reduction_register */ reduction_register);
             // reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_output_before_reduction);
+
             copy_tile_init(cb_target_logits);
             copy_tile(cb_target_logits, /* tile_idx */ 0, /* register_idx */ reduction_register);
 
             negative_tile_init();
             negative_tile(reduction_register);
 
+            // TODO: use this instead of twice copy tile
             // reconfig_data_format(cb_max_value_after_reduction, cb_exp_sum_after_reduction);
-            add_tiles_init(cb_max_value_after_reduction, cb_exp_sum_after_reduction, /* acc_to_dest */ true);
-            add_tiles(
-                cb_max_value_after_reduction,
-                cb_exp_sum_after_reduction,
-                /* tile_idx */ 0,
-                /* tile_idx */ 0,
-                reduction_register);
+            // add_tiles_init(cb_max_value_after_reduction, cb_exp_sum_after_reduction, /* acc_to_dest */ true);
+            // add_tiles(
+            //     cb_max_value_after_reduction,
+            //     cb_exp_sum_after_reduction,
+            //     /* tile_idx */ 0,
+            //     /* tile_idx */ 0,
+            //     reduction_register);
 
-            // copy_tile_init(cb_max_value_after_reduction);
-            // copy_tile(cb_max_value_after_reduction, /* tile_idx */ 0, /* register_idx */ reduction_register + 1U);
+            copy_tile_init(cb_max_value_after_reduction);
+            copy_tile(cb_max_value_after_reduction, /* tile_idx */ 0, /* register_idx */ reduction_register + 1U);
 
-            // add_binary_tile_init();
-            // add_binary_tile(reduction_register, reduction_register + 1U);
+            add_binary_tile_init();
+            add_binary_tile(reduction_register, reduction_register + 1U);
 
-            // copy_tile_init(cb_exp_sum_after_reduction);
-            // copy_tile(cb_exp_sum_after_reduction, /* tile_idx */ 0, /* register_idx */ reduction_register + 1U);
+            copy_tile_init(cb_exp_sum_after_reduction);
+            copy_tile(cb_exp_sum_after_reduction, /* tile_idx */ 0, /* register_idx */ reduction_register + 1U);
 
-            // add_binary_tile_init();
-            // add_binary_tile(
-            //     reduction_register, reduction_register + 1U);  // add log(sum(exp(x - max(x)))) to (x -max(x))
+            add_binary_tile_init();
+            add_binary_tile(
+                reduction_register, reduction_register + 1U);  // add log(sum(exp(x - max(x)))) to (x -max(x))
 
             // test output :
             // uint32_t test_register = 1U;
