@@ -411,7 +411,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
-    auto conv_reader_indices_buffer = conv_reader_indices.value().device_buffer();
+    auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
 
     tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
@@ -1283,7 +1283,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             out_block_h_datums * 2,
             1,
             tt::DataFormat::Float16_b,
-            &*conv_reader_indices_buffer);
+            conv_reader_indices_storage.get_buffer());
 
         // Local L1 to store temp vars
         cb_indices.cb_for_l1_array = cb_indices.get_next_cb_index();
@@ -1727,7 +1727,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     auto mcast_sender_cores_vec = grid_to_cores(mcast_sender_cores.start_coord, mcast_sender_cores.end_coord, true);
     auto mcast_receiver_cores_vec = corerange_to_cores(mcast_receiver_cores, std::nullopt, true);
-    // Capture conv_reader_indices_buffer to cache this with the program
+    // Capture conv_reader_indices_storage to cache this with the program
     auto override_runtime_arguments_callback =
         [reader_kernel_id = reader_id,
          mcast_sender_cores = mcast_sender_cores_vec,
@@ -1740,7 +1740,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
          num_cores_x = num_cores_x,
          num_cores_y = num_cores_y,
          has_bias = has_bias,
-         conv_reader_indices_buffer = conv_reader_indices_buffer](
+         conv_reader_indices_storage = conv_reader_indices_storage](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,

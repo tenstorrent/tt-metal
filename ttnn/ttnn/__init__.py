@@ -99,7 +99,6 @@ from ttnn._ttnn.multi_device import (
     CppTensorToMesh,
     Shard2dConfig,
     Concat2dConfig,
-    get_device_tensor,
     get_device_tensors,
     aggregate_as_tensor,
     replicate_tensor_to_mesh_mapper,
@@ -116,8 +115,6 @@ from ttnn._ttnn.events import (
     MeshEvent,
     record_event,
     wait_for_event,
-    record_mesh_event,
-    wait_for_mesh_event,
 )
 
 from ttnn._ttnn.operations.trace import (
@@ -126,10 +123,6 @@ from ttnn._ttnn.operations.trace import (
     end_trace_capture,
     execute_trace,
     release_trace,
-    begin_mesh_trace_capture,
-    end_mesh_trace_capture,
-    execute_mesh_trace,
-    release_mesh_trace,
 )
 
 from ttnn._ttnn.global_circular_buffer import (
@@ -142,7 +135,6 @@ from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
-    create_global_semaphore_with_same_address,
 )
 
 from ttnn.types import (
@@ -209,7 +201,6 @@ from ttnn.device import (
     disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
-    synchronize_mesh_device,
     dump_device_memory_state,
     get_memory_view,
     get_max_worker_l1_unreserved_size,

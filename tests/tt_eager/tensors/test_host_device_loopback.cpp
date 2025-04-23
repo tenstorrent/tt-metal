@@ -30,7 +30,7 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-bool test_single_tile_single_dram_bank_loopback(IDevice* device) {
+bool test_single_tile_single_dram_bank_loopback(distributed::MeshDevice* device) {
     bool pass = true;
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
@@ -44,7 +44,7 @@ bool test_single_tile_single_dram_bank_loopback(IDevice* device) {
     return pass;
 }
 
-bool test_multi_tile_multi_dram_bank_loopback(IDevice* device) {
+bool test_multi_tile_multi_dram_bank_loopback(distributed::MeshDevice* device) {
     bool pass = true;
     ttnn::Shape multi_tile_shape({1, 1, 4 * TILE_HEIGHT, 3 * TILE_WIDTH});
 
@@ -65,14 +65,11 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
-        pass &= test_single_tile_single_dram_bank_loopback(device);
+        pass &= test_single_tile_single_dram_bank_loopback(device.get());
 
-        pass &= test_multi_tile_multi_dram_bank_loopback(device);
-
-        pass &= tt_metal::CloseDevice(device);
-
+        pass &= test_multi_tile_multi_dram_bank_loopback(device.get());
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message

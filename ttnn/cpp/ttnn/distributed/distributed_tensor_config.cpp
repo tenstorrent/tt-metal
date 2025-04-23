@@ -24,7 +24,7 @@ DistributedTensorConfig create_replicate_distributed_tensor_config(
     if (auto it = metadata.find("replication_factor"); it != metadata.end()) {
         return ReplicateTensor(std::stoi(it->second));
     }
-    TT_THROW("Unsupported Replication strategy:");
+    return ReplicateTensor(1);
 }
 }  // namespace
 
@@ -38,8 +38,9 @@ DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<s
         } else if (strategy == "replicate") {
             return create_replicate_distributed_tensor_config(metadata);
         }
+        TT_THROW("Unsupported DistributedTensorConfig strategy: {}", strategy);
     }
-    TT_THROW("Unsupported DistributedTensorConfig strategy:");
+    return create_replicate_distributed_tensor_config(metadata);
 }
 
 bool operator==(const ReplicateTensor& a, const ReplicateTensor& b) {

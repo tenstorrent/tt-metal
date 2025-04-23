@@ -9,7 +9,6 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/global_cb_utils.hpp"
 
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
@@ -24,7 +23,7 @@ tt::tt_metal::operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const bool enable_performance_mode = false);
 
 struct DramPrefetcher {
-    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer> global_cb;
+    const std::optional<const GlobalCircularBuffer> global_cb;
     const uint32_t num_layers;
     const bool enable_performance_mode;
 

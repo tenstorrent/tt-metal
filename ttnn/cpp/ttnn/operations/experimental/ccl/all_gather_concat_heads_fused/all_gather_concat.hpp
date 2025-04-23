@@ -19,7 +19,7 @@ struct ExecuteAllGatherConcat {
         const int32_t dim,
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,
-        const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+        const GlobalSemaphore& global_semaphore,
         const uint32_t num_heads,
         const ttnn::MemoryConfig& memory_config,
         const std::optional<uint32_t> num_links = std::nullopt,

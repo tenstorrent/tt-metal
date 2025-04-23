@@ -420,7 +420,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
          writer_kernel_id,
          utilized_cores,
          // cache this tensor
-         mapping_tensor_device_buffer = mapping_tensor.device_buffer()](
+         mapping_tensor_device_buffer = mapping_tensor.device_storage()](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,

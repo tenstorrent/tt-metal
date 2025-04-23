@@ -9,9 +9,6 @@ import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 
 
 def run_all_reduce_test(
@@ -48,9 +45,9 @@ def run_all_reduce_test(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    from_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
-    to_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
-    gather_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
+    from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    gather_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     debug = False
 
@@ -70,7 +67,6 @@ def run_all_reduce_test(
     for i in range(num_devices):
         input_tensor = torch.rand(per_chip_output_shape).bfloat16()
         t = ttnn.from_torch(input_tensor, input_dtype, layout=layout)
-        t = t.to(mesh_device.get_device(mesh_device.get_device_ids()[i]), mem_config)
         tt_input_tensors.append(t)
         input_tensor = input_tensor.view(1, -1, input_tensor.shape[2], input_tensor.shape[3])
         input_tensors.append(input_tensor)
@@ -78,8 +74,7 @@ def run_all_reduce_test(
     unchunked_input_tensor = torch.cat(input_tensors)
 
     assert len(tt_input_tensors) == num_devices
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, mem_config)
     # Run the op
     for i in range(num_iters):
         output_tensor_mesh = ttnn.experimental.all_reduce_async(
@@ -304,9 +299,9 @@ def run_all_reduce_with_mesh_tensor_along_row(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    from_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
-    to_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
-    gather_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
+    from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    gather_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     try:
         debug = False

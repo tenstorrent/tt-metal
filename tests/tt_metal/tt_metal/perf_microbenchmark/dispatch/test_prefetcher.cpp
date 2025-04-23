@@ -2360,6 +2360,9 @@ void configure_for_single_chip(
         0,
         0,
         MetalContext::instance().dispatch_mem_map(DISPATCH_CORE_TYPE).get_dispatch_stream_index(0),
+        0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+        0,  // unused for single device - used to "virtualize" the number of eth cores across devices
+        0,  // unused for single device - used to "virtualize" the number of eth cores across devices
     };
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;

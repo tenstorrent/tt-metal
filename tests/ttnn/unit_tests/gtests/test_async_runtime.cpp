@@ -45,7 +45,7 @@ namespace {
 using MultiCommandQueueSingleDeviceFixture = ::ttnn::MultiCommandQueueSingleDeviceFixture;
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
-    IDevice* device = this->device_;
+    auto device = this->device_;
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
@@ -69,13 +69,12 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     ttnn::SmallVector<int64_t> reduce_dims = {3};
     Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
     Tensor np_out_host = np_out.cpu();
-    const bfloat16* golden_output =
-        std::get<owned_buffer::Buffer<bfloat16>>(std::get<OwnedStorage>(np_out_host.get_storage()).buffer).begin();
+    const bfloat16* golden_output = std::get<owned_buffer::Buffer<bfloat16>>(
+                                        std::get<MultiDeviceHostStorage>(np_out_host.get_storage()).buffers.at(0))
+                                        .begin();
     // Enable Asynchronous Execution and test ttnn runtime APIs
     device_->enable_async(true);
     // Events for host - device synchronization
-    auto write_event = std::make_shared<Event>();
-    auto workload_event = std::make_shared<Event>();
     // Running sum-reduce with preallocated output
     // Preallocate Input and Output Tensors on Device
     tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
@@ -83,41 +82,25 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     ASSERT_EQ(
         output_buf_size_datums * datum_size_bytes,
         tensor_layout.compute_packed_buffer_size_bytes(np_out.get_padded_shape()));
-    auto input_buffer =
-        tt::tt_metal::tensor_impl::allocate_buffer_on_device(device_, TensorSpec(input_shape, tensor_layout));
-    auto output_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(
-        device_, TensorSpec(np_out.get_padded_shape(), tensor_layout));
-    auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
-    auto output_storage = tt::tt_metal::DeviceStorage{output_buffer};
-    Tensor input_tensor = Tensor(
-        input_storage,
-        TensorSpec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{})));
-    Tensor output_tensor = Tensor(output_storage, np_out.get_logical_shape(), DataType::BFLOAT16, Layout::TILE);
+    auto input_tensor = allocate_tensor_on_mesh(TensorSpec(input_shape, tensor_layout), device);
+    auto output_tensor = allocate_tensor_on_mesh(TensorSpec(np_out.get_logical_shape(), tensor_layout), device);
     // Populate input_tensor with data
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
     // Record the completion of the write event
-    ttnn::record_event(device_->command_queue(*io_cq), write_event);
+    auto write_event = ttnn::record_event_to_host(device_->mesh_command_queue(*io_cq));
     // Host stalls until write is completed, before sending workload
     ttnn::event_synchronize(write_event);
-    EXPECT_EQ(ttnn::event_query(write_event), true);
     // Dispatch workload. Preallocated output_tensor is populated by op/
     ttnn::moreh_sum(input_tensor, /*dim*/ 3, false, output_tensor, std::nullopt, std::nullopt);
     // Record completion of workload
-    ttnn::record_event(device_->command_queue(*workload_dispatch_cq), workload_event);
+    auto workload_event = ttnn::record_event_to_host(device_->mesh_command_queue(*workload_dispatch_cq));
     ttnn::event_synchronize(workload_event);
-    EXPECT_EQ(ttnn::event_query(workload_event), true);
     // Read output back, once workload is complete
     ttnn::read_buffer(io_cq, output_tensor, {readback_data});
-    // Buffers are currently jointly owned by the original buffer object, the storage object and the tensor (3).
-    EXPECT_EQ(input_buffer.use_count(), 3);
-    EXPECT_EQ(output_buffer.use_count(), 3);
     // Deallocate tensors (tensor gives up buffer). Done asynchronously, so sync on queue after.
     input_tensor.deallocate();
     output_tensor.deallocate();
-    ttnn::queue_synchronize(device_->command_queue(*io_cq));
-    // Buffer only has 2 owners in main thread.
-    EXPECT_EQ(input_buffer.use_count(), 2);
-    EXPECT_EQ(output_buffer.use_count(), 2);
+    ttnn::queue_synchronize(device_->mesh_command_queue(*io_cq));
     for (int i = 0; i < output_buf_size_datums; i++) {
         EXPECT_EQ(readback_data[i], golden_output[i]);
     }
@@ -146,31 +129,26 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
                 host_data[i] = bfloat16(static_cast<float>(input_val));
             }
 
-            auto write_event = std::make_shared<Event>();
-            auto workload_event = std::make_shared<Event>();
             TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
             ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
-            auto input_buffer =
-                tt::tt_metal::tensor_impl::allocate_buffer_on_device(device_, TensorSpec(shape, tensor_layout));
-            auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
-            Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
+            auto input_tensor = allocate_tensor_on_mesh(TensorSpec(shape, tensor_layout), device_);
             ttnn::write_buffer(io_cq, input_tensor, {host_data});            // Write using cq 1
-            ttnn::record_event(device_->command_queue(*io_cq), write_event);  // Record write on cq 1
+            auto write_event = ttnn::record_event(device_->mesh_command_queue(*io_cq));  // Record write on cq 1
             // Wait until cq 1 write is complete
-            ttnn::wait_for_event(device_->command_queue(*workload_dispatch_cq), write_event);
+            ttnn::wait_for_event(device_->mesh_command_queue(*workload_dispatch_cq), write_event);
 
             // Run operation on cq 0
             Tensor output_tensor = ttnn::sqrt(workload_dispatch_cq, input_tensor);
             auto dummy_buffer_0 =
-                tt::tt_metal::tensor_impl::allocate_buffer_on_device(device_, TensorSpec(shape, tensor_layout));
+                tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device_, TensorSpec(shape, tensor_layout));
             output_tensor = ttnn::neg(workload_dispatch_cq, output_tensor);
             // Allocate this buffer to stress test async allocation across op execution and explicit allocation
             auto dummy_buffer_1 =
-                tt::tt_metal::tensor_impl::allocate_buffer_on_device(device_, TensorSpec(shape, tensor_layout));
+                tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device_, TensorSpec(shape, tensor_layout));
             // Record cq 0 prog execution
-            ttnn::record_event(device_->command_queue(*workload_dispatch_cq), workload_event);
+            auto workload_event = ttnn::record_event(device_->mesh_command_queue(*workload_dispatch_cq));
             // Wait until cq 0 prog execution is done
-            ttnn::wait_for_event(device_->command_queue(*io_cq), workload_event);
+            ttnn::wait_for_event(device_->mesh_command_queue(*io_cq), workload_event);
             // Read using cq 1
             ttnn::read_buffer(io_cq, output_tensor, {readback_data});
             for (int i = 0; i < buf_size_datums; i++) {
@@ -201,7 +179,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
     TensorSpec tensor_spec(shape, tensor_layout);
     for (int loop = 0; loop < 100000; loop++) {
-        auto input_buffer_dummy = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device_, tensor_spec);
+        auto input_buffer_dummy = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device_, tensor_spec);
         device_->synchronize();
     }
 }

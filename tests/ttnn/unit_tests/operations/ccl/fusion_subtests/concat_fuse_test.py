@@ -8,9 +8,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
@@ -158,9 +155,7 @@ def run_concat_fuse_impl(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     ### For sharded all gather only
     if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):
@@ -215,12 +210,10 @@ def run_concat_fuse_impl(
         input_tensors = torch.chunk(output_tensor, num_devices, dim)
         tt_input_tensors = []
         for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(
-                ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
-            )
+            tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
             logger.info(f"using device {mesh_device.get_devices()[i].id()}")
 
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -259,13 +252,11 @@ def run_concat_fuse_impl(
         zeros_tensor = torch.zeros(output_shape).bfloat16()
         tt_intermediate_tensors = []
         for i in range(4):
-            tt_intermediate_tensor = (
-                ttnn.Tensor(zeros_tensor, input_dtype)
-                .to(layout)
-                .to(mesh_device.get_devices()[i], intermediate_mem_config)
-            )
+            tt_intermediate_tensor = ttnn.Tensor(zeros_tensor, input_dtype).to(layout)
             tt_intermediate_tensors.append(tt_intermediate_tensor)
-        intermediate_tensor_mesh = ttnn.aggregate_as_tensor(tt_intermediate_tensors)
+        intermediate_tensor_mesh = ttnn.aggregate_as_tensor(tt_intermediate_tensors).to(
+            mesh_device, intermediate_mem_config
+        )
         intermediate_tensors_list.append(intermediate_tensor_mesh)
     tt_out_tensor_list = []
 

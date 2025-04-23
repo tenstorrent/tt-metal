@@ -10,9 +10,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     PREFETCHER_NOC1_GRID,
@@ -117,9 +114,7 @@ def run_all_reduce_impl(
 
     # create global semaphore handles
     num_buffers = 8
-    ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, SUB_DEVICE_CRS, 0) for _ in range(num_buffers)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, SUB_DEVICE_CRS, 0) for _ in range(num_buffers)]
 
     logger.info(f"Output shape: {output_shape}")
 
@@ -316,12 +311,11 @@ def run_all_reduce_impl(
         output_tensor = output_tensor_goldens_list[-1]
         validate(tt_out_tensor, output_tensor)
 
-    for i in range(mesh_device.get_num_devices()):
-        reshard_op_cnt = 1 if loopback_size > 1 else 0
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1 + reshard_op_cnt
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters + reshard_op_cnt
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+    reshard_op_cnt = 1 if loopback_size > 1 else 0
+    assert (
+        mesh_device.num_program_cache_entries() == 1 + reshard_op_cnt
+        or mesh_device.num_program_cache_entries() == num_iters + reshard_op_cnt
+    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()
 

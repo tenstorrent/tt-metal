@@ -59,6 +59,7 @@ uint32_t get_tile_offset_by_batch(uint32_t i, uint32_t face_h, uint32_t sub_tile
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const Tensor& input_tensor,
     const Tensor& temp_tensor,
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -71,9 +72,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const uint32_t num_heads) {
     tt::tt_metal::Program program{};
+    ttnn::MeshDevice* mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
 
-    IDevice* device = input_tensor.device();
     TensorSpec output_intermediate_tensor_spec = temp_tensor.tensor_spec();
     auto output_interm_padded_shape = output_intermediate_tensor_spec.padded_shape();
     auto ring_core_ranges = output_tensor.shard_spec().value().grid.ranges();
@@ -83,7 +84,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        target_device->id(),
         is_first_chip,
         is_last_chip);
 
@@ -256,8 +257,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     std::vector<uint32_t> noc_y_coords;
     noc_y_coords.reserve(in_num_cores);
     for (uint32_t i = 0; i < in_num_cores; ++i) {
-        noc_x_coords.push_back(device->worker_core_from_logical_core(in_cores_vec[i]).x);
-        noc_y_coords.push_back(device->worker_core_from_logical_core(in_cores_vec[i]).y);
+        noc_x_coords.push_back(mesh_device->worker_core_from_logical_core(in_cores_vec[i]).x);
+        noc_y_coords.push_back(mesh_device->worker_core_from_logical_core(in_cores_vec[i]).y);
     }
 
     // create concat semaphore for each link
@@ -368,7 +369,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     std::vector<uint32_t> nlp_local_core_x;
     std::vector<uint32_t> nlp_local_core_y;
     for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
-        auto this_core = device->worker_core_from_logical_core(input_cores_vec[k]);
+        auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[k]);
         nlp_local_core_x.push_back(this_core.x);
         nlp_local_core_y.push_back(this_core.y);
     }
@@ -394,14 +395,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         for (uint32_t i = input_tile_id_start / input_tensor_shard_num_pages;
              i < (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages;
              i++) {
-            auto this_core = device->worker_core_from_logical_core(input_cores_vec[i]);
+            auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
         }
         for (uint32_t i = input_tile_id_start / output_interm_tensor_shard_num_pages;
              i < (input_tile_id_end + output_interm_tensor_shard_num_pages - 1) / output_interm_tensor_shard_num_pages;
              i++) {
-            auto this_core = device->worker_core_from_logical_core(output_cores_this_device[i]);
+            auto this_core = mesh_device->worker_core_from_logical_core(output_cores_this_device[i]);
             output_tensor_cores_x.push_back(this_core.x);
             output_tensor_cores_y.push_back(this_core.y);
         }
@@ -418,7 +419,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
         if (link == 0) {
             // drain sync core is the first worker core
-            drain_sync_core = device->worker_core_from_logical_core(core);
+            drain_sync_core = mesh_device->worker_core_from_logical_core(core);
             TT_ASSERT(drain_sync_core.x == 19 && drain_sync_core.y == 18, "This op should run on a TG machine");
         }
 
@@ -462,8 +463,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         std::vector<uint32_t> mcast_end_y;
 
         for (const auto& range : sem_mcast_ranges.ranges()) {
-            auto start_core = device->worker_core_from_logical_core(range.start_coord);
-            auto end_core = device->worker_core_from_logical_core(range.end_coord);
+            auto start_core = mesh_device->worker_core_from_logical_core(range.start_coord);
+            auto end_core = mesh_device->worker_core_from_logical_core(range.end_coord);
             if (writer_noc == tt::tt_metal::NOC::NOC_1) {
                 std::swap(start_core, end_core);
             }
@@ -488,12 +489,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                target_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                target_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
@@ -516,7 +517,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         std::array<uint32_t, 8> kernel_core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
         std::array<uint32_t, 8> kernel_core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
         for (uint32_t k = 0; k < llama_configuration.num_cores_input_tensor; k++) {
-            auto this_core = device->worker_core_from_logical_core(input_cores_vec[k]);
+            auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[k]);
             input_cores_x.push_back(this_core.x);
             input_cores_y.push_back(this_core.y);
             TT_ASSERT(

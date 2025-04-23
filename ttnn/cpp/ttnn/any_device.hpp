@@ -29,8 +29,15 @@ public:
         if (auto* device = std::get_if<tt::tt_metal::IDevice*>(&metal_device_); device != nullptr) {
             return {*device};
         } else {
-            return std::get<tt::tt_metal::distributed::MeshDevice*>(metal_device_)->get_devices();
+            return {std::get<tt::tt_metal::distributed::MeshDevice*>(metal_device_)};
         }
+    }
+
+    tt::tt_metal::distributed::MeshDevice* get_mesh_device() {
+        if (auto* device = std::get_if<tt::tt_metal::distributed::MeshDevice*>(&metal_device_); device != nullptr) {
+            return *device;
+        }
+        return nullptr;
     }
 
 private:

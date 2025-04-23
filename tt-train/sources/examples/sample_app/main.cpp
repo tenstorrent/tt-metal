@@ -7,7 +7,7 @@
 
 #include "ttml.hpp"
 
-ttnn::device::IDevice* device = nullptr;
+std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device;
 
 void print_tensor(const tt::tt_metal::Tensor& tensor) {
     // IMPORTANT. This function prints the tensor data assuming the tensor is in ROW_MAJOR layout
@@ -21,7 +21,7 @@ void print_tensor(const tt::tt_metal::Tensor& tensor) {
 
     // prepare a buffer to copy the tensor data to the host
     std::vector<bfloat16> data(size);
-    tt::tt_metal::memcpy(device->command_queue(), data.data(), tensor);
+    tt::tt_metal::memcpy(device->mesh_command_queue(), data.data(), tensor);
 
     // print the data
     for (size_t dim0 = 0; dim0 < shape[0]; dim0++) {
@@ -53,7 +53,7 @@ int main() {
     std::srand(0);
     num_devices_ = tt::tt_metal::GetNumAvailableDevices();
     std::cout << "num_devices:" << num_devices_ << std::endl;
-    device = tt::tt_metal::CreateDevice(0);
+    device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0);
     std::cout << "Device created" << std::endl;
     // AutoFormat::SetDefaultDevice(device);  // set the default device to the one we just opened
 
@@ -81,7 +81,7 @@ int main() {
         // processing
         tt::tt_metal::Layout::TILE);
     // Once created, the tensor "on host" and we must move it to the device to perform operations on it
-    x = x.to_device(device);
+    x = x.to_device(device.get());
 
     // Print the tensor to see what it looks like
     std::cout << "Tensot x:\n";
@@ -99,6 +99,6 @@ int main() {
 
     // Remember to close the device when you are done
     std::cout << "Done. Shutting down" << std::endl;
-    tt::tt_metal::CloseDevice(device);
+    device.reset();
     return 0;
 }

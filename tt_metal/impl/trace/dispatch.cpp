@@ -112,7 +112,7 @@ void issue_trace_commands(
         const auto& num_noc_mcast_txns =
             desc.num_traced_programs_needing_go_signal_multicast ? device->num_noc_mcast_txns(id) : 0;
         const auto& num_noc_unicast_txns =
-            desc.num_traced_programs_needing_go_signal_unicast ? device->num_noc_unicast_txns(id) : 0;
+            desc.num_traced_programs_needing_go_signal_unicast ? device->num_virtual_eth_cores(id) : 0;
         auto index = *id;
         reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
             MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index);
@@ -138,7 +138,7 @@ void issue_trace_commands(
             expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
         }
         if (desc.num_traced_programs_needing_go_signal_unicast) {
-            expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, id);
+            expected_num_workers += device->num_virtual_eth_cores(id);
         }
 
         if (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {

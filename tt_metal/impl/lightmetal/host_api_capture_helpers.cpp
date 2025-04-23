@@ -102,7 +102,6 @@ void CaptureBufferCreate(
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
-    assert(device->id() == 0 && "multichip not supported yet");
     auto& ctx = LightMetalCaptureContext::get();
     auto& fbb = ctx.get_builder();
 

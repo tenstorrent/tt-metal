@@ -66,6 +66,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config,
     // New Parameters
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     const uint32_t num_links,
@@ -81,7 +82,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = a.device();
+    ttnn::MeshDevice* mesh_device = a.mesh_device();
     tt::tt_metal::Program program{};
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
@@ -138,7 +139,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(mesh_device->arch(), compute_kernel_config);
 
     if (!dst_full_sync_en) {
         if (fp32_dest_acc_en) {
@@ -201,7 +202,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     // two-stage reduce
     bool use_two_stage_reduce = false;
     // only do this for row/col dim are full length
-    if (grid_size.x > 1 && grid_size.x <= device->compute_with_storage_grid_size().x &&
+    if (grid_size.x > 1 && grid_size.x <= mesh_device->compute_with_storage_grid_size().x &&
         grid_size.y > 1) {  // row major and multiple rows
         use_two_stage_reduce = true;
     }
@@ -217,8 +218,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     std::vector<CoreCoord> storage_core_coords =
         corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), true);
     for (auto core : storage_core_coords) {
-        storage_core_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
-        storage_core_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+        storage_core_noc_x.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).x);
+        storage_core_noc_y.push_back((std::uint32_t)mesh_device->worker_core_from_logical_core(core).y);
 
         tt::log_debug(
             "Storage core: ({}, {}), physical coords: ({}, {})",
@@ -564,8 +565,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         in1_cb_index,
         in0_cb_index};
 
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(mesh_device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(mesh_device->arch());
 
     // reader kernel
 
@@ -686,10 +687,10 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     in0_mcast_noc_y.reserve(num_cores_y);
     CoreCoord core_start_offset = grid_offset.value_or(CoreCoord{0, 0});
     for (uint32_t core_idx_x = core_start_offset.x; core_idx_x < num_cores_x + core_start_offset.x; ++core_idx_x) {
-        in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, core_start_offset.y}).x);
+        in0_mcast_noc_x.push_back(mesh_device->worker_core_from_logical_core({core_idx_x, core_start_offset.y}).x);
     }
     for (uint32_t core_idx_y = core_start_offset.y; core_idx_y < num_cores_y + core_start_offset.y; ++core_idx_y) {
-        in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, core_idx_y}).y);
+        in0_mcast_noc_y.push_back(mesh_device->worker_core_from_logical_core({core_start_offset.x, core_idx_y}).y);
     }
 
     uint32_t last_core_width_index = 0;
@@ -756,8 +757,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
             CoreCoord bottom_right_core = {
                 (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
-            auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-            auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+            auto top_left_core_physical = mesh_device->worker_core_from_logical_core(top_left_core);
+            auto bottom_right_core_physical = mesh_device->worker_core_from_logical_core(bottom_right_core);
             mcast_start = top_left_core_physical;
             mcast_end = bottom_right_core_physical;
             if (reader_noc == NOC::NOC_1) {
@@ -826,13 +827,13 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
                  i < (input_tile_id_end + output_tensor_shard_num_pages - 1) / output_tensor_shard_num_pages;
                  i++) {
-                auto this_core = device->worker_core_from_logical_core(output_cores_this_device[i]);
+                auto this_core = mesh_device->worker_core_from_logical_core(output_cores_this_device[i]);
                 output_tensor_cores_x.push_back(this_core.x);
                 output_tensor_cores_y.push_back(this_core.y);
             }
             if (i == 0) {
                 // drain sync core is the first worker core
-                drain_sync_core = device->worker_core_from_logical_core(core);
+                drain_sync_core = mesh_device->worker_core_from_logical_core(core);
             }
 
             std::vector<uint32_t> base_rt_args = {
@@ -848,13 +849,13 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             all_gather_rts.push_back(forward_device.has_value());
             if (forward_device.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    device->id(), forward_device.value()->id(), i, program, {core}, all_gather_rts);
+                    target_device->id(), forward_device.value()->id(), i, program, {core}, all_gather_rts);
             }
 
             all_gather_rts.push_back(backward_device.has_value());
             if (backward_device.has_value()) {
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    device->id(), backward_device.value()->id(), i, program, {core}, all_gather_rts);
+                    target_device->id(), backward_device.value()->id(), i, program, {core}, all_gather_rts);
             }
         }
         // Set writer runtime args

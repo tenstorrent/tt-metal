@@ -717,7 +717,7 @@ class resnet50:
         )
         if is_wormhole_b0():
             # Issue #13145: Temp workaround for Galaxy to avoid hangs
-            if type(device) == ttnn.MeshDevice and device.get_num_devices() > 8:
+            if device.get_num_devices() > 8:
                 self.conv1_config.act_block_h_override = 64
             else:
                 self.conv1_config.act_block_h_override = 49 * 32

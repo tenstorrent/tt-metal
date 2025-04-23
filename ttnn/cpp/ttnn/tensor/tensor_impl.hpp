@@ -160,7 +160,7 @@ std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSp
 // ======================================================================================
 //                                      Validators
 // ======================================================================================
-void validate_on_device_dtype_and_layout(IDevice* device, const ttnn::Shape& shape, DataType dtype, Layout layout);
+void validate_on_device_dtype_and_layout(const ttnn::Shape& shape, DataType dtype, Layout layout);
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -177,13 +177,12 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
 template <typename T>
-void read_data_from_device_buffer(
-    CommandQueue& cq, std::shared_ptr<Buffer> device_buffer, void* host_buffer_data, bool blocking) {
+void read_data_from_device_buffer(CommandQueue& cq, Buffer& device_buffer, void* host_buffer_data, bool blocking) {
     EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
 }
 
 template <typename T>
-void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, std::vector<T>& host_buffer) {
+void read_data_from_device_buffer(Buffer& device_buffer, std::vector<T>& host_buffer) {
     ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
 }
 
@@ -196,7 +195,7 @@ Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn:
 
 // TODO: #17215 - This will eventually subsume `to_host`, when "mesh buffer" backed tensors become the default.
 template <typename T>
-Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true);
+Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
 Tensor to_device(
@@ -208,7 +207,13 @@ Tensor to_device(
 // TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
 template <typename T>
 Tensor to_device_mesh_tensor(
-    const Tensor& tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& memory_config);
+    const Tensor& tensor,
+    distributed::MeshDevice* mesh_device,
+    const MemoryConfig& memory_config,
+    QueueId cq_id = ttnn::DefaultQueueId);
+
+template <typename T>
+void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, QueueId cq_id = ttnn::DefaultQueueId);
 
 // ======================================================================================
 //                                  .to_layout()

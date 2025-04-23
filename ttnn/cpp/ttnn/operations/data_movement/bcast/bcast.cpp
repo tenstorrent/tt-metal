@@ -22,7 +22,7 @@ Tensor BcastOperation::invoke(
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor_a}))};
 
-    tt::tt_metal::operation::launch_with_autoformat(
+    tt::tt_metal::operation::launch_op(
         [bcast_op, bcast_dim, output_memory_config, output_tensor, queue_id](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,

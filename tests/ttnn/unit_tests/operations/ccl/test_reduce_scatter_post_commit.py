@@ -468,13 +468,9 @@ def run_reduce_scatter_sharded_test(
     if debug:
         input_tensors[-1] = torch.arange(numel).reshape(canonical_input_shape).bfloat16()
     for i, canonical_input_tensor in enumerate(input_tensors):
-        tt_input_tensors.append(
-            ttnn.Tensor(canonical_input_tensor, input_dtype)
-            .to(tensor_layout)
-            .to(t3k_mesh_device.get_device(t3k_mesh_device.get_device_ids()[i]), input_mem_config)
-        )
+        tt_input_tensors.append(ttnn.Tensor(canonical_input_tensor, input_dtype).to(tensor_layout))
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(t3k_mesh_device, input_mem_config)
 
     # Run the op
     if trace_mode:

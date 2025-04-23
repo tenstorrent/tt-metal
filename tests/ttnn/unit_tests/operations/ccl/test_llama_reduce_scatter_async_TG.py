@@ -10,9 +10,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     SUB_DEVICE_CRS,
@@ -210,9 +207,7 @@ def run_reduce_scatter_test(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     tt_out_tensor_list = []
     if trace_mode:
@@ -290,12 +285,10 @@ def run_reduce_scatter_test(
             failed_indices = torch.where(tt_torch_tensor != output_tensor_goldens_list[tensor_index])
             break
 
-    for i in range(num_devices_scatter * num_devices_fracture):
-        logger.info(f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries")
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+    logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
+    assert (
+        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
+    ), f"Device {i} has {mesh_device.num_program_cache_entries()} program cache entries"
 
     if not passed:
         logger.info(f"Failed indices: {failed_indices}")

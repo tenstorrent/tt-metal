@@ -32,6 +32,7 @@
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/logger.hpp>
@@ -97,7 +98,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -117,12 +118,13 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         }
 
         tt_metal::BufferType buffType = (use_DRAM) ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
-        tt_metal::InterleavedBufferConfig buff_config{
-            .device = device, .size = dram_buffer_size, .page_size = page_size, .buffer_type = buffType};
+        tt_metal::distributed::DeviceLocalBufferConfig buff_config{.page_size = page_size, .buffer_type = buffType};
+        tt_metal::distributed::MeshBufferConfig mesh_config =
+            tt_metal::distributed::ReplicatedBufferConfig{.size = dram_buffer_size};
 
-        auto src_dram_buffer = CreateBuffer(buff_config);
+        auto src_dram_buffer = tt_metal::distributed::MeshBuffer::create(mesh_config, buff_config, device.get());
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-        auto dst_dram_buffer = CreateBuffer(buff_config);
+        auto dst_dram_buffer = tt_metal::distributed::MeshBuffer::create(mesh_config, buff_config, device.get());
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input
@@ -187,7 +189,8 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         std::vector<uint32_t> src_vec = sfpu_op_to_init_func.at(sfpu_name)(
             dram_buffer_size, std::chrono::system_clock::now().time_since_epoch().count());
 
-        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
+        tt_metal::distributed::WriteShard(
+            device->mesh_command_queue(0), src_dram_buffer, src_vec, tt::tt_metal::distributed::MeshCoordinate(0, 0));
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -204,25 +207,24 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
                 0  // TODO(AP): [8] is scaler
             });
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel,
-            core,
-            {dram_buffer_dst_addr, 0, num_tiles});
+        tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0, num_tiles});
 
-        tt_metal::detail::LaunchProgram(device, program);
+        tt::tt_metal::distributed::MeshWorkload workload;
+        workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(device->shape()), std::move(program));
+        tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, true);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::distributed::ReadShard(
+            device->mesh_command_queue(0),
+            result_vec,
+            dst_dram_buffer,
+            tt::tt_metal::distributed::MeshCoordinate(0, 0));
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> golden = sfpu(src_vec, sfpu_op_to_function.at(sfpu_name));
 
         pass &= packed_uint32_t_vector_comparison(result_vec, golden, sfpu_op_to_comparison_function.at(sfpu_name));
-
-        pass &= tt_metal::CloseDevice(device);
-
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message

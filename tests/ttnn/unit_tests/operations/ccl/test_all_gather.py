@@ -208,7 +208,6 @@ def run_all_gather_on_n300_impl(
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
-
     return run_all_gather_impl(
         mesh_device,
         num_devices,
@@ -253,7 +252,6 @@ def run_all_gather_on_t3000_impl(
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
-
     return run_all_gather_impl(
         mesh_device,
         num_devices,
@@ -1206,21 +1204,11 @@ def run_all_gather_sharded(
     ):
         pytest.skip("Unsupported test case")
 
-    tt_input_tensors_dups = []
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors_dups.append(
-            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile))
-            .to(tensor_layout)
-            .to(mesh_device.get_devices()[i], input_mem_config)
-        )
-        tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile))
-            .to(tensor_layout)
-            .to(mesh_device.get_devices()[i], input_mem_config)
-        )
+        tt_input_tensors.append(ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile)).to(tensor_layout))
 
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
 
     if trace_mode:
         tt_out_tensor = run_with_trace(

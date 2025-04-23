@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 
@@ -41,32 +42,36 @@ struct OwnedStorage {
 
 // TODO: #17215 - Replace `DeviceStorage` with "mesh storage".
 struct DeviceStorage {
+    // TODO: come up with a better abstraction for this.
+    DistributedTensorConfig strategy;
+    std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs;
+
     std::shared_ptr<Buffer> buffer;
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
+
     DeviceStorage() = default;
-    DeviceStorage(std::shared_ptr<Buffer> buffer_) : buffer(std::move(buffer_)) {}
+    DeviceStorage(std::shared_ptr<Buffer> buffer_);
+    DeviceStorage(
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
+        DistributedTensorConfig strategy_,
+        std::vector<std::pair<distributed::MeshCoordinate, TensorSpec>> specs_);
 
-    MemoryConfig memory_config() const {
-        if (this->buffer.get() == nullptr) {
-            TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
-        }
+    MemoryConfig memory_config() const;
+    void insert_buffer(const std::shared_ptr<Buffer>& buffer_);
+    Buffer* get_buffer() const;
+    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const;
 
-        std::optional<ShardSpec> shard_spec = std::nullopt;
-        if (is_sharded(this->buffer->buffer_layout())) {
-            shard_spec = this->buffer->shard_spec().tensor_shard_spec;
-        }
-        return MemoryConfig{
-            .memory_layout = this->buffer->buffer_layout(),
-            .buffer_type = this->buffer->buffer_type(),
-            .shard_spec = shard_spec};
-    }
-
-    inline void insert_buffer(const std::shared_ptr<Buffer>& buffer_) { this->buffer = buffer_; }
-
-    inline std::shared_ptr<Buffer> get_buffer() const { return this->buffer; }
     static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 
-    inline bool is_allocated() const { return buffer && buffer->is_allocated(); }
+    bool is_allocated() const;
+
+    IDevice* get_device() const;
+
+    void update_specs(const TensorSpec& new_spec);
+
+    // Returns true if the tensor spans across all devices in a mesh, and all specs are the same.
+    bool is_uniform_storage() const;
 };
 
 using BorrowedBuffer = std::variant<
@@ -220,171 +225,7 @@ struct MultiDeviceHostStorage {
     }
 };
 
-struct MultiDeviceStorage {
-    DistributedTensorConfig strategy;
-    std::vector<int> ordered_device_ids;
-    std::unordered_map<int, std::shared_ptr<Buffer>> buffers;
-    std::unordered_map<int, TensorSpec> specs;
-
-    // TODO: #17215 - This isn't populated by default. Switch to creating MeshBuffer backed storage, when TTNN is ready
-    // to consume it.
-    // Eventually, `MultiDeviceStorage` will be renamed to `MeshDeviceStorage`, and unified with `DeviceStorage`.
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
-    mutable std::mutex buffer_mtx;
-    mutable std::mutex shape_mtx;
-    MultiDeviceStorage() = default;
-
-    friend void swap(MultiDeviceStorage& first, MultiDeviceStorage& second) {
-        std::scoped_lock lock(first.buffer_mtx, first.shape_mtx, second.buffer_mtx, second.shape_mtx);
-
-        swap(first.strategy, second.strategy);
-        swap(first.ordered_device_ids, second.ordered_device_ids);
-        swap(first.buffers, second.buffers);
-        swap(first.specs, second.specs);
-        swap(first.mesh_buffer, second.mesh_buffer);
-    }
-
-    // Constructs a multi-device tensor backed by a collection of heterogeneous single-device buffers.
-    MultiDeviceStorage(
-        DistributedTensorConfig strategy_,
-        std::vector<int> ordered_device_ids_,
-        std::unordered_map<int, std::shared_ptr<Buffer>> buffers_,
-        std::unordered_map<int, TensorSpec> specs_,
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_) :
-        strategy(std::move(strategy_)),
-        ordered_device_ids(std::move(ordered_device_ids_)),
-        buffers(std::move(buffers_)),
-        specs(std::move(specs_)),
-        mesh_buffer(std::move(mesh_buffer_)) {}
-
-    // Constructs a replicated multi-device tensor backed by mesh buffer.
-    MultiDeviceStorage(const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_, const TensorSpec& tensor_spec);
-
-    MultiDeviceStorage(MultiDeviceStorage&& other) { swap(*this, other); }
-
-    MultiDeviceStorage(const MultiDeviceStorage& other) {
-        std::scoped_lock lock(other.buffer_mtx, other.shape_mtx);
-        ordered_device_ids = other.ordered_device_ids;
-        strategy = other.strategy;
-        buffers = other.buffers;
-        specs = other.specs;
-        mesh_buffer = other.mesh_buffer;
-    }
-
-    MultiDeviceStorage& operator=(const MultiDeviceStorage& other) {
-        MultiDeviceStorage tmp(other);
-        swap(*this, tmp);
-        return *this;
-    }
-
-    MultiDeviceStorage& operator=(MultiDeviceStorage&& other) {
-        swap(*this, other);
-        return *this;
-    }
-
-    bool operator==(const MultiDeviceStorage& other) {
-        return this->ordered_device_ids == other.ordered_device_ids and this->strategy == other.strategy and
-               this->buffers == other.buffers and this->specs == other.specs and this->mesh_buffer == other.mesh_buffer;
-    }
-
-    MemoryConfig memory_config() const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        TT_FATAL(
-            !this->ordered_device_ids.empty(), "No device ids in list. Please ensure fields are initialized properly.");
-        auto first_device_id = this->ordered_device_ids[0];
-        if (this->buffers.at(first_device_id).get() == nullptr) {
-            TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
-        }
-        std::optional<ShardSpec> shard_spec = std::nullopt;
-        if (is_sharded(this->buffers.at(first_device_id)->buffer_layout())) {
-            shard_spec = this->buffers.at(first_device_id)->shard_spec().tensor_shard_spec;
-        }
-        return MemoryConfig{
-            .memory_layout = this->buffers.at(first_device_id)->buffer_layout(),
-            .buffer_type = this->buffers.at(first_device_id)->buffer_type(),
-            .shard_spec = shard_spec};
-    }
-
-    static constexpr auto attribute_names = std::forward_as_tuple();
-    const auto attribute_values() const { return std::forward_as_tuple(); }
-
-    // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
-    // preinitialize empty tensor handles and use/populate them in the worker threads.
-    std::vector<std::shared_ptr<Buffer>> get_buffers() const;
-
-    inline void insert_buffer_and_spec_for_device(
-        IDevice* device, const std::shared_ptr<Buffer>& buffer, TensorSpec spec) {
-        std::scoped_lock lock(buffer_mtx, shape_mtx);
-        TT_FATAL(mesh_buffer == nullptr, "MeshBuffer backed storage does not support inserting individual buffers");
-        TT_ASSERT(
-            device == buffer->device(),
-            "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-        buffers.insert({device->id(), buffer});
-        specs.insert({device->id(), std::move(spec)});
-    }
-
-    inline std::shared_ptr<Buffer> get_buffer_for_device(IDevice* device) const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        auto buffer_it = buffers.find(device->id());
-        TT_FATAL(buffer_it != buffers.end(), "Buffer not found for device {}", device->id());
-        TT_ASSERT(
-            buffer_it->second->device() == device,
-            "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-        return buffer_it->second;
-    }
-
-    inline std::shared_ptr<Buffer>& get_buffer_for_device(IDevice* device) {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        auto buffer_it = buffers.find(device->id());
-        TT_FATAL(buffer_it != buffers.end(), "Buffer not found for device {}", device->id());
-        TT_ASSERT(
-            buffer_it->second->device() == device,
-            "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-        return buffer_it->second;
-    }
-
-    inline std::shared_ptr<Buffer> get_buffer_for_device_id(uint32_t device_id) const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        return buffers.at(device_id);
-    }
-
-    inline TensorSpec get_tensor_spec_for_device(IDevice* device) const {
-        std::lock_guard<std::mutex> lock(shape_mtx);
-        auto spec_it = specs.find(device->id());
-        TT_FATAL(spec_it != specs.end(), "Shape not found for device {}", device->id());
-        return spec_it->second;
-    }
-
-    inline uint32_t num_buffers() const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        return buffers.size();
-    }
-
-    inline bool has_buffer_for_device(IDevice* device) const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        return buffers.find(device->id()) != buffers.end();
-    }
-
-    inline bool has_buffer_for_device_id(uint32_t device_id) const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        return buffers.find(device_id) != buffers.end();
-    }
-
-    inline bool is_allocated() const {
-        if (mesh_buffer != nullptr) {
-            return mesh_buffer->is_allocated();
-        } else {
-            std::lock_guard<std::mutex> lock(buffer_mtx);
-            return std::all_of(
-                ordered_device_ids.begin(), ordered_device_ids.end(), [&buffers = this->buffers](auto&& device_id) {
-                    const auto& buffer = buffers.at(device_id);
-                    return buffer && buffer->is_allocated();
-                });
-        }
-    }
-};
-
-using Storage = std::variant<OwnedStorage, DeviceStorage, BorrowedStorage, MultiDeviceHostStorage, MultiDeviceStorage>;
+using Storage = std::variant<OwnedStorage, DeviceStorage, BorrowedStorage, MultiDeviceHostStorage>;
 
 template <typename T>
 concept OwnedOrBorrowedStorage = std::is_same_v<T, OwnedStorage> || std::is_same_v<T, BorrowedStorage>;

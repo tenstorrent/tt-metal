@@ -11,56 +11,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn {
-namespace ccl {
-namespace all_reduce_detail {
-
-AllReduceAsync create_all_reduce_async_struct(
-    const Tensor& input_tensor,
-    const uint32_t num_links,
-    const std::optional<const DataType> dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::vector<IDevice*>& devices,
-    const ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    uint32_t num_devices = devices.size();
-
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    std::optional<GlobalSemaphore> semaphore = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == input_tensor.device()) {
-            device_index = i;
-            semaphore = semaphores.at(i);  // Get raw pointer
-            if (i != 0) {
-                backward_device = devices.at(i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(num_devices - 1);
-            }
-            if (i != num_devices - 1) {
-                forward_device = devices.at(i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
-            }
-        }
-    }
-
-    return ttnn::AllReduceAsync{
-        forward_device,
-        backward_device,
-        num_links,
-        num_devices,
-        device_index,
-        dtype.value_or(input_tensor.get_dtype()),
-        memory_config.value_or(input_tensor.memory_config()),
-        topology,
-        semaphore.value(),
-        sub_device_id};
-}
-
-}  // namespace all_reduce_detail
-}  // namespace ccl
 
 void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
@@ -124,9 +74,46 @@ std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::ve
     return {TensorSpec(shape, output_tensor_layout)};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+tt::tt_metal::operation::MeshWorkloadWithCallbacks AllReduceAsync::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    return ccl::create_mesh_workload_from_programs(
+        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+            return create_program_at(coord, input_tensors, output_tensors);
+        });
+};
+
+tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
+    const ttnn::MeshCoordinate& coord,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
+    const auto mesh_view = this->mesh_device->get_view();
+    std::vector<IDevice*> devices =
+        (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
+
+    IDevice* target_device =
+        input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
+
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
+    uint32_t device_index = 0;
+    for (uint32_t i = 0; i < ring_size; ++i) {
+        if (devices.at(i) == target_device) {
+            device_index = i;
+            if (i != 0) {
+                backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(ring_size - 1);
+            }
+            if (i != ring_size - 1) {
+                forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
+            }
+        }
+    }
 
     auto input_tensor_shape = input_tensors[0].get_padded_shape();
     auto input_tensor_buffer_layout = input_tensors[0].buffer()->buffer_layout();
@@ -151,13 +138,14 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program(
     return all_reduce_async_minimal_multi_core_with_workers(
         input_tensors[0],
         input_tensors[1],
-        this->forward_device,
-        this->backward_device,
+        target_device,
+        forward_device,
+        backward_device,
         output_tensors[0],
         this->dtype,
         this->num_links,
         this->ring_size,
-        this->ring_index,
+        device_index,
         this->topology,
         this->semaphore,
         this->sub_device_id);
@@ -172,9 +160,9 @@ tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::ve
     return tt::tt_metal::operation::hash_operation<AllReduceAsync>(
         this->num_links,
         this->ring_size,
-        this->ring_index,
         this->output_mem_config,
         this->topology,
+        this->cluster_axis,
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -185,9 +173,65 @@ tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::ve
 namespace operations {
 namespace experimental {
 namespace ccl {
+namespace {
+Tensor all_reduce_async_impl(
+    const Tensor& input_tensor,
+    Tensor& buffer_tensor,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<DataType> dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    const auto mesh_view = mesh_device.get_view();
+    TT_FATAL(
+        mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+
+    return tt::tt_metal::operation::run(
+               ttnn::AllReduceAsync{
+                   num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+                   num_devices,
+                   dtype.value_or(input_tensor.get_dtype()),
+                   memory_config.value_or(input_tensor.memory_config()),
+                   topology,
+                   multi_device_global_semaphore,
+                   subdevice_id,
+                   cluster_axis,
+                   &mesh_device},
+               {input_tensor, buffer_tensor})
+        .at(0);
+}
+}  // namespace
 
 Tensor all_reduce_async(
     const Tensor& input_tensor,
+    Tensor& buffer_tensor,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<DataType> dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    return all_reduce_async_impl(
+        input_tensor,
+        buffer_tensor,
+        cluster_axis,
+        *(input_tensor.mesh_device()),
+        topology,
+        multi_device_global_semaphore,
+        dtype,
+        memory_config,
+        num_preferred_links,
+        subdevice_id);
+}
+
+std::vector<Tensor> all_reduce_async(
+    const std::vector<Tensor>& input_tensors,
     Tensor& buffer_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
@@ -197,53 +241,22 @@ Tensor all_reduce_async(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
-    const auto mesh_view = mesh_device.get_view();
-    auto devices = input_tensor.get_workers();
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
-
-    tt::tt_metal::operation::launch_op(
-        [num_preferred_links,
-         dtype,
-         memory_config,
-         mesh_view,
-         cluster_axis,
-         num_devices,
-         topology,
-         semaphores,
-         subdevice_id](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_device_tensor = input_tensors.at(0);
-
-            TT_FATAL(
-                mesh_view.is_mesh_2d(),
-                "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
-                                                                : mesh_view.get_devices_on_row(coordinate[0]);
-
-            const auto& input_tensor = input_tensors.at(0);
-            const auto& buffer_tensor = input_tensors.at(1);
-
-            return tt::tt_metal::operation::run(
-                ttnn::ccl::all_reduce_detail::create_all_reduce_async_struct(
-                    input_device_tensor,
-                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-                    dtype,
-                    memory_config,
-                    devices,
-                    topology,
-                    semaphores,
-                    subdevice_id),
-                {input_tensor, buffer_tensor});
-        },
-        {input_tensor, buffer_tensor},
-        output_tensors);
-    return output_tensors.at(0);
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (size_t i = 0; i < input_tensors.size(); ++i) {
+        output_tensors.push_back(all_reduce_async_impl(
+            input_tensors[i],
+            buffer_tensor,
+            cluster_axis,
+            mesh_device,
+            topology,
+            multi_device_global_semaphore.global_semaphores[i],
+            dtype,
+            memory_config,
+            num_preferred_links,
+            subdevice_id));
+    }
+    return output_tensors;
 }
 
 }  // namespace ccl

@@ -38,7 +38,7 @@ namespace detail {
 void ttnn_device(py::module& module) {
     module.def(
         "open_device",
-        &ttnn::open_device,
+        &ttnn::open_mesh_device,
         py::kw_only(),
         py::arg("device_id"),
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
@@ -66,13 +66,18 @@ void ttnn_device(py::module& module) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    module.def("close_device", &ttnn::close_device, py::arg("device"));
+    module.def("close_device", [](MeshDevice& device) { ttnn::close_device(device); }, py::arg("device"));
 
-    module.def("enable_program_cache", &ttnn::enable_program_cache, py::arg("device"));
+    module.def(
+        "enable_program_cache", [](MeshDevice& device) { ttnn::enable_program_cache(device); }, py::arg("device"));
 
-    module.def("disable_and_clear_program_cache", &ttnn::disable_and_clear_program_cache, py::arg("device"));
+    module.def(
+        "disable_and_clear_program_cache",
+        [](MeshDevice& device) { ttnn::disable_and_clear_program_cache(device); },
+        py::arg("device"));
 
-    module.def("deallocate_buffers", &ttnn::deallocate_buffers, py::arg("device"), R"doc(
+    module.def(
+        "deallocate_buffers", [](MeshDevice* device) { ttnn::deallocate_buffers(device); }, py::arg("device"), R"doc(
         Deallocate all buffers associated with Device handle
     )doc");
 }
@@ -329,13 +334,13 @@ void device_module(py::module& m_device) {
            size_t trace_region_size,
            const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
            size_t worker_l1_size) {
-            return tt::tt_metal::CreateDevice(
+            return MeshDevice::create_unit_mesh(
                 device_id,
-                num_command_queues,
                 l1_small_size,
                 trace_region_size,
+                num_command_queues,
                 dispatch_core_config,
-                {},
+                /*l1_bank_remap=*/{},
                 worker_l1_size);
         },
         R"doc(
@@ -362,13 +367,13 @@ void device_module(py::module& m_device) {
            size_t trace_region_size,
            const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
            size_t worker_l1_size) {
-            return tt::tt_metal::detail::CreateDevices(
+            return MeshDevice::create_unit_meshes(
                 device_ids,
-                num_command_queues,
                 l1_small_size,
                 trace_region_size,
+                num_command_queues,
                 dispatch_core_config,
-                {},
+                /*l1_bank_remap=*/{},
                 worker_l1_size);
         },
         R"doc(
@@ -387,7 +392,7 @@ void device_module(py::module& m_device) {
         py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{},
         py::kw_only(),
         py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
-    m_device.def("CloseDevice", &tt::tt_metal::CloseDevice, R"doc(
+    m_device.def("CloseDevice", [](MeshDevice* device) { device->close(); }, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
         +------------------+------------------------+-----------------------+-------------+----------+
@@ -396,7 +401,14 @@ void device_module(py::module& m_device) {
         | device           | TT Device to close     | ttnn.Device           |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
-    m_device.def("CloseDevices", &tt::tt_metal::detail::CloseDevices, R"doc(
+    m_device.def(
+        "CloseDevices",
+        [](const std::map<chip_id_t, MeshDevice*>& devices) {
+            for (const auto& device_entry : devices) {
+                device_entry.second->close();
+            }
+        },
+        R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
         +------------------+------------------------+-----------------------+-------------+----------+
@@ -420,7 +432,7 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "SetDefaultDevice",
-        &ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice,
+        [](MeshDevice* device) { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device); },
         R"doc(
             Sets the default device to use for operations when inputs are not on the device.
 
@@ -438,7 +450,10 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "GetDefaultDevice",
-        &ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice,
+        []() {
+            return dynamic_cast<MeshDevice*>(
+                ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice());
+        },
         R"doc(
             Gets the default device to use for ops when inputs aren't on device.
 
@@ -454,7 +469,15 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "format_input_tensor",
-        &ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor,
+        [](const Tensor& input,
+           MeshDevice* device,
+           const ttnn::Shape& padded_shape,
+           float pad_value,
+           Layout target_layout,
+           std::optional<MemoryConfig> target_mem_config) {
+            return ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
+                input, device, padded_shape, pad_value, target_layout, std::move(target_mem_config));
+        },
         py::arg("input").noconvert(),
         py::arg("device").noconvert(),
         py::arg("padded_shape"),
@@ -487,7 +510,7 @@ void device_module(py::module& m_device) {
         "format_output_tensor",
         [](const Tensor& output,
            const ttnn::SmallVector<uint32_t>& shape,
-           IDevice* device,
+           MeshDevice* device,
            Layout target_layout,
            std::optional<MemoryConfig> target_mem_config) {
             return operations::experimental::auto_format::AutoFormat::format_output_tensor(
@@ -557,12 +580,7 @@ void device_module(py::module& m_device) {
         Disables generation of memory allocation statistics reports in tt-metal
     )doc");
 
-    m_device.def(
-        "DumpDeviceMemoryState",
-        &tt::tt_metal::detail::DumpDeviceMemoryState,
-        py::arg().noconvert(),
-        py::arg("prefix").noconvert() = std::string(""),
-        R"doc(
+    constexpr std::string_view dump_device_memory_state_doc = R"doc(
         Generates reports to dump device memory state. Three reports are generated:
         - `<prefix>l1_usage_summary.csv` has a table with an entry for each program indicating the minimum largest free L1 block and size of largest L1 buffer that can be interleaved across available free L1 blocks
         - `<prefix>memory_usage_summary.csv` for each program there is an entry indicating total allocatable, allocated, free, and largest free block sizes for each DRAM and L1 bank
@@ -574,14 +592,23 @@ void device_module(py::module& m_device) {
         | device           | Device to dump memory state for  | ttnn.Device           |             | Yes      |
         | prefix           | Dumped report filename prefix    | str                   |             | No       |
         +------------------+----------------------------------+-----------------------+-------------+----------+
-    )doc");
-
+    )doc";
     m_device.def(
-        "GetMemoryView",
-        &tt::tt_metal::detail::GetMemoryView,
+        "DumpDeviceMemoryState",
+        &tt::tt_metal::detail::DumpDeviceMemoryState,
         py::arg().noconvert(),
+        py::arg("prefix").noconvert() = std::string(""),
+        dump_device_memory_state_doc.data());
+    m_device.def(
+        "DumpDeviceMemoryState",
+        [](MeshDevice* device, const std::string& prefix) {
+            tt::tt_metal::detail::DumpDeviceMemoryState(device, prefix);
+        },
         py::arg().noconvert(),
-        R"doc(
+        py::arg("prefix").noconvert() = std::string(""),
+        dump_device_memory_state_doc.data());
+
+    constexpr std::string_view get_memory_view_doc = R"doc(
         Populates MemoryView for BufferType [dram, l1, l1 small, trace]. Used when storing to disk is not an option.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
@@ -590,7 +617,21 @@ void device_module(py::module& m_device) {
         | device           | Device to dump memory state for  | ttnn.Device           |             | Yes      |
         | buffer_type      | Type of buffer for memory view   | ttnn.BufferType       |             | Yes      |
         +------------------+----------------------------------+-----------------------+-------------+----------+
-    )doc");
+    )doc";
+    m_device.def(
+        "GetMemoryView",
+        &tt::tt_metal::detail::GetMemoryView,
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        get_memory_view_doc.data());
+    m_device.def(
+        "GetMemoryView",
+        [](MeshDevice* device, const BufferType& buffer_type) {
+            return tt::tt_metal::detail::GetMemoryView(device, buffer_type);
+        },
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        get_memory_view_doc.data());
 
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
@@ -628,23 +669,8 @@ void device_module(py::module& m_device) {
         py::arg("device"),
         py::arg("cq_id") = std::nullopt,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
-    // TODO: #18572 - Replace the implementation of this overload with the TT-distributed implementation.
     m_device.def(
         "synchronize_device",
-        [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            for (auto& d : device->get_devices()) {
-                d->push_work([d, cq_id, &sub_device_ids]() mutable {
-                    Synchronize(d, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
-                });
-                d->synchronize();
-            }
-        },
-        synchronize_device_doc.data(),
-        py::arg("device"),
-        py::arg("cq_id") = std::nullopt,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>());
-    m_device.def(
-        "synchronize_mesh_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
             tt::tt_metal::distributed::Synchronize(
                 device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
@@ -653,7 +679,24 @@ void device_module(py::module& m_device) {
         py::arg("device"),
         py::arg("cq_id") = std::nullopt,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
-    m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), R"doc(
+    m_device.def(
+        "DumpDeviceProfiler",
+        [](MeshDevice* mesh_device) {
+            for (auto device : mesh_device->get_devices()) {
+                DumpDeviceProfiler(device);
+            }
+        },
+        py::arg("device"),
+        R"doc(
+        Dump device side profiling data.
+
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                      | Data type             | Valid range | Required |
+        +==================+==================================+=======================+=============+==========+
+        | device           | Device to dump profiling data of | ttnn.Device           |             | Yes      |
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+    )doc");
+    m_device.def("DumpDeviceProfiler", &DumpDeviceProfiler, py::arg("device"), R"doc(
         Dump device side profiling data.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
