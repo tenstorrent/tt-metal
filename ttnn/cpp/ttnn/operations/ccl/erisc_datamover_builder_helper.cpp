@@ -87,7 +87,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     auto get_min_link_count = [&](IDevice* src_device, IDevice* dest_device, size_t min_link_count) {
         const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
         const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
-
         if (src_device_sockets.size() > 0) {
             min_link_count = std::min(min_link_count, src_device_sockets.size());
         }
@@ -341,16 +340,20 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     edm_builders_maps[EdmLineFabricOpInterface::Direction::FORWARD] = &this->edm_builders_forward_direction;
     edm_builders_maps[EdmLineFabricOpInterface::Direction::BACKWARD] = &this->edm_builders_backward_direction;
 
+    // Create pair of physically clothest sockets
     std::vector<CoreCoord> forward_connected_sockets;
     std::vector<CoreCoord> backward_connected_sockets;
     std::vector<std::vector<CoreCoord>> clothest_pairs;
     if (!forward_device.has_value()) {
+        // Line edge case, local_device is last device
         backward_connected_sockets = local_device->get_ethernet_sockets(backward_device.value()->id());
         clothest_pairs.push_back({CoreCoord(-1, -1), backward_connected_sockets[0]});
     } else if (!backward_device.has_value()) {
+        // Line edge case, local_device is first device
         forward_connected_sockets = local_device->get_ethernet_sockets(forward_device.value()->id());
         clothest_pairs.push_back({forward_connected_sockets[0], CoreCoord(-1, -1)});
     } else {
+        // middle device. backward or forward
         forward_connected_sockets = local_device->get_ethernet_sockets(forward_device.value()->id());
         backward_connected_sockets = local_device->get_ethernet_sockets(backward_device.value()->id());
 
@@ -371,17 +374,11 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
             return closest_idx;
         };
 
-        if (backward_connected_sockets.size() == 1) {
+        if (backward_connected_sockets.size() < forward_connected_sockets.size()) {
             for (const auto& bwd_logi_core : backward_connected_sockets) {
                 CoreCoord bwd_virtual = local_device->virtual_core_from_logical_core(bwd_logi_core, CoreType::ETH);
                 size_t idx = find_closest_index(forward_connected_sockets, bwd_virtual);
                 clothest_pairs.push_back({forward_connected_sockets[idx], bwd_logi_core});
-            }
-        } else if (forward_connected_sockets.size() == 1) {
-            for (const auto& fwd_logi_core : forward_connected_sockets) {
-                CoreCoord fwd_virtual = local_device->virtual_core_from_logical_core(fwd_logi_core, CoreType::ETH);
-                size_t idx = find_closest_index(backward_connected_sockets, fwd_virtual);
-                clothest_pairs.push_back({fwd_logi_core, backward_connected_sockets[idx]});
             }
         } else {
             for (const auto& fwd_logi_core : forward_connected_sockets) {
