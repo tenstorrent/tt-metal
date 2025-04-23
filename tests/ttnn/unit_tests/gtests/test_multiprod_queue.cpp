@@ -95,7 +95,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     // Reader cannot read until writer has correctly updated a memory location.
     // Writer cannot update location until reader has picked up data.
     // Use write_event to stall reader and read_event to stall writer.
-    IDevice* device = this->device_;
+    auto device = this->device_;
     // Enable async engine and set queue setting to lock_based
     device->enable_async(true);
 
@@ -110,8 +110,9 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     const ttnn::QueueId write_cq = ttnn::DefaultQueueId;
     const ttnn::QueueId read_cq = ttnn::QueueId(1);
 
-    std::shared_ptr<Event> write_event = std::make_shared<Event>();
-    std::shared_ptr<Event> read_event = std::make_shared<Event>();
+    std::optional<tt::tt_metal::distributed::MeshEvent> write_event;
+    std::optional<tt::tt_metal::distributed::MeshEvent> read_event;
+    std::mutex event_mutex;
 
     Tensor device_tensor = create_device_tensor(tensor_spec, device);
 
@@ -120,25 +121,50 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
         std::vector<uint32_t> host_data(tensor_shape.volume());
         for (int j = 0; j < kNumIterations; j++) {
             if (j != 0) {
-                ttnn::event_synchronize(read_event);
+                while (true) {
+                    std::unique_lock<std::mutex> lock(event_mutex);
+                    if (read_event.has_value()) {
+                        break;
+                    }
+                    lock.unlock();
+                    std::this_thread::sleep_for(std::chrono::microseconds(10));
+                }
+                ttnn::event_synchronize(*read_event);
             }
-            read_event = std::make_shared<Event>();
+            {
+                std::unique_lock<std::mutex> lock(event_mutex);
+                read_event = std::nullopt;
+            }
 
             // Create tensor and transfer to device
             std::iota(host_data.begin(), host_data.end(), j);
             const Tensor host_tensor = Tensor::from_vector(host_data, tensor_spec);
-            memcpy(device->command_queue(*write_cq), device_tensor, host_tensor);
+            memcpy(device->mesh_command_queue(*write_cq), device_tensor, host_tensor);
             EXPECT_TRUE(is_tensor_on_device(device_tensor));
 
-            ttnn::record_event(device->command_queue(*write_cq), write_event);
+            {
+                std::unique_lock<std::mutex> lock(event_mutex);
+                write_event = ttnn::record_event_to_host(device->mesh_command_queue(*write_cq));
+            }
         }
     });
 
     std::thread t1([&]() {
         std::vector<uint32_t> expected_readback_data(tensor_shape.volume());
         for (int j = 0; j < kNumIterations; j++) {
-            ttnn::event_synchronize(write_event);
-            write_event = std::make_shared<Event>();
+            while (true) {
+                std::unique_lock<std::mutex> lock(event_mutex);
+                if (write_event.has_value()) {
+                    break;
+                }
+                lock.unlock();
+                std::this_thread::sleep_for(std::chrono::microseconds(10));
+            }
+            ttnn::event_synchronize(*write_event);
+            {
+                std::unique_lock<std::mutex> lock(event_mutex);
+                write_event = std::nullopt;
+            }
 
             // Read back from device and verify
             const Tensor readback_tensor = device_tensor.cpu(/*blocking=*/true, read_cq);
@@ -147,7 +173,10 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             EXPECT_THAT(readback_tensor.to_vector<uint32_t>(), Pointwise(Eq(), expected_readback_data))
                 << "At iteration " << j;
 
-            ttnn::record_event(device->command_queue(*read_cq), read_event);
+            {
+                std::unique_lock<std::mutex> lock(event_mutex);
+                read_event = ttnn::record_event_to_host(device->mesh_command_queue(*read_cq));
+            }
         }
     });
 

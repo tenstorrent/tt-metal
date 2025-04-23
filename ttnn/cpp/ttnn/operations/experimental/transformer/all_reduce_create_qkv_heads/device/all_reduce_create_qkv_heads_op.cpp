@@ -12,68 +12,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn {
-namespace ccl {
-namespace all_reduce_create_qkv_heads_detail {
-
-AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
-    const Tensor& input_tensor,
-    const uint32_t num_links,
-    const std::optional<MemoryConfig>& all_reduce_memory_config,
-    const std::vector<IDevice*>& devices,
-    const ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    uint32_t head_dim,
-    uint32_t num_heads,
-    uint32_t num_kv_heads,
-    bool input_on_subcoregrids,
-    std::optional<const uint32_t> slice_size,
-    const std::optional<MemoryConfig>& final_memory_config,
-    const std::optional<const DataType> dtype) {
-    uint32_t num_devices = devices.size();
-
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    std::optional<GlobalSemaphore> semaphore = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == input_tensor.device()) {
-            device_index = i;
-            semaphore = semaphores.at(i);  // Get raw pointer
-            if (i != 0) {
-                backward_device = devices.at(i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(num_devices - 1);
-            }
-            if (i != num_devices - 1) {
-                forward_device = devices.at(i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
-            }
-        }
-    }
-
-    return ttnn::AllReduceCreateQkvHeads{
-        forward_device,
-        backward_device,
-        num_links,
-        num_devices,
-        device_index,
-        all_reduce_memory_config.value_or(input_tensor.memory_config()),
-        topology,
-        semaphore.value(),
-        sub_device_id,
-        head_dim,
-        num_heads,
-        num_kv_heads,
-        input_on_subcoregrids,
-        slice_size,
-        final_memory_config.value_or(input_tensor.memory_config()),
-        dtype.value_or(input_tensor.get_dtype())};
-}
-
-}  // namespace all_reduce_create_qkv_heads_detail
-}  // namespace ccl
 
 void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
@@ -275,15 +213,54 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
                 this->dtype, tt::tt_metal::PageConfig(input_tensor.get_layout()), v_mem_config))};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+tt::tt_metal::operation::MeshWorkloadWithCallbacks AllReduceCreateQkvHeads::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    return ccl::create_mesh_workload_from_programs(
+        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+            return create_program_at(coord, input_tensors, output_tensors);
+        });
+}
+
+tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_program_at(
+    const ttnn::MeshCoordinate& mesh_coord,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
 
-    auto input_tensor_shape = input_tensors[0].get_padded_shape();
-    auto input_tensor_buffer_layout = input_tensors[0].buffer()->buffer_layout();
-    auto input_tensor_page_layout = input_tensors[0].layout();
+    const auto& input_tensor = input_tensors[0];
+    auto mesh_device = input_tensor.mesh_device();
+    const auto& mesh_view = mesh_device->get_view();
 
-    auto input_tensor_memory_config = input_tensors[0].memory_config();
+    const auto target_device = mesh_device->get_device(mesh_coord);
+    std::vector<IDevice*> devices = (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coord[1])
+                                                              : mesh_view.get_devices_on_row(mesh_coord[0]);
+
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
+    uint32_t device_index = 0;  // Initialize device index
+    for (uint32_t i = 0; i < this->ring_size; ++i) {
+        if (devices.at(i) == target_device) {
+            device_index = i;
+            if (i != 0) {
+                backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(this->ring_size - 1);
+            }
+            if (i != this->ring_size - 1) {
+                forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
+            }
+        }
+    }
+
+    auto input_tensor_shape = input_tensor.get_padded_shape();
+    auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
+    auto input_tensor_page_layout = input_tensor.layout();
+
+    auto input_tensor_memory_config = input_tensor.memory_config();
     auto output_tensor_memory_config = output_tensors[0].memory_config();
     uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec->grid.num_cores();
     uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec->grid.num_cores();
@@ -301,13 +278,14 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
     tt::log_debug(tt::LogOp, "Running TG Llama specific all_reduce_create_qkv_heads_minimal_multi_core_with_workers");
     return all_reduce_create_qkv_heads_minimal_multi_core_with_workers(
         input_tensors,
-        this->forward_device,
-        this->backward_device,
+        target_device,
+        forward_device,
+        backward_device,
         output_tensors,
         this->dtype,
         this->num_links,
         this->ring_size,
-        this->ring_index,
+        device_index,
         this->topology,
         this->semaphore,
         this->sub_device_id,
@@ -326,9 +304,9 @@ tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<AllReduceCreateQkvHeads>(
         this->num_links,
         this->ring_size,
-        this->ring_index,
         this->all_reduce_mem_config,
         this->topology,
+        this->cluster_axis,
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -346,7 +324,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& all_reduce_memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -358,69 +336,28 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const std::optional<MemoryConfig>& final_memory_config,
     const std::optional<const DataType> dtype) {
     const auto mesh_view = mesh_device.get_view();
-    auto devices = input_tensor.get_workers();
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    TT_FATAL(
+        mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+    uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    std::vector<Tensor> output_tensors{
-        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
-        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
-        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
-        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
-
-    tt::tt_metal::operation::launch_op(
-        [num_preferred_links,
-         all_reduce_memory_config,
-         mesh_view,
-         cluster_axis,
-         num_devices,
-         topology,
-         semaphores,
-         subdevice_id,
-         head_dim,
-         num_heads,
-         num_kv_heads,
-         input_on_subcoregrids,
-         slice_size,
-         final_memory_config,
-         dtype](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_device_tensor = input_tensors.at(0);
-
-            TT_FATAL(
-                mesh_view.is_mesh_2d(),
-                "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
-                                                                : mesh_view.get_devices_on_row(coordinate[0]);
-
-            const auto& input_tensor = input_tensors.at(0);
-            const auto& buffer_tensor = input_tensors.at(1);
-            const auto& batch_offset_tensor = input_tensors.at(2);
-
-            return tt::tt_metal::operation::run(
-                ttnn::ccl::all_reduce_create_qkv_heads_detail::create_all_reduce_create_qkv_heads_struct(
-                    input_device_tensor,
-                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-                    all_reduce_memory_config,
-                    devices,
-                    topology,
-                    semaphores,
-                    subdevice_id,
-                    head_dim,
-                    num_heads,
-                    num_kv_heads,
-                    input_on_subcoregrids,
-                    slice_size,
-                    final_memory_config,
-                    dtype),
-                {input_tensor, buffer_tensor, batch_offset_tensor});
-        },
-        {input_tensor, buffer_tensor, batch_offset_tensor},
-        output_tensors);
-    return std::make_tuple(output_tensors.at(0), output_tensors.at(1), output_tensors.at(2), output_tensors.at(3));
+    auto output_tensors = tt::tt_metal::operation::run(
+        ttnn::AllReduceCreateQkvHeads(
+            num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+            num_devices,
+            all_reduce_memory_config.value_or(input_tensor.memory_config()),
+            topology,
+            multi_device_global_semaphore,
+            subdevice_id,
+            head_dim,
+            num_heads,
+            num_kv_heads,
+            input_on_subcoregrids,
+            slice_size,
+            final_memory_config.value_or(input_tensor.memory_config()),
+            dtype.value_or(input_tensor.get_dtype()),
+            cluster_axis),
+        {input_tensor, buffer_tensor, batch_offset_tensor});
+    return {output_tensors[0], output_tensors[1], output_tensors[2], output_tensors[3]};
 }
 
 }  // namespace ccl

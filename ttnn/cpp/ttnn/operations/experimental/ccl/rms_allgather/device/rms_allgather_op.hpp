@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -28,6 +29,7 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config,
     // New Parameters
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     const uint32_t num_links,
@@ -60,17 +62,22 @@ struct RMSAllGather {
     const ttnn::ccl::Topology topology;
     const uint32_t num_links;
     const uint32_t ring_size;
-    const uint32_t ring_index;
     const GlobalSemaphore semaphore;
     const std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    std::optional<IDevice*> forward_device;
-    std::optional<IDevice*> backward_device;
+    const uint32_t cluster_axis = 0;
+
     void validate(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const;
+    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
+        const ttnn::MeshCoordinate& mesh_coordinate,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
@@ -81,13 +88,11 @@ struct RMSAllGather {
         const DeviceComputeKernelConfig compute_kernel_config,
         std::optional<DataType> dtype,
         ::ttnn::ccl::Topology topology,
-        uint32_t num_links,
-        uint32_t ring_size,
-        uint32_t ring_index,
+        const uint32_t num_links,
+        const uint32_t ring_size,
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        std::optional<IDevice*> forward_device,
-        std::optional<IDevice*> backward_device) :
+        uint32_t cluster_axis) :
         eps(eps),
         output_mem_config(output_mem_config),
         program_config(program_config),
@@ -96,11 +101,9 @@ struct RMSAllGather {
         topology(topology),
         num_links(num_links),
         ring_size(ring_size),
-        ring_index(ring_index),
         semaphore(semaphore),
         sub_device_id(sub_device_id),
-        forward_device(forward_device),
-        backward_device(backward_device) {}
+        cluster_axis(cluster_axis) {}
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
@@ -110,11 +113,10 @@ struct RMSAllGather {
         attrs.emplace_back("compute_kernel_config", compute_kernel_config);
         attrs.emplace_back("dtype", dtype);
         attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("ring_index", ring_index);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
+        attrs.emplace_back("cluster_axis", cluster_axis);
 
         return attrs;
     }

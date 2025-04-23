@@ -25,7 +25,6 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -280,7 +279,7 @@ TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
                                    MetalContext::instance().hal().get_alignment(HalMemType::L1);
     // This is a slow dispatch test dispatch core type is needed to query DispatchMemMap
     uint32_t base_pcie_dst_address =
-        DispatchMemMap::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
+        MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
         MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     uint32_t size_bytes = 2048 * 128;
