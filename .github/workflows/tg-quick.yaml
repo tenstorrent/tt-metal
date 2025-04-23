@@ -109,7 +109,7 @@ jobs:
           TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites";
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-          pytest tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py --arch wh --machine-type 6u --sanity_6u
+          pytest tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py --machine-type 6u -m sanity_6u
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
           pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick";
