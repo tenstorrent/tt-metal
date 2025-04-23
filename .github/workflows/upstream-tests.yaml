@@ -48,7 +48,7 @@ jobs:
           # 22.04 artifact... we'll probably need to key on that in the original action in metal
           name: TTMetal_build_any
           path: ${{ github.workspace }}/build_vanilla
-      - run: mkdir -p _tt-metal
+      - run: mkdir -p _tt-metal-vanilla
       - run: tar -xvf build_vanilla/ttm_any.tar -C _tt-metal-vanilla/
       - run: ls -hal _tt-metal-vanilla
       - name: 🧪 Download vanilla Python Wheel
