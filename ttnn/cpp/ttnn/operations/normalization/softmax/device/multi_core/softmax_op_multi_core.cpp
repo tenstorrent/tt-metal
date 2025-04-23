@@ -110,7 +110,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t in0_t = numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
+    uint32_t in0_t = tt::div_up(Wt, block_size) * block_size;
     uint32_t out0_t = block_size * 2;
     uint32_t im1_t = 1;  // 1/sum(exp(x))
     uint32_t in2_t = 1;  // scaler for reduce coming from reader
@@ -180,7 +180,8 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/reader_unary_interleaved_sm.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/"
+        "reader_unary_interleaved_sm_large_tensor.cpp",
         all_device_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, softmax_defines));
 
@@ -202,7 +203,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     auto softmax_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/compute/softmax.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/compute/softmax_large_tensor.cpp",
         all_device_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -321,6 +322,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                  curr_ht,
                  mask_id,
                  0x3f803f80,
+                 in0_t,
                  mask_curr_ht,
                  mask_offset});  // [10]=1.0f is scaler
         } else {
@@ -338,11 +340,15 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                  mask_addr,
                  curr_ht,
                  mask_id,
-                 0x3f803f80});  // [10]=1.0f is scaler
+                 0x3f803f80,
+                 in0_t});  // [10]=1.0f is scaler
         }
 
         SetRuntimeArgs(
-            program, softmax_kernels_id, core, {num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data});
+            program,
+            softmax_kernels_id,
+            core,
+            {num_tile_rows_per_core, Ht, Wt, block_size, curr_ht, mask_padded_data, in0_t});
 
         SetRuntimeArgs(
             program,
