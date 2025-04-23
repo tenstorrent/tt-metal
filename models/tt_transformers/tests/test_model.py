@@ -86,14 +86,24 @@ def test_model_inference(
     ensure_gc,
     request,
 ):
+    model_name_env = os.getenv("HF_MODEL")
+    if model_name_env and "Mistral-7B" in model_name_env and weights == "instruct":
+        pytest.skip(
+            "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
+        )
+
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
 
     test_id = request.node.callspec.id
     mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
+
+    # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
+    # Also avoid comparing PCC for dummy weights
+    cache_pcc = layers == 1 and not dummy_weights
+
     model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
