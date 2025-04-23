@@ -356,11 +356,51 @@ std::pair<string, string> get_op_init_and_func_default(
                 op_init_and_name = {"eqz_tile_init();", fmt::format("eqz_tile({});", idst)};
             }
             break;
-        case UnaryOpType::NEZ: op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile({});", idst)}; break;
-        case UnaryOpType::LTZ: op_init_and_name = {"ltz_tile_init();", fmt::format("ltz_tile({});", idst)}; break;
-        case UnaryOpType::GTZ: op_init_and_name = {"gtz_tile_init();", fmt::format("gtz_tile({});", idst)}; break;
-        case UnaryOpType::LEZ: op_init_and_name = {"lez_tile_init();", fmt::format("lez_tile({});", idst)}; break;
-        case UnaryOpType::GEZ: op_init_and_name = {"gez_tile_init();", fmt::format("gez_tile({});", idst)}; break;
+        case UnaryOpType::NEZ:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile_int32({});", idst)};
+            } else {
+                op_init_and_name = {"nez_tile_init();", fmt::format("nez_tile({});", idst)};
+            }
+            break;
+        case UnaryOpType::LTZ:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {"ltz_tile_init();", fmt::format("ltz_tile_int32({});", idst)};
+            } else {
+                op_init_and_name = {"ltz_tile_init();", fmt::format("ltz_tile({});", idst)};
+            }
+            break;
+        case UnaryOpType::GTZ:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {"gtz_tile_init();", fmt::format("gtz_tile_int32({});", idst)};
+            } else {
+                op_init_and_name = {"gtz_tile_init();", fmt::format("gtz_tile({});", idst)};
+            }
+            break;
+        case UnaryOpType::GEZ:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {"gez_tile_init();", fmt::format("gez_tile_int32({});", idst)};
+            } else {
+                op_init_and_name = {"gez_tile_init();", fmt::format("gez_tile({});", idst)};
+            }
+            break;
+        case UnaryOpType::LEZ:
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {"lez_tile_init();", fmt::format("lez_tile_int32({});", idst)};
+            } else {
+                op_init_and_name = {"lez_tile_init();", fmt::format("lez_tile({});", idst)};
+            }
+            break;
         case UnaryOpType::EXP2: op_init_and_name = {"exp2_tile_init();", fmt::format("exp2_tile({});", idst)}; break;
         case UnaryOpType::EXPM1: op_init_and_name = {"expm1_tile_init();", fmt::format("expm1_tile({});", idst)}; break;
         case UnaryOpType::ASIN: op_init_and_name = {"asin_tile_init();", fmt::format("asin_tile({});", idst)}; break;
