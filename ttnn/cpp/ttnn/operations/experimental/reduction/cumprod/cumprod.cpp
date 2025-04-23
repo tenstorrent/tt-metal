@@ -44,13 +44,12 @@ Tensor CumprodOperation::invoke(
     }
 
     // Normalize negative dim
-    uint32_t cum_axis{dim};
+    int32_t cum_axis{dim};
     if (cum_axis < 0) {
         cum_axis += tensor_rank;
     }
 
-    // If dim is either one of two last dimensions
-    if (cum_axis == tensor_rank - 1 || cum_axis == tensor_rank - 2) {
+    if (tensor_rank - cum_axis < 4) {
         int initial_tensor_rank = tensor_rank;
         if (initial_tensor_rank < 4) {
             ttnn::SmallVector<uint32_t> new_dims = {};
@@ -66,7 +65,7 @@ Tensor CumprodOperation::invoke(
                 optional_out = ttnn::reshape(optional_out.value(), new_shape);
             }
 
-            tensor_rank += (4 - initial_tensor_rank);
+            tensor_rank = 4;
             cum_axis += (4 - initial_tensor_rank);  // update dim parameter to target updated axis
         }
 
@@ -80,7 +79,7 @@ Tensor CumprodOperation::invoke(
             ttnn::permute(adjusted_input_tensor, permutation, adjusted_input_tensor.memory_config());
 
         if (optional_out.has_value()) {
-            optional_out = ttnn::permute(optional_out.value(), permutation, optional_out->memory_config());
+            //     optional_out = ttnn::permute(optional_out.value(), permutation, optional_out->memory_config());
         }
 
         Tensor output_tensor = ttnn::prim::cumprod(
@@ -94,13 +93,15 @@ Tensor CumprodOperation::invoke(
         output_tensor = ttnn::permute(output_tensor, permutation, output_tensor.memory_config());
         // TODO(jbbieniekTT): what about the optional out? (trying to handle it right now, not sure if correctly)
         if (optional_out.has_value()) {
-            optional_out = ttnn::permute(optional_out.value(), permutation, optional_out.value().memory_config());
+            //     optional_out = ttnn::permute(optional_out.value(), permutation,
+            //     optional_out.value().memory_config());
+            ttnn::copy(output_tensor, *optional_out);
         }
 
         if (initial_tensor_rank < 4) {
             output_tensor = ttnn::reshape(output_tensor, input_shape);
             if (optional_out.has_value()) {
-                optional_out = ttnn::reshape(optional_out.value(), input_shape);
+                //     optional_out = ttnn::reshape(optional_out.value(), input_shape);
             }
         }
 

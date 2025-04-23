@@ -61,10 +61,13 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         ((dim >= -static_cast<decltype(dim)>(input_tensor.get_padded_shape().rank())) &&
-         (dim < input_tensor.get_padded_shape().rank())),
-        "The requested cumulation axis is {}, while the input thensor has rank {}.",
+         (dim < static_cast<decltype(dim)>(input_tensor.get_padded_shape().rank()))),
+        "The requested cumulation axis is {}, while the input thensor has rank {}. DEBUG: {}, {}, {}",
         dim,
-        input_tensor.get_padded_shape().rank());
+        input_tensor.get_padded_shape().rank(),
+        -static_cast<decltype(dim)>(input_tensor.get_padded_shape().rank()),
+        dim >= -static_cast<decltype(dim)>(input_tensor.get_padded_shape().rank()),
+        dim < input_tensor.get_padded_shape().rank());
 
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,

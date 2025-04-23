@@ -4,8 +4,6 @@
 
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
-
 FORCE_INLINE unsigned get_tile_id(
     uint32_t i0, uint32_t i1, uint32_t j, uint32_t tiles_per_row, uint32_t PLo, uint32_t PHi, uint32_t HtWt) {
     uint32_t base_tileid = i0 * (tiles_per_row * PHi * HtWt) + i1;
@@ -68,7 +66,6 @@ void kernel_main() {
 
                 cb_wait_front(cb_in, 1);
 
-                // Write tile
                 noc_async_write_tile(tileid, dram_output_addrg, input_sram_addr);
                 noc_async_write_barrier();
 

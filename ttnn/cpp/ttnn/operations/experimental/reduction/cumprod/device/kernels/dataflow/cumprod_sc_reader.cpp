@@ -4,8 +4,6 @@
 
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
-
 namespace {
 
 FORCE_INLINE unsigned get_tile_id(
@@ -38,13 +36,12 @@ void kernel_main() {
 
     const int32_t ACC_START_VALUE_F32{caster.u};
     constexpr int32_t ACC_START_VALUE_F16{0x3F80};
-    constexpr int32_t ACC_START_VALUE_I32{0x70007000};
-    constexpr int32_t ACC_START_VALUE_I16{1};
-    constexpr int32_t ACC_START_VALUE_I8{8};
+    constexpr int32_t ACC_START_VALUE_I32{0x1};  // TODO(jbbieniekTT): get it right
+    constexpr int32_t ACC_START_VALUE_I16{0x1};
+    constexpr int32_t ACC_START_VALUE_I8{0x1};
 
     const auto& input_data_format = get_dataformat(cb_out);
 
-    // single tile ublock
     uint32_t ublock_size_bytes = get_tile_size(cb_out);
     uint32_t l1_addr_out = get_write_ptr(cb_out);
 
@@ -59,30 +56,25 @@ void kernel_main() {
     switch (input_data_format) {
         case DataFormat::Float32:
             scaler = ACC_START_VALUE_F32;
-            DPRINT << "F32" << ENDL();
             bytes_per_element = 4;
             break;
         case DataFormat::Float16_b:
         case DataFormat::Float16:
             scaler = (ACC_START_VALUE_F16 << 16) | ACC_START_VALUE_F16;
-            DPRINT << "F16" << ENDL();
             bytes_per_element = 2;
             break;
         case DataFormat::UInt8:
             scaler = (ACC_START_VALUE_I8 << 24) | (ACC_START_VALUE_I8 << 16) | (ACC_START_VALUE_I8 << 8) |
                      (ACC_START_VALUE_I8);
-            DPRINT << "U8" << ENDL();
             bytes_per_element = 1;
             break;
         case DataFormat::UInt16:
             scaler = (ACC_START_VALUE_I16 << 16) | ACC_START_VALUE_I16;
-            DPRINT << "U16" << ENDL();
             bytes_per_element = 2;
             break;
         case DataFormat::Int32:
         case DataFormat::UInt32:
             scaler = ACC_START_VALUE_I32;
-            DPRINT << "U32" << ENDL();
             bytes_per_element = 4;
             break;
         default:  // ?

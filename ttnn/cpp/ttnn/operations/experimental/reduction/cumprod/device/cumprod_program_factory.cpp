@@ -37,7 +37,7 @@ uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::calc_phi(
 uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::calc_htwt(const Shape& input_shape) {
     switch (input_shape.rank()) {
         case 0: return 0;
-        case 1: return input_shape[0] / tt::constants::TILE_WIDTH;  // TODO(jbbieniekTT): ?
+        case 1: return input_shape[0] / tt::constants::TILE_WIDTH;
         default: return input_shape[input_shape.rank() - 1] * input_shape[input_shape.rank() - 2] / 1024;
     }
 }
@@ -55,7 +55,6 @@ CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
     const auto& input_tensor{tensor_args.input_tensor};
     auto& output_tensor{tensor_return_value};
     const auto& input_shape{input_tensor.get_padded_shape()};
-    // const auto& dim{operation_attributes.dim};
 
     Program program{};
 
@@ -75,26 +74,15 @@ CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
     const uint32_t dst_is_dram{dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.get_dtype())};
-    // const bool fp32_dest_acc_en{
-    //     (dst_cb_data_format == tt::DataFormat::Float32) || (dst_cb_data_format == tt::DataFormat::Int32) ||
-    //     (dst_cb_data_format == tt::DataFormat::UInt32)};
+    const bool fp32_dest_acc_en{
+        (dst_cb_data_format == tt::DataFormat::Float32) || (dst_cb_data_format == tt::DataFormat::Int32) ||
+        (dst_cb_data_format == tt::DataFormat::UInt32)};
     const uint32_t height_tiles{input_shape[2] / constants::TILE_HEIGHT};
     const uint32_t width_tiles{input_shape[3] / constants::TILE_WIDTH};
 
     const uint32_t input_rank{tensor_args.input_tensor.get_padded_shape().rank()};
     const int32_t dim{
         (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
-
-    // const std::vector<uint32_t> compile_args{
-    //     src_is_dram,
-    //     dst_is_dram,
-    //     static_cast<uint32_t>(CumprodCB::SRC),
-    //     static_cast<uint32_t>(CumprodCB::ACC),
-    //     static_cast<uint32_t>(CumprodCB::DST),
-    //     input_shape[0],
-    //     input_shape[1],
-    //     height_tiles,
-    //     width_tiles};
 
     const ReaderDataMovementConfig reader_config{};
     const ComputeConfig compute_config{
@@ -133,36 +121,7 @@ void CumprodDeviceOperation::SingleCoreCumprodProgramFactory::override_runtime_a
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program{cached_program.program};
-    // const auto& cumprod_reader_kernel_id{cached_program.shared_variables.cumprod_reader_kernel_id};
-    // const auto& cumprod_compute_kernel_id{cached_program.shared_variables.cumprod_compute_kernel_id};
-    // const auto& cumprod_writer_kernel_id{cached_program.shared_variables.cumprod_writer_kernel_id};
-
-    // auto src_buffer{tensor_args.input_tensor.buffer()};
-    // auto dst_buffer{tensor_return_value.buffer()};
-
-    // constexpr CoreCoord core{1, 1};
-    // const uint32_t tiles_per_row{tensor_args.input_tensor.get_padded_shape()[operation_attributes.dim]};
-    // const uint32_t num_rows{tensor_args.input_tensor.volume() / TILE_SIZE / tiles_per_row};
-    // auto& reader_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
-    // reader_runtime_args[0] = src_buffer->address();
-    // reader_runtime_args[1] = num_rows;
-    // reader_runtime_args[2] = tiles_per_row;
-    // reader_runtime_args[3] = calc_phi(tensor_args.input_tensor.get_padded_shape(), operation_attributes.dim);
-    // reader_runtime_args[4] = calc_plo(tensor_args.input_tensor.get_padded_shape(), operation_attributes.dim);
-    // reader_runtime_args[5] = calc_htwt(tensor_args.input_tensor.get_padded_shape());
-    // auto& compute_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
-    // compute_runtime_args[0] = num_rows;
-    // compute_runtime_args[1] = tiles_per_row;
-    // auto& writer_runtime_args{GetRuntimeArgs(program, cumprod_reader_kernel_id, core)};
-    // writer_runtime_args[0] = dst_buffer->address();
-    // writer_runtime_args[1] = num_rows;
-    // writer_runtime_args[2] = tiles_per_row;
-    // writer_runtime_args[3] = calc_phi(tensor_args.input_tensor.get_padded_shape(), operation_attributes.dim);
-    // writer_runtime_args[4] = calc_plo(tensor_args.input_tensor.get_padded_shape(), operation_attributes.dim);
-    // writer_runtime_args[5] = calc_htwt(tensor_args.input_tensor.get_padded_shape());
-}
+    tensor_return_value_t& tensor_return_value) {}
 
 CBHandle CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create_cb(
     Program& program,
