@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import torch
 import ttnn
@@ -15,7 +14,7 @@ from .normalization import TtLayerNorm, TtLayerNormParameters
 from .patch_embedding import TtPatchEmbed, TtPatchEmbedParameters
 from .substate import indexed_substates, substate
 from .timestep_embedding import TtCombinedTimestepTextProjEmbeddings, TtCombinedTimestepTextProjEmbeddingsParameters
-from .transformer_block import TtTransformerBlock, TtTransformerBlockParameters, chunk_device_tensors, chunk_time
+from .transformer_block import TtTransformerBlock, TtTransformerBlockParameters, chunk_time
 
 
 @dataclass
@@ -34,7 +33,9 @@ class TtSD3Transformer2DModelParameters:
         state: dict[str, torch.Tensor],
         *,
         num_heads: int,
+        unpadded_num_heads: int,
         embedding_dim: int,
+        hidden_dim_padding: int,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
     ) -> TtSD3Transformer2DModelParameters:
@@ -49,7 +50,14 @@ class TtSD3Transformer2DModelParameters:
                 substate(state, "context_embedder"), dtype=dtype, device=device, shard_dim=None
             ),
             transformer_blocks=[
-                TtTransformerBlockParameters.from_torch(s, num_heads=num_heads, dtype=dtype, device=device)
+                TtTransformerBlockParameters.from_torch(
+                    s,
+                    num_heads=num_heads,
+                    unpadded_num_heads=unpadded_num_heads,
+                    hidden_dim_padding=hidden_dim_padding,
+                    dtype=dtype,
+                    device=device,
+                )
                 for s in indexed_substates(state, "transformer_blocks")
             ],
             time_embed_out=TtLinearParameters.from_torch(
