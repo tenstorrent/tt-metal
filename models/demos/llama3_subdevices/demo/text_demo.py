@@ -519,7 +519,6 @@ def test_demo_text(
                     mesh_shape=model_args.cluster_shape,
                 ),
             )[0, 0, 0, :batch_size]
-            print(tt_output_torch)
 
             # tt_out = tt_out[:, :, :B, : self.vocab_size].reshape(B, S, -1)
             # Get the next token

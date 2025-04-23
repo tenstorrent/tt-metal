@@ -413,9 +413,9 @@ class TtTransformer(LightweightModule):
         It returns ttnn device tensors.
         """
         rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
-        x = self.embd(x)
+        x_embd = self.embd(x)
         tt_logits = self.forward(
-            x,
+            x_embd,
             current_pos,
             rot_mats=rot_mats,
             mode="decode",
@@ -443,11 +443,7 @@ class TtTransformer(LightweightModule):
 
         if argmax_on_device:
             tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
-                tt_logits,
-                dim=3,
-                keepdim=True,
-                use_multicore=True,
-                sub_core_grids=sub_core_grids,  # ,output_tensor=tokens
+                tt_logits, dim=3, keepdim=True, use_multicore=True, sub_core_grids=sub_core_grids, output_tensor=x
             )
         else:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
