@@ -7,7 +7,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import tracy
 import ttnn
 
 from .attention import TtAttention, TtAttentionParameters
@@ -39,6 +38,8 @@ class TtTransformerBlockParameters:
         state: dict[str, torch.Tensor],
         *,
         num_heads: int,
+        unpadded_num_heads: int,
+        hidden_dim_padding: int,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
     ) -> TtTransformerBlockParameters:
@@ -58,10 +59,20 @@ class TtTransformerBlockParameters:
         prompt_time_embed_chunks = 2 if not has_ff_context else 6
         return cls(
             dual_attn=TtAttentionParameters.from_torch(
-                substate(state, "attn"), num_heads=num_heads, dtype=dtype, device=device
+                substate(state, "attn"),
+                num_heads=num_heads,
+                unpadded_num_heads=unpadded_num_heads,
+                hidden_dim_padding=hidden_dim_padding,
+                dtype=dtype,
+                device=device,
             ),
             spatial_attn=TtAttentionParameters.from_torch(
-                substate(state, "attn2"), num_heads=num_heads, dtype=dtype, device=device
+                substate(state, "attn2"),
+                num_heads=num_heads,
+                unpadded_num_heads=unpadded_num_heads,
+                hidden_dim_padding=hidden_dim_padding,
+                dtype=dtype,
+                device=device,
             )
             if has_spatial_attn
             else None,
@@ -74,6 +85,7 @@ class TtTransformerBlockParameters:
                 dtype=dtype,
                 device=device,
                 num_chunks=spatial_time_embed_chunks,
+                hidden_dim_padding=hidden_dim_padding,
                 unsqueeze_bias=True,
             ),
             prompt_time_embed=TtLinearParameters.from_torch_time_embed(
@@ -81,20 +93,9 @@ class TtTransformerBlockParameters:
                 dtype=dtype,
                 device=device,
                 num_chunks=prompt_time_embed_chunks,
+                hidden_dim_padding=hidden_dim_padding,
                 unsqueeze_bias=True,
             ),
-            # spatial_time_embed=TtLinearParameters.from_torch(
-            #     substate(state, "norm1.linear"),
-            #     dtype=dtype,
-            #     device=device,
-            #     shard_dim=-1,
-            # ),
-            # prompt_time_embed=TtLinearParameters.from_torch(
-            #     substate(state, "norm1_context.linear"),
-            #     dtype=dtype,
-            #     device=device,
-            #     shard_dim=-1,
-            # ),
             spatial_ff=TtFeedForwardParameters.from_torch(substate(state, "ff"), dtype=dtype, device=device),
             prompt_ff=TtFeedForwardParameters.from_torch(substate(state, "ff_context"), dtype=dtype, device=device)
             if has_ff_context
@@ -158,31 +159,15 @@ class TtTransformerBlock:
         N: int,
         L: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
-        # spatial_memory_config = ttnn.create_sharded_memory_config(
-        #     spatial.shape,
-        #     core_grid=spatial.device().core_grid,
-        #     strategy=ttnn.ShardStrategy.BLOCK,
-        #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        # )
-        # spatial = ttnn.to_memory_config(spatial, spatial_memory_config)
-
         spatial_scaled = spatial * (1 + spatial_scale) + spatial_shift
         prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
-
-        # ttnn.deallocate(spatial)
-        # spatial_scaled = ttnn.to_memory_config(spatial_scaled, ttnn.DRAM_MEMORY_CONFIG)
-        # ttnn.deallocate(spatial_scaled)
-
         spatial_scaled = ttnn.all_gather(spatial_scaled, dim=-1)
         prompt_scaled = ttnn.all_gather(prompt_scaled, dim=-1)
-
         spatial_attn, prompt_attn = self._dual_attn(
             spatial=spatial_scaled, prompt=prompt_scaled, deallocate=True, N=N, L=L
         )
-
         spatial_attn_scaled = spatial_gate * spatial_attn
         prompt_attn_scaled = prompt_gate * prompt_attn if prompt_gate is not None else None
-
         ttnn.deallocate(spatial_attn)
         ttnn.deallocate(prompt_attn)
         return spatial_attn_scaled, prompt_attn_scaled
@@ -265,7 +250,6 @@ class TtTransformerBlock:
 
         spatial_normed = self._spatial_norm_1(spatial)
         prompt_normed = self._prompt_norm_1(prompt)
-
         spatial_attn, prompt_attn = self._dual_attn_block(
             spatial=spatial_normed,
             prompt=prompt_normed,
@@ -305,13 +289,9 @@ class TtTransformerBlock:
             ttnn.deallocate(spatial_shift_attn)
 
         spatial_normed = self._spatial_norm_2(spatial)
-
-        #        spatial_normed = ttnn.clone(spatial_normed, dtype=ttnn.bfloat8_b)
-
         spatial += self._spatial_ff_block(
             spatial_normed, gate=spatial_gate_ff, scale=spatial_scale_ff, shift=spatial_shift_ff
         )
-
         ttnn.deallocate(spatial_normed)
         ttnn.deallocate(spatial_gate_ff)
         ttnn.deallocate(spatial_scale_ff)
@@ -326,7 +306,6 @@ class TtTransformerBlock:
 
         prompt += prompt_attn
         ttnn.deallocate(prompt_attn)
-
         prompt_normed = self._prompt_norm_2(prompt)
         prompt += self._prompt_ff_block(
             prompt_normed,

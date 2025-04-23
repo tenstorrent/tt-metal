@@ -61,18 +61,26 @@ def test_attention(
     torch_model: Attention = parent_torch_model.transformer_blocks[block_index].attn
     torch_model.eval()
 
-    parameters = TtAttentionParameters.from_torch(
-        torch_model.state_dict(), num_heads=torch_model.num_heads, device=mesh_device, dtype=ttnn_dtype
-    )
-
+    num_devices = mesh_device.get_num_devices()
     ## heads padding for T3K TP
-    pad_40_heads = 0
+    pad_embedding_dim = False
     if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
-        pad_40_heads = 1
-        embedding_dim_padding = 128
+        pad_embedding_dim = True
+        hidden_dim_padding = (
+            ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE
+        ) * num_devices - embedding_dim
         num_heads = 40
     else:
         num_heads = torch_model.num_heads
+
+    parameters = TtAttentionParameters.from_torch(
+        torch_model.state_dict(),
+        num_heads=num_heads,
+        unpadded_num_heads=torch_model.num_heads,
+        hidden_dim_padding=hidden_dim_padding,
+        device=mesh_device,
+        dtype=ttnn_dtype,
+    )
 
     tt_model = TtAttention(parameters, num_heads=num_heads, device=mesh_device)
 
@@ -87,9 +95,9 @@ def test_attention(
     spatial_padded_4d = torch.nn.functional.pad(
         spatial.unsqueeze(1), pad=(0, 0, 0, spatial_padding), mode="constant", value=0
     )
-    if pad_40_heads:
+    if pad_embedding_dim:
         spatial_padded_4d = torch.nn.functional.pad(
-            spatial_padded_4d, pad=(0, embedding_dim_padding), mode="constant", value=0
+            spatial_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
         )
     tt_spatial = from_torch(spatial_padded_4d, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
 
@@ -99,9 +107,9 @@ def test_attention(
         prompt_padded_4d = torch.nn.functional.pad(
             prompt.unsqueeze(1), pad=(0, 0, 0, prompt_padding), mode="constant", value=0
         )
-        if pad_40_heads:
+        if pad_embedding_dim:
             prompt_padded_4d = torch.nn.functional.pad(
-                prompt_padded_4d, pad=(0, embedding_dim_padding), mode="constant", value=0
+                prompt_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
             )
         tt_prompt = from_torch(prompt_padded_4d, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
     else:
@@ -110,12 +118,7 @@ def test_attention(
     with torch.no_grad():
         spatial_output, prompt_output = torch_model(spatial=spatial, prompt=prompt)
 
-    # tt_spatial = allocate_tensor_on_device_like(tt_spatial_host, device=device)
-    # tt_prompt = allocate_tensor_on_device_like(tt_prompt_host, device=device) if joint_attention else None
-
-    # ttnn.copy_host_to_device_tensor(tt_spatial_host, tt_spatial)
     # if joint_attention:
-    #     ttnn.copy_host_to_device_tensor(tt_prompt_host, tt_prompt)
     tt_spatial_output, tt_prompt_output = tt_model(
         spatial=tt_spatial, prompt=tt_prompt, N=spatial_sequence_length, L=prompt_sequence_length
     )

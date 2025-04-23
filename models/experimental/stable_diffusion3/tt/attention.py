@@ -7,13 +7,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-import tracy
 import ttnn
 
 from .linear import TtLinear, TtLinearParameters
 from .normalization import TtRmsNorm, TtRmsNormParameters
 from .substate import has_substate, substate
-from .utils import to_memory_config
 
 
 @dataclass
@@ -35,6 +33,8 @@ class TtAttentionParameters:
         state: dict[str, torch.Tensor],
         *,
         num_heads: int,
+        unpadded_num_heads: int,
+        hidden_dim_padding: int,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
     ) -> TtAttentionParameters:
@@ -46,7 +46,12 @@ class TtAttentionParameters:
         return cls(
             spatial=TtAttentionPartParameters(
                 qkv_proj=TtLinearParameters.from_torch_col_parallel(
-                    state=spatial_qkv_proj, n_local_heads=n_local_heads, dtype=dtype, device=device
+                    state=spatial_qkv_proj,
+                    n_local_heads=n_local_heads,
+                    unpadded_num_heads=unpadded_num_heads,
+                    hidden_dim_padding=hidden_dim_padding,
+                    dtype=dtype,
+                    device=device,
                 ),
                 norm_q=TtRmsNormParameters.from_torch(substate(state, "norm_q"), dtype=dtype, device=device),
                 norm_k=TtRmsNormParameters.from_torch(substate(state, "norm_k"), dtype=dtype, device=device),
@@ -56,7 +61,12 @@ class TtAttentionParameters:
             ),
             prompt=TtAttentionPartParameters(
                 qkv_proj=TtLinearParameters.from_torch_col_parallel(
-                    state=prompt_qkv_proj, n_local_heads=n_local_heads, dtype=dtype, device=device
+                    state=prompt_qkv_proj,
+                    n_local_heads=n_local_heads,
+                    unpadded_num_heads=unpadded_num_heads,
+                    hidden_dim_padding=hidden_dim_padding,
+                    dtype=dtype,
+                    device=device,
                 ),
                 norm_q=TtRmsNormParameters.from_torch(substate(state, "norm_added_q"), dtype=dtype, device=device),
                 norm_k=TtRmsNormParameters.from_torch(substate(state, "norm_added_k"), dtype=dtype, device=device),

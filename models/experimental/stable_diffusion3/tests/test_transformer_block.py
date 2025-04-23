@@ -16,6 +16,8 @@ from ..tt.utils import assert_quality, from_torch
 if TYPE_CHECKING:
     from ..reference.transformer_block import TransformerBlock
 
+TILE_SIZE = 32
+
 
 @pytest.mark.parametrize(
     "mesh_device",
@@ -59,18 +61,26 @@ def test_transformer_block(
     torch_model: TransformerBlock = parent_torch_model.transformer_blocks[block_index]
     torch_model.eval()
 
-    parameters = TtTransformerBlockParameters.from_torch(
-        torch_model.state_dict(), num_heads=torch_model.num_heads, device=mesh_device, dtype=ttnn_dtype
-    )
-
+    num_devices = mesh_device.get_num_devices()
     ## heads padding for T3K TP
-    pad_40_heads = 0
+    pad_embedding_dim = False
     if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
-        pad_40_heads = 1
-        embedding_dim_padding = 128
+        pad_embedding_dim = True
+        hidden_dim_padding = (
+            ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE
+        ) * num_devices - embedding_dim
         num_heads = 40
     else:
         num_heads = torch_model.num_heads
+
+    parameters = TtTransformerBlockParameters.from_torch(
+        torch_model.state_dict(),
+        num_heads=num_heads,
+        unpadded_num_heads=torch_model.num_heads,
+        hidden_dim_padding=hidden_dim_padding,
+        device=mesh_device,
+        dtype=ttnn_dtype,
+    )
 
     tt_model = TtTransformerBlock(parameters, num_heads=num_heads, device=mesh_device)
 
@@ -79,23 +89,21 @@ def test_transformer_block(
     prompt = torch.randn((batch_size, prompt_sequence_length, embedding_dim))
     time = torch.randn((batch_size, embedding_dim))
 
-    TILE_SIZE = 32
     ##
     spatial_extra = spatial_sequence_length % TILE_SIZE
     if spatial_extra > 0:
         spatial_padding = TILE_SIZE - spatial_extra
     else:
         spatial_padding = 0
-    spatial_padded_4D = torch.nn.functional.pad(
+    spatial_padded_4d = torch.nn.functional.pad(
         spatial.unsqueeze(1), pad=(0, 0, 0, spatial_padding), mode="constant", value=0
     )
-    if pad_40_heads:
-        spatial_padded_4D = torch.nn.functional.pad(
-            spatial_padded_4D, pad=(0, embedding_dim_padding), mode="constant", value=0
+    if pad_embedding_dim:
+        spatial_padded_4d = torch.nn.functional.pad(
+            spatial_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
         )
-    # tt_spatial = from_torch(spatial_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=None)
     tt_spatial = from_torch(
-        spatial_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
+        spatial_padded_4d, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
     )
 
     ##
@@ -104,23 +112,22 @@ def test_transformer_block(
         prompt_padding = TILE_SIZE - prompt_extra
     else:
         prompt_padding = 0
-    prompt_padded_4D = torch.nn.functional.pad(
+    prompt_padded_4d = torch.nn.functional.pad(
         prompt.unsqueeze(1), pad=(0, 0, 0, prompt_padding), mode="constant", value=0
     )
-    if pad_40_heads:
-        prompt_padded_4D = torch.nn.functional.pad(
-            prompt_padded_4D, pad=(0, embedding_dim_padding), mode="constant", value=0
+    if pad_embedding_dim:
+        prompt_padded_4d = torch.nn.functional.pad(
+            prompt_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
         )
-    # tt_prompt = from_torch(prompt_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=None)
     tt_prompt = from_torch(
-        prompt_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
+        prompt_padded_4d, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
     )
 
     ##
-    if pad_40_heads:
-        time_padded_2D = torch.nn.functional.pad(time, pad=(0, embedding_dim_padding), mode="constant", value=0)
+    if pad_embedding_dim:
+        time_padded_2d = torch.nn.functional.pad(time, pad=(0, hidden_dim_padding), mode="constant", value=0)
         tt_time = from_torch(
-            time_padded_2D.unsqueeze(1).unsqueeze(1), dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT
+            time_padded_2d.unsqueeze(1).unsqueeze(1), dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT
         )
     else:
         tt_time = from_torch(
@@ -130,14 +137,6 @@ def test_transformer_block(
     with torch.no_grad():
         spatial_output, prompt_output = torch_model(spatial=spatial, prompt=prompt, time_embed=time)
 
-    # tt_spatial = allocate_tensor_on_device_like(tt_spatial_host, device=device)
-    # tt_prompt = allocate_tensor_on_device_like(tt_prompt_host, device=device)
-    # tt_time = allocate_tensor_on_device_like(tt_time_host, device=device)
-
-    # ttnn.copy_host_to_device_tensor(tt_spatial_host, tt_spatial)
-    # ttnn.copy_host_to_device_tensor(tt_prompt_host, tt_prompt)
-    # ttnn.copy_host_to_device_tensor(tt_time_host, tt_time)
-
     tt_spatial_output_padded, tt_prompt_output_padded = tt_model(
         spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time, N=spatial_sequence_length, L=prompt_sequence_length
     )
@@ -145,7 +144,6 @@ def test_transformer_block(
         tt_spatial_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
     )
     tt_spatial_output_padded = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :embedding_dim]
-    # tt_spatial_output_padded = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :embedding_dim]
 
     if tt_prompt_output_padded is not None:
         tt_prompt_output_padded = ttnn.to_torch(
@@ -157,7 +155,6 @@ def test_transformer_block(
     assert_quality(
         spatial_output, tt_spatial_output_padded, pcc=0.995, shard_dim=0, num_devices=mesh_device.get_num_devices()
     )
-    # assert_quality(spatial_output, tt_spatial_output_padded, pcc=0.995, shard_dim=0, num_devices=mesh_device.get_num_devices())
 
     if prompt_output is not None and tt_prompt_output_padded is not None:
         assert_quality(
