@@ -56,14 +56,14 @@ class ElfFile::Impl {
 private:
     std::span<Elf32_Phdr> phdrs_;
     std::span<Elf32_Shdr> shdrs_;
-    std::string const& path_;
+    const std::string path_;
     ElfFile& owner_;
 
 private:
     class Weakener;
 
 public:
-    Impl(ElfFile& owner, std::string const& path) : owner_(owner), path_(path) {}
+    Impl(ElfFile& owner, std::string_view path) : owner_(owner), path_(std::string(path)) {}
     ~Impl() = default;
 
 public:
@@ -162,8 +162,8 @@ void ElfFile::ReleaseImpl() {
     pimpl_ = nullptr;
 }
 
-void ElfFile::ReadImage(std::string const& path) {
-    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+void ElfFile::ReadImage(std::string_view path) {
+    int fd = open(path.data(), O_RDONLY | O_CLOEXEC);
     struct stat st;
     void* buffer = MAP_FAILED;
     if (fd >= 0 && fstat(fd, &st) >= 0) {

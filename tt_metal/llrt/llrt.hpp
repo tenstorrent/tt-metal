@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -59,7 +59,7 @@ using WorkerCores = std::vector<WorkerCore>;
 // Return a reference to a potentially shared binary image.
 // The images are cached by path name.
 const ll_api::memory& get_risc_binary(
-    const string& path, ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE);
+    std::string_view path, ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 
