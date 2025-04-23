@@ -602,9 +602,9 @@ class Operation:
                         )
                         if global_golden_function_output is not None:
                             ttnn.database.store_tensors(ttnn.CONFIG.report_path, global_golden_function_output)
-                        ttnn.database.insert_buffers(ttnn.CONFIG.report_path, operation_id)
+                        ttnn.database.insert_buffers(ttnn.CONFIG.report_path, operation_id, devices)
                         if ttnn.CONFIG.enable_detailed_buffer_report:
-                            ttnn.database.insert_buffer_pages(ttnn.CONFIG.report_path, operation_id)
+                            ttnn.database.insert_buffer_pages(ttnn.CONFIG.report_path, operation_id, devices)
 
                         if ttnn.CONFIG.enable_graph_report:
                             ttnn.tracer.visualize(

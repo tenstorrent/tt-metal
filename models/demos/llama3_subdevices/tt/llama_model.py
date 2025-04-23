@@ -29,6 +29,7 @@ class TtTransformer(LightweightModule):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        enable_prefetcher_performance_mode=False,
         mode="decode",
     ):
         super().__init__()
@@ -40,6 +41,7 @@ class TtTransformer(LightweightModule):
         self.dtype = dtype
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
+        self.enable_prefetcher_performance_mode = enable_prefetcher_performance_mode
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
         self.embd = TtLlamaEmbedding(
@@ -506,6 +508,7 @@ class TtTransformer(LightweightModule):
                 self.tt_tensors,
                 num_layers=self.n_layers,
                 global_cb=self.prefetcher_setup.global_circular_buffer,
+                enable_performance_mode=self.enable_prefetcher_performance_mode,
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 

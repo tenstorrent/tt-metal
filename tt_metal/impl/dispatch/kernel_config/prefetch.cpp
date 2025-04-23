@@ -19,7 +19,6 @@
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "dispatch_s.hpp"
 #include "eth_router.hpp"
 #include "hal.hpp"
@@ -35,7 +34,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -441,7 +440,7 @@ void PrefetchKernel::ConfigureCore() {
         // Initialize the FetchQ
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
-        auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+        auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         std::vector<uint32_t> prefetch_q(my_dispatch_constants.prefetch_q_entries(), 0);
@@ -485,7 +484,7 @@ void PrefetchKernel::UpdateArgsForFabric(
     dependent_config_.downstream_dev_id = downstream_dev_id;
     dependent_config_.outbound_eth_chan = outbound_eth_chan;
 
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     static_config_.client_interface_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_INTERFACE);
 }

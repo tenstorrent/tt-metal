@@ -78,34 +78,29 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
             ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to_layout(layout);
         t.set_tensor_spec(TensorSpec(
             input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
-
-        device_input_tensors.push_back(t.to_device(devices[i]));
+        device_input_tensors.push_back(t);
     }
     // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
-
+    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
+                                         .to_device(test_fixture.mesh_device_.get());
     // FABRIC setup
     const bool enable_persistent_fabric = true;
 
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
 
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore from_remote_multi_device_global_semaphore =
-        ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            10                             // attempts
-        );
+    GlobalSemaphore from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        test_fixture.mesh_device_.get(),
+        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
 
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore to_remote_multi_device_global_semaphore =
-        ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            10                             // attempts
-        );
+    GlobalSemaphore to_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        test_fixture.mesh_device_.get(),
+        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
 
     auto output_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
         input_mesh_tensor,

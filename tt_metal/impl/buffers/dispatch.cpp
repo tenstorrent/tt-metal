@@ -18,7 +18,6 @@
 #include "dispatch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
-#include "dispatch_mem_map.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include "math.hpp"
@@ -267,7 +266,7 @@ int32_t calculate_num_pages_available_in_cq(
 }
 
 uint32_t calculate_max_data_size(const CoreType& dispatch_core_type) {
-    return DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size() -
+    return MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() -
            (MetalContext::instance().hal().get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
 }
 
@@ -283,7 +282,8 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
     BufferDispatchConstants buf_dispatch_constants;
 
     buf_dispatch_constants.issue_queue_cmd_limit = sysmem_manager.get_issue_queue_limit(cq_id);
-    buf_dispatch_constants.max_prefetch_cmd_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
+    buf_dispatch_constants.max_prefetch_cmd_size =
+        MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
     buf_dispatch_constants.max_data_sizeB = calculate_max_data_size(dispatch_core_type);
 
     return buf_dispatch_constants;
@@ -506,7 +506,7 @@ void issue_buffer_dispatch_command_sequence(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
-                DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
                 dispatch_params.expected_num_workers_completed[offset_index]);
         }
     }
@@ -875,14 +875,14 @@ void issue_read_buffer_dispatch_command_sequence(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
-            DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
             dispatch_params.expected_num_workers_completed[offset_index]);
     }
     auto offset_index = *sub_device_ids[last_index];
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),
+        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
         dispatch_params.expected_num_workers_completed[offset_index]);
 
     bool flush_prefetch = false;

@@ -59,10 +59,18 @@ std::map<std::string, std::string> get_defines(
             op_name = "mul_tiles";
             op_binary_type = "EltwiseBinaryType::ELWMUL";
             break;
-        case BinaryOpType::GT: defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst)); break;
-        case BinaryOpType::LT: defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst)); break;
-        case BinaryOpType::GTE: defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst)); break;
-        case BinaryOpType::LTE: defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::GT:
+            defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst, input_dtype));
+            break;
+        case BinaryOpType::LT:
+            defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst, input_dtype));
+            break;
+        case BinaryOpType::GTE:
+            defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst, input_dtype));
+            break;
+        case BinaryOpType::LTE:
+            defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst, input_dtype));
+            break;
         case BinaryOpType::EQ:
             defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst, input_dtype));
             break;
@@ -75,7 +83,7 @@ std::map<std::string, std::string> get_defines(
         case BinaryOpType::LOGICAL_AND:
             op_name = "mul_tiles";
             op_binary_type = "EltwiseBinaryType::ELWMUL";
-            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst, input_dtype));
             break;
         case BinaryOpType::BIAS_GELU:
             op_name = "add_tiles";
@@ -104,18 +112,18 @@ std::map<std::string, std::string> get_defines(
             op_binary_type = "EltwiseBinaryType::ELWMUL";
             break;
         case BinaryOpType::LOGICAL_OR:
-            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
-            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0", "0", input_dtype));
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0", "0", input_dtype));
             op_name = "add_tiles";
             op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst, input_dtype));
             break;
         case BinaryOpType::LOGICAL_XOR:
-            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
-            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0", "0", input_dtype));
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0", "0", input_dtype));
             op_name = "sub_tiles";
             op_binary_type = "EltwiseBinaryType::ELWSUB";
-            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst, input_dtype));
             break;
         case BinaryOpType::LDEXP:
             defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
@@ -268,7 +276,7 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         case BinaryOpType::LOGICAL_AND:
             op_name = "mul_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1));
+            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::BIAS_GELU:
             new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
@@ -276,34 +284,34 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.merge(get_defines(UnaryOpType::GELU, std::vector<float>{0}, "0", idst1));
             break;
         case BinaryOpType::LOGICAL_OR:
-            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
-            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));
+            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0", "0", input_a_dtype));
+            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0", "0", input_b_dtype));
             new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
             op_name = "add_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst1));
+            new_defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::LOGICAL_XOR:
-            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
-            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));
+            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0", "0", input_a_dtype));
+            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0", "0", input_b_dtype));
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1));
+            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         // applied on A-B
         case BinaryOpType::GT:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst1));
+            new_defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::LT:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst1));
+            new_defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::GTE:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst1));
+            new_defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::LTE:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst1));
+            new_defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::EQ:
             op_name = "sub_binary_tile";
@@ -311,7 +319,7 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         case BinaryOpType::NE:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1));
+            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1, input_a_dtype));
             break;
         default:
             tt::log_debug(tt::LogOp, "Undefined op type {}", op_type);

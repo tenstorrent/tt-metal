@@ -481,7 +481,7 @@ def test_demo_for_conditional_generation(
     )
     if is_ci_env:
         if is_blackhole():
-            expected_perf_metrics = {"prefill_t/s": 7.31, "decode_t/s/u": 67.8}
+            expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 92.9}
         else:  # wormhole_b0
             expected_perf_metrics = {"prefill_t/s": 3.85, "decode_t/s/u": 51.8}
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"]  # Only supporting batch 1

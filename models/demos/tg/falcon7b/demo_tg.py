@@ -10,9 +10,9 @@ from models.utility_functions import is_wormhole_b0
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 14800, "decode_t/s": 3677, "decode_t/s/u": 3.59}, False, None),
-        (True, 1024, {"prefill_t/s": 19180, "decode_t/s": 3325, "decode_t/s/u": 3.25}, False, None),
-        (True, 2048, {"prefill_t/s": 13500, "decode_t/s": 3448, "decode_t/s/u": 3.37}, False, None),
+        (True, 128, {"prefill_t/s": 21408, "decode_t/s": 7425, "decode_t/s/u": 7.25}, False, None),
+        (True, 1024, {"prefill_t/s": 19180, "decode_t/s": 6867, "decode_t/s/u": 6.7}, False, None),
+        (True, 2048, {"prefill_t/s": 14500, "decode_t/s": 7262, "decode_t/s/u": 7.19}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),
