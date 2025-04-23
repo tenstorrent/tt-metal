@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ -z "${LLAMA_DIR}" ]; then
+  echo "Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
+  exit 1
+fi
+
+if [ -d "$LLAMA_DIR" ] && [ "$(ls -A $LLAMA_DIR)" ]; then
+  echo "[upstream-tests] Llama weights exist, continuing"
+else
+  echo "[upstream-tests] Error: Llama weights do not seem to exist in $LLAMA_DIR, exiting" >&2
+  exit 1
+fi
+
+echo "[upstream-tests] Running validation model tests with weights"
+pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick"
+
+echo "[upstream-tests] Unsetting LLAMA_DIR to ensure later tests can't use it"
+unset LLAMA_DIR
+
 echo "[upstream-tests] Running minimal model unit tests"
 pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
 pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py

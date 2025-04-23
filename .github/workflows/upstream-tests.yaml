@@ -1,6 +1,9 @@
 name: Build test and publish upstream tests
 
 on:
+  push:
+    branches:
+      - rkim/21067-add-llama-dir
   workflow_dispatch:
   schedule:
     - cron: '0 12 * * *'
@@ -118,7 +121,8 @@ jobs:
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
       - name: Tag and push latest
-        if: ${{ github.ref == 'refs/heads/main' }}
+        # TODO - get rid of my branch and make this generic for both images
+        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rkim/21067-add-llama-dir' }}
         run: |
           IMAGE_NAME="${{ matrix.image-config.image-base-name }}"
           LATEST_TAG="${IMAGE_NAME}:latest"
@@ -142,8 +146,11 @@ jobs:
         timeout-minutes: 10
         run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run image
-        timeout-minutes: 10
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+        timeout-minutes: 15
+        env:
+          SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct
+          LLAMA_DIR: /model_weights/llama/Llama3.1-70B-Instruct
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
