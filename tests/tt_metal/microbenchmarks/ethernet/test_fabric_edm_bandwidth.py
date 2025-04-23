@@ -14,22 +14,9 @@ import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_confi
 from tabulate import tabulate
 import pandas as pd
 from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
-
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
-
-machine_type_suffix = None
-
-
-def update_machine_type_suffix(machine_type: str):
-    global machine_type_suffix
-    machine_type_suffix = machine_type
-
-
-def reset_machine_type_suffix():
-    global machine_type_suffix
-    machine_type_suffix = None
 
 
 # Python enum mirroring test_fabric_edm_common.hpp
@@ -111,13 +98,17 @@ def read_golden_results(
     disable_sends_for_interior_workers,
     unidirectional,  # traffic at fabric level
     *,
+    arch_name,
+    machine_type,
     noc_message_type,
     senders_are_unidirectional=False,  # coming out of any given worker
 ):
     """Print a summary table of all test results by packet size"""
+    assert arch_name is not None
+    assert machine_type is not None
     csv_path = os.path.join(
         os.environ["TT_METAL_HOME"],
-        f"tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden{'_' + machine_type_suffix if machine_type_suffix is not None else ''}.csv",
+        f"tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden_{arch_name}_{machine_type}.csv",
     )
 
     if not os.path.exists(csv_path):
@@ -205,6 +196,8 @@ def profile_results(
 
 def process_results(
     *,
+    arch_name,
+    machine_type,
     test_name,
     zone_name_inner,
     zone_name_main,
@@ -262,6 +255,8 @@ def process_results(
         num_links,
         disable_sends_for_interior_workers,
         unidirectional,
+        arch_name=arch_name,
+        machine_type=machine_type,
         noc_message_type=noc_message_type,
         senders_are_unidirectional=senders_are_unidirectional,
     )
@@ -291,8 +286,14 @@ def process_results(
         ), f"Packets per second mismatch. expected: {expected_Mpps} Mpps, actual: {mega_packets_per_second} Mpps"
 
 
+def is_enabled_test_config(arch_name, machine_type):
+    return arch_name == "wh"
+
+
 def run_fabric_edm(
     *,
+    arch_name,
+    machine_type,
     is_unicast,
     num_messages,
     noc_message_type,
@@ -309,6 +310,11 @@ def run_fabric_edm(
     num_cluster_rows=0,
     num_cluster_cols=0,
 ):
+    if not is_enabled_test_config(arch_name, machine_type):
+        pytest.skip(
+            f"Skipping test because it is a currently unsupported test config. Specified arch: {arch_name}, machine_type: {machine_type}"
+        )
+
     if test_mode == "1_fabric_instance":
         assert num_cluster_rows == 0 and num_cluster_cols == 0
         test_name = f"{'unicast' if is_unicast else 'mcast'}_{fabric_mode.name}"
@@ -359,6 +365,8 @@ def run_fabric_edm(
     zone_name_main = "MAIN-TEST-BODY"
 
     process_results(
+        arch_name=arch_name,
+        machine_type=machine_type,
         test_name=test_name,
         zone_name_inner=zone_name_inner,
         zone_name_main=zone_name_main,
@@ -374,9 +382,6 @@ def run_fabric_edm(
         senders_are_unidirectional=senders_are_unidirectional,
     )
 
-    # Reset for the next test case
-    reset_machine_type_suffix()
-
 
 @pytest.mark.ubench_quick_tests
 @pytest.mark.parametrize("num_messages", [200000])
@@ -385,6 +390,8 @@ def run_fabric_edm(
 @pytest.mark.parametrize("packet_size", [4096])
 @pytest.mark.parametrize("line_size, num_links", [(4, 1), (4, 2), (4, 3), (4, 4)])
 def test_fabric_edm_mcast_half_ring_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -393,6 +400,8 @@ def test_fabric_edm_mcast_half_ring_bw(
     packet_size,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         noc_message_type="noc_unicast_write",
@@ -416,6 +425,8 @@ def test_fabric_edm_mcast_half_ring_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_4chip_one_link_mcast_full_ring_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -424,6 +435,8 @@ def test_fabric_4chip_one_link_mcast_full_ring_bw(
     packet_size,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         noc_message_type="noc_unicast_write",
@@ -445,6 +458,8 @@ def test_fabric_4chip_one_link_mcast_full_ring_bw(
 @pytest.mark.parametrize("num_links", [2, 3, 4])
 @pytest.mark.parametrize("packet_size", [4096])
 def test_fabric_4chip_multi_link_mcast_full_ring_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -453,6 +468,8 @@ def test_fabric_4chip_multi_link_mcast_full_ring_bw(
     packet_size,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         noc_message_type="noc_unicast_write",
@@ -474,6 +491,8 @@ def test_fabric_4chip_multi_link_mcast_full_ring_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -482,6 +501,8 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
     packet_size,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         noc_message_type="noc_unicast_write",
@@ -502,6 +523,8 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
 @pytest.mark.parametrize("num_links", [2, 3, 4])
 @pytest.mark.parametrize("packet_size", [4096])
 def test_fabric_8chip_multi_link_edm_mcast_full_ring_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -510,6 +533,8 @@ def test_fabric_8chip_multi_link_edm_mcast_full_ring_bw(
     packet_size,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         noc_message_type="noc_unicast_write",
@@ -532,6 +557,8 @@ def test_fabric_8chip_multi_link_edm_mcast_full_ring_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -540,6 +567,8 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
     packet_size,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
@@ -560,6 +589,8 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("packet_size", [4096])
 def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -568,6 +599,8 @@ def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
     packet_size,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
@@ -592,6 +625,8 @@ def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_cols", [4])
 def test_fabric_t3k_4chip_cols_mcast_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -601,7 +636,13 @@ def test_fabric_t3k_4chip_cols_mcast_bw(
     fabric_test_mode,
     num_cluster_cols,
 ):
+    if machine_type != "t3k":
+        pytest.skip(
+            f"Test test_fabric_t3k_4chip_cols_mcast_bw only works with machine type 't3k' but current machine_type is '{machine_type}'"
+        )
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
@@ -631,6 +672,8 @@ def test_fabric_t3k_4chip_cols_mcast_bw(
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_rows", [2])
 def test_fabric_t3k_4chip_rows_mcast_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -640,7 +683,13 @@ def test_fabric_t3k_4chip_rows_mcast_bw(
     fabric_test_mode,
     num_cluster_rows,
 ):
+    if machine_type != "t3k":
+        pytest.skip(
+            f"Test test_fabric_t3k_4chip_rows_mcast_bw only works with machine type 't3k' but current machine_type is '{machine_type}'"
+        )
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
@@ -671,6 +720,8 @@ def test_fabric_t3k_4chip_rows_mcast_bw(
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.FullRing, FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_cols", [4])
 def test_fabric_6u_4chip_cols_mcast_bw(
+    arch_name,
+    machine_type,
     is_unicast,
     num_messages,
     num_links,
@@ -682,10 +733,15 @@ def test_fabric_6u_4chip_cols_mcast_bw(
     num_cluster_cols,
 ):
     is_ring = fabric_test_mode == FabricTestMode.FullRing
+    if machine_type != "6u":
+        pytest.skip(
+            f"Test test_fabric_6u_4chip_cols_mcast_bw only works with machine type '6u' but current machine_type is '{machine_type}'"
+        )
     if is_ring:
-        pytest.skip("Baseline numbers not yet available for full-6u ring fabric test mode")
-    update_machine_type_suffix("6u")
+        pytest.skip("Baseline numbers not yet available for full 6u ring fabric test mode")
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=is_unicast,
         num_messages=num_messages,
         num_links=num_links,
@@ -715,6 +771,8 @@ def test_fabric_6u_4chip_cols_mcast_bw(
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.FullRing, FabricTestMode.Linear])
 @pytest.mark.parametrize("num_cluster_rows", [8])
 def test_fabric_6u_4chip_rows_mcast_bw(
+    arch_name,
+    machine_type,
     is_unicast,
     num_messages,
     num_links,
@@ -728,8 +786,13 @@ def test_fabric_6u_4chip_rows_mcast_bw(
     is_ring = fabric_test_mode == FabricTestMode.FullRing
     if is_ring:
         pytest.skip("Baseline numbers not yet available for full-6u ring fabric test mode")
-    update_machine_type_suffix("6u")
+    if machine_type != "6u":
+        pytest.skip(
+            f"Test test_fabric_6u_4chip_rows_mcast_bw only works with machine type '6u' but current machine_type is '{machine_type}'"
+        )
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=is_unicast,
         num_messages=num_messages,
         num_links=num_links,
@@ -757,6 +820,8 @@ def test_fabric_6u_4chip_rows_mcast_bw(
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_one_link_mcast_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -766,6 +831,8 @@ def test_fabric_4chip_one_link_mcast_bw(
     fabric_test_mode,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
@@ -789,6 +856,8 @@ def test_fabric_4chip_one_link_mcast_bw(
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -798,6 +867,8 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
     fabric_test_mode,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
@@ -821,6 +892,8 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -830,6 +903,8 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
     fabric_test_mode,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
@@ -853,6 +928,8 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_two_link_mcast_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -862,6 +939,8 @@ def test_fabric_4chip_two_link_mcast_bw(
     fabric_test_mode,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=False,
         num_messages=num_messages,
         noc_message_type="noc_unicast_write",
@@ -885,6 +964,8 @@ def test_fabric_4chip_two_link_mcast_bw(
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_non_forwarding_unicast_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -894,6 +975,8 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
     fabric_test_mode,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
@@ -916,6 +999,8 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_two_link_non_forwarding_unicast_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -925,6 +1010,8 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
     fabric_test_mode,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
@@ -948,6 +1035,8 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -957,6 +1046,8 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     fabric_test_mode,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
@@ -980,6 +1071,8 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -989,6 +1082,8 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
     fabric_test_mode,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
@@ -1012,6 +1107,8 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multihop_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -1021,6 +1118,8 @@ def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multi
     fabric_test_mode,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
@@ -1045,6 +1144,8 @@ def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multi
 @pytest.mark.parametrize("packet_size", [16])
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_bw(
+    arch_name,
+    machine_type,
     num_messages,
     num_links,
     num_op_invocations,
@@ -1055,6 +1156,8 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
     fabric_test_mode,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
@@ -1083,6 +1186,8 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
 )
 @pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_multihop_fused_write_atomic_inc_bw(
+    arch_name,
+    machine_type,
     is_unicast,
     num_messages,
     num_links,
@@ -1096,6 +1201,8 @@ def test_fabric_one_link_multihop_fused_write_atomic_inc_bw(
     fabric_test_mode,
 ):
     run_fabric_edm(
+        arch_name=arch_name,
+        machine_type=machine_type,
         is_unicast=is_unicast,
         num_messages=num_messages,
         num_links=num_links,
