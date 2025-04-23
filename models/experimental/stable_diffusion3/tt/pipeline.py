@@ -21,7 +21,9 @@ from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderMo
 
 from .t5_encoder import TtT5Encoder, TtT5EncoderParameters
 from .transformer import TtSD3Transformer2DModel, TtSD3Transformer2DModelParameters
-from ..tt.utils import from_torch, assert_quality, to_torch
+from ..tt.utils import from_torch, to_torch
+
+TILE_SIZE = 32
 
 
 class TtStableDiffusion3Pipeline:
@@ -64,22 +66,27 @@ class TtStableDiffusion3Pipeline:
         else:
             embedding_dim = 2432
 
-        parameters = TtSD3Transformer2DModelParameters.from_torch(
-            torch_transformer.state_dict(),
-            num_heads=torch_transformer.config.num_attention_heads,
-            embedding_dim=embedding_dim,
-            device=self._device,
-            dtype=ttnn_dtype,
-        )
-
+        num_devices = device.get_num_devices()
         ## heads padding for T3K TP
-        pad_40_heads = 0
+        pad_embedding_dim = False
         if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
-            pad_40_heads = 1
-            embedding_dim_padding = 128
+            pad_embedding_dim = True
+            hidden_dim_padding = (
+                ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE
+            ) * num_devices - embedding_dim
             num_heads = 40
         else:
             num_heads = torch_transformer.config.num_attention_heads
+
+        parameters = TtSD3Transformer2DModelParameters.from_torch(
+            torch_transformer.state_dict(),
+            num_heads=num_heads,
+            unpadded_num_heads=torch_transformer.config.num_attention_heads,
+            embedding_dim=embedding_dim,
+            hidden_dim_padding=hidden_dim_padding,
+            device=self._device,
+            dtype=ttnn_dtype,
+        )
 
         self._tt_transformer = TtSD3Transformer2DModel(
             parameters, guidance_cond=guidance_cond, num_heads=num_heads, device=self._device
@@ -284,7 +291,6 @@ class TtStableDiffusion3Pipeline:
             torch.manual_seed(seed)
         latents = torch.randn(latents_shape, dtype=prompt_embeds.dtype)  # .permute([0, 2, 3, 1])
 
-        TILE_SIZE = 32
         prompt_extra = self._prepared_prompt_sequence_length % TILE_SIZE
         if prompt_extra > 0:
             prompt_padding = TILE_SIZE - prompt_extra
