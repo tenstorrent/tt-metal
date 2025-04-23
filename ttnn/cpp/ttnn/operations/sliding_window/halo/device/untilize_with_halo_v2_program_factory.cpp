@@ -508,9 +508,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     int32_t num_active_cores = cores.size();
     int32_t num_cores_rectangular = is_block_sharded ? num_active_cores : tt::round_up(num_active_cores, num_cores_x);
     int32_t num_noop_cores = is_block_sharded ? 0 : num_cores_rectangular - num_active_cores;
-    printf("num_cores_rectangular = %d\n", num_cores_rectangular);
-    printf("num_noop_cores = %d\n", num_noop_cores);
-    printf("num_active_cores = %d\n", num_active_cores);
     TT_FATAL(
         !is_block_sharded || all_cores.ranges().size() == 1,
         "for block sharding the implementation depends on the assumption that there is only 1 core range");
