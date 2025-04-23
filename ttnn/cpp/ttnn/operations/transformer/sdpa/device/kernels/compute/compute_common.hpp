@@ -415,7 +415,6 @@ void matmul_reduce(const uint32_t& out_cb) {
         tile_regs_commit();
         cb_pop_front(out_cb, subblock_h);
 
-        cb_reserve_back(out_cb, subblock_h);
         tile_regs_wait();
         for (uint32_t i = 0; i < subblock_h; i++) {
             pack_tile(i, out_cb);
