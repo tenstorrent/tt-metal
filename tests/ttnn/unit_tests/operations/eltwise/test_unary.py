@@ -529,17 +529,27 @@ def test_unary_ceil(input_shapes, device):
         (-5, 5),  # Small range
     ],
 )
-def test_unary_eqz_ttnn(input_shapes, low, high, device):
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.eqz,
+        ttnn.nez,
+        ttnn.ltz,
+        ttnn.lez,
+        ttnn.gtz,
+        ttnn.gez,
+    ],
+)
+def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
     in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
     cq_id = 0
-    output_tensor = ttnn.eqz(input_tensor, queue_id=cq_id)
-    golden_function = ttnn.get_golden_function(ttnn.eqz)
+    output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
+    golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)
-
     pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
     assert pcc == 1
 
@@ -553,7 +563,18 @@ def test_unary_eqz_ttnn(input_shapes, low, high, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_eqz_edge_case(input_shapes, device):
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.eqz,
+        ttnn.nez,
+        ttnn.ltz,
+        ttnn.lez,
+        ttnn.gtz,
+        ttnn.gez,
+    ],
+)
+def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     torch.manual_seed(213919)
 
     # Generate a uniform range of values across the valid int32 range
@@ -567,8 +588,8 @@ def test_unary_eqz_edge_case(input_shapes, device):
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.eqz(input_tensor)
-    golden_function = ttnn.get_golden_function(ttnn.eqz)
+    output_tensor = ttnn_function(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
 
     output_tensor = ttnn.to_torch(output_tensor)
