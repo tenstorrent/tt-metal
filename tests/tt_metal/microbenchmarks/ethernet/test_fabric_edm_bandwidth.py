@@ -710,6 +710,7 @@ def test_fabric_t3k_4chip_rows_mcast_bw(
 
 # expected_Mpps = expected millions of packets per second
 @pytest.mark.sanity_6u
+@pytest.mark.usefixtures("sanity_6u")
 @pytest.mark.parametrize("is_unicast", [False])
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
@@ -761,6 +762,7 @@ def test_fabric_6u_4chip_cols_mcast_bw(
 
 # expected_Mpps = expected millions of packets per second
 @pytest.mark.sanity_6u
+@pytest.mark.usefixtures("sanity_6u")
 @pytest.mark.parametrize("is_unicast", [False])
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
