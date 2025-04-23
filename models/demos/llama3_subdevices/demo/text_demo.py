@@ -18,7 +18,6 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
-    sample_host,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -175,7 +174,7 @@ def create_tt_model(
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            True,  # paged_attention
+            False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
@@ -494,7 +493,7 @@ def test_demo_text(
 
             # Run decode forward
             try:
-                logits = generator.decode_forward_text(
+                out_tok_cpu = generator.decode_forward_text(
                     out_tok,
                     current_pos,
                     enable_trace=enable_trace,
@@ -506,26 +505,36 @@ def test_demo_text(
                 logger.error(f"Error during decoding: {str(e)}")
                 break
 
-            # Get the next token
-            if argmax_on_device:
-                out_tok = logits.unsqueeze(1)
-                for b in range(1, 32):
-                    out_tok[b][0] = 0
-            else:
-                # TODO Fix use case with temperature > 0
-                _, out_tok = sample_host(
-                    logits,
-                    temperature=sampling_params["temperature"],
-                    top_p=sampling_params["top_p"],
-                    on_host=True,
-                )
-
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
             else:
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+            tt_output_torch = ttnn.to_torch(
+                out_tok_cpu,  # tt_out.cpu(blocking=True, cq_id=1),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device,
+                    dims=(3, 1),
+                    mesh_shape=model_args.cluster_shape,
+                ),
+            )[0, 0, 0, :batch_size]
+            print(tt_output_torch)
+
+            # tt_out = tt_out[:, :, :B, : self.vocab_size].reshape(B, S, -1)
+            # Get the next token
+            # if argmax_on_device:
+            #     out_tok = logits.unsqueeze(1)
+            #     for b in range(1, 32):
+            #         out_tok[b][0] = 0
+            # else:
+            #     # TODO Fix use case with temperature > 0
+            #     _, out_tok = sample_host(
+            #         logits,
+            #         temperature=sampling_params["temperature"],
+            #         top_p=sampling_params["top_p"],
+            #         on_host=True,
+            #     )
 
             # Always print perf after every iteration
             tokens_per_second_per_user = 1 / decode_iteration_time
@@ -538,7 +547,7 @@ def test_demo_text(
 
             # Save output token to print out later
             for user in range(batch_size):
-                user_tok = out_tok[user].item()
+                user_tok = tt_output_torch.tolist()[0]
                 if (
                     user_tok not in tokenizer.stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers

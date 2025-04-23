@@ -243,8 +243,8 @@ class TtTransformer(LightweightModule):
         """
         host_inputs = self.prepare_decode_inputs_host(*inputs)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
-        transformed_device_inputs = self.transform_decode_inputs_device(*device_inputs)
-        return transformed_device_inputs
+        # transformed_device_inputs = self.transform_decode_inputs_device(*device_inputs)
+        return device_inputs
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """
@@ -350,6 +350,8 @@ class TtTransformer(LightweightModule):
         """
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
+        tt_out_cpu = tt_out.cpu(blocking=True, cq_id=0)
+        return tt_out_cpu
         if is_tokens:
             tt_out = ttnn.to_torch(
                 tt_out,  # tt_out.cpu(blocking=True, cq_id=1),
@@ -401,7 +403,7 @@ class TtTransformer(LightweightModule):
         self,
         x,
         current_pos,
-        rot_mats,
+        rot_mat_idxs,
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
@@ -410,6 +412,8 @@ class TtTransformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
+        x = self.embd(x)
         tt_logits = self.forward(
             x,
             current_pos,
@@ -450,6 +454,14 @@ class TtTransformer(LightweightModule):
             if not self.args.is_galaxy:
                 tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
+        ttnn.plus_one(
+            current_pos,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
+        ttnn.plus_one(
+            rot_mat_idxs,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
         return tt_logits
 
     def switch_mode(self, mode):
