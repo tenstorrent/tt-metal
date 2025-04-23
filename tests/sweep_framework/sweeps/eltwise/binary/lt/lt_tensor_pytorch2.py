@@ -16,7 +16,7 @@ from models.utility_functions import torch_random
 # Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.lt.Tensor.md
 
 parameters = {
-    "nightly": {
+    "testa2": {
         "input_shape_a": [[1, 50257]],
         "input_shape_b": [[1, 1]],
         "input_a_dtype": [ttnn.bfloat16],
@@ -52,6 +52,7 @@ def run(
 
     golden_function = ttnn.get_golden_function(ttnn.lt)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    torch_output_tensor = torch_output_tensor.float()
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -68,8 +69,17 @@ def run(
         memory_config=input_b_memory_config,
     )
     start_time = start_measuring_time()
-    result = ttnn.lt(input_tensor_a, input_tensor_b)
+    result = ttnn.lt(input_tensor_a, input_tensor_b, use_legacy=False)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
     return [assert_equal(torch_output_tensor, output_tensor), e2e_perf]
+
+
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# |        | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN | FAIL (L1 Out of Mem) | FAIL (Watcher) | FAIL (Unsupported Device Perf) |
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | testa1 |  4   |            0            |         0         |    0    |          0           |       0        |               0                |
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | testa2 |  4   |            0            |         0         |    0    |          0           |       0        |               0                |
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+

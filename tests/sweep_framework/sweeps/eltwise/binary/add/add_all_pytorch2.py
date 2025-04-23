@@ -20,7 +20,7 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "testa1": {
         "input_shape": [
             {"self": [0, 1], "other": [0, 1]},
             {"self": [0], "other": [0]},
@@ -555,8 +555,7 @@ def run(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(input_shape["other"])
     else:
-        torch_input_tensor_b = torch.tensor(input_shape["other"], dtype=torch.float32)
-        # torch_input_tensor_b = input_shape["other"]
+        torch_input_tensor_b = input_shape["other"]
 
     golden_function = ttnn.get_golden_function(ttnn.add)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
@@ -568,21 +567,30 @@ def run(
         device=device,
         memory_config=input_a_memory_config,
     )
-
-    # if isinstance(input_shape["other"], list):
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
-    # else:
-    #     input_tensor_b = input_shape["other"]
+    input_tensor_b = None
+    if isinstance(input_shape["other"], list):
+        input_tensor_b = ttnn.from_torch(
+            torch_input_tensor_b,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+            device=device,
+            memory_config=input_b_memory_config,
+        )
+    else:
+        input_tensor_b = input_shape["other"]
 
     start_time = start_measuring_time()
-    result = ttnn.add(input_tensor_a, input_tensor_b)
+    result = ttnn.add(input_tensor_a, input_tensor_b, use_legacy=False)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999), e2e_perf]
+
+
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# |         | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN | FAIL (L1 Out of Mem) | FAIL (Watcher) | FAIL (Unsupported Device Perf) |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | nightly | 1855 |           44            |         0         |    0    |          5           |       0        |               0                |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | testa1  | 1901 |            0            |         0         |    0    |          3           |       0        |               0                |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+

@@ -32,11 +32,35 @@ Tensor where_impl(
     const FloatOrTensor& value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {};
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {};
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {};
+
     auto get_multiplied = [&](const Tensor& condition, const FloatOrTensor& value) -> Tensor {
         if (std::holds_alternative<Tensor>(value)) {
-            return ttnn::multiply(queue_id, condition, std::get<Tensor>(value), std::nullopt, output_mem_config);
+            return ttnn::multiply(
+                queue_id,
+                condition,
+                std::get<Tensor>(value),
+                std::nullopt,
+                output_mem_config,
+                std::nullopt,
+                post_activations,
+                lhs_activations,
+                rhs_activations,
+                false);
         } else {
-            return ttnn::multiply(queue_id, condition, std::get<float>(value), std::nullopt, output_mem_config);
+            return ttnn::multiply(
+                queue_id,
+                condition,
+                std::get<float>(value),
+                std::nullopt,
+                output_mem_config,
+                std::nullopt,
+                post_activations,
+                lhs_activations,
+                rhs_activations,
+                false);
         }
     };
 
@@ -44,9 +68,29 @@ Tensor where_impl(
     Tensor t1 = get_multiplied(ttnn::lez(queue_id, predicate, output_mem_config), value_false);
 
     if (output_tensor.has_value()) {
-        ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config, output_tensor);
+        ttnn::add(
+            queue_id,
+            t2,
+            t1,
+            std::nullopt,
+            output_mem_config,
+            output_tensor,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            false);
     } else {
-        output_tensor = ttnn::add(queue_id, t2, t1, std::nullopt, output_mem_config);
+        output_tensor = ttnn::add(
+            queue_id,
+            t2,
+            t1,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            false);
     }
 
     return output_tensor.value();

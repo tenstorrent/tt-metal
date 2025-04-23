@@ -20,7 +20,7 @@ from models.utility_functions import torch_random, is_wormhole_b0
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "testa1": {
         "input_shape": [[1066], [120], [128], [160], [240], [300], [30], [320], [40], [480], [60], [640], [800], [80]],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
@@ -74,3 +74,10 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+
+
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# |        | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN | FAIL (L1 Out of Mem) | FAIL (Watcher) | FAIL (Unsupported Device Perf) |
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | testa1 |  56  |            0            |         0         |    0    |          0           |       0        |               0                |
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+

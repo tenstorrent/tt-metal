@@ -21,7 +21,7 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "testa1": {
         "input_shape": [
             [10, 10],
             [15, 15],
@@ -73,3 +73,12 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+
+
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# |         | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN | FAIL (L1 Out of Mem) | FAIL (Watcher) | FAIL (Unsupported Device Perf) |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | nightly |  12  |            0            |         0         |    0    |          0           |       0        |               0                |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | testa1  |  12  |            0            |         0         |    0    |          0           |       0        |               0                |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+

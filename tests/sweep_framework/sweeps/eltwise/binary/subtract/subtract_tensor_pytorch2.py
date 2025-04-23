@@ -17,7 +17,7 @@ from models.utility_functions import torch_random
 
 
 parameters = {
-    "nightly": {
+    "testa1": {
         "input_specs": [
             {"shape": [0, 1], "other": [0, 1]},
             {"shape": [0], "other": [0]},
@@ -133,7 +133,7 @@ def run(
 
     other = input_specs["other"]
     if isinstance(other, (int, float)):
-        torch_other_tensor = torch.tensor(other, dtype=torch.float32)
+        torch_other_tensor = input_specs["other"]
     else:
         torch_other_tensor = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
@@ -149,20 +149,30 @@ def run(
         device=device,
         memory_config=input_a_memory_config,
     )
-
-    input_tensor_b = ttnn.from_torch(
-        torch_other_tensor,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
+    input_tensor_b = None
+    if isinstance(other, list):
+        input_tensor_b = ttnn.from_torch(
+            torch_other_tensor,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+            device=device,
+            memory_config=input_b_memory_config,
+        )
+    else:
+        input_tensor_b = input_specs["other"]
 
     start_time = start_measuring_time()
 
-    output_tensor = ttnn.subtract(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.subtract(input_tensor_a, input_tensor_b, memory_config=output_memory_config, use_legacy=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+
+
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# |        | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN | FAIL (L1 Out of Mem) | FAIL (Watcher) | FAIL (Unsupported Device Perf) |
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | testa1 | 624  |            0            |         0         |    0    |          0           |       0        |               0                |
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+

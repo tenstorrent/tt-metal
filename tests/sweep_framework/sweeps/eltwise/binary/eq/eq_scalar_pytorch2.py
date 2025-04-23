@@ -21,22 +21,25 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "testa5": {
         "input_shape": [
-            [1, 1, 256],
-            [1, 16],
-            [1, 7],
-            [1, 7],
-            [16, 49, 49],
-            [16, 64, 64],
-            [1],
-            [1],
-            [4, 49, 49],
-            [4, 64, 64],
-            [64, 49, 49],
-            [64, 64, 64],
+            {"self": [1, 16], "scalar": 0},
+            {"self": [1, 1], "scalar": 0},
+            {"self": [1, 45], "scalar": 0},
+            {"self": [1, 5], "scalar": 0},
+            {"self": [1, 7], "scalar": 1},
+            {"self": [1, 7], "scalar": 50256},
+            # {"self": [1, "s0"], "scalar": 0},
+            {"self": [16, 49, 49], "scalar": 0},
+            {"self": [16, 64, 64], "scalar": 0},
+            {"self": [1], "scalar": 1},
+            {"self": [1], "scalar": 50256},
+            {"self": [2, 1], "scalar": 0},
+            {"self": [4, 49, 49], "scalar": 0},
+            {"self": [4, 64, 64], "scalar": 0},
+            {"self": [64, 49, 49], "scalar": 0},
+            {"self": [64, 64, 64], "scalar": 0},
         ],
-        "scalar": [1, 0, 1, 50256, 0, 0, 1, 50256, 0, 0, 0, 0],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -51,7 +54,6 @@ parameters = {
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
-    scalar,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -61,9 +63,11 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    input_shape_a = input_shape["self"]
+    scalar = input_shape["scalar"]
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape)
+    )(input_shape_a)
 
     golden_function = ttnn.get_golden_function(ttnn.eq)
     torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
@@ -82,3 +86,8 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+
+
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | testa5  |  60  |            0            |         0         |    0    |          0           |       0        |               0                |
+# +---------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+

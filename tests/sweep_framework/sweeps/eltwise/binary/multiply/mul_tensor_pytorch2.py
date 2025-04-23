@@ -20,7 +20,7 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "test_a8": {
         "input_shape": [
             {"self": [0], "other": 0.5},
             {"self": [1, 1, 1, 10], "other": -3.4028234663852886e38},
@@ -434,10 +434,10 @@ def run(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(input_shape["other"])
     else:
-        torch_input_tensor_b = torch.tensor(input_shape["other"], dtype=torch.float32)
-        # torch_input_tensor_b = input_shape["other"]
+        # torch_input_tensor_b = torch.tensor(input_shape["other"], dtype=torch.float32)
+        torch_input_tensor_b = input_shape["other"]
 
-    golden_function = ttnn.get_golden_function(ttnn.mul)
+    golden_function = ttnn.get_golden_function(ttnn.multiply)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
@@ -447,21 +447,100 @@ def run(
         device=device,
         memory_config=input_a_memory_config,
     )
-
-    # if isinstance(input_shape["other"], list):
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
-    # else:
-    #     input_tensor_b = input_shape["other"]
+    input_tensor_b = None
+    if isinstance(input_shape["other"], list):
+        input_tensor_b = ttnn.from_torch(
+            torch_input_tensor_b,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+            device=device,
+            memory_config=input_b_memory_config,
+        )
+    else:
+        input_tensor_b = input_shape["other"]
 
     start_time = start_measuring_time()
-    result = ttnn.mul(input_tensor_a, input_tensor_b)
+    result = ttnn.multiply(input_tensor_a, input_tensor_b, use_legacy=False)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99), e2e_perf]
+
+
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# |        | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN | FAIL (L1 Out of Mem) | FAIL (Watcher) | FAIL (Unsupported Device Perf) |
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | testa1 | 1461 |           32            |         3         |    0    |          0           |       0        |               0                |
+# +--------+------+-------------------------+-------------------+---------+----------------------+----------------+--------------------------------+
+# | test_a8 | 1480 |          16            |        0        |    0    |         0          |       0        |               0                |
+
+
+# Retest on 6 May:
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 1, 1, 2048], 'other': -3.4028234663852886e+38}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)}
+# STATUS False
+# message 0.9465936391219674
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 1, 1, 2048], 'other': -3.4028234663852886e+38}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)}
+# STATUS False
+# message 0.9465936391219674
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 1, 1, 2048], 'other': -3.4028234663852886e+38}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)}
+# STATUS False
+# message 0.9465936391219674
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 1, 1, 2048], 'other': -3.4028234663852886e+38}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)}
+# STATUS False
+# message 0.9465936391219674
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 16, 16, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 16, 16, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 16, 16, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 16, 16, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 32, 32, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 32, 32, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 32, 32, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 32, 32, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 64, 64, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 64, 64, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 64, 64, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
+# ********* FAILED *********
+# current parameter  {'input_shape': {'self': [1, 3, 64, 64, 2], 'other': []}, 'input_a_dtype': <DataType.BFLOAT16: 0>, 'input_b_dtype': <DataType.BFLOAT16: 0>, 'input_a_layout': <Layout.TILE: 1>, 'input_b_layout': <Layout.TILE: 1>, 'input_a_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt), 'input_b_memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)}
+# STATUS False
+# **************************
