@@ -19,6 +19,18 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
+machine_type_suffix = None
+
+
+def update_machine_type_suffix(machine_type: str):
+    global machine_type_suffix
+    machine_type_suffix = machine_type
+
+
+def reset_machine_type_suffix():
+    global machine_type_suffix
+    machine_type_suffix = None
+
 
 # Python enum mirroring test_fabric_edm_common.hpp
 class FabricTestMode(Enum):
@@ -104,7 +116,8 @@ def read_golden_results(
 ):
     """Print a summary table of all test results by packet size"""
     csv_path = os.path.join(
-        os.environ["TT_METAL_HOME"], "tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden.csv"
+        os.environ["TT_METAL_HOME"],
+        f"tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden{'_' + machine_type_suffix if machine_type_suffix is not None else ''}.csv",
     )
 
     if not os.path.exists(csv_path):
@@ -188,73 +201,6 @@ def profile_results(
     logger.info("bandwidth: {} GB/s", bandwidth_GB_s)
 
     return bandwidth, packets_per_second
-
-
-def process_1d_fabric_on_mesh_results(
-    *,
-    zone_name_inner,
-    zone_name_main,
-    is_unicast,
-    num_messages,
-    noc_message_type,
-    num_links,
-    line_size,
-    packet_size,
-    fabric_mode,
-    disable_sends_for_interior_workers,
-    unidirectional,
-    senders_are_unidirectional,
-    num_cluster_rows,
-    num_cluster_cols,
-):
-    assert num_cluster_rows > 0 ^ num_cluster_cols > 0
-    bandwidth_inner_loop, packets_per_second_inner_loop = profile_results(
-        zone_name_inner,
-        num_messages,
-        line_size,
-        packet_size,
-        fabric_mode,
-        disable_sends_for_interior_workers,
-        unidirectional,
-    )
-
-    bandwidth, packets_per_second = profile_results(
-        zone_name_main,
-        num_messages,
-        line_size,
-        packet_size,
-        fabric_mode,
-        disable_sends_for_interior_workers,
-        unidirectional,
-    )
-
-    logger.info("bandwidth_inner_loop: {} B/c", bandwidth_inner_loop)
-    logger.info("bandwidth: {} B/c", bandwidth)
-    logger.info("packets_per_second_inner_loop: {} pps", packets_per_second_inner_loop)
-    logger.info("packets_per_second: {} pps", packets_per_second)
-
-    summarize_to_csv(
-        test_name,
-        packet_size,
-        line_size,
-        num_links,
-        disable_sends_for_interior_workers,
-        unidirectional,
-        bandwidth,
-        packets_per_second,
-        noc_message_type=noc_message_type,
-        senders_are_unidirectional=senders_are_unidirectional,
-    )
-    expected_bandwidth, expected_packets_per_second = read_golden_results(
-        test_name,
-        packet_size,
-        line_size,
-        num_links,
-        disable_sends_for_interior_workers,
-        unidirectional,
-        noc_message_type=noc_message_type,
-        senders_are_unidirectional=senders_are_unidirectional,
-    )
 
 
 def process_results(
@@ -427,6 +373,9 @@ def run_fabric_edm(
         unidirectional=unidirectional,
         senders_are_unidirectional=senders_are_unidirectional,
     )
+
+    # Reset for the next test case
+    reset_machine_type_suffix()
 
 
 @pytest.mark.ubench_quick_tests
@@ -704,6 +653,94 @@ def test_fabric_t3k_4chip_rows_mcast_bw(
         disable_sends_for_interior_workers=False,
         unidirectional=False,
         senders_are_unidirectional=True,
+        test_mode="1D_fabric_on_mesh",
+        num_cluster_rows=num_cluster_rows,
+        num_cluster_cols=0,
+    )
+
+
+# expected_Mpps = expected millions of packets per second
+@pytest.mark.sanity_6u
+@pytest.mark.parametrize("is_unicast", [False])
+@pytest.mark.parametrize("num_messages", [200000])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [8])
+@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("packet_size", [2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.FullRing, FabricTestMode.Linear])
+@pytest.mark.parametrize("num_cluster_cols", [4])
+def test_fabric_6u_4chip_cols_mcast_bw(
+    is_unicast,
+    num_messages,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    fabric_test_mode,
+    num_cluster_cols,
+):
+    is_ring = fabric_test_mode == FabricTestMode.FullRing
+    if is_ring:
+        pytest.skip("Baseline numbers not yet available for full-6u ring fabric test mode")
+    update_machine_type_suffix("6u")
+    run_fabric_edm(
+        is_unicast=is_unicast,
+        num_messages=num_messages,
+        num_links=num_links,
+        noc_message_type="noc_unicast_write",
+        num_op_invocations=num_op_invocations,
+        line_sync=line_sync,
+        line_size=line_size,
+        packet_size=packet_size,
+        fabric_mode=fabric_test_mode,
+        disable_sends_for_interior_workers=False,
+        senders_are_unidirectional=not is_ring,
+        test_mode="1D_fabric_on_mesh",
+        num_cluster_rows=0,
+        num_cluster_cols=num_cluster_cols,
+    )
+
+
+# expected_Mpps = expected millions of packets per second
+@pytest.mark.sanity_6u
+@pytest.mark.parametrize("is_unicast", [False])
+@pytest.mark.parametrize("num_messages", [200000])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("packet_size", [2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.FullRing, FabricTestMode.Linear])
+@pytest.mark.parametrize("num_cluster_rows", [8])
+def test_fabric_6u_4chip_rows_mcast_bw(
+    is_unicast,
+    num_messages,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    fabric_test_mode,
+    num_cluster_rows,
+):
+    is_ring = fabric_test_mode == FabricTestMode.FullRing
+    if is_ring:
+        pytest.skip("Baseline numbers not yet available for full-6u ring fabric test mode")
+    update_machine_type_suffix("6u")
+    run_fabric_edm(
+        is_unicast=is_unicast,
+        num_messages=num_messages,
+        num_links=num_links,
+        noc_message_type="noc_unicast_write",
+        num_op_invocations=num_op_invocations,
+        line_sync=line_sync,
+        line_size=line_size,
+        packet_size=packet_size,
+        fabric_mode=fabric_test_mode,
+        disable_sends_for_interior_workers=False,
+        senders_are_unidirectional=not is_ring,
         test_mode="1D_fabric_on_mesh",
         num_cluster_rows=num_cluster_rows,
         num_cluster_cols=0,
