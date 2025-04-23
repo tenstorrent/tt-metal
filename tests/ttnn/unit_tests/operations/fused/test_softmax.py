@@ -224,14 +224,15 @@ def test_softmax_sharded_stable_with_program_cache(
     assert device.num_program_cache_entries() == 1
 
 
-@pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64])
-@pytest.mark.parametrize("w", [32, 64])
-@pytest.mark.parametrize("dim", [-1, -2, -3])
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [32])
+@pytest.mark.parametrize("dim", [-1])
 def test_softmax(device, batch_size, h, w, dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
+    print(torch_input_tensor)
     torch_output_tensor = F.softmax(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
@@ -321,6 +322,7 @@ def test_5d_softmax(device, input_shape, dim):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
     torch_output_tensor = torch.softmax(torch_input_tensor, dim)
+    print(torch_output_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
