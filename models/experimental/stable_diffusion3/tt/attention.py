@@ -12,6 +12,7 @@ import ttnn
 from .linear import TtLinear, TtLinearParameters
 from .normalization import TtRmsNorm, TtRmsNormParameters
 from .substate import has_substate, substate
+from .utils import all_gather
 
 
 @dataclass
@@ -303,8 +304,8 @@ class TtAttention:
         prompt = ttnn.unsqueeze(prompt, 1)
 
         if self.device.get_num_devices() > 1:
-            spatial = ttnn.all_gather(spatial, dim=-1)
-            prompt = ttnn.all_gather(prompt, dim=-1)
+            spatial = all_gather(spatial, dim=-1)
+            prompt = all_gather(prompt, dim=-1)
 
         spatial = self._spatial_attn.out_proj(spatial)
         prompt = self._prompt_attn.out_proj(prompt)
