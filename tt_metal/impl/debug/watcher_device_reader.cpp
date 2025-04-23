@@ -585,6 +585,10 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
             error_msg = get_noc_target_str(device_id, core, noc, san);
             error_msg += " (mixing virtual and virtual coordinates in Mcast).";
             break;
+        case DebugSanitizeInlineWriteDramUnsupported:
+            error_msg = get_noc_target_str(device_id, core, noc, san);
+            error_msg += " (inline dw writes does not support DRAM destination addresses).";
+            break;
         case DebugSanitizeNocAddrMailbox:
             error_msg = get_noc_target_str(device_id, core, noc, san);
             error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
