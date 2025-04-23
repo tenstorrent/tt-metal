@@ -228,9 +228,8 @@ void MAIN {
                         /* cb_cur_sum += cb_prev_sum */
                         add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
-                        /* cb_out_accumulate_im *= cb_exp_max_diff */
-                        mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, cb_exp_max_diff);
-                        add_block_inplace(alias_mm2_cur_out, alias_mm2_prev_out, out_chunk_tiles);
+                        mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(
+                            alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out, true);
                     }
 
                     // Swap alias_prev_sum and alias_cur_sum
@@ -244,9 +243,8 @@ void MAIN {
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
                 // NOTE: PCC bug if we modify below function to directy output to cb_out.
-                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum);
                 pack_reconfig_data_format(cb_out);
-                copy_block(alias_mm2_prev_out, cb_out, out_chunk_tiles);
+                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum, cb_out, false);
 
                 cb_pop_front(cb_q_in, q_chunk_tiles);
                 // free up cb_prev_max after K chunks
