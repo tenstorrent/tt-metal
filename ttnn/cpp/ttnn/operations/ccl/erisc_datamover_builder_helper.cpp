@@ -14,7 +14,9 @@
 namespace ttnn::ccl {
 
 std::vector<CoreCoord> reorder_connected_sockets(
-    const tt::tt_metal::IDevice* local_device, const std::vector<CoreCoord>& connected_sockets) {
+    const tt::tt_metal::IDevice* local_device,
+    const std::vector<CoreCoord>& connected_sockets,
+    const std::vector<CoreCoord>& originated_eth_cores = {}) {
     // Prepare storage
     std::vector<CoreCoord> reordered_connected_sockets;
     reordered_connected_sockets.reserve(connected_sockets.size());
@@ -29,17 +31,31 @@ std::vector<CoreCoord> reorder_connected_sockets(
         ethernet_cores_logical_virtual.emplace_back(core, core_physical);
     }
 
-    // Sort by the 'x' coordinate of the virtual (physical) core
-    std::sort(
-        ethernet_cores_logical_virtual.begin(), ethernet_cores_logical_virtual.end(), [](const auto& a, const auto& b) {
-            return a.second.x < b.second.x;
-        });
+    if (originated_eth_cores.size() > 0) {
+        auto physical_orig_core = local_device->virtual_core_from_logical_core(originated_eth_cores[0], CoreType::ETH);
+        // Sort by manhattan distance using physical_orig_core as the origin
+        std::sort(
+            ethernet_cores_logical_virtual.begin(),
+            ethernet_cores_logical_virtual.end(),
+            [&physical_orig_core](const auto& a, const auto& b) {
+                auto dist_a = std::abs(static_cast<int>(a.second.x) - static_cast<int>(physical_orig_core.x)) +
+                              std::abs(static_cast<int>(a.second.y) - static_cast<int>(physical_orig_core.y));
+                auto dist_b = std::abs(static_cast<int>(b.second.x) - static_cast<int>(physical_orig_core.x)) +
+                              std::abs(static_cast<int>(b.second.y) - static_cast<int>(physical_orig_core.y));
+                return dist_a < dist_b;
+            });
+    } else {
+        // Sort by the 'x' coordinate of the virtual (physical) core
+        std::sort(
+            ethernet_cores_logical_virtual.begin(),
+            ethernet_cores_logical_virtual.end(),
+            [](const auto& a, const auto& b) { return a.second.x < b.second.x; });
+    }
 
     // Extract the reordered logical sockets
     for (auto& core_pair : ethernet_cores_logical_virtual) {
         reordered_connected_sockets.push_back(core_pair.first);
     }
-
     return reordered_connected_sockets;
 }
 
@@ -68,6 +84,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     auto get_min_link_count = [&](IDevice* src_device, IDevice* dest_device, size_t min_link_count) {
         const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
         const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
+
         if (src_device_sockets.size() > 0) {
             min_link_count = std::min(min_link_count, src_device_sockets.size());
         }
@@ -92,12 +109,18 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     this->num_links = min_link_count;
 
     auto build_edm_directions =
-        [&](IDevice* src_device, IDevice* dest_device, Program* src_program, Program* dest_program) {
+        [&](IDevice* src_device,
+            IDevice* dest_device,
+            Program* src_program,
+            Program* dest_program,
+            std::vector<CoreCoord>& orig_cores) {
             const auto& src_device_sockets = src_device->get_ethernet_sockets(dest_device->id());
             const auto& dest_device_sockets = dest_device->get_ethernet_sockets(src_device->id());
             // re-order the connected_sockets based on virtual coords
-            auto reordered_src_device_sockets = reorder_connected_sockets(src_device, src_device_sockets);
-            auto reordered_dest_device_sockets = reorder_connected_sockets(dest_device, dest_device_sockets);
+            auto reordered_src_device_sockets = reorder_connected_sockets(src_device, src_device_sockets, orig_cores);
+            auto reordered_dest_device_sockets =
+                reorder_connected_sockets(dest_device, dest_device_sockets, orig_cores);
+            orig_cores.clear();
 
             std::vector<CoreCoord> local_link_cores;
             local_link_cores.reserve(reordered_src_device_sockets.size());
@@ -157,17 +180,19 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         enable_persistent_mode,
                         build_in_worker_connection_mode,
                         dateline));
+                orig_cores.push_back(remote_link_cores[l]);
             }
         };
 
     tt::tt_fabric::FabricEriscDatamoverBuilder* a_builder = nullptr;
+    std::vector<CoreCoord> orig_cores;
     // Construct the builders
     for (size_t hop = 0; hop < device_sequence.size() - 1; hop++) {
         auto src_device = device_sequence[hop];
         auto dest_device = device_sequence[hop + 1];
         auto src_program = programs[hop];
         auto dest_program = programs[hop + 1];
-        build_edm_directions(src_device, dest_device, src_program, dest_program);
+        build_edm_directions(src_device, dest_device, src_program, dest_program, orig_cores);
         // Move out of loop?
         a_builder = &edm_builders_backward_direction[dest_device->id()].front();
         this->buffer_size_bytes = a_builder->channel_buffer_size;
@@ -177,7 +202,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         auto dest_device = device_sequence.front();
         auto src_program = programs.back();
         auto dest_program = programs.front();
-        build_edm_directions(src_device, dest_device, src_program, dest_program);
+        build_edm_directions(src_device, dest_device, src_program, dest_program, orig_cores);
 
         a_builder = &edm_builders_backward_direction[dest_device->id()].front();
         this->buffer_size_bytes = a_builder->channel_buffer_size;
