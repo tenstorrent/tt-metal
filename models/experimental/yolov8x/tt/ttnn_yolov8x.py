@@ -541,7 +541,12 @@ class TtDetectionModel:
         }
 
         self.conv_0 = TtConv(
-            device, parameters, "model.0", input_params=[3, 2, 1, 80, 3], act_block_h=True, deallocate_activation=True
+            device,
+            parameters,
+            "model.0",
+            input_params=[3, 2, 1, 80, 3],
+            act_block_h=True,
+            deallocate_activation=True,
         )
         self.conv_1 = TtConv(
             device,
@@ -634,6 +639,7 @@ class TtDetectionModel:
             n=3,
             shortcut=False,
             input_params=c2f_configs["model.21"]["input_params"],
+            block_shard=False,
             change_shard=True,
         )
         self.detect_22 = TtDetect(device, parameters, "model.22", detect_config)

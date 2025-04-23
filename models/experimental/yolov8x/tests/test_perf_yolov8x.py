@@ -19,7 +19,7 @@ from models.experimental.yolov8x.reference import yolov8x
 
 
 def get_expected_times(name):
-    base = {"yolov8x": (128.267, 0.52)}
+    base = {"yolov8x": (128.267, 0.54)}
     return base[name]
 
 
