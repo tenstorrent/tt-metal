@@ -39,8 +39,8 @@ ALWI void exp_tile_init() {
  */
 // clang-format on
 template <bool approx = true, bool fast_and_approx = true>
-ALWI void exp_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_exponential<approx, fast_and_approx>(idst)));
+ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
+    MATH((llk_math_eltwise_unary_sfpu_exponential<approx, fast_and_approx>(idst, vector_mode)));
 }
 
 }  // namespace ckernel

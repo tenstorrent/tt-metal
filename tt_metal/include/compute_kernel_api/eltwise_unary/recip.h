@@ -33,7 +33,9 @@ ALWI void recip_tile_init() { MATH((llk_math_eltwise_unary_sfpu_reciprocal_init<
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
-// clang-format on
-ALWI void recip_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_reciprocal<APPROX, DST_ACCUM_MODE>(idst))); }
+ // clang-format on
+ALWI void recip_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
+    MATH((llk_math_eltwise_unary_sfpu_reciprocal<APPROX, DST_ACCUM_MODE>(idst, vector_mode)));
+}
 
 }  // namespace ckernel

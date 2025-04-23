@@ -32,7 +32,7 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
         acquire_dst();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
-        max_tile(dst_reg_0, dst_reg_1);
+        max_tile(dst_reg_0, dst_reg_1, (int)VectorMode::C);
         pack_tile(dst_reg_0, in0);
         release_dst();
     }
@@ -87,7 +87,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         copy_tile(in_cb, i, 0);
-        recip_tile(0);
+        recip_tile(0, (int)VectorMode::C);
         pack_tile(0, in_cb);
         release_dst();
     }
@@ -258,7 +258,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
 
-        exp_tile<true, false>(0);
+        exp_tile<true, false>(0, (int)VectorMode::C);
 
         pack_tile(0, out_cb);
 
