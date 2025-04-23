@@ -1,8 +1,10 @@
 import ttnn
 import torch
+import math
 import numpy as np
 import time
 import pandas as pd
+
 
 device_id = 0
 device = ttnn.open_device(device_id=device_id)
@@ -37,7 +39,7 @@ datatypes_parameters = {
 }
 
 target_type = "bfloat16"
-operation_name = "exp"
+operation_name = "tan"
 
 
 parameters = datatypes_parameters[target_type]
@@ -98,6 +100,10 @@ def log_ttnn(tensor_input, output_tensor):
     return ttnn.log(tensor_input, output_tensor=output_tensor)
 
 
+def tan_ttnn(tensor_input, output_tensor):
+    return ttnn.tan(tensor_input, output_tensor=output_tensor)
+
+
 def silu_ttnn(tensor_input, output_tensor):
     return ttnn.silu(tensor_input, output_tensor=output_tensor)
 
@@ -108,14 +114,15 @@ def silu_torch(tensor_input, out):
 
 
 operations_dict = {
-    "exp": (torch.exp, exp_ttnn),
-    "exp_approx": (torch.exp, exp_ttnn_approx),
-    "log": (torch.log, log_ttnn),
-    "silu": (silu_torch, silu_ttnn),
+    "exp": (torch.exp, exp_ttnn, math.exp),
+    "exp_approx": (torch.exp, exp_ttnn_approx, None),
+    "log": (torch.log, log_ttnn, math.log),
+    "silu": (silu_torch, silu_ttnn, None),
+    "tan": (torch.tan, tan_ttnn, None),
 }
 
 
-(torch_unary_op, ttnn_unary_op) = operations_dict[operation_name]
+(torch_unary_op, ttnn_unary_op, python_unary_op) = operations_dict[operation_name]
 
 
 # For each tensor, pick several values:
@@ -152,14 +159,38 @@ for i in range(0, repeats):
     # print(f"Torch Value =\n{torch_value}, size = {torch_value.size()}")
     # print(f"Torch Value f32 =\n{torch_value_f32}, size = {torch_value_f32.size()}")
 
-    ttnn_value = ttnn.from_torch(torch_input_f32, device=device, dtype=TTNN_TYPE, layout=ttnn.TILE_LAYOUT)
+    # Launch a TTNN operation from a torch tensor and returns output in torch tensor
+    def launch_ttnn_op(torch_tensor, ttnn_unary, ttnn_output):
+        ttnn_value = ttnn.from_torch(torch_tensor, device=device, dtype=TTNN_TYPE, layout=ttnn.TILE_LAYOUT)
+
+        ttnn_output = ttnn_unary(ttnn_value, output_tensor=ttnn_output)
+
+        # Convert back to torch
+        torch_output = ttnn.to_torch(ttnn_output)
+
+        return torch_output
+
+    def launch_scalar_op(torch_tensor, python_unary):
+        np_input = torch_tensor.to(torch.float32).flatten().numpy()
+
+        def run_unary_op(x):
+            try:
+                return python_unary(x)
+            except:
+                return math.nan
+
+        np_output = np.vectorize(run_unary_op)(np_input)
+
+        torch_output = torch.from_numpy(np_output).to(TORCH_TYPE).reshape(size)
+        return torch_output
 
     # Run operation
-    ttnn_output = ttnn_unary_op(ttnn_value, output_tensor=ttnn_output)
     torch_output_ref = torch_unary_op(torch_input_f32, out=torch_output_ref)
 
-    # Convert back to torch
-    actual_torch_output = ttnn.to_torch(ttnn_output)
+    if True:
+        actual_torch_output = launch_ttnn_op(torch_input_f32, ttnn_unary_op, ttnn_output)
+    else:  # Launch scalar op (used to evaluate accuracy of torch)
+        actual_torch_output = launch_scalar_op(torch_input_f32, python_unary_op)
 
     # Flatten tensors for data analsis (we only used 2D for ttnn and TILE_LAYOUT)
     np_flat_input = torch_input_f32.to(torch.float32).flatten().numpy()
@@ -220,6 +251,8 @@ accuracy_df = pd.DataFrame(
         "mean_rel_error": mean_rel_error_array,
     }
 )
+accuracy_df["operation"] = operation_name
+accuracy_df["dtype"] = target_type
 
 accuracy_df.to_csv(f"accuracy-{operation_name}-{target_type}.csv", na_rep="NaN", index_label="index")
 
