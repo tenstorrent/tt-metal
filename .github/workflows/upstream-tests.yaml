@@ -8,6 +8,9 @@ on:
   schedule:
     - cron: '0 12 * * *'
 
+env:
+  WH_6U_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u
+
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -22,19 +25,20 @@ jobs:
       version: 22.04
       build-wheel: true
       tracy: true
-  get-image-names:
+  get-image-tags:
     runs-on: ubuntu-latest
     outputs:
-      wh-6u-image-name: ${{ steps.set-wh-6u-image-name.outputs.wh-6u-image-name }}
+      wh-6u-image-tag: ${{ steps.set-wh-6u-image-tag.outputs.wh-6u-image-tag }}
     steps:
-      - name: Set WH 6U image name
-        id: set-wh-6u-image-name
-        run: echo "wh-6u-image-name=ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+      - name: Set image tags
+        id: set-wh-6u-image-tag
+        run: |
+          echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${{ github.run_number }}" >> "$GITHUB_OUTPUT"
   build-wh-6u-image:
     needs:
       # - build-artifact
       # - build-artifact-profiler
-      - get-image-names
+      - get-image-tags
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -89,11 +93,11 @@ jobs:
             TEST_COMMAND=tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
           # Use run_number as it should be unique for every run, can trace to a commit, and is a
           # static counter managed by GitHub
-          tags: ${{ needs.get-image-names.outputs.wh-6u-image-name }}
+          tags: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
           context: ${{ github.workspace }}
   test-wh-6u-image:
     needs:
-      - get-image-names
+      - get-image-tags
       - build-wh-6u-image
     runs-on:
       - arch-wormhole_b0
@@ -103,7 +107,7 @@ jobs:
     steps:
       - name: Pull image
         timeout-minutes: 10
-        run: docker pull ${{ needs.get-image-names.outputs.wh-6u-image-name }}
+        run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run image
         timeout-minutes: 10
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-names.outputs.wh-6u-image-name }}
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
