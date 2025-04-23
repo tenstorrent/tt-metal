@@ -153,3 +153,44 @@ def test_cumsum_with_preallocated_output(size, dim, dtype, device):
     assert preallocated_output_tensor == output_tensor
 
     assert_with_pcc(expected_output, torch_output)
+
+
+# For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
+@pytest.mark.parametrize(
+    "size, dim",
+    [
+        ([2, 3, 4], 0),
+        ([2, 3, 4], -3),
+        ([1, 1024, 32], 0),
+        ([260, 1, 1], 0),
+        ([1024, 1, 32], 0),
+        ([2, 3, 33, 33], 0),
+        ([7, 13, 129, 33], 1),
+        ([7, 13, 129, 33], 0),
+        ([4, 6, 128, 128], 0),
+        ([2, 3, 5, 33, 128], 0),
+        ([2, 3, 5, 33, 128], 1),
+        ([2, 3, 5, 33, 128], 2),
+    ],
+)
+def test_cumsum_int32(size, dim, device):
+    torch.manual_seed(29112024)
+
+    (host_dtype, dev_dtype) = (torch.int32, ttnn.int32)
+
+    # Generate integer input on [-2; 2];
+    torch_input_tensor = torch.randint(-2, 3, size=size, dtype=host_dtype)
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
+
+    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dev_dtype)
+
+    expected_output_dtype = dev_dtype if dev_dtype is not None else input_tensor.dtype
+
+    assert output_tensor.dtype == expected_output_dtype
+    assert output_tensor.shape == (size)
+
+    torch_output = ttnn.to_torch(output_tensor, dtype=host_dtype)
+
+    expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=host_dtype)
+
+    assert_with_pcc(expected_output, torch_output)
