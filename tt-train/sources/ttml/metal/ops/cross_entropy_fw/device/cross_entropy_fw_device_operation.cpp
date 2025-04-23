@@ -20,7 +20,10 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_hit(
 
 void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
+    auto check_tensor = [](const ttnn::Tensor& tensor,
+                           const std::string& name,
+                           const tt::tt_metal::Layout required_layout,
+                           const tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
             tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
             "CrossEntropyForward operation is only supported on Wormhole. Device arch: {}. Tensor name {}",
@@ -40,13 +43,13 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
             name);
 
         TT_FATAL(
-            tensor.get_layout() == tt::tt_metal::Layout::TILE,
+            tensor.get_layout() == required_layout,
             "CrossEntropyForward operation requires tensor to be in Tile layout. {} tensor layout: {}",
             name,
             static_cast<int>(tensor.get_layout()));
 
         TT_FATAL(
-            tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
+            tensor.get_dtype() == required_dtype,
             "CrossEntropyForward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
             name,
             static_cast<int>(tensor.get_dtype()));
@@ -61,11 +64,18 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
 
     const auto& input_tensor = tensor_args.input;
     const auto& target_tensor = tensor_args.target;
+    const auto& target_indexes_tensor = tensor_args.target_indexes;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
-    check_tensor(input_tensor, "Input");
-    check_tensor(target_tensor, "Target");
+    check_tensor(input_tensor, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_tensor(target_tensor, "Target", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_tensor(
+        target_indexes_tensor, "Target Indexes", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
     if (preallocated_output_tensor.has_value()) {
-        check_tensor(preallocated_output_tensor.value(), "Preallocated Output");
+        check_tensor(
+            preallocated_output_tensor.value(),
+            "Preallocated Output",
+            tt::tt_metal::Layout::TILE,
+            tt::tt_metal::DataType::BFLOAT16);
     }
 }
 
@@ -113,12 +123,14 @@ std::
     CrossEntropyForwardDeviceOperation::invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& target_tensor,
+        const ttnn::Tensor& target_indexes,
         const std::optional<ttnn::Tensor>& preallocated_output) {
     return {
         operation_attributes_t{},
         tensor_args_t{
             .input = input_tensor,
             .target = target_tensor,
+            .target_indexes = target_indexes,
             .preallocated_output = preallocated_output,
         }};
 }

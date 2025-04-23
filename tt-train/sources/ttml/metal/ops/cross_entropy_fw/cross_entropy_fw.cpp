@@ -8,8 +8,9 @@
 
 namespace ttml::metal::ops::cross_entropy_fw {
 
-ttnn::Tensor CrossEntropyForwardOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Tensor& target_tensor) {
-    auto result = ttnn::prim::ttml_cross_entropy_fw(input_tensor, target_tensor);
+ttnn::Tensor CrossEntropyForwardOperation::invoke(
+    const ttnn::Tensor& input_tensor, const ttnn::Tensor& target_tensor, const ttnn::Tensor& target_indexes) {
+    auto result = ttnn::prim::ttml_cross_entropy_fw(input_tensor, target_tensor, target_indexes);
     return result;
 }
 }  // namespace ttml::metal::ops::cross_entropy_fw

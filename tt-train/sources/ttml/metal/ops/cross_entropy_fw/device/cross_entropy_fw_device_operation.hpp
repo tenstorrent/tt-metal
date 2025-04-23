@@ -34,6 +34,7 @@ struct CrossEntropyForwardDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& target_tensor,
+        const ttnn::Tensor& target_indexes,
         const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 

@@ -45,6 +45,8 @@ constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_8;
 constexpr auto cb_output_before_reduction = tt::CBIndex::c_9;
 constexpr auto cb_output = tt::CBIndex::c_10;
 
+constexpr uint32_t cb_target_logits = tt::CBIndex::c_13;
+
 constexpr uint32_t onetile = 1;
 
 #ifdef DO_MASK_W
@@ -180,17 +182,28 @@ void calculate_sum_exp_x() {
 
     cb_reserve_back(cb_exp_sum_before_reduction, onetile);
     tile_regs_acquire();
+
+    const uint32_t max_value_register = 3U;
+    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    unary_bcast<BroadcastType::COL>(
+        cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
     for (uint32_t col = 0; col < Wt; ++col) {
         auto working_register = col == 0 ? accum_register : tile_register;
 
         // subtract max value from each tile
-        sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
-        sub_tiles_bcast_cols(
-            cb_input,
-            cb_max_value_after_reduction,
-            /* tile idx */ col,
-            /* tile idx */ 0,
-            /* reg tile idx */ working_register);
+        // sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
+        // sub_tiles_bcast_cols(
+        //     cb_input,
+        //     cb_max_value_after_reduction,
+        //     /* tile idx */ col,
+        //     /* tile idx */ 0,
+        //     /* reg tile idx */ working_register);
+
+        copy_tile_init(cb_input);
+        copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
+
+        sub_binary_tile_init();
+        sub_binary_tile(working_register, max_value_register);  // subtract max value from each tile
 
         exp_tile_init();
         exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
@@ -203,8 +216,11 @@ void calculate_sum_exp_x() {
                 copy_tile_init(cb_mask);
                 copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
-                mask_tile_init();
-                mask_tile(working_register, mask_register);  // mask should be next to tile register
+                // mask_tile_init();
+                // mask_tile(working_register, mask_register);  // mask should be next to tile register
+
+                mul_binary_tile_init();
+                mul_binary_tile(working_register, mask_register);  // choose (x - max(x)) by index
             }
         }
 
@@ -440,20 +456,36 @@ void MAIN {
 
             cb_wait_front(cb_output_before_reduction, onetile);
 
+            cb_wait_front(cb_target_logits, onetile);
             const uint32_t reduction_register = 0;
             tile_regs_acquire();
-            reconfig_data_format(cb_output_before_reduction, cb_scaler);
-            reduce_init_delta<false, PoolType::SUM, ReduceDim::REDUCE_ROW>(
-                cb_output_before_reduction, cb_scaler, cb_output_before_reduction);
-            reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-                cb_output_before_reduction,
-                cb_scaler,
-                /* tile_idx */ 0,
-                /* tile_idx */ 0,
-                /* reduction_register */ reduction_register);
-            reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_output_before_reduction);
 
-            reconfig_data_format(cb_exp_sum_after_reduction, cb_max_value_after_reduction);
+            // reconfig_data_format(cb_max_value_after_reduction, cb_exp_sum_after_reduction);
+            // add_tiles_init(cb_max_value_after_reduction, cb_exp_sum_after_reduction, /* acc_to_dest */ true);
+            // add_tiles(
+            //     cb_max_value_after_reduction,
+            //     cb_exp_sum_after_reduction,
+            //     /* tile_idx */ 0,
+            //     /* tile_idx */ 0,
+            //     reduction_register + 1U);
+
+            // reconfig_data_format(cb_output_before_reduction, cb_scaler);
+            // reduce_init_delta<false, PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            //     cb_output_before_reduction, cb_scaler, cb_output_before_reduction);
+            // reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+            //     cb_output_before_reduction,
+            //     cb_scaler,
+            //     /* tile_idx */ 0,
+            //     /* tile_idx */ 0,
+            //     /* reduction_register */ reduction_register);
+            // reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_output_before_reduction);
+            copy_tile_init(cb_target_logits);
+            copy_tile(cb_target_logits, /* tile_idx */ 0, /* register_idx */ reduction_register);
+
+            negative_tile_init();
+            negative_tile(reduction_register);
+
+            // reconfig_data_format(cb_max_value_after_reduction, cb_exp_sum_after_reduction);
             add_tiles_init(cb_max_value_after_reduction, cb_exp_sum_after_reduction, /* acc_to_dest */ true);
             add_tiles(
                 cb_max_value_after_reduction,
@@ -461,6 +493,25 @@ void MAIN {
                 /* tile_idx */ 0,
                 /* tile_idx */ 0,
                 reduction_register);
+
+            // copy_tile_init(cb_max_value_after_reduction);
+            // copy_tile(cb_max_value_after_reduction, /* tile_idx */ 0, /* register_idx */ reduction_register + 1U);
+
+            // add_binary_tile_init();
+            // add_binary_tile(reduction_register, reduction_register + 1U);
+
+            // copy_tile_init(cb_exp_sum_after_reduction);
+            // copy_tile(cb_exp_sum_after_reduction, /* tile_idx */ 0, /* register_idx */ reduction_register + 1U);
+
+            // add_binary_tile_init();
+            // add_binary_tile(
+            //     reduction_register, reduction_register + 1U);  // add log(sum(exp(x - max(x)))) to (x -max(x))
+
+            // test output :
+            // uint32_t test_register = 1U;
+            // copy_tile_init(cb_max_value_after_reduction);
+            // copy_tile(cb_max_value_after_reduction, /* tile_idx */ 0, /* register_idx */ test_register);
+
             tile_regs_commit();
 
             tile_regs_wait();
@@ -472,6 +523,8 @@ void MAIN {
             cb_pop_front(cb_max_value_after_reduction, onetile);  // pop tile after reduction
             cb_pop_front(cb_exp_sum_after_reduction, onetile);    // pop tile after reduction
             cb_pop_front(cb_output_before_reduction, onetile);    // pop tile before reduction
+
+            cb_pop_front(cb_target_logits, onetile);  // pop logits tile
 
 #ifdef EVERYTHING_FITS_IN_L1
             cb_pop_front(cb_input, Wt);   // pop Wt tiles from input buffer
