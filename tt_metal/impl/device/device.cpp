@@ -604,6 +604,9 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
     uint32_t zero = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         &zero, sizeof(uint32_t), tt_cxy_pair(this->id(), virtual_core), launch_msg_buffer_read_ptr_addr);
+    uint64_t go_msg_index_addr = this->get_dev_addr(virtual_core, HalL1MemAddrType::GO_MSG_INDEX);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        &zero, sizeof(uint32_t), tt_cxy_pair(this->id(), virtual_core), go_msg_index_addr);
 }
 
 void Device::clear_launch_messages_on_eth_cores() {
@@ -1701,8 +1704,8 @@ void Device::generate_device_bank_to_noc_tables()
     }
 }
 
-uint8_t Device::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
+bool Device::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
 }
 
 uint8_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
