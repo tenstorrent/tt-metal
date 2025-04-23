@@ -16,6 +16,10 @@ class TtMoeLayer(LightweightModule):
         self.args = args
         self.dtype = dtype
         self.model_config = args.get_model_config()
+        self.tile_size = args.tile_size
+        assert self.tile_size == 32, "tile size must be 32"
+        self.num_devices = args.num_devices
+        assert self.num_devices == 8, "num devices must be 8 for Mixtral MoE"
 
         gate_name = f"layers.{layer_num}.feed_forward.gate.weight"
         if args.dummy_weights:
@@ -23,7 +27,6 @@ class TtMoeLayer(LightweightModule):
         else:
             cache_name = args.weight_cache_path(dtype) / (gate_name + "_multidevice_repadded")
 
-        self.num_devices = 8
         # make the index of the expert on each devices equal to zero
         gates_tensor = (
             torch.nn.functional.pad(state_dict[gate_name].permute(1, 0), (0, 56), "constant", 0)
@@ -47,16 +50,12 @@ class TtMoeLayer(LightweightModule):
             mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
         )
 
-        self.tile_size = 32
-        # self.compute_kernel = args.get_compute_kernel_attn_config()
-        # self.compute_kernel_reduce = args.get_compute_kernel_config_reduce()
-        # self.compute_kernel = args.get_compute_kernel_attn_config()
         self.compute_kernel = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # self.compute_kernel_reduce = args.get_compute_kernel_config_reduce()
+
         self.compute_kernel_reduce = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             fp32_dest_acc_en=False,

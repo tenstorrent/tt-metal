@@ -107,7 +107,6 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
         "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
-        # "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
         "model.layers.{layer}.block_sparse_moe.experts.{expert}.w1.weight": "layers.{layer}.feed_forward.experts.{expert}.w1.weight",
         "model.layers.{layer}.block_sparse_moe.experts.{expert}.w2.weight": "layers.{layer}.feed_forward.experts.{expert}.w2.weight",
         "model.layers.{layer}.block_sparse_moe.experts.{expert}.w3.weight": "layers.{layer}.feed_forward.experts.{expert}.w3.weight",

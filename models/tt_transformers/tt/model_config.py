@@ -692,17 +692,25 @@ class ModelArgs:
             # Configure data precision and math fidelity for tensors and kernels
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
             # Mixtral
-            self.model_config["PREFILL_MLP_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
-            self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
+            self.model_config["PREFILL_MLP_COMPUTE_CONFIG"] = self.compute_kernel_config_lofi
+            # ttnn.WormholeComputeKernelConfig(
+            #     math_fidelity=ttnn.MathFidelity.LoFi,
+            #     math_approx_mode=True,
+            #     fp32_dest_acc_en=False,
+            #     packer_l1_acc=True,
+            # )
+            self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"] = self.compute_kernel_config_lofi
+            # ttnn.WormholeComputeKernelConfig(
+            #     math_fidelity=ttnn.MathFidelity.HiFi4,
+            #     fp32_dest_acc_en=True,
+            #     packer_l1_acc=True,
+            # )
+            # self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
+            #     math_fidelity=ttnn.MathFidelity.HiFi4,
+            #     math_approx_mode=False,
+            #     fp32_dest_acc_en=True,
+            #     packer_l1_acc=True,
+            # )
             # end mixtral
 
             if self.optimizations is None:
