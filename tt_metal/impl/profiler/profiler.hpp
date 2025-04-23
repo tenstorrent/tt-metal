@@ -23,6 +23,8 @@
 #include <vector>
 
 #include "buffer.hpp"
+#include "mesh_buffer.hpp"
+#include "program.hpp"
 #include "common/TracyTTDeviceData.hpp"
 #include "core_coord.hpp"
 #include "hostdevcommon/profiler_common.h"
@@ -115,7 +117,6 @@ private:
     void logPacketData(
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log,
-        uint32_t runID,
         uint32_t runHostID,
         const std::string& opname,
         chip_id_t device_id,
@@ -136,7 +137,6 @@ private:
         uint32_t timer_id,
         uint64_t timestamp,
         uint64_t data,
-        uint32_t run_id,
         uint32_t run_host_id,
         const std::string_view opname,
         const std::string_view zone_name,
@@ -155,7 +155,6 @@ private:
         uint32_t timer_id,
         uint64_t timestamp,
         uint64_t data,
-        uint32_t run_id,
         uint32_t run_host_id,
         const std::string_view opname,
         const std::string_view zone_name,
@@ -185,7 +184,7 @@ public:
     ~DeviceProfiler();
 
     // DRAM buffer for device side results
-    std::shared_ptr<tt::tt_metal::Buffer> output_dram_buffer = nullptr;
+    distributed::AnyBuffer output_dram_buffer;
     std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
 
     // Device-core Syncdata
@@ -224,8 +223,10 @@ public:
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 };
 
-std::shared_ptr<Buffer> get_control_buffer_view(
+distributed::AnyBuffer get_control_buffer_view(
     IDevice* device, uint32_t address, uint32_t size, CoreCoord logical_worker_core);
+
+void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data);
 
 }  // namespace tt_metal
 

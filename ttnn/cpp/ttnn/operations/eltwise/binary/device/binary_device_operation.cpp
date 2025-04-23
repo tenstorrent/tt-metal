@@ -123,9 +123,11 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
 
     if (input_tensor_b.has_value()) {
         tensor_b_sharded = input_tensor_b->memory_config().is_sharded();
-        TT_FATAL(
-            input_tensor_a.device() == input_tensor_b->device(),
-            "Operands to eltwise binary need to be on the same device!");
+        if (input_tensor_a.device() != input_tensor_b->device()) {
+            TT_FATAL(
+                input_tensor_a.device() == input_tensor_b->device(),
+                "Operands to eltwise binary need to be on the same device!");
+        }
         TT_FATAL(input_tensor_b->get_layout() == Layout::TILE, "Inputs to eltwise binary must be tilized");
     }
 

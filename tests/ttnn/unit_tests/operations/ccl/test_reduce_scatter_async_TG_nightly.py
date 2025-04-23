@@ -11,9 +11,6 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import (
     run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows,
 )
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_global_semaphore_with_same_address,
-)
 
 
 # Enumerate the post-commit cases explicitly

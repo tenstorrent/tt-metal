@@ -23,10 +23,10 @@
 #include "ttnn/tensor/types.hpp"
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::IDevice;
 using tt::tt_metal::Layout;
 using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::Tensor;
+using tt::tt_metal::distributed::MeshDevice;
 
 template <typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
@@ -47,7 +47,7 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
-bool run_test(const ttnn::Shape& shape, const DeviceFunction& device_function, IDevice* device, Args... args) {
+bool run_test(const ttnn::Shape& shape, const DeviceFunction& device_function, MeshDevice* device, Args... args) {
     auto input_tensor_a = ttnn::random::random(shape, DataType::BFLOAT16);
     auto input_tensor_b = ttnn::random::random(shape, DataType::BFLOAT16);
 
@@ -66,7 +66,8 @@ int main() {
     using tt::constants::TILE_WIDTH;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    auto device_owner = MeshDevice::create_unit_mesh(device_id);
+    auto device = device_owner.get();
 
     {
         ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
@@ -136,8 +137,6 @@ int main() {
     device->disable_and_clear_program_cache();
 
     TT_FATAL(device->num_program_cache_entries() == 0, "Error");
-
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 
     return 0;
 }
