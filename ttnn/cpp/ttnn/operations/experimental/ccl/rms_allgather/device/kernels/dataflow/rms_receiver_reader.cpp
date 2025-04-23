@@ -144,8 +144,10 @@ void kernel_main() {
 
         // sync with the gather worker
         cb_wait_front(cb_ex2, 1);
+        cb_pop_front(cb_ex2, 1);
         noc_semaphore_inc(reduce_second_stage_receiver_semaphore_noc_addr, 1);
     }
+    cb_pop_front(cb_ex_partial2, 1);
     // Signal the compute kernel cb_ex_global ready
     cb_reserve_back(cb_ex_global, 1);
     noc_semaphore_wait(post_reduce_sender_semaphore_addr_ptr, VALID);

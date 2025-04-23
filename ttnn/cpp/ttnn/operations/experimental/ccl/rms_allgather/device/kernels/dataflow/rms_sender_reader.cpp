@@ -120,6 +120,7 @@ void kernel_main() {
                 cb_external,
                 (num_blocks_second_stage - 1));  // push back partials from all cores -> compute can start reducing now
         }
+        cb_pop_front(cb_partial, 1);
     };
     global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2);
 
