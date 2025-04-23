@@ -293,7 +293,7 @@ Tensor scale_mask_softmax(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    tt::tt_metal::operation::launch_with_autoformat(
+    tt::tt_metal::operation::launch_op(
         [scale, mask, output_mem_config, is_causal_mask, compute_kernel_config, numeric_stable](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,

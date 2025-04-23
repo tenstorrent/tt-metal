@@ -182,7 +182,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     const uint32_t num_cores = all_cores.num_cores();
 
-    auto padding_config_buffer = padding_config.device_buffer();
+    auto padding_config_storage = padding_config.device_storage();
+    auto padding_config_buffer = padding_config_storage.get_buffer();
     cb_indices.padding_config = cb_indices.get_next_cb_id();
     auto padding_config_cb = create_circular_buffer(
         program,
@@ -191,9 +192,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         kernel_config_df,
         1,
         padding_config_buffer->size() / num_cores,
-        padding_config_buffer.get());
+        padding_config_buffer);
 
-    auto gather_config_buffer0 = gather_config0.device_buffer();
+    auto gather_config_storage0 = gather_config0.device_storage();
+    auto gather_config_buffer0 = gather_config_storage0.get_buffer();
     cb_indices.gather_config0 = cb_indices.get_next_cb_id();
     auto gather_config_cb0 = create_circular_buffer(
         program,
@@ -202,9 +204,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         kernel_config_df,
         1,
         gather_config_buffer0->size() / num_cores,
-        gather_config_buffer0.get());
+        gather_config_buffer0);
 
-    auto gather_config_buffer1 = gather_config1.device_buffer();
+    auto gather_config_storage1 = gather_config1.device_storage();
+    auto gather_config_buffer1 = gather_config_storage1.get_buffer();
     cb_indices.gather_config1 = cb_indices.get_next_cb_id();
     auto gather_config_cb1 = create_circular_buffer(
         program,
@@ -213,7 +216,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         kernel_config_df,
         1,
         gather_config_buffer1->size() / num_cores,
-        gather_config_buffer1.get());
+        gather_config_buffer1);
 
     const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
@@ -270,18 +273,18 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
     if (!capture_buffers) {
-        padding_config_buffer = nullptr;
-        gather_config_buffer0 = nullptr;
-        gather_config_buffer1 = nullptr;
+        padding_config_storage = {};
+        gather_config_storage0 = {};
+        gather_config_storage1 = {};
     }
     auto override_runtime_arguments_callback = [src_cb,
                                                 out_cb,
                                                 padding_config_cb,
                                                 gather_config_cb0,
                                                 gather_config_cb1,
-                                                padding_config_buffer,
-                                                gather_config_buffer0,
-                                                gather_config_buffer1](
+                                                padding_config_storage,
+                                                gather_config_storage0,
+                                                gather_config_storage1](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -433,7 +436,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
 
     const uint32_t num_cores = all_cores.num_cores();
 
-    auto padding_config_buffer = padding_config.device_buffer();
+    auto padding_config_storage = padding_config.device_storage();
+    auto padding_config_buffer = padding_config_storage.get_buffer();
     cb_indices.padding_config_cb_id = cb_indices.get_next_cb_id();
     auto padding_config_cb = create_circular_buffer(
         program,
@@ -442,9 +446,10 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         kernel_config_df,
         1,
         padding_config_buffer->size() / num_cores,
-        padding_config_buffer.get());
+        padding_config_buffer);
 
-    auto local_config_buffer = local_config.device_buffer();
+    auto local_config_storage = local_config.device_storage();
+    auto local_config_buffer = local_config_storage.get_buffer();
     cb_indices.local_config_cb_id = cb_indices.get_next_cb_id();
     auto local_config_cb = create_circular_buffer(
         program,
@@ -453,9 +458,10 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         kernel_config_df,
         1,
         local_config_buffer->size() / num_cores,
-        local_config_buffer.get());
+        local_config_buffer);
 
-    auto remote_config_buffer = remote_config.device_buffer();
+    auto remote_config_storage = remote_config.device_storage();
+    auto remote_config_buffer = remote_config_storage.get_buffer();
     cb_indices.remote_config_cb_id = cb_indices.get_next_cb_id();
     auto remote_config_cb = create_circular_buffer(
         program,
@@ -464,7 +470,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         kernel_config_df,
         1,
         remote_config_buffer->size() / num_cores,
-        remote_config_buffer.get());
+        remote_config_buffer);
 
     const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
@@ -569,19 +575,19 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
     if (!capture_buffers) {
-        padding_config_buffer = nullptr;
-        local_config_buffer = nullptr;
-        remote_config_buffer = nullptr;
+        padding_config_storage = {};
+        local_config_storage = {};
+        remote_config_storage = {};
     }
-    // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
+    // Capture padding_config_storage, local_config_storage, remote_config_storage to cache this with the program
     auto override_runtime_arguments_callback = [src_cb,
                                                 out_cb,
                                                 padding_config_cb,
                                                 local_config_cb,
                                                 remote_config_cb,
-                                                padding_config_buffer,
-                                                local_config_buffer,
-                                                remote_config_buffer](
+                                                padding_config_storage,
+                                                local_config_storage,
+                                                remote_config_storage](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,

@@ -74,15 +74,28 @@ void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&
     programs_[device_range] = std::move(program);
 }
 
+void MeshWorkload::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
+    auto& program = programs_.at(device_range);
+    program.compile(mesh_device);
+    program.allocate_circular_buffers(mesh_device);
+    tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device);
+}
+
 void MeshWorkload::compile(MeshDevice* mesh_device) {
     // Multi-Step Compile:
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
-    for (auto& [device_range, program] : programs_) {
-        program.compile(mesh_device);
-        program.allocate_circular_buffers(mesh_device);
-        tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device);
+    if (programs_.size() == 1) {
+        // Compile from main thread for homogenous workloads
+        this->compile_program(programs_.begin()->first, mesh_device);
+    } else {
+        for (auto& [device_range, _] : programs_) {
+            // Multi-Threaded Compile: Useful for heterogenous MeshWorkloads
+            mesh_device->enqueue_to_thread_pool(
+                [device_range, mesh_device, this]() { this->compile_program(device_range, mesh_device); });
+        }
+        mesh_device->wait_for_thread_pool();
     }
     program_dispatch::finalize_program_offsets(*this, mesh_device);
 }
@@ -115,6 +128,7 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                 .page_size = HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
                 .buffer_type = BufferType::DRAM,
                 .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+                .bottom_up = false,
             };
             ReplicatedBufferConfig global_kernel_bin_buf_config = {
                 .size = max_kernel_bin_buf_size,

@@ -200,7 +200,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
             }
         };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace matmul

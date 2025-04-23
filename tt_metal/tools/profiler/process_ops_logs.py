@@ -34,6 +34,8 @@ from tt_metal.tools.profiler.common import (
 
 yaml.SafeDumper.ignore_aliases = lambda *args: True
 
+TRACE_OP_ID_BITSHIFT = 32
+
 OUT_NAME = "ops_perf_results"
 
 OPS_CSV_HEADER = [
@@ -172,6 +174,7 @@ def import_tracy_op_logs(logFolder):
                         traceIDs[deviceID] = None
                     elif "REPLAY" in opDataStr:
                         replayIDTime = opDataTime
+
                         if deviceID in traceReplays:
                             if traceID in traceReplays[deviceID]:
                                 traceReplays[deviceID][traceID].append(replayIDTime)
@@ -309,7 +312,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
                         deviceOpID = timeID["run_host_id"]
                         assert (
                             deviceOpID in opIDHostDataDict
-                        ), f"Device op ID not present: Device op ID {deviceOpID} not present in host data"
+                        ), f"Device op ID not present: Device op ID {deviceOpID} not present in host data on device {device}"
                         traceID = opIDHostDataDict[deviceOpID]["metal_trace_id"]
                         if traceID is not None:
                             if device in traceOps:
@@ -399,7 +402,8 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
                 for deviceOp in devicesOps[device]:
                     if "metal_trace_replay_session_id" in deviceOp.keys():
                         deviceOp["global_call_count"] = (
-                            deviceOp["global_call_count"] | deviceOp["metal_trace_replay_session_id"] << 16
+                            deviceOp["global_call_count"]
+                            | deviceOp["metal_trace_replay_session_id"] << TRACE_OP_ID_BITSHIFT
                         )
                         traceOps[deviceOp["global_call_count"]] = deviceOp
                     else:
@@ -637,7 +641,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
             if type(row) is str and "sp" in row:
                 ret = signposts[row]["tracy_time"]
             elif type(row) is int:
-                if row > ((1 << 16) - 1):
+                if row > ((1 << TRACE_OP_ID_BITSHIFT) - 1):
                     ret = traceOps[row]["tracy_time"]
                 else:
                     ret = ops[row]["host_time"]["ns_since_start"]
@@ -649,7 +653,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
         childCallKeys = set()
         for row in rowKeys:
             if type(row) is int:
-                if row > ((1 << 16) - 1):
+                if row > ((1 << TRACE_OP_ID_BITSHIFT) - 1):
                     opData = traceOps[row]
                 else:
                     opData = ops[row]
@@ -668,9 +672,9 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                 rowDict["HOST START TS"] = int(signposts[row]["tracy_time"])
             elif type(row) is int:
                 op = row
-                if op > ((1 << 16) - 1):
+                if op > ((1 << TRACE_OP_ID_BITSHIFT) - 1):
                     opData = traceOps[op]
-                    opData["global_call_count"] = ((1 << 16) - 1) & op
+                    opData["global_call_count"] = ((1 << TRACE_OP_ID_BITSHIFT) - 1) & op
                 else:
                     opData = ops[op]
                     opData["metal_trace_replay_session_id"] = ""

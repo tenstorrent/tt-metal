@@ -24,126 +24,6 @@ using OptionalConstTensors = tt::tt_metal::operation::OptionalConstTensors;
 
 namespace detail {
 
-template <typename Tuple, typename T>
-constexpr bool is_homogenous_tuple() {
-    return []<std::size_t... Ns>(std::index_sequence<Ns...>) {
-        return (std::is_same_v<T, std::tuple_element_t<Ns, Tuple>> && ...);
-    }(std::make_index_sequence<std::tuple_size_v<Tuple>>{});
-}
-
-template <typename Tuple, typename T>
-constexpr Tuple make_tuple_from_vector(const std::vector<T>& vector) {
-    return ([&vector]<std::size_t... Ns>(std::index_sequence<Ns...>) {
-        return std::forward_as_tuple(vector.at(Ns)...);
-    }(std::make_index_sequence<std::tuple_size_v<Tuple>>{}));
-}
-
-template <typename Include, typename... args_t>
-auto extract_args_to_vector(args_t&&... args) {
-    std::vector<Include> result;
-    auto process_arg = [&](auto&& arg) {
-        using ArgType = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<ArgType, Include>) {
-            result.push_back(arg);
-        }
-    };
-    (process_arg(std::forward<args_t>(args)), ...);
-    return result;
-}
-
-template <typename operation_t, typename execute_on_worker_thread_return_t, typename... args_t>
-inline auto create_async_output_tensors(
-    const Tensors& inputs, const OptionalConstTensors& optional_inputs, args_t&&... args) {
-    constexpr bool custom_create_async_outputs =
-        requires(const operation_t& t) { t.create_async_output_tensors(inputs, optional_inputs); };
-
-    if constexpr (custom_create_async_outputs) {
-        return operation_t::create_async_output_tensors(inputs, optional_inputs);
-    } else if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, OptionalTensors>) {
-        constexpr bool custom_create_async_optional_outputs = requires(const operation_t& t) {
-            t.create_async_optional_output_tensors(std::forward<decltype(args)>(args)...);
-        };
-        static_assert(
-            custom_create_async_optional_outputs,
-            "If the operation returns a vector of optional Tensors, it must "
-            "implement create_async_optional_output_tensors.");
-
-        return operation_t::create_async_optional_output_tensors(std::forward<decltype(args)>(args)...);
-    } else if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
-        return std::vector{Tensor(tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs))};
-
-    } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
-        Tensors output_tensors;
-        output_tensors.reserve(std::tuple_size_v<execute_on_worker_thread_return_t>);
-        for (auto index = 0; index < std::tuple_size_v<execute_on_worker_thread_return_t>; index++) {
-            output_tensors.emplace_back(
-                Tensor(tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs)));
-        }
-        return output_tensors;
-    } else {
-        static_assert(
-            tt::stl::concepts::always_false_v<operation_t>,
-            "Operation is expecting the operator() method to return either a single Tensor or a tuple "
-            "of "
-            "Tensor(s). If the operation returns a vector of Tensors, it must implement create_async_output_tensors.");
-    }
-}
-
-template <typename... args_t>
-auto map_launch_op_args_to_execute_on_worker_thread_args(
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors,
-    const args_t&... args) {
-    auto input_tensor_index = 0;
-    auto optional_input_tensor_index = 0;
-    auto optional_output_tensor_index = 0;
-    return std::tuple{[&input_tensor_index,
-                       &input_tensors,
-                       &optional_input_tensor_index,
-                       &optional_input_tensors,
-                       &optional_output_tensor_index,
-                       &optional_output_tensors](auto&& arg) {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, std::vector<Tensor>>) {
-            return input_tensors;
-        }
-        if constexpr (std::is_same_v<T, Tensor>) {
-            return input_tensors.at(input_tensor_index++);
-        } else if constexpr (std::is_same_v<T, std::optional<const Tensor>>) {
-            return optional_input_tensors.at(optional_input_tensor_index++);
-        } else if constexpr (std::is_same_v<T, std::optional<Tensor>>) {
-            return optional_output_tensors.at(optional_output_tensor_index++);
-        } else {
-            return arg;
-        }
-    }(args)...};
-}
-
-template <typename operation_t, typename T>
-auto map_execute_on_worker_thread_return_to_launch_op_return(const T&& value) {
-    if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Tensors>) {
-        return value;
-    } else if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Tensor>) {
-        return std::vector{value};
-    } else if constexpr (std::is_same_v<std::decay_t<decltype(value)>, OptionalTensors>) {
-        return value;
-    } else if constexpr (is_homogenous_tuple<T, Tensor>()) {
-        Tensors output_tensors;
-        output_tensors.reserve(std::tuple_size_v<T>);
-        [&]<std::size_t... Is>(std::index_sequence<Is...>) {
-            using std::get;
-            (output_tensors.emplace_back(std::forward<decltype(get<Is>(value))>(get<Is>(value))), ...);
-        }(std::make_index_sequence<std::tuple_size_v<T>>{});
-        return output_tensors;
-    } else {
-        static_assert(
-            tt::stl::concepts::always_false_v<operation_t>,
-            "Operation must return either a single Tensor or a vector of Tensors or a vector of optional Tensors "
-            "implement map_execute_on_worker_thread_return_to_launch_op_return.");
-    }
-}
-
 template <typename... args_t>
 void log(const std::string& prefix, args_t&&... args) {
     auto args_tuple = std::tuple{[](auto&& arg) {
@@ -210,7 +90,7 @@ template <typename T, typename... Args>
 concept FirstArgIs =
     sizeof...(Args) > 0 && std::same_as<std::decay_t<std::tuple_element_t<0, std::tuple<Args&&...>>>, T>;
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
+template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
     static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
 
@@ -289,83 +169,10 @@ private:
     }
 
     template <typename... args_t>
-        requires(not auto_launch_op)
     auto invoke_composite(args_t&&... args) const {
         ZoneScopedN("Run composite ttnn operation ");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
         return operation_t::invoke(std::forward<decltype(args)>(args)...);
-    }
-
-    template <typename... args_t>
-        requires(auto_launch_op)
-    auto invoke_composite(args_t&&... args) const {
-        ZoneScopedN("Run composite ttnn operation (using auto async)");
-        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
-
-        // #8479: Fix and re-enable logging in cpp operation decorator
-        // detail::log("Arguments: ", std::forward<args_t>(args)...);
-
-        using execute_on_worker_thread_return_t = decltype(operation_t::invoke(args...));
-
-        Tensors single_input_tensor = detail::extract_args_to_vector<ttnn::Tensor>(args...);
-        const OptionalConstTensors optional_input_tensors =
-            detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(args...);
-        std::vector<std::vector<ttnn::Tensor>> vec_input_tensors =
-            detail::extract_args_to_vector<std::vector<ttnn::Tensor>>(args...);
-        if (!(single_input_tensor.empty() || vec_input_tensors.empty())) {
-            TT_THROW(
-                "Only one of single_input_tensor or vec_input_tensors can be specified."
-                "Ensure that your invoke function does not have both Tensor and std::vector<Tensor> as input "
-                "parameters");
-        }
-        if (single_input_tensor.empty() && vec_input_tensors.size() > 1) {
-            TT_THROW(
-                "You have more than one std::vector<Tensor> input parameters in the invoke. Only one vector is "
-                "allowed");
-        }
-
-        auto& input_tensors = !vec_input_tensors.empty() ? vec_input_tensors[0] : single_input_tensor;
-
-        auto output_tensors = detail::create_async_output_tensors<operation_t, execute_on_worker_thread_return_t>(
-            input_tensors, optional_input_tensors, args...);
-
-        const OptionalTensors optional_output_tensors =
-            detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(args...);
-
-        tt::tt_metal::operation::launch_op(
-            [args...](
-                const Tensors& input_tensors,
-                const OptionalConstTensors& optional_input_tensors,
-                const OptionalTensors& optional_output_tensors) {
-                auto execute_on_worker_thread_args = detail::map_launch_op_args_to_execute_on_worker_thread_args(
-                    input_tensors, optional_input_tensors, optional_output_tensors, args...);
-                return std::apply(
-                    [](auto&&... args) {
-                        return detail::map_execute_on_worker_thread_return_to_launch_op_return<operation_t>(
-                            operation_t::invoke(std::forward<decltype(args)>(args)...));
-                    },
-                    execute_on_worker_thread_args);
-            },
-            input_tensors,
-            output_tensors,
-            optional_input_tensors,
-            optional_output_tensors);
-
-        if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
-            return output_tensors.at(0);
-        } else if constexpr (std::is_same_v<execute_on_worker_thread_return_t, Tensors>) {
-            return output_tensors;
-        } else if constexpr (std::is_same_v<execute_on_worker_thread_return_t, OptionalTensors>) {
-            return output_tensors;
-        } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
-            return detail::make_tuple_from_vector<execute_on_worker_thread_return_t>(output_tensors);
-        } else {
-            static_assert(
-                tt::stl::concepts::always_false_v<operation_t>,
-                "Operation is expecting the operator() method to return either a single Tensor or a "
-                "vector of "
-                "Tensor(s).");
-        }
     }
 };
 
@@ -414,10 +221,10 @@ consteval void assert_operation_in_correct_namespace() {
     }
 }
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
+template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation_impl() {
     assert_operation_in_correct_namespace<cpp_fully_qualified_name, operation_t>();
-    constexpr auto operation = registered_operation_t<cpp_fully_qualified_name, operation_t, auto_launch_op>{};
+    constexpr auto operation = registered_operation_t<cpp_fully_qualified_name, operation_t>{};
     static_assert(
         not requires(operation_name_key_t<cpp_fully_qualified_name> key) { get(key); },
         "Operation with this `cpp_fully_qualified_name` was already registered. Please use a different name.");
@@ -430,12 +237,14 @@ constexpr auto register_operation_impl() {
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation() {
-    return register_operation_impl<cpp_fully_qualified_name, operation_t, false>();
+    return register_operation_impl<cpp_fully_qualified_name, operation_t>();
 }
 
+// TODO: This can just get replaced with register_operation(), but opting to defer this until after the migration
+// to minimize blast radius.
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation_with_auto_launch_op() {
-    return register_operation_impl<cpp_fully_qualified_name, operation_t, true>();
+    return register_operation_impl<cpp_fully_qualified_name, operation_t>();
 }
 
 }  // namespace decorators
