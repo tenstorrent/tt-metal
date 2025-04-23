@@ -338,7 +338,7 @@
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor. BFLOAT16, BFLOAT8_B</p>
+<p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor. [Supported range -20 to inf]</p>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
@@ -368,12 +368,13 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>Supported only for Wormhole_B0. [supported range -20 to inf].</p></td>
+<td><p>BFLOAT16, BFLOAT8_B</p></td>
 <td><p>TILE</p></td>
 <td><p>2, 3, 4</p></td>
 </tr>
 </tbody>
 </table>
+<p>Supported only for Wormhole_B0.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
