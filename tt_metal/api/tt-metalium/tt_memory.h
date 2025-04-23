@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <string>
+#include <string_view>
 #include <vector>
 
 namespace ll_api {
@@ -35,7 +35,7 @@ private:
 
 public:
     memory();
-    memory(std::string const &path, Loading loading);
+    memory(std::string_view path, Loading loading);
 
 public:
     // These can be large objects, so ban copying ...
