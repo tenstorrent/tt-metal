@@ -359,9 +359,11 @@ auto get_mesh_tensor_write_test_params() {
             .get_mapper = [](MeshDevice* device) { return replicate_tensor_to_mesh_mapper(*device); },
         },
         MeshTensorWriteTestParams{
-            .shape = ttnn::Shape{7, 3, 32, 32},
+            .shape = ttnn::Shape{7, 4, 32, 32},
             .expected_shapes =
                 {ttnn::Shape{7, 1, 32, 32},
+                 ttnn::Shape{7, 1, 32, 32},
+                 ttnn::Shape{7, 1, 32, 32},
                  ttnn::Shape{7, 1, 32, 32},
                  ttnn::Shape{7, 1, 32, 32},
                  ttnn::Shape{7, 1, 32, 32},
@@ -371,14 +373,21 @@ auto get_mesh_tensor_write_test_params() {
                 {distributed::MeshCoordinate{0, 0},
                  distributed::MeshCoordinate{0, 1},
                  distributed::MeshCoordinate{0, 2},
+                 distributed::MeshCoordinate{0, 3},
                  distributed::MeshCoordinate{1, 0},
                  distributed::MeshCoordinate{1, 1},
-                 distributed::MeshCoordinate{1, 2}},
+                 distributed::MeshCoordinate{1, 2},
+                 distributed::MeshCoordinate{1, 3}},
             .get_mapper =
                 [](MeshDevice* device) {
-                    // Replicate to a submesh 2x3
                     // Replicate within each row, then split by second dimension.
-                    return shard_tensor_to_2d_mesh_mapper(*device, MeshShape{2, 3}, Shard2dConfig{std::nullopt, 1});
+                    return create_mesh_mapper(
+                        *device,
+                        MeshMapperConfig{
+                            .placements = {
+                                MeshMapperConfig::Replicate(),
+                                MeshMapperConfig::Shard(1),
+                            }});
                 },
         },
     };

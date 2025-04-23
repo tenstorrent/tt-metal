@@ -13,18 +13,6 @@
 namespace ttnn::distributed {
 namespace {
 
-class ConcatMeshToTensor : public MeshToTensor {
-public:
-    ConcatMeshToTensor(int dim) : concat_dim_(dim) {}
-
-    Tensor compose(const std::vector<Tensor>& tensors) const override {
-        return experimental::xtensor::concat(tensors, concat_dim_);
-    }
-
-private:
-    int concat_dim_ = -1;
-};
-
 class NdTensorToMesh : public TensorToMesh {
 public:
     NdTensorToMesh(const ttnn::MeshShape& shape, const MeshMapperConfig& config) : shape_(shape), config_(config) {}
@@ -60,8 +48,8 @@ public:
         }
 
         TT_FATAL(
-            current_tensors.size() == shape_.mesh_size(),
-            "NdTensorToMesh: Mapping failed. Expected {} tensors for mesh shape {}, but got {}.",
+            current_tensors.size() <= shape_.mesh_size(),
+            "NdTensorToMesh: Mapping failed. Expected at most {} tensors for mesh shape {}, but got {}.",
             shape_.mesh_size(),
             shape_,
             current_tensors.size());
@@ -151,32 +139,13 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(MeshDevice& mesh_devic
         MeshShape(mesh_device.num_devices()));
 }
 
-std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
-    MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config) {
-    MeshMapperConfig mesh_mapper_config;
-    auto convert_to_shard =
-        [](std::optional<int> dim) -> std::variant<MeshMapperConfig::Replicate, MeshMapperConfig::Shard> {
-        if (dim.has_value()) {
-            return MeshMapperConfig::Shard{*dim};
-        } else {
-            return MeshMapperConfig::Replicate{};
-        }
-    };
-    mesh_mapper_config.placements.push_back(convert_to_shard(config.row_dim));
-    mesh_mapper_config.placements.push_back(convert_to_shard(config.col_dim));
-    return create_mesh_mapper(mesh_device, mesh_mapper_config);
-}
-
-std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int dim) {
-    return std::make_unique<ConcatMeshToTensor>(dim);
-}
-
-std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config) {
+std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(MeshDevice& mesh_device, int dim) {
     return create_mesh_composer(
         mesh_device,
         MeshComposerConfig{
-            .dims = {config.row_dim, config.col_dim},
-        });
+            .dims = {dim},
+        },
+        MeshShape(mesh_device.num_devices()));
 }
 
 std::unique_ptr<TensorToMesh> create_mesh_mapper(

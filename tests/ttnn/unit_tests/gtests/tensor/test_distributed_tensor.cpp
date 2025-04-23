@@ -141,7 +141,7 @@ TEST_F(TensorDistributionT3000Test, Shard1D) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
     }
 
-    auto composer = concat_mesh_to_tensor_composer(/*dim=*/0);
+    auto composer = concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
 
     Tensor expected_tensor =
@@ -158,11 +158,10 @@ TEST_F(TensorDistributionT3000Test, Shard2DReplicateDim) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, 1}, DataType::FLOAT32));
 
-    auto mapper = shard_tensor_to_2d_mesh_mapper(
+    auto mapper = create_mesh_mapper(
         *mesh_device_,
-        MeshShape{kNumRows, kNumCols},
-        Shard2dConfig{
-            .row_dim = 1,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Replicate{}},
         });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
@@ -191,12 +190,10 @@ TEST_F(TensorDistributionT3000Test, Shard2D) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, 3}, DataType::FLOAT32));
 
-    auto mapper = shard_tensor_to_2d_mesh_mapper(
+    auto mapper = create_mesh_mapper(
         *mesh_device_,
-        MeshShape{kNumRows, kNumCols},
-        Shard2dConfig{
-            .row_dim = 1,
-            .col_dim = 2,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
         });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
@@ -206,11 +203,10 @@ TEST_F(TensorDistributionT3000Test, Shard2D) {
         EXPECT_THAT(device_tensors[i].to_vector<float>(), ElementsAre(i * 1.F, i * 2.F, i * 3.F));
     }
 
-    auto composer = concat_2d_mesh_to_tensor_composer(
+    auto composer = create_mesh_composer(
         *mesh_device_,
-        Concat2dConfig{
-            .row_dim = 0,
-            .col_dim = 2,
+        MeshComposerConfig{
+            .dims = {0, 2},
         });
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
 
@@ -325,22 +321,19 @@ TEST_F(TensorDistributionT3000Test, ShardBorrowedTensor) {
         /*on_destruction_callback=*/[]() {});
     EXPECT_EQ(num_references_created, 1);  // self
 
-    auto mapper = shard_tensor_to_2d_mesh_mapper(
+    auto mapper = create_mesh_mapper(
         *mesh_device_,
-        MeshShape{kNumRows, kNumCols},
-        Shard2dConfig{
-            .row_dim = 0,
-            .col_dim = 2,
+        MeshMapperConfig{
+            .placements = {MeshMapperConfig::Shard{0}, MeshMapperConfig::Shard{2}},
         });
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
     // Self + sharding across rows; sharding across cols is non-contiguous and thus makes a copy.
     EXPECT_EQ(num_references_created, 1 + kNumRows);
 
-    auto composer = concat_2d_mesh_to_tensor_composer(
+    auto composer = create_mesh_composer(
         *mesh_device_,
-        Concat2dConfig{
-            .row_dim = 0,
-            .col_dim = 2,
+        MeshComposerConfig{
+            .dims = {0, 2},
         });
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
     EXPECT_THAT(concatenated_tensor.to_vector<float>(), Pointwise(FloatEq(), test_data));
