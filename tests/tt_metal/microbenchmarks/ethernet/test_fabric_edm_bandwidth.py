@@ -671,11 +671,11 @@ def test_fabric_6u_4chip_cols_mcast_bw(
     fabric_test_mode,
     num_cluster_cols,
 ):
-    global machine_type_suffix
-    machine_type_suffix = "6u"
     is_ring = fabric_test_mode == FabricTestMode.FullRing
     if is_ring:
         pytest.skip("Baseline numbers not yet available for full-6u ring fabric test mode")
+    global machine_type_suffix
+    machine_type_suffix = "6u"
     run_fabric_edm(
         is_unicast=is_unicast,
         num_messages=num_messages,
@@ -716,11 +716,12 @@ def test_fabric_6u_4chip_rows_mcast_bw(
     fabric_test_mode,
     num_cluster_rows,
 ):
-    global machine_type_suffix
-    machine_type_suffix = "6u"
     is_ring = fabric_test_mode == FabricTestMode.FullRing
     if is_ring:
         pytest.skip("Baseline numbers not yet available for full-6u ring fabric test mode")
+
+    global machine_type_suffix
+    machine_type_suffix = "6u"
     run_fabric_edm(
         is_unicast=is_unicast,
         num_messages=num_messages,
