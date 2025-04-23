@@ -54,7 +54,7 @@ Tensor pre_sort_transform_tensor(
     // If input is not rank 4 transorm it to 4D
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
     // Fill implicit tile padding with the appropriate value
-    const Tensor padded_tensor = ttnn::fill_implicit_tile_padding(
+    Tensor padded_tensor = ttnn::fill_implicit_tile_padding(
         transformed_tensor,
         descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity());
 
