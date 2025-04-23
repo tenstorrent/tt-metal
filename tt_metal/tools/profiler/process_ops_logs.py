@@ -14,6 +14,7 @@ import json
 import yaml
 from datetime import datetime
 import copy
+from collections import deque
 
 import click
 from loguru import logger
@@ -37,6 +38,8 @@ yaml.SafeDumper.ignore_aliases = lambda *args: True
 TRACE_OP_ID_BITSHIFT = 32
 
 OUT_NAME = "ops_perf_results"
+PER_CORE_OP_TO_OP_OUT_NAME = "per_core_op_to_op_times"
+PROFILER_OP_TO_OP_OVERHEAD_NANO_SEC = 1500
 
 OPS_CSV_HEADER = [
     "OP CODE",
@@ -53,8 +56,10 @@ OPS_CSV_HEADER = [
     "DEVICE FW START CYCLE",
     "DEVICE FW END CYCLE",
     "OP TO OP LATENCY [ns]",
+    "OP TO OP LATENCY BR/NRISC START [ns]",
     "DEVICE FW DURATION [ns]",
     "DEVICE KERNEL DURATION [ns]",
+    "DEVICE KERNEL DURATION DM START [ns]",
     "DEVICE KERNEL DURATION PER CORE MIN [ns]",
     "DEVICE KERNEL DURATION PER CORE MAX [ns]",
     "DEVICE KERNEL DURATION PER CORE AVG [ns]",
@@ -433,28 +438,35 @@ def get_device_data_generate_report(
 ):
     deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
     devicePreOpTime = {}
+    devicePreOpDMStartTime = {}
     deviceOps = {}
     i = 0
     rowDicts = []
+    perCoreRowDicts = []
+    perCoreCSVHeader = set()
 
     outFolder = PROFILER_OUTPUT_DIR
     if outputFolder:
         outFolder = outputFolder
 
     name = OUT_NAME
+    perCoreName = PER_CORE_OP_TO_OP_OUT_NAME
     outFolder = os.path.abspath(outFolder)
 
     if nameAppend:
         name += f"_{nameAppend}"
+        perCoreName += f"_{nameAppend}"
         outFolder = os.path.join(outFolder, nameAppend)
 
     if date:
         dateStr = f"{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
         name += f"_{dateStr}"
+        perCoreName += f"_{dateStr}"
         outFolder = os.path.join(outFolder, dateStr)
 
     if export_csv:
         allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
+        perCoreCSVPath = os.path.join(outFolder, f"{perCoreName}.csv")
         logger.info(f"Copying runtime artifacts")
         os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
         if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
@@ -497,7 +509,7 @@ def get_device_data_generate_report(
                 for analysis, data in deviceOp["device_time"].items():
                     analysisData = data["series"]
                     analysisStats = data["stats"]
-                    if "core" in analysis:
+                    if "per_core" in analysis:
                         assert len(analysisData) >= 1, "Unexpected device data format"
                         headerField = f"{csv_header_format(analysis)} MIN [ns]"
                         rowDict[headerField] = f"{analysisStats['Min'] * 1000 / freq:.0f}"
@@ -520,7 +532,62 @@ def get_device_data_generate_report(
                         else:
                             rowDict["OP TO OP LATENCY [ns]"] = 0
                         devicePreOpTime[device] = analysisData[0]["end_cycle"]
+                    if analysis == "device_kernel_duration_dm_start":
+                        if device in devicePreOpDMStartTime.keys():
+                            rowDict["OP TO OP LATENCY BR/NRISC START [ns]"] = round(
+                                1000 * (analysisData[0]["start_cycle"] - devicePreOpDMStartTime[device]) / freq
+                            )
+                        else:
+                            rowDict["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
+                        devicePreOpDMStartTime[device] = analysisData[0]["end_cycle"]
                 rowDicts.append(rowDict)
+
+            def get_core_str_format(core):
+                return f"{core[0]}; {core[1]} [ns]"
+
+            allCores = list(deviceData["devices"][device]["cores"].keys())
+            allCores.remove("DEVICE")
+            allCores.sort()
+            for core in allCores:
+                perCoreCSVHeader.add(get_core_str_format(core))
+
+            coreOpToOps = {}
+            opToOps = []
+            for core in allCores:
+                coreSeries = deviceData["devices"][device]["cores"][core]["riscs"]["TENSIX"]["analysis"]["op2op"][
+                    "series"
+                ]
+                for op2op in coreSeries:
+                    if op2op["end_iter_mark"][1] != op2op["start_iter_mark"][1]:
+                        startMarker, endMarker = op2op["duration_type"]
+                        op2opID = (startMarker["run_host_id"], endMarker["run_host_id"])
+                        op2opDuration = op2op["duration_cycles"]
+                        op2opStart = op2op["start_cycle"]
+                        opToOps.append((op2opStart, op2opID, op2opDuration, core))
+                        if core in coreOpToOps:
+                            coreOpToOps[core].append((op2opStart, op2opID, op2opDuration, core))
+                        else:
+                            coreOpToOps[core] = deque([(op2opStart, op2opID, op2opDuration, core)])
+            opToOps.sort()
+
+            pickedOps = set()
+            for op2op in opToOps:
+                if op2op not in pickedOps:
+                    op2opStart, op2opID, op2opDuration, core = op2op
+                    perCoreRowDict = {
+                        "device ID": device,
+                        "op2op ID": f"{op2opID[0]} -> {op2opID[1]}",
+                    }
+                    for core, series in coreOpToOps.items():
+                        perCoreRowDict[get_core_str_format(core)] = ""
+                        if series and op2opID == series[0][1]:
+                            coreOpToOp = series.popleft()
+                            perCoreRowDict[get_core_str_format(core)] = (
+                                coreOpToOp[2] - PROFILER_OP_TO_OP_OVERHEAD_NANO_SEC
+                            )
+                            pickedOps.add(coreOpToOp)
+
+                    perCoreRowDicts.append(perCoreRowDict)
 
         rowDictHeaders = set()
         for row in rowDicts:
@@ -539,6 +606,15 @@ def get_device_data_generate_report(
                         rowDict[field] = str(fieldData).replace(",", ";")
                     writer.writerow(rowDict)
             logger.info(f"Device only OPs csv generated at: {allOpsCSVPath}")
+            with open(perCoreCSVPath, "w") as perCoreCSV:
+                perCoreCSVHeader = ["device ID", "op2op ID"] + [core for core in perCoreCSVHeader]
+
+                writer = csv.DictWriter(perCoreCSV, fieldnames=perCoreCSVHeader)
+                writer.writeheader()
+
+                for rowDict in perCoreRowDicts:
+                    writer.writerow(rowDict)
+            logger.info(f"Device only per core op to op times csv generated at: {perCoreCSVPath}")
 
         if cleanup_device_log:
             os.remove(deviceTimesLog)
@@ -579,6 +655,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
         rowDicts = []
 
         devicePreOpTime = {}
+        devicePreOpDMStartTime = {}
 
         tensorCSVData = {
             "INPUT": {
@@ -727,7 +804,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                         analysisData = data["series"]
                         analysisStats = data["stats"]
                         freq = analysisData[0]["duration_cycles"] / analysisData[0]["duration_ns"]
-                        if "core" in analysis:
+                        if "per_core" in analysis:
                             assert len(analysisData) >= 1, "Unexpected device data format"
                             headerField = f"{csv_header_format(analysis)} MIN [ns]"
                             rowDict[headerField] = f"{analysisStats['Min'] / freq:.0f}"
@@ -750,6 +827,14 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                             else:
                                 rowDict["OP TO OP LATENCY [ns]"] = 0
                             devicePreOpTime[deviceID] = analysisData[0]["end_cycle"]
+                        if analysis == "device_kernel_duration_dm_start":
+                            if deviceID in devicePreOpDMStartTime.keys():
+                                rowDict["OP TO OP LATENCY BR/NRISC START [ns]"] = round(
+                                    (analysisData[0]["start_cycle"] - devicePreOpDMStartTime[deviceID]) / freq
+                                )
+                            else:
+                                rowDict["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
+                            devicePreOpDMStartTime[deviceID] = analysisData[0]["end_cycle"]
 
                 if "child_calls" in opData.keys():
                     for childCall, duration in opData["child_calls"].items():

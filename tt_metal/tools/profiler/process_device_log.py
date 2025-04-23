@@ -643,15 +643,27 @@ def get_duration(riscData, analysis):
     return []
 
 
+def is_timer_id_iteration_start(timerID):
+    ret = False
+    if timerID["type"] == "ZONE_START" and timerID["zone_name"] == "BRISC-FW":
+        ret = True
+    return ret
+
+
 def adjacent_LF_analysis(riscData, analysis):
     timeseries = riscData["timeseries"]
     durations = []
     startFound = None
+    startIterMark = None
+    iterMark = None
     for timerID, timestamp, attachedData, *metaData in timeseries:
+        if is_timer_id_iteration_start(timerID):
+            iterMark = (timerID, timestamp)
         currStart, currEnd, desStart, desEnd = determine_conditions(timerID, metaData, analysis)
         if not startFound:
             if currStart in desStart:
                 startFound = (timerID, timestamp)
+                startIterMark = iterMark
         else:
             if currEnd in desEnd:
                 startID, startTS = startFound
@@ -661,11 +673,14 @@ def adjacent_LF_analysis(riscData, analysis):
                         end_cycle=timestamp,
                         duration_type=(startID, timerID),
                         duration_cycles=timestamp - startTS,
+                        end_iter_mark=iterMark,
+                        start_iter_mark=startIterMark,
                     )
                 )
                 startFound = None
             elif currStart in desStart:
                 startFound = (timerID, timestamp)
+                startIterMark = iterMark
 
     return durations
 
