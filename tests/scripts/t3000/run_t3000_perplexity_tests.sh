@@ -118,23 +118,14 @@ run_t3000_llama3_perplexity_tests_single_card() {
 
 run_t3000_mistral_perplexity_tests() {
   # This one runs all the T3K tests
-  fail=0
-  start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_mistral_perplexity_tests"
 
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
   hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
+  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_accuracy.py --timeout=3600
 
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_mistral_perplexity_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
 }
 
 run_t3000_llama3_perplexity_tests_t3000() {
