@@ -21,13 +21,13 @@ input_bcast_shape_pairs = [
     ((1, 1, 270, 270), (1, 1, 270, 270)),
     ((1, 1, 64, 64), (1, 310, 64, 64)),
     ((1, 1, 64, 64), (310, 1, 64, 64)),
-    ((1, 1, 64, 64), (1, 310, 64, 64)),
+    ((1, 1, 64, 64), (10, 31, 64, 64)),
     ((31, 33, 64, 64), (31, 33, 64, 64)),
-    ((1, 1, 1, 1), (8, 16, 32, 64)),  # scalar to 4D tensor
+    ((1, 1, 1, 1), (7, 17, 32, 64)),  # scalar to 4D tensor
     ((1, 3, 1, 1), (8, 3, 32, 64)),  # broadcast N, H, W (preserve C)
-    ((2, 1, 4, 1), (2, 16, 4, 64)),  # broadcast C and W
-    ((1, 1, 32, 32), (8, 16, 32, 32)),  # broadcast N and C (preserve H, W)
-    ((1, 3, 1, 4), (8, 3, 32, 4)),  # broadcast N, H, W, C
+    ((2, 1, 4, 1), (2, 17, 4, 64)),  # broadcast C and W
+    ((1, 1, 32, 32), (7, 17, 32, 32)),  # broadcast N and C (preserve H, W)
+    ((1, 3, 1, 4), (7, 3, 32, 4)),  # broadcast N, H, W, C
 ]
 
 
@@ -115,6 +115,7 @@ def test_broadcast_to_out(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, 
 
 
 profile_input_bcast_shape_pairs = [
+    ((1, 1, 1, 1), (1, 65, 32, 64)),
     ((1, 1, 64, 64), (2, 16, 64, 64)),
     ((2, 16, 1, 1), (2, 16, 64, 64)),
     ((2, 1, 64, 1), (2, 16, 64, 64)),  # col
@@ -139,6 +140,7 @@ profile_input_bcast_shape_pairs = [
 @pytest.mark.parametrize("shape_and_broadcast_spec", profile_input_bcast_shape_pairs)
 def test_broadcast_to_profile(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, memory_config_input):
     ttnn.enable_program_cache(device)
+    torch.manual_seed(0)
     shape, broadcast_shape = shape_and_broadcast_spec
     if dtype_pt == torch.bfloat16 and shape[-1] < 2 and broadcast_shape[-1] < 2:
         pytest.skip("bfloat16 needs 4 byte inner dim on the output.")
@@ -229,7 +231,6 @@ input_bcast_shape_pairs = [
 
 @pytest.mark.parametrize("shape_and_broadcast_spec", input_bcast_shape_pairs)
 def test_broadcast_to_bf8_b(device, shape_and_broadcast_spec):
-    pytest.skip("Skip for now, as it is not stable. Need to investigate.")
     shape, broadcast_shape = shape_and_broadcast_spec
     torch_input_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat8_b

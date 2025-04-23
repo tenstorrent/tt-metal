@@ -43,8 +43,8 @@ void kernel_main() {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_written < num_tiles; ++tw, ++num_tiles_written) {
                     // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
                     noc_async_write_tile(start_tile_id + num_tiles_written, dst, l1_read_addr);
-                    noc_async_write_barrier();
                 }
+                noc_async_write_barrier();
                 cb_pop_front(cb_id_dst, onetile);
             }
         }

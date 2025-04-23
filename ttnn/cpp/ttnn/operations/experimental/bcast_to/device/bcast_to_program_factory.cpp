@@ -68,8 +68,9 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 10>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 11>{0});
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 13>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
+            handle_args(program, compute_kernel_id, core, std::array<uint32_t, 12>{0});
             continue;
         }
 
