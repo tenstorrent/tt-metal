@@ -139,9 +139,9 @@ Result conv2d_DRAM(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
-    uint32_t input_sliced_dim =
+    const uint32_t input_sliced_dim =
         dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? input_height : input_width;
-    uint32_t output_sliced_dim =
+    const uint32_t output_sliced_dim =
         dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
     TT_FATAL(dram_slice_config.num_slices > 1, " Number of slices should be greater than 1 for Conv2D DRAM Slicing");
     TT_FATAL(
@@ -169,15 +169,6 @@ Result conv2d_DRAM(
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
-    // Tensor dram_output_tensor = ttnn::zeros(     //Kept for debugging. Will remove later.
-    //         ttnn::Shape({batch_size, output_height, output_width, out_channels}),
-    //         conv_config.dtype,
-    //         tt_metal::Layout::ROW_MAJOR,
-    //         *device,
-    //         MemoryConfig{
-    //             .memory_layout = TensorMemoryLayout::INTERLEAVED,
-    //             .buffer_type = BufferType::DRAM,
-    //         });
 
     Tensor dram_output_tensor = tt_metal::create_device_tensor(
         TensorSpec(
@@ -190,26 +181,20 @@ Result conv2d_DRAM(
                     .buffer_type = BufferType::DRAM,
                 })),
         device);
-    bool first_run = true;
-    std::optional<MemoryConfig> input_memory_config = std::nullopt;
-    uint32_t input_memory_config_slice_dim = 0;
 
-    uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
-    uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
+    bool first_run = true;
+
+    const uint32_t min_output_slice_size = output_sliced_dim / dram_slice_config.num_slices;
+    const uint32_t output_slice_rem = output_sliced_dim % dram_slice_config.num_slices;
 
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 
     while ((output_slice_dim_start < output_sliced_dim) && (slice_index < dram_slice_config.num_slices)) {
-        uint32_t output_slice_size = min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0);
-        uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
-        uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
+        const uint32_t output_slice_size = min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0);
+        const uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
+        const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
-        log_info(
-            "Output Slice Start: {}, End: {}, Size: {}",
-            output_slice_dim_start,
-            output_slice_dim_end,
-            this_output_slice_dim);
         if (this_output_slice_dim == 0) {
             continue;
         }
@@ -260,11 +245,11 @@ Result conv2d_DRAM(
             }
         }
 
-        uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
-        uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+        const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
+        const uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
 
-        uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
-        uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
+        const uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
+        const uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
 
         if (!conv_config.shard_layout.has_value()) {
             conv_config = determine_conv_config_for_auto_shard(

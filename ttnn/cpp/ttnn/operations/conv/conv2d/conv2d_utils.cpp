@@ -951,51 +951,6 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
-MemoryConfig get_input_memory_config(
-    const Conv2dConfig& conv_config,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    uint32_t output_height,
-    uint32_t output_width,
-    const CoreCoord& compute_grid_size,
-    Layout input_layout,
-    bool is_mm_conv) {
-    TT_FATAL(conv_config.shard_layout.has_value(), "Shard layout must be set.");
-    auto shard_layout = conv_config.shard_layout.value();
-    auto parallel_config = determine_parallel_config(
-        shard_layout,
-        batch_size,
-        in_channels,
-        output_height,
-        output_width,
-        out_channels,
-        compute_grid_size,
-        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR,
-        !is_mm_conv,
-        true,
-        true,
-        conv_config.act_block_h_override);
-
-    uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
-    uint32_t input_num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
-
-    uint32_t round_up_size = 1;  // tt::constants::TILE_HEIGHT;
-    if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED && input_layout == Layout::ROW_MAJOR) {
-        round_up_size = 1;
-    }
-    uint32_t tensor_height = batch_size * input_height * input_width;
-    // uint32_t input_tensor_height_snapped_to_tile = tt::round_up(tensor_height, input_num_cores_nhw * round_up_size);
-    // uint32_t input_tensor_width_snapped_to_channels_alignment =
-    // tt::round_up(in_channels, input_num_cores_c * conv_config.input_channels_alignment);
-
-    auto input_padded_shape = ttnn::Shape({1, 1, tensor_height, in_channels});  // TODO: resolve ttnn::types::Shape and
-
-    return create_sharded_memory_config_from_parallel_config(input_padded_shape, parallel_config, round_up_size);
-}
-
 conv_op_l1_usage conv2d::calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const OptimizedConvBlockConfig& block_config,
