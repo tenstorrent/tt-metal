@@ -10,6 +10,7 @@ on:
 
 env:
   WH_6U_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u
+  WH_6U_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-wh-6u
 
 jobs:
   build-artifact:
@@ -34,6 +35,7 @@ jobs:
         id: set-wh-6u-image-tag
         run: |
           echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "wh-6u-profiler-image-tag=${{ env.WH_6U_PROFILER_IMAGE_NAME }}:${{ github.run_number }}" >> "$GITHUB_OUTPUT"
   build-wh-6u-image:
     needs:
       # - build-artifact
@@ -43,6 +45,14 @@ jobs:
     permissions:
       packages: write
       contents: read
+    strategy:
+      matrix:
+        image-config:
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile.wh-6u
+            # Need to update these
+            build-artifact-name: TTMetal_build_any
+            wheel-artifact-name: eager-dist-ubuntu-22.04-any
     steps:
       - uses: actions/checkout@v4
       - name: Download artifacts from metal
@@ -51,7 +61,7 @@ jobs:
         with:
           # 22.04 artifact... we'll probably need to key on that in the original action in metal
           # TODO - change to outputs from build above
-          name: TTMetal_build_any
+          name: ${{ matrix.image-config.build-artifact-name }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: 14628746342
       - run: mkdir -p _tt-metal
@@ -61,7 +71,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           # TODO - change to outputs from build above
-          name: eager-dist-ubuntu-22.04-any
+          name: ${{ matrix.image-config.wheel-artifact-name }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: 14628746342
       - name: 💿 Verify Wheel exists
@@ -81,7 +91,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          file: dockerfile/upstream_test_images/Dockerfile.wh-6u
+          file: ${{ matrix.image-config.dockerfile }}
           platforms: linux/amd64
           pull: true
           push: true
@@ -93,7 +103,7 @@ jobs:
             TEST_COMMAND=tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
           # Use run_number as it should be unique for every run, can trace to a commit, and is a
           # static counter managed by GitHub
-          tags: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+          tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
   test-wh-6u-image:
     needs:
