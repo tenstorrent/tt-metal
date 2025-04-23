@@ -70,11 +70,47 @@ template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
+        vInt zero = 0;
 
         // a[i] == 0
         if constexpr (COMP_MODE == SfpuType::equal_zero) {
-            v_if(v == 0) { v = 1; }
-            v_else { v = 0; }
+            v_if(v == zero) { v = 1; }
+            v_else { v = zero; }
+            v_endif;
+        }
+
+        // a[i] != 0
+        if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
+            v_if(v == zero) { v = zero; }
+            v_else { v = 1; }
+            v_endif;
+        }
+
+        // a[i] < 0
+        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+            v_if(v < zero) { v = 1; }
+            v_else { v = zero; }
+            v_endif;
+        }
+
+        // a[i] > 0
+        if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
+            v_if(v > zero) { v = 1; }
+            v_else { v = zero; }
+            v_endif;
+        }
+
+        // a[i] <= 0
+        if constexpr (COMP_MODE == SfpuType::less_than_equal_zero) {
+            v_if(v <= zero) { v = 1; }
+            v_else { v = zero; }
+            v_endif;
+        }
+
+        // a[i] >= 0
+        if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
+            v_if(v >= zero) { v = 1; }
+            v_else { v = zero; }
             v_endif;
         }
 
