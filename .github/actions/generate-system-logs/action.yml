@@ -25,7 +25,9 @@ runs:
         sudo lshw > ~/run-log/${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_lshw.log
     - name: 'Tar files'
       shell: bash
-      run: tar -cvf ~/run-log/sys_logs.tar ~/run-log/${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_*
+      run: |
+        set +e
+        tar -cvf ~/run-log/sys_logs.tar ~/run-log/${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_*
     - name: 'Upload Artifact'
       uses: actions/upload-artifact@v4
       with:
