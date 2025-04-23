@@ -837,8 +837,8 @@ HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual
 }
 
 // Methods for SubDevice Management
-uint8_t MeshDevice::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
+bool MeshDevice::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->has_noc_mcast_txns(sub_device_id);
 }
 uint8_t MeshDevice::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
