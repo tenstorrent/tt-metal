@@ -15,19 +15,19 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
-  build-6u-image:
+  build-wh-6u-image:
     needs: build-artifact
     runs-on: ubuntu-latest
     outputs:
-      6u-image-name: ${{ steps.set-6u-image-name.outputs.6u-image-name }}
+      image-name: ${{ steps.set-wh-6u-image-name.outputs.wh-6u-image-name }}
     permissions:
       packages: write
       contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Set image name
-        id: set-6u-image-name
-        run: echo "6u-image-name=ghcr.io/tenstorrent/tt-metal/upstream-tests-6u:${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+        id: set-wh-6u-image-name
+        run: echo "wh-6u-image-name=ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:${{ github.run_number }}" >> "$GITHUB_OUTPUT"
       - name: Download artifacts from metal
         id: download-artifacts
         uses: actions/download-artifact@v4
@@ -48,7 +48,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          file: dockerfile/upstream_test_images/Dockerfile.6u
+          file: dockerfile/upstream_test_images/Dockerfile.wh-6u
           platforms: linux/amd64
           pull: true
           push: true
@@ -58,10 +58,10 @@ jobs:
             TT_METAL_COMMIT_SHA=${{ github.sha }}
           # Use run_number as it should be unique for every run, can trace to a commit, and is a
           # static counter managed by GitHub
-          tags: ${{ steps.set-6u-image-name.outputs.6u-image-name }}
+          tags: ${{ steps.set-wh-6u-image-name.outputs.wh-6u-image-name }}
           context: ${{ github.workspace }}
-  test-6u-image:
-    needs: build-6u-image
+  test-wh-6u-image:
+    needs: build-wh-6u-image
     runs-on:
       - arch-wormhole_b0
       - topology-6u
@@ -69,4 +69,4 @@ jobs:
       - pipeline-functional
     steps:
       - name: Run image
-        run: timeout --preserve-status 600 docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.build-6u-image.outputs.6u-image-name }}
+        run: timeout --preserve-status 600 docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.build-wh-6u-image.outputs.wh-6u-image-name }}
