@@ -107,7 +107,7 @@ class TtStableDiffusion3Pipeline:
             parameters = TtT5EncoderParameters.from_torch(
                 torch_text_encoder_3.state_dict(),
                 device=self._device,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
             )
             self._text_encoder_3 = TtT5Encoder(
                 parameters,
