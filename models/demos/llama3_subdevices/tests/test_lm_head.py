@@ -99,7 +99,9 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
     )
 
     logger.info("Run Llama_LM_Head")
-    tt_outputs = tt_model(tt_input)
+    # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
+    tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(tt_ccl.tt_lm_head_buffer, tt_ccl.lm_head_buffer_mem_cfg)
+    tt_outputs = tt_model(tt_input, prefetcher_setup.worker_sub_device_id, mode="decode")
     tt_outputs = [
         ttnn.to_torch(
             tt_output,
