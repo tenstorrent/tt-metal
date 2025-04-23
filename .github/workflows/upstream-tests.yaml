@@ -46,6 +46,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           # 22.04 artifact... we'll probably need to key on that in the original action in metal
+          # TODO - change to outputs from build above
           name: TTMetal_build_any
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ${{ github.workspace }}/build_vanilla
@@ -56,7 +57,8 @@ jobs:
       - name: 🧪 Download vanilla Python Wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ needs.build-artifact.wheel-artifact-name }}
+          # TODO - change to outputs from build above
+          name: eager-dist-ubuntu-22.04-any
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ${{ github.workspace }}/build_vanilla
           run-id: 14628746342
