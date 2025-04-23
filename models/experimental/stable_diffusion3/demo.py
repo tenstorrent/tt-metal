@@ -45,7 +45,7 @@ def test_sd3(
     pipeline = TtStableDiffusion3Pipeline(
         checkpoint=f"stabilityai/stable-diffusion-3.5-{model_name}",
         device=mesh_device,
-        enable_t5_text_encoder=False,
+        enable_t5_text_encoder=mesh_device.get_num_devices() >= 4,
         guidance_cond=guidance_cond,
     )
 
