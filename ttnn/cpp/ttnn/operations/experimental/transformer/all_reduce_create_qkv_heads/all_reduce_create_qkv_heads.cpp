@@ -17,7 +17,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllRed
     const ttnn::Tensor& batch_offset,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& multi_device_global_semaphore,
     // create qkv heads non-optional parameters
     const uint32_t num_heads,
     const std::optional<ttnn::MemoryConfig>& all_reduce_memory_config,

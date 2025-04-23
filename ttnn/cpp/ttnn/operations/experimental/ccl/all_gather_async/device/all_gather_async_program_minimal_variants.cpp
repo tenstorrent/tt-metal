@@ -56,6 +56,7 @@ void append_fabric_connection_rt_args(
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
     const Tensor& input_tensor,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -67,15 +68,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
+    auto mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
     const bool enable_persistent_fabric_mode = true;
-    IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        sender_device->id(),
         is_first_chip,
         is_last_chip);
 
@@ -89,7 +90,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
+        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, mesh_device, sub_device_id);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
@@ -175,7 +176,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         CoreCoord core = sender_worker_cores[link];
         if (link == 0) {
             // drain sync core is the first worker core
-            drain_sync_core = device->worker_core_from_logical_core(core);
+            drain_sync_core = mesh_device->worker_core_from_logical_core(core);
         }
 
         // Set reader runtime args
@@ -218,12 +219,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                input_tensor.device()->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                input_tensor.device()->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
@@ -261,6 +262,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
+    IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -272,16 +274,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
+    auto mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
     const bool enable_persistent_fabric_mode = true;
 
-    IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        sender_device->id(),
         is_first_chip,
         is_last_chip);
 
@@ -295,7 +297,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
+        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, mesh_device, sub_device_id);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -419,14 +421,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         for (uint32_t i = input_tile_id_start / input_tensor_shard_num_pages;
              i < (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages;
              i++) {
-            auto this_core = device->worker_core_from_logical_core(input_cores_vec[i]);
+            auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
         }
         for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
              i < (input_tile_id_end + output_tensor_shard_num_pages - 1) / output_tensor_shard_num_pages;
              i++) {
-            auto this_core = device->worker_core_from_logical_core(output_cores_this_device[i]);
+            auto this_core = mesh_device->worker_core_from_logical_core(output_cores_this_device[i]);
             output_tensor_cores_x.push_back(this_core.x);
             output_tensor_cores_y.push_back(this_core.y);
         }
@@ -443,7 +445,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
 
         if (link == 0) {
             // drain sync core is the first worker core
-            drain_sync_core = device->worker_core_from_logical_core(core);
+            drain_sync_core = mesh_device->worker_core_from_logical_core(core);
         }
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
@@ -488,12 +490,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                input_tensor.device()->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                input_tensor.device()->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);

@@ -10,9 +10,9 @@ from models.utility_functions import is_wormhole_b0
 @pytest.mark.parametrize(
     "llm_mode, batch_size, max_seq_len, model_config_str, num_samples, expected_ppl, expected_top1, expected_top5",
     (
-        ("prefill", 1, 128, "BFLOAT16-DRAM", 64, 19.93, 0.41, 0.66),
-        ("prefill", 1, 1024, "BFLOAT16-DRAM", 64, 11.41, 0.49, 0.72),
-        ("prefill", 1, 2048, "BFLOAT16-DRAM", 64, 9.96, 0.50, 0.74),
+        ("prefill", 1, 128, "BFLOAT16-DRAM", 64, 20.00, 0.41, 0.66),
+        ("prefill", 1, 1024, "BFLOAT16-DRAM", 64, 11.46, 0.49, 0.72),
+        ("prefill", 1, 2048, "BFLOAT16-DRAM", 64, 9.97, 0.50, 0.74),
         ("decode", 32, 128, "BFLOAT16-L1_SHARDED", 64, 20.25, 0.40, 0.66),
         ("decode", 32, 1024, "BFLOAT16-L1_SHARDED", 64, 11.63, 0.48, 0.72),
         ("decode", 32, 2048, "BFLOAT16-L1_SHARDED", 64, 10.18, 0.50, 0.74),

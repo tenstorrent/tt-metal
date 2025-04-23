@@ -216,7 +216,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             # TT vision_model
             vision_tokens = self.vision_model(stacked_images, aspect_ratios)
             # Back to torch
-            vision_tokens = ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            vision_tokens = ttnn.to_torch(ttnn.get_device_tensors(vision_tokens)[0])
             chunk_seq_len = self.configuration.vision_chunk_ntok
             # NOTE: slicing up to chunk_seq_len is necessary because padding information is lost by this point
             vision_tokens = (

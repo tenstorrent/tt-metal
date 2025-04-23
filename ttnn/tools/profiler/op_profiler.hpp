@@ -485,17 +485,41 @@ inline std::string op_meta_data_serialized_json(
     ZoneText(op_text.c_str(), op_text.size());                                                                \
     TracyMessage(op_message.c_str(), op_message.size());
 
-#define TracyOpTTNNExternal(op_id, op, input_tensors)                                                           \
+#define TracyOpTTNNExternal(op, input_tensors, base_op_id)                                                      \
+    /* This op runs entirely on host, but its ID must be generated using the same data-path as device-side */   \
+    /* ops, for accurate reporting by the performance post-processor. */                                        \
+    auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_op_id, 0, true);                           \
     std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(op_id, op, input_tensors); \
     std::string op_text = fmt::format("id:{}", op_id);                                                          \
     ZoneText(op_text.c_str(), op_text.size());                                                                  \
     TracyMessage(op_message.c_str(), op_message.size());
 
+#define TracyOpMeshWorkload(                                                                                   \
+    mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)             \
+    for (const auto& [range, program] : mesh_workload.get_programs()) {                                        \
+        auto base_program_id = program.get_runtime_id();                                                       \
+        for (auto coord : range) {                                                                             \
+            /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */ \
+            /* regression tests well-formed data. */                                                           \
+            /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                       \
+            ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
+            auto device_id = mesh_device->get_device(coord)->id();                                             \
+            auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id);           \
+            std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                  \
+                operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
+            std::string op_text = fmt::format("id:{}", op_id);                                                 \
+            ZoneText(op_text.c_str(), op_text.size());                                                         \
+            TracyMessage(op_message.c_str(), op_message.size());                                               \
+        }                                                                                                      \
+    }
+
 #else
 
 #define TracyOpTTNNDevice( \
     operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value)
-#define TracyOpTTNNExternal(op_id, op, input_tensors)
+#define TracyOpTTNNExternal(op, input_tensors, base_op_id)
+#define TracyOpMeshWorkload( \
+    mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)
 
 #endif
 }  // namespace op_profiler

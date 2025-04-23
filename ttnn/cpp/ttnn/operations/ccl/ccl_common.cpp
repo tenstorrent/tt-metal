@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
 #include "tt-metalium/hal.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -58,13 +59,33 @@ size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInter
 
 ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
 
+tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program) {
+    tt::tt_metal::operation::MeshWorkloadWithCallbacks workload_with_callbacks;
+    for (const auto& range : tensor_coords.ranges()) {
+        for (const auto& coord : range) {
+            const ttnn::MeshCoordinateRange program_range(coord, coord);
+            auto program_with_callbacks = create_program(coord);
+            workload_with_callbacks.workload.add_program(program_range, std::move(program_with_callbacks.program));
+            if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
+                workload_with_callbacks.per_program_callbacks.emplace(
+                    program_range, std::move(*program_with_callbacks.override_runtime_arguments_callback));
+            }
+        }
+    }
+    return workload_with_callbacks;
+}
+
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
-    const Tensor& input_tensor, const std::vector<IDevice*>& devices, const ttnn::ccl::Topology& topology) {
+    const IDevice* target_device, const std::vector<IDevice*>& devices, const ttnn::ccl::Topology& topology) {
     uint32_t num_devices = devices.size();
     bool is_linear = topology == ttnn::ccl::Topology::Linear;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == input_tensor.device()) {
+        if (devices.at(i) == target_device) {
             device_index = i;
             bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
             bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;

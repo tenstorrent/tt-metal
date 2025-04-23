@@ -162,7 +162,7 @@ std::tuple<
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore>
 create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, IDevice* device) {
     auto from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device.get(),
+        mesh_device->get_devices(),
         device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                             // initial value
         tt::tt_metal::BufferType::L1,  // buffer type
@@ -170,7 +170,7 @@ create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&
     );
 
     auto to_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device.get(),
+        mesh_device->get_devices(),
         device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                             // initial value
         tt::tt_metal::BufferType::L1,  // buffer type
@@ -178,7 +178,7 @@ create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&
     );
 
     auto multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device.get(),
+        mesh_device->get_devices(),
         device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
         0,                             // initial value
         tt::tt_metal::BufferType::L1,  // buffer type

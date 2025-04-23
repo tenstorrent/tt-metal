@@ -103,7 +103,7 @@ ttnn::Tensor permute_launch(
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
     std::vector<ttnn::Tensor> output_tensors = {ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({a}))};
-    tt::tt_metal::operation::launch_with_autoformat(
+    tt::tt_metal::operation::launch_op(
         [dims, output_mem_config, pad_value](
             const std::vector<ttnn::Tensor>& input_tensors,
             const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,

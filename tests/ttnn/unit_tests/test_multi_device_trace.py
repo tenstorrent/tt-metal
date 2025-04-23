@@ -136,7 +136,6 @@ def test_multi_device_multi_trace(t3k_mesh_device, shape, use_all_gather, enable
     torch.manual_seed(0)
     if t3k_mesh_device.get_num_devices() <= 1:
         pytest.skip("This test requires multiple devices")
-
     # Trace requires program cache to be enabled
     t3k_mesh_device.enable_async(enable_async)
     t3k_mesh_device.enable_program_cache()

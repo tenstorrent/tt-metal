@@ -54,6 +54,24 @@ def is_single_card_n300(device):
     return num_pcie == 1 and num_devices == 2 and device.arch().name == "WORMHOLE_B0"
 
 
+# TODO: Remove this when TG clusters are deprecated.
+def is_tg_cluster():
+    import ttnn
+
+    num_pcie = ttnn.GetNumPCIeDevices()
+    num_devices = ttnn.GetNumAvailableDevices()
+    # TG has 32 available chips and 4 PCIe mapped chips (not exposed to the user)
+    TG_NUM_PCIE_DEVICES = 4
+    TG_NUM_DEVICES = 32
+    return num_pcie == TG_NUM_PCIE_DEVICES and num_devices == TG_NUM_DEVICES
+
+
+def first_available_tg_device():
+    assert is_tg_cluster()
+    # The id of the first user exposed device for a TG cluster is 4
+    return 4
+
+
 @pytest.fixture(scope="session")
 def model_location_generator():
     def model_location_generator_(model_version, model_subdir=""):
@@ -107,8 +125,12 @@ def device(request, device_params):
     device_id = request.config.getoption("device_id")
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
 
-    num_devices = ttnn.GetNumPCIeDevices()
-    assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
+    # When initializing a single device on a TG system, we want to
+    # target the first user exposed device, not device 0 (one of the
+    # 4 gateway devices)
+    if is_tg_cluster() and not device_id:
+        device_id = first_available_tg_device()
+
     updated_device_params = get_updated_device_params(device_params)
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)

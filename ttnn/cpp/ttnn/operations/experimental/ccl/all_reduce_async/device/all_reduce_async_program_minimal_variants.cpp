@@ -46,6 +46,7 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
     const Tensor& buffer_tensor,
+    IDevice* target_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -57,14 +58,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
-    IDevice* device = input_tensor.device();
+    auto mesh_device = input_tensor.mesh_device();
     const bool enable_persistent_fabric_mode = true;
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        target_device->id(),
         is_first_chip,
         is_last_chip);
 
@@ -87,8 +88,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
     const auto num_output_cores = output_tensor_cores.num_cores();
 
-    auto sub_device_cores = device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(device->get_sub_device_ids().at(0)));
+    auto sub_device_cores = mesh_device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0)));
 
     std::vector<CoreRange> output_cores;
     for (const auto& cr : sub_device_cores.ranges()) {
@@ -342,7 +343,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     // Kernel Runtime Args
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
-        CoreCoord drain_sync_core = device->worker_core_from_logical_core(core);
+        CoreCoord drain_sync_core = target_device->worker_core_from_logical_core(core);
         uint32_t worker_num_tiles_to_read = output_tensor_pages_in_link[link];
 
         uint32_t input_first_core_tile_start_offset = input_tensor_tile_offset_per_link[link];
@@ -353,14 +354,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         std::vector<uint32_t> output_tensor_cores_x;
         std::vector<uint32_t> output_tensor_cores_y;
         for (uint32_t i = input_cores_idx_per_link[link].first; i < input_cores_idx_per_link[link].second; i++) {
-            auto this_core = device->worker_core_from_logical_core(input_cores_vec[i]);
+            auto this_core = target_device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
         }
         for (uint32_t i = output_cores_per_link * link;
              i < output_cores_per_link * link + num_output_cores_in_link[link];
              i++) {
-            auto this_core = device->worker_core_from_logical_core(output_cores_vec[i]);
+            auto this_core = target_device->worker_core_from_logical_core(output_cores_vec[i]);
             output_tensor_cores_x.push_back(this_core.x);
             output_tensor_cores_y.push_back(this_core.y);
         }
@@ -389,8 +390,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
 
         uint32_t num_mcast_cores = 0;
         for (const auto& range : output_corerangeset_per_link[link].ranges()) {
-            auto start_core = device->worker_core_from_logical_core(range.start_coord);
-            auto end_core = device->worker_core_from_logical_core(range.end_coord);
+            auto start_core = target_device->worker_core_from_logical_core(range.start_coord);
+            auto end_core = target_device->worker_core_from_logical_core(range.end_coord);
             num_mcast_cores += (end_core.x - start_core.x + 1) * (end_core.y - start_core.y + 1);
             bool mcast_range_contains_self =
                 start_core.x <= core.x && core.x <= end_core.x && start_core.y <= core.y && core.y <= end_core.y;
@@ -438,13 +439,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                target_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
 
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                target_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);

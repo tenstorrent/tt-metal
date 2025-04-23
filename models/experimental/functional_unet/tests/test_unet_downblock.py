@@ -110,7 +110,9 @@ def test_unet_downblock_multi_device(
     ttnn_input = ttnn_input.to(mesh_device)
     ttnn_output, ttnn_residual = getattr(ttnn_model, block_name)(ttnn_input)
 
-    assert len(ttnn_output.devices()) == 2, "Expected output tensor to be sharded across 2 devices"
-    assert len(ttnn_residual.devices()) == 2, "Expected residual output tensor to be sharded across 2 devices"
+    assert ttnn_output.device().get_num_devices() == 2, "Expected output tensor to be sharded across 2 devices"
+    assert (
+        ttnn_residual.device().get_num_devices() == 2
+    ), "Expected residual output tensor to be sharded across 2 devices"
     check_pcc_conv(torch_residual, ttnn_residual, pcc=0.999, mesh_composer=output_mesh_composer)
     check_pcc_pool(torch_output, ttnn_output, pcc=0.999, mesh_composer=output_mesh_composer)
