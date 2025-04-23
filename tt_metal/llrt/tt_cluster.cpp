@@ -280,22 +280,28 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 void Cluster::open_driver(const bool &skip_driver_allocs) {
     std::unique_ptr<tt_device> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
+        std::set<chip_id_t> chips_set;
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
         // umd::Cluster::detect_available_device_ids only lists MMIO device ids, since we need remote chip ids
         // generate the cluster desc and pull chip ids from there
         auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-        std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
-        std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
+        const char* TT_METAL_VISIBLE_DEVICES = std::getenv("TT_METAL_VISIBLE_DEVICES");
+        if (TT_METAL_VISIBLE_DEVICES != NULL) {
+            chips_set.emplace(std::stoi(std::string(TT_METAL_VISIBLE_DEVICES)));
+        } else {
+            std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
+            chips_set.insert(all_chips.begin(), all_chips.end());
+        }
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
         // and assert if workload uses more than available.
-        uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, (uint32_t)all_chips_set.size());
+        uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, (uint32_t)chips_set.size());
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
         const bool clean_system_resources = true;
         device_driver = std::make_unique<tt::umd::Cluster>(
             sdesc_path,
-            all_chips_set,
+            chips_set,
             num_host_mem_ch_per_mmio_device,
             skip_driver_allocs,
             clean_system_resources,
