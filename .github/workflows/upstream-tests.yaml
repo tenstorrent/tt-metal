@@ -32,8 +32,8 @@ jobs:
         run: echo "wh-6u-image-name=ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:${{ github.run_number }}" >> "$GITHUB_OUTPUT"
   build-wh-6u-image:
     needs:
-      - build-artifact
-      - build-artifact-profiler
+      # - build-artifact
+      # - build-artifact-profiler
       - get-image-names
     runs-on: ubuntu-latest
     permissions:
@@ -47,7 +47,9 @@ jobs:
         with:
           # 22.04 artifact... we'll probably need to key on that in the original action in metal
           name: TTMetal_build_any
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ${{ github.workspace }}/build_vanilla
+          run-id: 14628746342
       - run: mkdir -p _tt-metal-vanilla
       - run: tar -xvf build_vanilla/ttm_any.tar -C _tt-metal-vanilla/
       - run: ls -hal _tt-metal-vanilla
@@ -55,7 +57,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.build-artifact.wheel-artifact-name }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ${{ github.workspace }}/build_vanilla
+          run-id: 14628746342
       - name: 💿 Verify vanilla Wheel exists
         shell: bash
         run: |
