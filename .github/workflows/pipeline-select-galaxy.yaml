@@ -25,6 +25,10 @@ on:
         required: false
         type: boolean
         default: false
+      tg-demo:
+        required: false
+        type: boolean
+        default: false
       tg-unit:
         required: false
         type: boolean
@@ -56,6 +60,7 @@ jobs:
   tg-quick:
     if: ${{ inputs.tg-quick }}
     needs: build-artifact
+    secrets: inherit
     uses: ./.github/workflows/tg-quick.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -65,6 +70,7 @@ jobs:
   tg-unit-tests:
     if: ${{ inputs.tg-unit }}
     needs: build-artifact
+    secrets: inherit
     uses: ./.github/workflows/tg-unit-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -76,6 +82,16 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  tg-demo-tests:
+    if: ${{ inputs.tg-demo }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tg-demo-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
