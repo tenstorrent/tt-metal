@@ -348,14 +348,8 @@ class TtAttention:
         )
 
         if self.device.get_num_devices() > 1:
-            spatial = ttnn.all_gather(
-                spatial,
-                dim=-1,
-            )
-            prompt = ttnn.all_gather(
-                prompt,
-                dim=-1,
-            )
+            spatial = ttnn.all_gather(spatial, dim=-1)
+            prompt = ttnn.all_gather(prompt, dim=-1)
 
         spatial = self._spatial_attn.out_proj(spatial)
         prompt = self._prompt_attn.out_proj(prompt)

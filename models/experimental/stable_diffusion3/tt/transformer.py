@@ -26,6 +26,7 @@ class TtSD3Transformer2DModelParameters:
     time_embed_out: TtLinearParameters
     norm_out: TtLayerNormParameters
     proj_out: TtLinearParameters
+    distributed: bool
 
     @classmethod
     def from_torch(
@@ -37,7 +38,7 @@ class TtSD3Transformer2DModelParameters:
         embedding_dim: int,
         hidden_dim_padding: int,
         dtype: ttnn.DataType | None = None,
-        device: ttnn.Device,
+        device: ttnn.MeshDevice,
     ) -> TtSD3Transformer2DModelParameters:
         return cls(
             pos_embed=TtPatchEmbedParameters.from_torch(
@@ -69,6 +70,7 @@ class TtSD3Transformer2DModelParameters:
             proj_out=TtLinearParameters.from_torch(
                 substate(state, "proj_out"), dtype=dtype, device=device, shard_dim=None
             ),
+            distributed=device.get_num_devices() > 1,
         )
 
 
@@ -112,6 +114,7 @@ class TtSD3Transformer2DModel:
 
         # TODO: get dimensions from other parameters
         self._sharding = ShardingProjection(dim=2432, device=device)
+        self._distributed = parameters.distributed
 
     def __call__(
         self,
@@ -160,7 +163,8 @@ class TtSD3Transformer2DModel:
 
         spatial_time = self._time_embed_out(ttnn.silu(time_embed))
         [scale, shift] = chunk_time(spatial_time, 2)
-        spatial = ttnn.all_gather(spatial, dim=-1)
+        if self._distributed:
+            spatial = ttnn.all_gather(spatial, dim=-1)
         spatial = self._norm_out(spatial) * (1 + scale) + shift
         return self._proj_out(spatial)
 

@@ -32,7 +32,6 @@ class TtStableDiffusion3Pipeline:
     ) -> None:
         self._device = device
         device.enable_async(True)
-        ttnn_dtype = ttnn.bfloat16  # ttnn.bfloat8_b
 
         logger.info("loading models...")
         self._tokenizer_1 = CLIPTokenizer.from_pretrained(checkpoint, subfolder="tokenizer")
@@ -86,7 +85,7 @@ class TtStableDiffusion3Pipeline:
             embedding_dim=embedding_dim,
             hidden_dim_padding=hidden_dim_padding,
             device=self._device,
-            dtype=ttnn_dtype,
+            dtype=ttnn.bfloat8_b if device.get_num_devices() == 1 else ttnn.bfloat16,
         )
 
         self._tt_transformer = TtSD3Transformer2DModel(
@@ -108,7 +107,7 @@ class TtStableDiffusion3Pipeline:
             parameters = TtT5EncoderParameters.from_torch(
                 torch_text_encoder_3.state_dict(),
                 device=self._device,
-                dtype=ttnn_dtype,
+                dtype=ttnn.bfloat8_b,
             )
             self._text_encoder_3 = TtT5Encoder(
                 parameters,

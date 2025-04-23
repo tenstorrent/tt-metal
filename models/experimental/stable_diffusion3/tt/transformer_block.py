@@ -31,6 +31,7 @@ class TtTransformerBlockParameters:
     spatial_norm_2: TtLayerNormParameters
     prompt_ff: TtFeedForwardParameters | None
     spatial_ff: TtFeedForwardParameters
+    distributed: bool
 
     @classmethod
     def from_torch(
@@ -100,6 +101,7 @@ class TtTransformerBlockParameters:
             prompt_ff=TtFeedForwardParameters.from_torch(substate(state, "ff_context"), dtype=dtype, device=device)
             if has_ff_context
             else None,
+            distributed=device.get_num_devices() > 1,
         )
 
 
@@ -132,6 +134,7 @@ class TtTransformerBlock:
         self._prompt_time_embed = TtLinear(parameters.prompt_time_embed)
 
         self._context_pre_only = self._prompt_ff is None
+        self._distributed = parameters.distributed
 
     def _spatial_attn_block(
         self, inp: ttnn.Tensor, *, gate: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor
@@ -161,8 +164,9 @@ class TtTransformerBlock:
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         spatial_scaled = spatial * (1 + spatial_scale) + spatial_shift
         prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
-        spatial_scaled = ttnn.all_gather(spatial_scaled, dim=-1)
-        prompt_scaled = ttnn.all_gather(prompt_scaled, dim=-1)
+        if self._distributed:
+            spatial_scaled = ttnn.all_gather(spatial_scaled, dim=-1)
+            prompt_scaled = ttnn.all_gather(prompt_scaled, dim=-1)
         spatial_attn, prompt_attn = self._dual_attn(
             spatial=spatial_scaled, prompt=prompt_scaled, deallocate=True, N=N, L=L
         )
@@ -176,7 +180,8 @@ class TtTransformerBlock:
         self, inp: ttnn.Tensor, *, gate: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor
     ) -> ttnn.Tensor:
         scaled = inp * (1 + scale) + shift
-        scaled = ttnn.all_gather(scaled, dim=-1)
+        if self._distributed:
+            scaled = ttnn.all_gather(scaled, dim=-1)
         result = gate * self._spatial_ff(scaled)
         ttnn.deallocate(scaled)
         return result
@@ -187,7 +192,8 @@ class TtTransformerBlock:
         assert self._prompt_ff is not None
 
         scaled = inp * (1 + scale) + shift
-        scaled = ttnn.all_gather(scaled, dim=-1)
+        if self._distributed:
+            scaled = ttnn.all_gather(scaled, dim=-1)
         result = gate * self._prompt_ff(scaled)
         ttnn.deallocate(scaled)
         return result
