@@ -72,6 +72,13 @@ class TtLinearParameters:
             # TODO: Once the issue is resolved, remove this workaround for https://github.com/tenstorrent/tt-metal/issues/16599
             bias = bias.unsqueeze(0)
 
+        if shard_dim in [0, -2]:
+            bias_mm = _ShardBias(device)
+        elif shard_dim in [1, -1]:
+            bias_mm = ttnn.ShardTensorToMesh(device, 1)
+        else:
+            bias_mm = ttnn.ReplicateTensorToMesh(device)
+
         return cls(
             weight=from_torch_fast(
                 weight.transpose(0, 1),
@@ -84,7 +91,7 @@ class TtLinearParameters:
                 bias,
                 dtype=dtype,
                 device=device,
-                shard_dim=shard_dim,
+                mesh_mapper=bias_mm,
                 layout=ttnn.TILE_LAYOUT,
             )
             if bias is not None
@@ -248,6 +255,7 @@ class TtLinear:
         dtype: ttnn.DataType | None = None,
         activation: str | None = None,
         deallocate: bool = False,
+        prob: bool = False,
     ) -> ttnn.Tensor:
         msg = f"last value in input shape {list(x.shape)} should be equal to {self._in_channels}"
         assert x.shape[-1] == self._in_channels, msg
@@ -259,6 +267,10 @@ class TtLinear:
         squeeze = len(x.shape) == 4 and x.shape[1] == 1 and x.shape[2] == 1
         if squeeze:
             x = x.reshape([x.shape[0], 1, x.shape[-1]])
+
+        assert x.device() == weight.device()
+        if bias is not None:
+            assert x.device() == bias.device()
 
         output = ttnn.linear(
             x,
@@ -281,6 +293,29 @@ class TtLinear:
 
         return output
 
-    @property
-    def device(self) -> ttnn.Device:
-        return self._weight.device()
+
+class _ShardBias(ttnn.TensorToMesh):
+    """A mesh mapper for sharding the bias of a linear operation.
+
+    This mesh mapper is intended for sharding the bias of a linear operation on the first dimension.
+    A single device receive the bias as is, while the other ones receive zero tensors of the same
+    shape so that the bias is not added multiple times after gathering.
+    """
+
+    def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
+        super().__init__(mesh_device)
+
+    def map(self, tensor: torch.Tensor) -> dict[int, ttnn.Tensor]:
+        mesh_height, mesh_width = self.mesh_device.shape
+
+        zeros = torch.zeros_like(tensor)
+        return ([tensor] + [zeros] * (mesh_width - 1)) * mesh_height
+
+    def config(self) -> dict[str, str]:
+        mesh_height, mesh_width = self.mesh_device.shape
+
+        return {
+            "strategy": "shard_2d",
+            "mesh_shape_y": str(mesh_height),
+            "mesh_shape_x": str(mesh_width),
+        }
