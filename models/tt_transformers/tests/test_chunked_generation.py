@@ -68,8 +68,6 @@ def test_chunked_prefill_single_user(
     is_ci_env,
     request,
 ):
-    mesh_device.enable_async(True)
-
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
 

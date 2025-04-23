@@ -99,8 +99,6 @@ def test_LlamaModel_demo(
 
     check_mesh_device(t3k_mesh_device, model_config)
 
-    t3k_mesh_device.enable_async(True)
-
     args = construct_arg(
         implementation=implementation,
         ckpt_dir=ckpt_dir,

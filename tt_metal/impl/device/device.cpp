@@ -1478,39 +1478,6 @@ CommandQueue& Device::command_queue(size_t cq_id) {
     return *command_queues_[cq_id];
 }
 
-void Device::synchronize() {
-    if (not this->initialized_) {
-        log_warning("Attempting to synchronize Device {} which is not initialized. Ignoring...", this->id_);
-        return;
-    }
-    this->work_executor_->synchronize();
-}
-
-void Device::set_worker_mode(const WorkExecutorMode& mode) { this->work_executor_->set_worker_mode(mode); }
-
-void Device::enable_async(bool enable) {
-    if (enable) {
-        tt::log_warning("Async mode is always disabled for a single device, ignoring enable_async call");
-    } else {
-        force_enable_async(false);
-    }
-}
-
-void Device::force_enable_async(bool enable) {
-    auto mode = enable ? WorkExecutorMode::ASYNCHRONOUS : WorkExecutorMode::SYNCHRONOUS;
-    this->set_worker_mode(mode);
-    // If a worker thread is spawned for a device, register/track it in a runtime structure.
-    // If a worker thread is destroyed, remove it from the structure.
-    // This is required for checking if a call is made from an application thread or a worker thread.
-    // See InWorkerThread().
-    if (enable) {
-        tt::DevicePool::instance().register_worker_thread_for_device(
-            this, this->work_executor_->get_worker_thread_id());
-    } else {
-        tt::DevicePool::instance().unregister_worker_thread_for_device(this);
-    }
-}
-
 bool Device::using_slow_dispatch() const {
     return !using_fast_dispatch();
 }
@@ -1641,21 +1608,16 @@ std::shared_ptr<TraceBuffer> Device::get_trace(uint32_t tid) {
 
 void Device::enable_program_cache() {
     log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
-    this->synchronize();
     program_cache_.enable();
 }
 void Device::disable_and_clear_program_cache() {
     log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
-    this->synchronize();
     if (this->program_cache_.is_enabled()) {
         program_cache_.disable();
     }
     program_cache_.clear();
 }
-std::size_t Device::num_program_cache_entries() {
-    this->synchronize();
-    return program_cache_.num_entries();
-}
+std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
 void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
 
@@ -1855,9 +1817,6 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_mu
     }
     return dst_noc_multicast_info;
 }
-
-tt::WorkExecutorMode Device::get_worker_mode() { return work_executor_->get_worker_mode(); }
-bool Device::is_worker_queue_empty() const { return work_executor_->worker_queue.empty(); }
 
 std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
 

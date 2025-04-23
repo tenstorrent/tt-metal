@@ -386,8 +386,6 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, ttnn::QueueId
 
 Tensor set_tensor_id(const Tensor& tensor);
 
-bool validate_worker_modes(const std::vector<IDevice*>& workers);
-
 }  // namespace tt_metal
 
 }  // namespace tt
