@@ -130,11 +130,8 @@ bool validate_optional_output_tensors_for_early_exit(
     auto output_tensor_0 = std::get<0>(optional_output_tensors.value());
     auto output_tensor_1 = std::get<1>(optional_output_tensors.value());
 
-    if (output_tensor_0.get_logical_shape() == original_lshape &&
-        output_tensor_1.get_logical_shape() == original_lshape) {
-        return true;
-    }
-    return false;
+    return output_tensor_0.get_logical_shape() == original_lshape &&
+           output_tensor_1.get_logical_shape() == original_lshape;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE

@@ -4,7 +4,11 @@
 
 #pragma once
 
+#include "ttnn/tensor/tensor.hpp"
+
 #include <vector>
+#include <optional>
+#include <cstdint>
 
 namespace reduction_common {
 
