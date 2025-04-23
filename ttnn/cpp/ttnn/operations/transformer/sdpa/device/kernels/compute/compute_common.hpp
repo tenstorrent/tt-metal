@@ -133,19 +133,25 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb) {
 }
 
 template <uint32_t rows, uint32_t cols>
-void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
+void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, bool pack_accumulate = false) {
     DeviceZoneScopedN("MUL_BLOCK_BCAST_COLS_INPLACE");
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
-    // Postcondition: in0_cb has rows*cols produced
-    // Postcondition: in1_cb has rows consumed
+    // Precondition: out_cb has rows*cols produced
+    // Postcondition: in0_cb empty
+    // Postcondition: in1_cb empty
+    // Postcondition: out_cb has rows*cols produced
 
     constexpr uint32_t num_tiles = rows * cols;
     constexpr uint32_t dst_tiles = DHT_GRANULARITY;
     constexpr uint32_t granularity = cols >> LOG2_DHT_GRANULARITY;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
+    PACK((llk_pack_reconfig_l1_acc(pack_accumulate)));
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, rows);
+    if (!pack_accumulate) {
+        cb_reserve_back(out_cb, num_tiles);
+    }
     uint32_t in0_index = 0;
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; ++u) {
@@ -157,15 +163,21 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                pack_tile(j, in0_cb);
+                pack_tile(j, out_cb);
             }
             tile_regs_release();
         }
     }
+    PACK((llk_pack_reconfig_l1_acc(false)));
     cb_pop_front(in1_cb, rows);
     cb_pop_front(in0_cb, num_tiles);
-    cb_reserve_back(in0_cb, num_tiles);
-    cb_push_back(in0_cb, num_tiles);
+    if (!pack_accumulate) {
+        cb_push_back(out_cb, num_tiles);
+    } else {
+        cb_pop_front(out_cb, num_tiles);
+        cb_reserve_back(out_cb, num_tiles);
+        cb_push_back(out_cb, num_tiles);
+    }
 }
 
 template <uint32_t in0_cb, uint32_t in1_scalar_cb, uint32_t num_tiles>
