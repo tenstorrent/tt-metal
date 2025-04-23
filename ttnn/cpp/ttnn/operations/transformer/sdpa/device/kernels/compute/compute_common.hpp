@@ -42,7 +42,7 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t rows, uint32_t cols>
-void reduce_c(uint32_t out_cb) {
+void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     DeviceZoneScopedN("REDUCE_C");
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
@@ -51,19 +51,26 @@ void reduce_c(uint32_t out_cb) {
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
 
-    reduce_init_delta<false, pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
-
     constexpr uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
 
+    max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
+    constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
+        reduce_init_delta<false, pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
         for (uint32_t j = 0; j < cols; j++) {
             reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+        }
+        reduce_revert_delta<reduce_dim>(out_cb);
+        if (do_eltwise_max) {
+            copy_tile_to_dst_init_short(prev_cb);
+            copy_tile(prev_cb, i, prev_max_dst_idx);
+            max_tile(reduce_dst_idx, prev_max_dst_idx, (int)VectorMode::C);
         }
 
         pack_tile(reduce_dst_idx, out_cb);
@@ -71,7 +78,6 @@ void reduce_c(uint32_t out_cb) {
     }
 
     cb_push_back(out_cb, rows);
-    reduce_revert_delta<reduce_dim>(out_cb);
 }
 
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
