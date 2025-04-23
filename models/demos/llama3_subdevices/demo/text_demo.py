@@ -562,7 +562,7 @@ def test_demo_text(
                             users_decoding = False
 
             # Print out generated outputs for each user at the end of every iteration
-            if not is_ci_env and repeat_batches == 1:
+            if not is_ci_env:
                 for user in range(1):
                     text = "".join(tokenizer.decode(all_outputs[user]))
                     if len(text) > 100:
