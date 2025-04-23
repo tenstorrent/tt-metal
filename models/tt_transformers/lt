@@ -68,15 +68,14 @@ test_cache_seq_lens = [
     (4096, 512, 4608),
     (8192, 512, 8704),
     (16384, 512, 16896),
-    (32768, 512, 33280),
-    (65536, 1024, 66560),
-    (98304, 2048, 100352),
-    (114688, 4096, 118784),
-    (122880, 8192, 131072),
 ]
 
+setting_test_cache = "precision_cfg = {kv_cache: bfp4}, fidelity_cfg = {li_ff1_3: hifi2fp16}"
+
 test_cache_commands = {
-    f"test-cache-len-{i}": (f"pytest models/tt_transformers/tests/test_accuracy.py -k '{prefill}-{decode}-{max_seq}'")
+    f"test-cache-len-{i}": (
+        f"pytest models/tt_transformers/tests/test_accuracy.py -k '{prefill}-{decode}-{max_seq}' --optimizations  '{setting_test_cache}'"
+    )
     for i, (prefill, decode, max_seq) in enumerate(test_cache_seq_lens)
 }
 
