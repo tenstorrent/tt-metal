@@ -1,6 +1,9 @@
 name: Build test and publish upstream tests
 
 on:
+  push:
+    branches:
+      - rkim/21067-upstream-tests
   workflow_dispatch:
   schedule:
     - cron: '0 12 * * *'
