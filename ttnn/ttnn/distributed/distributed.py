@@ -279,7 +279,7 @@ class ShardTensor2dMesh(TensorToMesh):
         self.dims: Tuple[Optional[int], Optional[int]] = dims
 
         mesh_device_rows, mesh_device_cols = self.mesh_device.shape
-        if mesh_shape[0] > mesh_device_rows or mesh_shape[1] > mesh_device_cols:
+        if mesh_shape[0] != mesh_device_rows or mesh_shape[1] != mesh_device_cols:
             raise ValueError("ShardTensor2dMesh: Device mesh shape does not match the provided mesh shape.")
 
     def map(self, tensor: "torch.Tensor") -> List["torch.Tensor"]:
