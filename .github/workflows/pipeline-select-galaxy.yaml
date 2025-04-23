@@ -60,6 +60,7 @@ jobs:
   tg-quick:
     if: ${{ inputs.tg-quick }}
     needs: build-artifact
+    secrets: inherit
     uses: ./.github/workflows/tg-quick.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -69,6 +70,7 @@ jobs:
   tg-unit-tests:
     if: ${{ inputs.tg-unit }}
     needs: build-artifact
+    secrets: inherit
     uses: ./.github/workflows/tg-unit-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -88,6 +90,7 @@ jobs:
   tg-demo-tests:
     if: ${{ inputs.tg-demo }}
     needs: build-artifact
+    secrets: inherit
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
