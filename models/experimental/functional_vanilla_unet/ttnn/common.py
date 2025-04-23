@@ -159,8 +159,6 @@ class ConvTranspose:
             output_padding=(0, 0),
             dilation=(1, 1),
             mirror_kernel=True,
-            return_weights_device=True,
-            return_weights_and_bias=True,
         )
 
         output_tensor = ttnn.reshape(
