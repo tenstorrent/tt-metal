@@ -41,7 +41,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Download vanilla artifacts from metal
+      - name: Download artifacts from metal
         id: download-artifacts
         uses: actions/download-artifact@v4
         with:
@@ -49,25 +49,23 @@ jobs:
           # TODO - change to outputs from build above
           name: TTMetal_build_any
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: ${{ github.workspace }}/build_vanilla
           run-id: 14628746342
-      - run: mkdir -p _tt-metal-vanilla
-      - run: tar -xvf build_vanilla/ttm_any.tar -C _tt-metal-vanilla/
-      - run: ls -hal _tt-metal-vanilla
-      - name: 🧪 Download vanilla Python Wheel
+      - run: mkdir -p _tt-metal
+      - run: tar -xvf ttm_any.tar -C _tt-metal/
+      - run: ls -hal _tt-metal
+      - name: 🧪 Download Python Wheel
         uses: actions/download-artifact@v4
         with:
           # TODO - change to outputs from build above
           name: eager-dist-ubuntu-22.04-any
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: ${{ github.workspace }}/build_vanilla
           run-id: 14628746342
-      - name: 💿 Verify vanilla Wheel exists
+      - name: 💿 Verify Wheel exists
         shell: bash
         run: |
-          echo "📂 In directory: $(pwd)/build_vanilla"
+          echo "📂 In directory: $(pwd)"
           echo "📄 Files:"
-          ls -la build_vanilla
+          ls -la .
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to GitHub Container Registry
