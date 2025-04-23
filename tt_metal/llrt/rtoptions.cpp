@@ -57,6 +57,7 @@ RunTimeOptions::RunTimeOptions() {
         this->is_kernel_dir_env_var_set = true;
         this->kernel_dir = std::string(kernel_dir_str) + "/";
     }
+    this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
 
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
@@ -208,6 +209,8 @@ const std::string& RunTimeOptions::get_kernel_dir() const {
 
     return this->kernel_dir;
 }
+
+const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
 
 void RunTimeOptions::ParseWatcherEnv() {
     watcher_interval_ms = 0;
