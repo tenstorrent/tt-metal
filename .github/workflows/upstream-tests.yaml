@@ -69,4 +69,4 @@ jobs:
       - pipeline-functional
     steps:
       - name: Run image
-        run: timeout --preserve-status 600 docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.build-wh-6u-image.outputs.wh-6u-image-name }}
+        run: timeout --preserve-status 600 docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.build-wh-6u-image.outputs.image-name }}
