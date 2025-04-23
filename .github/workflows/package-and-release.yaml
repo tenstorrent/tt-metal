@@ -193,7 +193,7 @@ jobs:
             README.md
             INSTALLING.md
             models/MODEL_UPDATES.md
-            ttnn-*+*.whl
+            ttnn-*.whl
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
   create-docker-release-image:
