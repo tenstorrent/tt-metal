@@ -475,10 +475,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
-    uint32_t semaphore_id = 0;
-    uint32_t remote_temp_cb_id = 0;
-    std::vector<uint32_t> output_tensor_cores_x;
-    std::vector<uint32_t> output_tensor_cores_y;
     int32_t in_out_buffer_start_delta = max_out_nsticks_per_core - input_npages;
     if (!skip_untilize) {
         in_out_buffer_start_delta = 0;
@@ -490,6 +486,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
 
     // create the remote temp CB
+    uint32_t remote_temp_cb_id = 0;
     if (max_ref_size > 0) {
         remote_temp_cb_id = cb_indices.get_next_cb_id();
         auto remote_temp_cb_config =
@@ -499,18 +496,48 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
     }
 
-    semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    // noc conversion function
+    auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
+        auto num_cores_x = device->compute_with_storage_grid_size().x;
+        auto core_coord = CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
+        return device->worker_core_from_logical_core(core_coord);
+    };
 
+    // find the noc coordinate of core 0,0
+    CoreCoord noc_TL = core_id_to_noc_coords(0);
+
+    // compute the number of noop cores
     const bool is_rm_orientation = input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_orientation);
-    for (const auto& core : cores) {
-        auto worker = device->worker_core_from_logical_core(core);
-        output_tensor_cores_x.push_back(worker.x);
-        output_tensor_cores_y.push_back(worker.y);
+    int32_t num_cores_x = device->compute_with_storage_grid_size().x;
+    int32_t num_cores_y = device->compute_with_storage_grid_size().y;
+    int32_t num_active_cores = cores.size();
+    int32_t num_cores_rectangular = is_block_sharded ? num_active_cores : tt::round_up(num_active_cores, num_cores_x);
+    int32_t num_noop_cores = is_block_sharded ? 0 : num_cores_rectangular - num_active_cores;
+    TT_FATAL(
+        !is_block_sharded || all_cores.ranges().size() == 1,
+        "for block sharding the implementation depends on the assumption that there is only 1 core range");
+    CoreCoord last_active_coord = is_block_sharded
+                                      ? device->worker_core_from_logical_core(all_cores.ranges()[0].end_coord)
+                                      : core_id_to_noc_coords(num_active_cores - 1);
+    uint32_t last_active_x = last_active_coord.x;
+
+    // create the rectangular core range
+    uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
+    uint32_t rectangular_y =
+        is_block_sharded ? all_cores.ranges()[0].end_coord.y + 1
+                         : (num_noop_cores ? num_active_cores / num_cores_x + 1 : num_active_cores / num_cores_x);
+    std::set<CoreRange> rectangular_cores_set;
+    if (is_block_sharded) {
+        rectangular_cores_set.insert(all_cores.ranges()[0]);
+    } else {
+        rectangular_cores_set.insert(CoreRange(CoreCoord(0, 0), CoreCoord(rectangular_x - 1, rectangular_y - 1)));
     }
+    CoreRangeSet rectangular_cores(rectangular_cores_set);
+    CoreCoord noc_BR = is_block_sharded ? last_active_coord : core_id_to_noc_coords(rectangular_x * rectangular_y - 1);
 
     // create semaphore
-    semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    uint32_t semaphore_id = tt::tt_metal::CreateSemaphore(program, rectangular_cores, 0);
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
     log_debug(tt::LogOp, "out_stick_nbytes = {}", out_stick_nbytes);
@@ -533,12 +560,18 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         input_npages,
         out_stick_nbytes,
         is_block_sharded,
-        remote_read,
         (uint32_t)(transpose_mcast ? 1 : 0),
         is_width_sharded,
         aligned_input_nstick_nbytes,
-        true,
-        cores.size(),
+        remote_read,
+        num_active_cores,
+        noc_TL.x,
+        noc_TL.y,
+        noc_BR.x,
+        noc_BR.y,
+        rectangular_x,
+        rectangular_y,
+        last_active_x,
         semaphore_id,
         in_out_buffer_start_delta,
         temp_cb_id,
@@ -552,7 +585,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",
-        all_cores,
+        rectangular_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
@@ -560,19 +593,25 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     reader_ct_args[1] = 0;
     reader_ct_args[2] = 0;
     reader_ct_args[3] = 0;
-    reader_ct_args[16] = false;
-    KernelHandle reader_kernel_id = CreateKernel(
+    KernelHandle reader_kernel_id1 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",
-        all_cores,
+        rectangular_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
-    std::vector<uint32_t> reader_rt_args;
-    reader_rt_args.insert(reader_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
-    reader_rt_args.insert(reader_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
-    SetRuntimeArgs(program, reader_kernel_id0, all_cores, reader_rt_args);
-    SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
+    for (uint32_t core_i = 0; core_i < num_cores_rectangular; core_i++) {
+        uint32_t core_x_i = core_i % rectangular_x;
+        uint32_t core_y_i = core_i / rectangular_x;
+        CoreRange core(CoreCoord(core_x_i, core_y_i), CoreCoord(core_x_i, core_y_i));
+        bool noop_core = core_i >= num_active_cores;
+        bool cast_core = core_i == 0;  // first core controls the multicasting
+
+        std::vector<uint32_t> reader_rt_args0 = {(uint32_t)noop_core, (uint32_t)cast_core};
+        std::vector<uint32_t> reader_rt_args1 = {(uint32_t)noop_core, (uint32_t)false};
+        SetRuntimeArgs(program, reader_kernel_id0, core, reader_rt_args0);
+        SetRuntimeArgs(program, reader_kernel_id1, core, reader_rt_args1);
+    }
 
     if (!capture_buffers) {
         padding_config_storage = {};
