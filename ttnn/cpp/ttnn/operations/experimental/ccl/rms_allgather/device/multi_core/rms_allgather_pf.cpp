@@ -472,8 +472,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, all_cores, cb_reserved_packet_header_config);
 
-    uint32_t add_out_cb_index = tt::CBIndex::c_9;
-    uint32_t in1_cb_index = tt::CBIndex::c_10;
+    uint32_t add_out_cb_index = tt::CBIndex::c_21;
+    uint32_t in1_cb_index = tt::CBIndex::c_22;
 
     CBHandle cb_in1 = 0;
     CBHandle cb_add_out = 0;
@@ -496,14 +496,14 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     // Create post circular buffers
 
     // ex_global
-    uint32_t ex_global_cb_index = tt::CBIndex::c_11;
+    uint32_t ex_global_cb_index = tt::CBIndex::c_9;
     tt::tt_metal::CircularBufferConfig ex_global_cb_config =
         tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{ex_global_cb_index, cb_data_format}})
             .set_page_size(ex_global_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
 
     // out
-    uint32_t output_cb_index = tt::CBIndex::c_12;
+    uint32_t output_cb_index = tt::CBIndex::c_10;
     tt::tt_metal::CircularBufferConfig output_cb_config =
         tt::tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_data_format}})
             .set_page_size(output_cb_index, out_single_tile_size);
@@ -513,7 +513,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     CBHandle cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     // gamma
-    uint32_t in5_cb_index = tt::CBIndex::c_13;
+    uint32_t in5_cb_index = tt::CBIndex::c_11;
     if (gamma.has_value()) {
         tt::tt_metal::CircularBufferConfig in5_cb_config =
             tt::tt_metal::CircularBufferConfig(in5_CB_size, {{in5_cb_index, gamma_cb_data_format}})
@@ -522,7 +522,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     }
 
     // in0 sharded
-    uint32_t in0_cb_index = tt::CBIndex::c_14;
+    uint32_t in0_cb_index = tt::CBIndex::c_12;
     tt::tt_metal::CircularBufferConfig in0_cb_config =
         tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
             .set_page_size(in0_cb_index, in_single_tile_size)
@@ -530,14 +530,14 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     auto cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
 
     // in3 eps
-    uint32_t in3_cb_index = tt::CBIndex::c_15;
+    uint32_t in3_cb_index = tt::CBIndex::c_13;
     tt::tt_metal::CircularBufferConfig in3_cb_config =
         tt::tt_metal::CircularBufferConfig(in3_CB_size, {{in3_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(in3_cb_index, bfloat16_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
 
     // in4 scaler-c
-    uint32_t in4_cb_index = tt::CBIndex::c_16;
+    uint32_t in4_cb_index = tt::CBIndex::c_14;
     tt::tt_metal::CircularBufferConfig in4_cb_config =
         tt::tt_metal::CircularBufferConfig(in2_CB_size, {{in4_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(in4_cb_index, bfloat16_tile_size);
@@ -545,13 +545,13 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     // x
     uint32_t x_cb_index;
-    x_cb_index = tt::CBIndex::c_17;
+    x_cb_index = tt::CBIndex::c_15;
     tt::tt_metal::CircularBufferConfig x_cb_config =
         tt::tt_metal::CircularBufferConfig(x_CB_size, {{x_cb_index, cb_data_format}})
             .set_page_size(x_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, x_cb_config);
 
-    uint32_t output_reshard_cb_index = tt::CBIndex::c_18;
+    uint32_t output_reshard_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig output_reshard_cb_config =
         tt::tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_reshard_cb_index, out_data_format}})
             .set_page_size(output_reshard_cb_index, out_single_tile_size);
@@ -562,7 +562,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     }
 
     // cb_var
-    uint32_t cb_var_index = tt::CBIndex::c_19;
+    uint32_t cb_var_index = tt::CBIndex::c_17;
     tt::tt_metal::CircularBufferConfig cb_var_config =
         tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{cb_var_index, cb_data_format}})
             .set_page_size(cb_var_index, single_tile_size);
@@ -570,20 +570,20 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     // cb_stats_reduced
     uint32_t cb_stats_reduced_index;
-    cb_stats_reduced_index = tt::CBIndex::c_20;
+    cb_stats_reduced_index = tt::CBIndex::c_18;
     tt::tt_metal::CircularBufferConfig stats_reduced_cb_config =
         tt::tt_metal::CircularBufferConfig(stats_reduced_cb_size, {{cb_stats_reduced_index, cb_data_format}})
             .set_page_size(cb_stats_reduced_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_reduced_cb_config);
 
     // cb_stats
-    uint32_t cb_stats_index = tt::CBIndex::c_21;
+    uint32_t cb_stats_index = tt::CBIndex::c_19;
     tt::tt_metal::CircularBufferConfig stats_cb_config =
         tt::tt_metal::CircularBufferConfig(stats_cb_size, {{cb_stats_index, cb_data_format}})
             .set_page_size(cb_stats_index, single_tile_size)
             .set_globally_allocated_address(*stats.value().buffer());
     auto cb_stats = tt::tt_metal::CreateCircularBuffer(program, sender_cores, stats_cb_config);
-    uint32_t signaling_cb = tt::CBIndex::c_22;
+    uint32_t signaling_cb = tt::CBIndex::c_20;
     tt::tt_metal::CircularBufferConfig signaling_cb_config =
         tt::tt_metal::CircularBufferConfig(2, {{signaling_cb, tt::DataFormat::Float16_b}})
             .set_page_size(signaling_cb, 2);

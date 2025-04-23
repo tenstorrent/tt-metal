@@ -50,7 +50,9 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_compile_time_arg_val(24);
 
     uint32_t stats_set_semaphore_addr = get_semaphore(stats_set_semaphore_id);
-    size_t arg_idx = 1;
+    size_t arg_idx = 0;
+    const uint32_t base_post_rt =
+        get_arg_val<uint32_t>(arg_idx++);  // RT 0 holds how many pre RTs there are (which can vary core by core)
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(arg_idx++);
@@ -61,9 +63,24 @@ void kernel_main() {
     if constexpr (is_all_to_all_worker) {
         const uint32_t scalar_c = get_arg_val<uint32_t>(arg_idx++);
         wh_generate_reduce_scaler<true>(cb_in_4, scalar_c);
+        const uint32_t post_scalar_c = get_arg_val<uint32_t>(base_post_rt + 0);
+        wh_generate_reduce_scaler<true>(post_cb_in_4, post_scalar_c);
     } else {
         arg_idx++;
     }
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(base_post_rt + 2);
+    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(base_post_rt + 3);
+
+    // Reshard writer
+#ifndef SKIP_WRITE_BACK
+    const uint32_t num_segments_to_write_back = get_arg_val<uint32_t>(base_post_rt + 4);
+    const uint32_t storage_core_start_offset = get_arg_val<uint32_t>(base_post_rt + 5);
+    tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(base_post_rt + 6));
+#endif
+
+    const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
+    const uint32_t eps = get_arg_val<uint32_t>(base_post_rt + 1);
+    generate_bcast_col_scalar(eps_cb_id, eps);
     const uint32_t iteration_number = get_arg_val<uint32_t>(arg_idx++);
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
@@ -169,26 +186,6 @@ void kernel_main() {
     // Tell the compute kernel it is ok to proceed
     cb_reserve_back(signaling_cb, 1);
     cb_push_back(signaling_cb, 1);
-    const uint32_t base_post_rt =
-        get_arg_val<uint32_t>(0);  // RT 0 holds how many pre RTs there are (which can vary core by core)
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(base_post_rt + 2);
-    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(base_post_rt + 3);
-
-    // Reshard writer
-#ifndef SKIP_WRITE_BACK
-    const uint32_t num_segments_to_write_back = get_arg_val<uint32_t>(base_post_rt + 4);
-    const uint32_t storage_core_start_offset = get_arg_val<uint32_t>(base_post_rt + 5);
-    tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(base_post_rt + 6));
-#endif
-
-    if constexpr (is_all_to_all_worker) {
-        const uint32_t post_scalar_c = get_arg_val<uint32_t>(base_post_rt + 0);
-        wh_generate_reduce_scaler<true>(post_cb_in_4, post_scalar_c);
-    }
-
-    const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
-    const uint32_t eps = get_arg_val<uint32_t>(base_post_rt + 1);
-    generate_bcast_col_scalar(eps_cb_id, eps);
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
