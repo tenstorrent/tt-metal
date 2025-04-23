@@ -15,6 +15,13 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
+      tracy: true
   get-image-names:
     runs-on: ubuntu-latest
     outputs:
@@ -26,6 +33,7 @@ jobs:
   build-wh-6u-image:
     needs:
       - build-artifact
+      - build-artifact-profiler
       - get-image-names
     runs-on: ubuntu-latest
     permissions:
@@ -33,15 +41,27 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Download artifacts from metal
+      - name: Download vanilla artifacts from metal
         id: download-artifacts
         uses: actions/download-artifact@v4
         with:
           # 22.04 artifact... we'll probably need to key on that in the original action in metal
           name: TTMetal_build_any
+          path: ${{ github.workspace }}/build_vanilla
       - run: mkdir -p _tt-metal
-      - run: tar -xvf ttm_any.tar -C _tt-metal/
-      - run: ls -hal _tt-metal
+      - run: tar -xvf build_vanilla/ttm_any.tar -C _tt-metal-vanilla/
+      - run: ls -hal _tt-metal-vanilla
+      - name: 🧪 Download vanilla Python Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-artifact.wheel-artifact-name }}
+          path: ${{ github.workspace }}/build_vanilla
+      - name: 💿 Verify vanilla Wheel exists
+        shell: bash
+        run: |
+          echo "📂 In directory: $(pwd)/build_vanilla"
+          echo "📄 Files:"
+          ls -la build_vanilla
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to GitHub Container Registry
@@ -82,4 +102,4 @@ jobs:
         run: docker pull ${{ needs.get-image-names.outputs.wh-6u-image-name }}
       - name: Run image
         timeout-minutes: 10
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.build-wh-6u-image.outputs.image-name }}
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-names.outputs.wh-6u-image-name }}
