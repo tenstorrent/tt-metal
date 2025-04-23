@@ -1819,13 +1819,6 @@ void assemble_device_commands(
     LaunchMessageGenerator launch_message_generator;
     launch_message_generator.construct_commands(device, program, calculator, constants, sub_device_id);
 
-    GoSignalGenerator go_signal_generator;
-    DeviceCommandCalculator go_signal_calculator;
-
-    go_signal_generator.size_commands(go_signal_calculator, device, sub_device_id, program_transfer_info);
-
-    // Start assembling commands into the device_command_sequence.
-
     program_command_sequence.device_command_sequence = HostMemDeviceCommand(calculator.write_offset_bytes());
 
     auto& device_command_sequence = program_command_sequence.device_command_sequence;
@@ -1841,6 +1834,9 @@ void assemble_device_commands(
 
     launch_message_generator.assemble_commands(program_command_sequence, device_command_sequence, constants);
 
+    GoSignalGenerator go_signal_generator;
+    DeviceCommandCalculator go_signal_calculator;
+    go_signal_generator.size_commands(go_signal_calculator, device, sub_device_id, program_transfer_info);
     program_command_sequence.go_msg_command_sequence = HostMemDeviceCommand(go_signal_calculator.write_offset_bytes());
     go_signal_generator.assemble_commands(
         program_command_sequence,
