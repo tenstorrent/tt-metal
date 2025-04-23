@@ -354,12 +354,11 @@ static Tensor prod_result_computation_WH_B0(
     for (int i = 0; i < tt::constants::TILE_HW; ++i) {
         result = result * static_cast<T>(input_buffer[i]);
     }
-
     owned_buffer[0] = result;  // output will only have one element - the product of the entire tensor
     auto output = Tensor(
                       OwnedStorage{owned_buffer},
                       TensorSpec(
-                          ttnn::Shape({1}),
+                          ttnn::Shape({}),
                           TensorLayout::fromPaddedShape(
                               data_type,
                               PageConfig(Layout::ROW_MAJOR),

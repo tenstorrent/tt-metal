@@ -43,9 +43,8 @@ tt::tt_metal::operation::ProgramWithCallbacks Prod_op::create_program(
 }
 
 tt::tt_metal::Tensor prod_all(const tt::tt_metal::Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
-    tt::tt_metal::Tensor result = ttnn::tiled_prod(
-        tt::tt_metal::operation::run(Prod_op{.output_mem_config = output_mem_config}, {input}).at(0),
-        output_mem_config);
+    tt::tt_metal::Tensor result =
+        tt::tt_metal::operation::run(Prod_op{.output_mem_config = output_mem_config}, {input}).at(0);
     return ttnn::prod_result_computation_WH_B0<bfloat16>(
         result, result.get_dtype(), result.get_layout(), result.device(), output_mem_config);
 }
