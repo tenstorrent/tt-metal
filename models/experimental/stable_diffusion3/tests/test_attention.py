@@ -90,11 +90,7 @@ def test_attention(
         torch.randn((batch_size, prompt_sequence_length, embedding_dim), dtype=torch_dtype) if joint_attention else None
     )
 
-    spatial_extra = spatial_sequence_length % TILE_SIZE
-    spatial_padding = TILE_SIZE - spatial_extra if spatial_extra > 0 else 0
-    spatial_padded_4d = torch.nn.functional.pad(
-        spatial.unsqueeze(1), pad=(0, 0, 0, spatial_padding), mode="constant", value=0
-    )
+    spatial_padded_4d = spatial.unsqueeze(1)
     if pad_embedding_dim:
         spatial_padded_4d = torch.nn.functional.pad(
             spatial_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
@@ -102,11 +98,7 @@ def test_attention(
     tt_spatial = from_torch_fast(spatial_padded_4d, dtype=ttnn_dtype, device=mesh_device, layout=ttnn.TILE_LAYOUT)
 
     if joint_attention:
-        prompt_extra = prompt_sequence_length % TILE_SIZE
-        prompt_padding = TILE_SIZE - prompt_extra if prompt_extra > 0 else 0
-        prompt_padded_4d = torch.nn.functional.pad(
-            prompt.unsqueeze(1), pad=(0, 0, 0, prompt_padding), mode="constant", value=0
-        )
+        prompt_padded_4d = prompt.unsqueeze(1)
         if pad_embedding_dim:
             prompt_padded_4d = torch.nn.functional.pad(
                 prompt_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0

@@ -135,9 +135,7 @@ class TtSD3Transformer2DModel:
         time_embed = time_embed.reshape([time_embed.shape[0], 1, 1, time_embed.shape[1]])
 
         spatial = ttnn.unsqueeze(spatial, 1)
-        assert spatial.shape[-2] % 32 == 0
         prompt = ttnn.unsqueeze(prompt, 1)
-        assert prompt.shape[-2] % 32 == 0
 
         spatial = self._sharding(spatial)
         prompt = self._sharding(prompt)

@@ -291,17 +291,8 @@ class TtStableDiffusion3Pipeline:
             torch.manual_seed(seed)
         latents = torch.randn(latents_shape, dtype=prompt_embeds.dtype)  # .permute([0, 2, 3, 1])
 
-        prompt_extra = self._prepared_prompt_sequence_length % TILE_SIZE
-        if prompt_extra > 0:
-            prompt_padding = TILE_SIZE - prompt_extra
-        else:
-            prompt_padding = 0
-        prompt_embeds_padded = torch.nn.functional.pad(
-            prompt_embeds, pad=(0, 0, 0, prompt_padding), mode="constant", value=0.0
-        )
-
         tt_prompt_embeds = ttnn.from_torch(
-            prompt_embeds_padded,
+            prompt_embeds,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
             device=self._device,
