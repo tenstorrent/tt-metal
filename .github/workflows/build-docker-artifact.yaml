@@ -25,6 +25,9 @@ on:
       dev-tag:
         description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.dev-tag }}
+      basic-dev-tag:
+        description: "Docker tag for the basic dev Docker image for basic development"
+        value: ${{ jobs.check-docker-images.outputs.basic-dev-tag }}
   workflow_dispatch:
     inputs:
       distro:
@@ -51,6 +54,7 @@ env:
   CI_BUILD_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-build-${{ inputs.architecture }}
   CI_TEST_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-test-${{ inputs.architecture }}
   DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
+  BASIC_DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-basic-dev-${{ inputs.architecture }}
 
 jobs:
   check-docker-images:
@@ -62,6 +66,8 @@ jobs:
       ci-test-tag: ${{ steps.tags.outputs.ci-test-tag }}
       dev-exists: ${{ steps.images.outputs.dev-exists }}
       dev-tag: ${{ steps.tags.outputs.dev-tag }}
+      basic-dev-exists: ${{ steps.images.outputs.basic-dev-exists }}
+      basic-dev-tag: ${{ steps.tags.outputs.basic-dev-tag }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -83,6 +89,9 @@ jobs:
           echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
           echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
 
+          BASIC_DEV_HASH=$(cat dockerfile/Dockerfile.basic-dev | sha1sum | cut -d' ' -f1)
+          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+
       # Assume if dev-tag exists, the others will exist too
       - name: Query images exist
         id: images
@@ -99,11 +108,19 @@ jobs:
             echo "dev-exists=false" >> $GITHUB_OUTPUT
           fi
 
+          if docker manifest inspect ${{ steps.tags.outputs.basic-dev-tag }} > /dev/null 2>&1; then
+            echo "${{ steps.tags.outputs.basic-dev-tag }} exists"
+            echo "basic-dev-exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "${{ steps.tags.outputs.basic-dev-tag }} does not exist"
+            echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
+          fi
+
   # Assume if dev-tag does not exist, the others will not exist either
   build-docker-image:
     name: "🐳️ Build images"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.dev-exists != 'true'
+    if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true'
     timeout-minutes: 45
     runs-on: tt-beta-ubuntu-2204-large
     steps:
@@ -118,6 +135,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push CI Build image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -129,6 +147,7 @@ jobs:
           cache-to: type=inline
           pull: true
       - name: Build and push CI Test image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -140,6 +159,7 @@ jobs:
           cache-to: type=inline
           pull: true
       - name: Build and push Dev image
+        if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
@@ -147,6 +167,17 @@ jobs:
           target: dev
           push: true
           tags: ${{ needs.check-docker-images.outputs.dev-tag }}
+          build-args: UBUNTU_VERSION=${{ inputs.version }}
+          cache-to: type=inline
+          pull: true
+      - name: Build and push Basic Dev image
+        if: needs.check-docker-images.outputs.basic-dev-exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ github.workspace }}
+          file: dockerfile/Dockerfile.basic-dev
+          push: true
+          tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
@@ -177,3 +208,11 @@ jobs:
           docker pull ${DEV_TAG}
           docker tag ${DEV_TAG} ${LATEST_TAG}
           docker push ${LATEST_TAG}
+
+          BASIC_DEV_IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}"
+          BASIC_DEV_LATEST_TAG="${BASIC_DEV_IMAGE_REPO}:latest"
+          BASIC_DEV_TAG="${{ needs.check-docker-images.outputs.basic-dev-tag }}"
+          echo "Tagging ${BASIC_DEV_TAG} as ${BASIC_DEV_LATEST_TAG}"
+          docker pull ${BASIC_DEV_TAG}
+          docker tag ${BASIC_DEV_TAG} ${BASIC_DEV_LATEST_TAG}
+          docker push ${BASIC_DEV_LATEST_TAG}
