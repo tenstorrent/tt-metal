@@ -302,8 +302,10 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     // uint32_t input_page_size = tile_size(cb_data_format);
     // uint32_t output_page_size = tile_size(cb_data_format);
-    uint32_t input_block_size = input_sticks_per_device * input_shard_width * input_tensor.get_dtype();
-    uint32_t output_block_size = input_sticks_per_device * output_shard_width * output_tensor.get_dtype();
+    uint32_t input_block_size = input_sticks_per_device * input_shard_width * input_tensor.element_size();
+    uint32_t output_block_size = input_sticks_per_device * output_shard_width * output_tensor.element_size();
+    uint32_t input_page_size = input_shard_width * input_tensor.element_size();
+    uint32_t output_page_size = output_shard_width * output_tensor.element_size();
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
@@ -376,15 +378,14 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     uint32_t accumulator_cb_index = tt::CBIndex::c_5;
 
     tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
-        tt::tt_metal::CircularBufferConfig(
-            input_tiles_per_core_width * input_page_size, {{input_tensor_cb_id, cb_data_format}})
-            .set_page_size(input_tensor_cb_id, input_page_size)
+        tt::tt_metal::CircularBufferConfig(1 * input_block_size, {{input_tensor_cb_id, cb_data_format}})
+            .set_page_size(input_tensor_cb_id, input_block_size)
             .set_globally_allocated_address(*input_tensor_buffer);
     // CB to represent the output sharded buffer
     tt::tt_metal::CircularBufferConfig cb_output_tensor_config =
         tt::tt_metal::CircularBufferConfig(
-            output_tiles_per_core_width * input_page_size, {{output_tensor_cb_id, cb_data_format}})
-            .set_page_size(output_tensor_cb_id, input_page_size)
+            output_shard_height * output_page_size, {{output_tensor_cb_id, cb_data_format}})
+            .set_page_size(output_tensor_cb_id, output_page_size)
             .set_globally_allocated_address(*output_tensor_buffer);
 
     constexpr uint32_t buffering_factor = 2;
@@ -399,7 +400,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     uint32_t max_shards_per_worker = detail::rs_heads_fusion::max_shards_per_worker(schedule);
     uint32_t num_shards_total = max_shards_per_worker * (num_devices - 1);
-    uint32_t num_pages_total = num_shards_total * input_tiles_per_core_width;
+    uint32_t num_pages_total = num_shards_total * 1;
 
     // There is one sender from link, and each sender splits the packet workload for each device
     // For llama there are 3 senders, and each device sends 30 pages to each other device
@@ -426,8 +427,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     */
     tt::tt_metal::CircularBufferConfig fabric_sender_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            num_pages_total * input_page_size, {{fabric_sender_cb_index, cb_data_format}})
-            .set_page_size(fabric_sender_cb_index, input_page_size);
+            num_pages_total * input_block_size, {{fabric_sender_cb_index, cb_data_format}})
+            .set_page_size(fabric_sender_cb_index, input_block_size);
 
     // buffer for receiving packets from the other devices.
     // each core handles one packet from each device
@@ -468,8 +469,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     */
     tt::tt_metal::CircularBufferConfig fabric_receiver_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            num_pages_per_packet * num_devices * input_page_size, {{fabric_receiver_cb_index, cb_data_format}})
-            .set_page_size(fabric_receiver_cb_index, input_page_size)
+            num_blocks_per_packet * num_devices * input_block_size, {{fabric_receiver_cb_index, cb_data_format}})
+            .set_page_size(fabric_receiver_cb_index, input_block_size)
             .set_globally_allocated_address(*packet_buffer);
 
     // After reduction, the data will be packed into the accumulator cb
@@ -483,9 +484,9 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     */
     tt::tt_metal::CircularBufferConfig accumulator_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            buffering_factor * num_pages_per_packet * output_tiles_per_core_width * input_page_size * num_devices,
+            buffering_factor * num_blocks_per_packet * 1 * input_block_size * num_devices,
             {{accumulator_cb_index, cb_data_format}})
-            .set_page_size(accumulator_cb_index, input_page_size);
+            .set_page_size(accumulator_cb_index, input_block_size);
 
     auto cb_input_tensor_handle =
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_input_tensor_config);  // input buffer
@@ -537,12 +538,12 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         accumulator_cb_index,
         output_tensor_cb_id,
         (uint32_t)chip_id,
-        input_tiles_per_core_width,
-        output_tiles_per_core_width,
-        num_pages_per_packet,
-        input_shard_cores_per_device,
+        1,
+        1,
+        num_blocks_per_packet,
+        ncores_input,
         num_devices,
-        input_page_size,
+        input_block_size,
         output_cores_per_device,
         packet_start_worker_core.at(0).x,
         packet_start_worker_core.at(0).y,
@@ -587,19 +588,19 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         accumulator_cb_index,
         output_tensor_cb_id,
         (uint32_t)chip_id,
-        input_tiles_per_core_width,
-        output_tiles_per_core_width,
-        num_pages_per_packet,
-        input_shard_cores_per_device,
+        1,
+        1,
+        num_blocks_per_packet,
+        ncores_input,
         num_devices,
-        input_page_size,
+        input_block_size,
         output_cores_per_device,
         packet_receiver_worker_core.x,
         packet_receiver_worker_core.y,
         num_packet_worker_cores};
 
     auto writer_defines = reader_defines;
-    bool skip_write_back = output_cores == packet_worker_cores and num_pages_per_packet == output_tiles_per_core_width;
+    bool skip_write_back = output_cores == packet_worker_cores and num_blocks_per_packet == 1;
     if (skip_write_back) {
         writer_defines["SKIP_WRITE_BACK"] = "1";
     }
@@ -616,7 +617,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto output_cb_index = skip_write_back ? output_tensor_cb_id : accumulator_cb_index;
     const std::vector<uint32_t> compute_compile_time_args = {
-        fabric_receiver_cb_index, output_cb_index, num_devices, output_tiles_per_core_width, num_pages_per_packet};
+        fabric_receiver_cb_index, output_cb_index, num_devices, 1, num_blocks_per_packet};
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
     const auto compute_kernel_file =
@@ -627,7 +628,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         packet_worker_cores_grid,
         tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
 
-    uint32_t offset_for_input = chip_id * input_shard_cores_per_device * input_tiles_per_core_width;
+    uint32_t offset_for_input = chip_id * ncores_input * 1;  // needs to be updated for row slicing.
     uint32_t local_page = 0;
 
     std::vector<uint32_t> reader_runtime_args = {
@@ -719,7 +720,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             writer_runtime_args[is_writer_worker_core_idx] = true;
             writer_runtime_args[is_linear_output_page_start_idx] = local_page;
 
-            local_page += num_pages_per_packet;
+            local_page += num_blocks_per_packet;
             if (core == packet_receiver_core) {
                 reader_runtime_args[is_reader_receiver_core_idx] = true;
             } else {
