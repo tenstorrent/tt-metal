@@ -78,10 +78,6 @@ class TtLayerNormParameters:
                 bias = torch.zeros_like(weight)
 
             h = 32 * mesh_width
-            # TODO: Is this the correct way to add the padding?
-            weight = torch.nn.functional.pad(weight, [0, (-weight.shape[-1]) % h])
-            bias = torch.nn.functional.pad(bias, [0, (-bias.shape[-1]) % h])
-
             _, mesh_width = device.shape
             weight = weight.reshape([-1, h])
             bias = bias.reshape([-1, h])
