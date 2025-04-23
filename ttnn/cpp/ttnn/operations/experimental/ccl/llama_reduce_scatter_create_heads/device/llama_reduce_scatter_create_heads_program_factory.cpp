@@ -264,30 +264,35 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     auto& output_tensor = tensor_return_value;
     auto& output_shape = output_tensor.get_logical_shape();
     auto& padded_output_shape = output_tensor.get_padded_shape();
-    const auto& input_tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
-    const auto& output_tile_shape = output_tensor.get_tensor_spec().tile().get_tile_shape();
+    // const auto& input_tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
+    // const auto& output_tile_shape = output_tensor.get_tensor_spec().tile().get_tile_shape();
     auto input_tensor_width = input_tensor.get_logical_shape()[-1];
     auto output_tensor_width = output_tensor.get_logical_shape()[-1];
-    auto input_tensor_width_in_tiles = input_tensor.get_logical_shape()[-1] / input_tile_shape[1];
-    auto output_tensor_width_in_tiles = output_tensor.get_logical_shape()[-1] / output_tile_shape[1];
+    // auto input_tensor_width_in_tiles = input_tensor.get_logical_shape()[-1] / input_tile_shape[1];
+    // auto output_tensor_width_in_tiles = output_tensor.get_logical_shape()[-1] / output_tile_shape[1];
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto output_shard_spec = output_tensor.shard_spec().value();
     const auto& cross_device_semaphore = operation_attributes.cross_device_semaphore;
 
     uint32_t input_shard_height = input_shard_spec.shape[0];
     uint32_t input_shard_width = input_shard_spec.shape[1];
-    uint32_t input_tiles_per_core_width = input_shard_width / input_tile_shape[1];
+    // uint32_t input_tiles_per_core_width = input_shard_width / input_tile_shape[1];
 
     uint32_t output_shard_height = output_shard_spec.shape[0];
     uint32_t output_shard_width = output_shard_spec.shape[1];
-    uint32_t output_tiles_per_core_width = output_shard_width / input_tile_shape[1];
+    // uint32_t output_tiles_per_core_width = output_shard_width / input_tile_shape[1];
 
     uint32_t ncores_input = (input_tensor_width + input_shard_width - 1) / input_shard_width;
-    if (ncores_input % num_devices != 0) {
-        ncores_input = ((ncores_input + num_devices - 1) / num_devices) * num_devices;
-    }
+    // if (ncores_input % num_devices != 0) {
+    //     ncores_input = ((ncores_input + num_devices - 1) / num_devices) * num_devices;
+    // }
     uint32_t ncores_output = (output_tensor_width + output_shard_width - 1) / output_shard_width;
-    uint32_t input_shard_cores_per_device = ncores_input / num_devices;
+    // uint32_t input_shard_cores_per_device = ncores_input / num_devices;
+    uint32_t input_sticks_per_device = input_shape[-2] / num_devices;  // should be 8
+    uint32_t input_blocks_per_stick = ncores_input;                    // should be 20
+    /* each block is 8x64, sharded in 20 cores, totally 8x1280
+     */
+
     uint32_t output_cores_per_device = ncores_output;
 
     auto input_tensor_buffer = input_tensor.buffer();
@@ -295,8 +300,10 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     auto packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
-    uint32_t input_page_size = tile_size(cb_data_format);
-    uint32_t output_page_size = tile_size(cb_data_format);
+    // uint32_t input_page_size = tile_size(cb_data_format);
+    // uint32_t output_page_size = tile_size(cb_data_format);
+    uint32_t input_block_size = input_sticks_per_device * input_shard_width * input_tensor.get_dtype();
+    uint32_t output_block_size = input_sticks_per_device * output_shard_width * output_tensor.get_dtype();
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
@@ -318,26 +325,28 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     auto fabric_max_packet_size = tt::tt_fabric::get_1d_fabric_config().channel_buffer_size_bytes;
     size_t packet_size_bytes = input_tensor.get_dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size)
                                                                               : fabric_max_packet_size;
-    uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;
-    auto per_worker_num_tiles = (output_tensor_width_in_tiles + num_links - 1) / num_links;
-    if (per_worker_num_tiles < num_pages_per_packet) {  // if num_tiles per worker is smaller than packet size
-        packet_size_bytes = per_worker_num_tiles * input_page_size;
-        num_pages_per_packet = packet_size_bytes / input_page_size;
-    }
-    auto num_packets_to_send = (output_tensor_width_in_tiles + num_pages_per_packet - 1) / num_pages_per_packet;
-    auto num_packets_to_send_per_worker = (num_packets_to_send + num_links - 1) / num_links;
+    uint32_t num_blocks_per_packet = packet_size_bytes / input_block_size;
+    uint32_t per_worker_num_blocks = (ncores_input + num_links - 1) / num_links;
 
-    TT_FATAL(
-        num_pages_per_packet % input_tiles_per_core_width == 0 || input_tiles_per_core_width > num_pages_per_packet,
-        "must have num_pages per packet divisible by num_tiles per core, or num_tiles per core larger than num_pages "
-        "per packet");
+    // if num_tiles per worker is smaller than packet size
+    if (per_worker_num_blocks < num_blocks_per_packet) {
+        packet_size_bytes = per_worker_num_blocks * input_block_size;
+        num_blocks_per_packet = packet_size_bytes / input_block_size;
+    }
+    uint32_t num_packets_to_send = (ncores_input + num_blocks_per_packet - 1) / num_blocks_per_packet;
+    uint32_t num_packets_to_send_per_worker = (num_packets_to_send + num_links - 1) / num_links;
+
+    // TT_FATAL(
+    //     num_blocks_per_packet % input_tiles_per_core_width == 0 || input_tiles_per_core_width >
+    //     num_blocks_per_packet, "must have num_pages per packet divisible by num_tiles per core, or num_tiles per core
+    //     larger than num_pages " "per packet");
 
     uint32_t num_workers_per_link = 1;
 
     auto intermediate_packet_buffer_grid = tensor_args.intermediate_packet_buffer.shard_spec().value().grid;
     // UNCOMMENT this once we can allocate persistent buffers across all device lifetimes
     uint32_t num_packets_total_per_device =
-        (input_shard_cores_per_device * input_tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
+        (input_blocks_per_stick + num_blocks_per_packet - 1) / num_blocks_per_packet;
     auto packet_worker_cores_grid = detail::rs_heads_fusion::get_worker_cores(
         intermediate_packet_buffer_grid,
         num_packets_total_per_device,
@@ -350,10 +359,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
 
     auto schedule = detail::rs_heads_fusion::distribute_work_evenly(
-        input_shard_cores_per_device,
-        num_workers_per_link * num_links,
-        input_tiles_per_core_width,
-        num_pages_per_packet);
+        ncores_input, num_workers_per_link * num_links, 1, num_blocks_per_packet);
     auto schedule_string = detail::rs_heads_fusion::schedule_to_string(schedule);
 
     // input sharded buffer

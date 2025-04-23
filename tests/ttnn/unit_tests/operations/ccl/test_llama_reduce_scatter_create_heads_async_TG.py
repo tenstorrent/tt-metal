@@ -271,7 +271,7 @@ def run_reduce_scatter_test(
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
     mesh_device.reset_sub_device_stall_group()
-
+    breakpoint()
     passed = True
     first_failed_tensor_index = None
     failed_indices = []
