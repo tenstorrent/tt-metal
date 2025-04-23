@@ -16,6 +16,7 @@ jobs:
       version: 22.04
       build-wheel: true
   build-6u-image:
+    needs: build-artifact
     runs-on: ubuntu-latest
     permissions:
       packages: write
