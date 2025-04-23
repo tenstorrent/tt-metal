@@ -50,15 +50,16 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         dim += tensor_rank;
     }
 
-    TT_FATAL(input_dtype == output_dtype, "Type conversion not supported yet");
+    TT_FATAL(input_dtype == output_dtype, "In-device type conversion not supported yet");
 
     TT_FATAL(
-        output_dtype == DataType::FLOAT32 || output_dtype == DataType::INT32 || output_dtype == DataType::BFLOAT16,
+        output_dtype == DataType::FLOAT32 || output_dtype == DataType::INT32 || output_dtype == DataType::UINT32 ||
+            output_dtype == DataType::BFLOAT16,
         "Only float32 and int32 data type supported for now");
 
     TT_FATAL(output_tensor.get_layout() == Layout::TILE, "Only supported layout is TILE");
 
-    TT_FATAL(input_tensor.get_padded_shape().rank() >= 3, "Only support 3D tensor and above");
+    TT_FATAL(input_tensor.get_padded_shape().rank() >= 3, "Device operation only support 3D tensor and above");
 
     TT_FATAL(
         input_tensor.buffer()->size() == input_tensor.volume() * input_tensor.element_size(),
@@ -69,12 +70,6 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     TT_ASSERT(dim >= 0, "dim argument must be positive");
 
     TT_FATAL(dim + 2 < tensor_rank, "cumsum on x and y axes not supported (dim = {}, rank = {})", dim, tensor_rank);
-
-    printf("Input size = %ld, input volume = %u\n", input_tensor.buffer()->size(), input_tensor.volume());
-    printf(
-        "Input buffer addr = %u, Output buffer addr = %u\n",
-        input_tensor.buffer()->address(),
-        output_tensor.buffer()->address());
 
     // Buffer setup
     const uint32_t single_tile_size = output_tensor.element_size() * TILE_SIZE;
@@ -213,10 +208,6 @@ void CumSumDeviceOperation::SingleCore::override_runtime_arguments(
     const auto& input_dtype = input_tensor.get_dtype();
 
     TT_THROW("override_runtime_arguments() not yet supported");
-
-    TT_FATAL(input_dtype == DataType::FLOAT32 || input_dtype == DataType::INT32, "Unsupported input data type");
-
-    TT_FATAL(dtype == DataType::FLOAT32 || dtype == DataType::INT32, "Unsupported data type");
 }
 
 }  // namespace ttnn::operations::experimental::reduction

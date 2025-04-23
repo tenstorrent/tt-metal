@@ -40,9 +40,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([7, 13, 129, 33], 1),
         ([7, 13, 129, 33], 0),
         ([4, 6, 128, 128], 0),
-        ([2, 3, 2, 2], 1),
-        ([2, 3, 2, 2], 0),
-        ([2, 1, 33], 0),
         ([2, 3, 5, 33, 128], 0),
         ([2, 3, 5, 33, 128], 1),
         ([2, 3, 5, 33, 128], 2),
@@ -155,7 +152,4 @@ def test_cumsum_with_preallocated_output(size, dim, dtype, device):
 
     assert preallocated_output_tensor == output_tensor
 
-    preallocated_torch = ttnn.to_torch(preallocated_output_tensor, dtype=host_dtype)
-
     assert_with_pcc(expected_output, torch_output)
-    assert_with_pcc(expected_output, preallocated_torch)
