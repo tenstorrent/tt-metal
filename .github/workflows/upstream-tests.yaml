@@ -15,19 +15,24 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
-  build-wh-6u-image:
-    needs: build-artifact
+  get-image-names:
     runs-on: ubuntu-latest
     outputs:
-      image-name: ${{ steps.set-wh-6u-image-name.outputs.wh-6u-image-name }}
+      wh-6u-image-name: ${{ steps.set-wh-6u-image-name.outputs.wh-6u-image-name }}
+    steps:
+      - name: Set WH 6U image name
+        id: set-wh-6u-image-name
+        run: echo "wh-6u-image-name=ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+  build-wh-6u-image:
+    needs:
+      - build-artifact
+      - get-image-names
+    runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Set image name
-        id: set-wh-6u-image-name
-        run: echo "wh-6u-image-name=ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:${{ github.run_number }}" >> "$GITHUB_OUTPUT"
       - name: Download artifacts from metal
         id: download-artifacts
         uses: actions/download-artifact@v4
@@ -53,15 +58,19 @@ jobs:
           pull: true
           push: true
           # https://github.com/docker/build-push-action/issues/557#issuecomment-1030412477
+          # TODO - should probably parameterize the dev docker image name as well
           build-args: |
             TT_METAL_DEV_VERSION=latest
             TT_METAL_COMMIT_SHA=${{ github.sha }}
+            TEST_COMMAND=./tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
           # Use run_number as it should be unique for every run, can trace to a commit, and is a
           # static counter managed by GitHub
-          tags: ${{ steps.set-wh-6u-image-name.outputs.wh-6u-image-name }}
+          tags: ${{ needs.get-image-names.outputs.wh-6u-image-name }}
           context: ${{ github.workspace }}
   test-wh-6u-image:
-    needs: build-wh-6u-image
+    needs:
+      - get-image-names
+      - build-wh-6u-image
     runs-on:
       - arch-wormhole_b0
       - topology-6u
@@ -70,7 +79,7 @@ jobs:
     steps:
       - name: Pull image
         timeout-minutes: 10
-        run: docker pull ${{ needs.build-wh-6u-image.outputs.image-name }}
+        run: docker pull ${{ needs.get-image-names.outputs.wh-6u-image-name }}
       - name: Run image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.build-wh-6u-image.outputs.image-name }}
