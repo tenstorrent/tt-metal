@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.ufld_v2.ttnn.common import TtnnUFLDV2Conv2D
-from models.experimental.ufld_v2.ttnn.ttnn_resnet_34 import TtnnResnet34
+from models.demos.ufld_v2.ttnn.common import TtnnUFLDV2Conv2D
+from models.demos.ufld_v2.ttnn.ttnn_resnet_34 import TtnnResnet34
 
 
 class TtnnUFLDv2:

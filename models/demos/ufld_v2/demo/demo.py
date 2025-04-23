@@ -8,13 +8,13 @@ import json
 import numpy as np
 import os
 from loguru import logger
-from models.experimental.ufld_v2.reference.ufld_v2_model import TuSimple34
-from models.experimental.ufld_v2.demo import model_config as cfg
-from models.experimental.ufld_v2.demo.demo_utils import (
+from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
+from models.demos.ufld_v2.demo import model_config as cfg
+from models.demos.ufld_v2.demo.demo_utils import (
     run_test_tusimple,
     LaneEval,
 )
-from models.experimental.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_preprocessor_whole_model
 from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args
 
@@ -42,9 +42,9 @@ def test_UFLD_v2_demo(batch_size, input_channels, height, width, device, use_pre
     reference_model = TuSimple34(input_height=height, input_width=width)
     if use_pretrained_weight:
         logger.info(f"Demo Inference using Pre-trained Weights")
-        weights_path = "models/experimental/ufld_v2/tusimple_res34.pth"
+        weights_path = "models/demos/ufld_v2/tusimple_res34.pth"
         if not os.path.exists(weights_path):
-            os.system("bash models/experimental/ufld_v2/weights_download.sh")
+            os.system("bash models/demos/ufld_v2/weights_download.sh")
         state_dict = torch.load(weights_path)
         new_state_dict = {}
         for key, value in state_dict["model"].items():

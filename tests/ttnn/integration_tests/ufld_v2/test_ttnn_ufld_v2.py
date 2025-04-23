@@ -13,9 +13,9 @@ from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
-from models.experimental.ufld_v2.reference.ufld_v2_model import TuSimple34, BasicBlock
-from models.experimental.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
-from models.experimental.ufld_v2.ttnn.ttnn_basic_block import TtnnBasicBlock
+from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34, BasicBlock
+from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from models.demos.ufld_v2.ttnn.ttnn_basic_block import TtnnBasicBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -367,9 +367,9 @@ def test_ufld_v2_model(device, batch_size, input_channels, height, width, use_pr
     torch_input_tensor = torch.randn((batch_size, input_channels, height, width), dtype=torch.bfloat16)
     torch_output = torch_model(torch_input_tensor)
     if use_pretrained_weight:
-        weights_path = "models/experimental/ufld_v2/tusimple_res34.pth"
+        weights_path = "models/demos/ufld_v2/tusimple_res34.pth"
         if not os.path.exists(weights_path):
-            os.system("bash models/experimental/ufld_v2/weights_download.sh")
+            os.system("bash models/demos/ufld_v2/weights_download.sh")
             state_dict = torch.load(weights_path)
             new_state_dict = {}
             for key, value in state_dict["model"].items():

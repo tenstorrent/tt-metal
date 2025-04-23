@@ -10,8 +10,8 @@ import pytest
 from loguru import logger
 from models.utility_functions import is_wormhole_b0
 from models.perf.perf_utils import prep_perf_report
-from models.experimental.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
-from models.experimental.ufld_v2.reference.ufld_v2_model import TuSimple34
+from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
@@ -52,9 +52,9 @@ def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pre
     torch_input_tensor = torch.randn((batch_size, input_channels, height, width))
     reference_model = TuSimple34(input_height=height, input_width=width)
     if use_pretrained_weight:
-        weights_path = "models/experimental/ufld_v2/tusimple_res34.pth"
+        weights_path = "models/demos/ufld_v2/tusimple_res34.pth"
         if not os.path.exists(weights_path):
-            os.system("bash models/experimental/ufld_v2/weights_download.sh")
+            os.system("bash models/demos/ufld_v2/weights_download.sh")
             state_dict = torch.load(weights_path)
             new_state_dict = {}
             for key, value in state_dict["model"].items():
@@ -93,7 +93,7 @@ def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pre
     expected_compile_time, expected_inference_time = get_expected_times("ufld_v2")
 
     prep_perf_report(
-        model_name="models/experimental/ufld_v2",
+        model_name="models/demos/ufld_v2",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,

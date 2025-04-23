@@ -11,9 +11,10 @@ Resource link - [source](https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2)
 
 ### Model Details
 
-- The entry point to the UFLD_v2 is located at:`models/experimental/ufld_v2/ttnn/ttnn_ufld_v2.py`
-- The model picks up trained weights from the **tusimple_res34.pth** file located at:`models/experimental/ufld_v2/reference/tusimple_res34.pth`
+- The entry point to the UFLD_v2 is located at:`models/demos/ufld_v2/ttnn/ttnn_ufld_v2.py`
+- The model picks up trained weights from the **tusimple_res34.pth** file located at:`models/demos/ufld_v2/reference/tusimple_res34.pth`
 - Batch Size :1
+- Supported Input Resolution - (320,800) (Height,Width)
 
 Export the following command before running pytests on N300:
 
@@ -23,19 +24,23 @@ Use the following command to run the model :
 
 `pytest tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py::test_ufld_v2_model`
 
-Use the following command to run the e2e perf:
+Use the following command to run the e2e perf(5.3 FPS):
 
-`pytest models/experimental/ufld_v2/tests/test_ufld_v2_perf.py::test_ufld_v2_perf`
+`pytest models/demos/ufld_v2/tests/test_ufld_v2_perf.py::test_ufld_v2_perf`
 
-Use the following command to run the e2e perf with trace:
+Use the following command to run the e2e perf with trace(107 FPS):
 
-`pytest models/experimental/ufld_v2/tests/test_ufld_v2_e2e_performant.py`
+`pytest models/demos/ufld_v2/tests/test_ufld_v2_e2e_performant.py`
+
+Use the following command to generate device perf (306 FPS):
+
+`pytest models/demos/ufld_v2/tests/test_ufld_v2_perf.py::test_perf_device_bare_metal_ufld_v2`
 
 ### Demo
 
 Use the following command to run the demo :
 
-`pytest models/experimental/ufld_v2/demo/demo.py`
+`pytest models/demos/ufld_v2/demo/demo.py`
 
 To run the demo on your data:
 
