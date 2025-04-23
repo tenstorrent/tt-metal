@@ -10,6 +10,7 @@ import torch
 import ttnn
 from models.experimental.stable_diffusion3.tt.linear import TtLinear, TtLinearParameters
 
+from . import utils
 from .normalization import TtLayerNorm, TtLayerNormParameters
 from .patch_embedding import TtPatchEmbed, TtPatchEmbedParameters
 from .substate import indexed_substates, substate
@@ -162,7 +163,7 @@ class TtSD3Transformer2DModel:
         spatial_time = self._time_embed_out(ttnn.silu(time_embed))
         [scale, shift] = chunk_time(spatial_time, 2)
         if self._distributed:
-            spatial = ttnn.all_gather(spatial, dim=-1)
+            spatial = utils.all_gather(spatial, dim=-1)
         spatial = self._norm_out(spatial) * (1 + scale) + shift
         return self._proj_out(spatial)
 

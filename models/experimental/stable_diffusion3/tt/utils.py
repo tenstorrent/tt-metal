@@ -140,9 +140,16 @@ def all_gather(
     memory_config: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
     assert cluster_axis is None or mesh_device is not None, "cluster_axis requires mesh_device to be set"
+    assert x.shape[dim] == x.padded_shape[dim]
+
+    shape = list(x.shape)
+
+    reshape = x.shape != x.padded_shape
+    if reshape:
+        x = ttnn.reshape(x, x.padded_shape, x.padded_shape)
 
     if cluster_axis is not None:
-        return ttnn.all_gather(
+        x = ttnn.all_gather(
             x,
             dim,
             cluster_axis,
@@ -152,10 +159,16 @@ def all_gather(
             memory_config=memory_config,
         )
 
-    return ttnn.all_gather(
+    x = ttnn.all_gather(
         x,
         dim,
         num_links=num_links,
         topology=topology,
         memory_config=memory_config,
     )
+
+    if reshape:
+        shape[dim] = x.shape[dim]
+        x = ttnn.reshape(x, shape, x.padded_shape)
+
+    return x

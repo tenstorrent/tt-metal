@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import ttnn
 
+from . import utils
 from .attention import TtAttention, TtAttentionParameters
 from .feed_forward import TtFeedForward, TtFeedForwardParameters
 from .linear import TtLinear, TtLinearParameters
@@ -165,8 +166,8 @@ class TtTransformerBlock:
         spatial_scaled = spatial * (1 + spatial_scale) + spatial_shift
         prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
         if self._distributed:
-            spatial_scaled = ttnn.all_gather(spatial_scaled, dim=-1)
-            prompt_scaled = ttnn.all_gather(prompt_scaled, dim=-1)
+            spatial_scaled = utils.all_gather(spatial_scaled, dim=-1)
+            prompt_scaled = utils.all_gather(prompt_scaled, dim=-1)
         spatial_attn, prompt_attn = self._dual_attn(
             spatial=spatial_scaled, prompt=prompt_scaled, deallocate=True, N=N, L=L
         )
@@ -181,7 +182,7 @@ class TtTransformerBlock:
     ) -> ttnn.Tensor:
         scaled = inp * (1 + scale) + shift
         if self._distributed:
-            scaled = ttnn.all_gather(scaled, dim=-1)
+            scaled = utils.all_gather(scaled, dim=-1)
         result = gate * self._spatial_ff(scaled)
         ttnn.deallocate(scaled)
         return result
@@ -193,7 +194,7 @@ class TtTransformerBlock:
 
         scaled = inp * (1 + scale) + shift
         if self._distributed:
-            scaled = ttnn.all_gather(scaled, dim=-1)
+            scaled = utils.all_gather(scaled, dim=-1)
         result = gate * self._prompt_ff(scaled)
         ttnn.deallocate(scaled)
         return result
