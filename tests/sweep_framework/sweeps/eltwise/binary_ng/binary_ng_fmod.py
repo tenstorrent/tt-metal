@@ -245,7 +245,7 @@ def run(
     torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
 
     golden_function = ttnn.get_golden_function(ttnn_fn)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
     start_time = start_measuring_time()
     result = ttnn_fn(input_tensor_a, input_tensor_b)
