@@ -53,17 +53,15 @@ public:
 
 class TTNNFixtureWithDevice : public TTNNFixtureBase {
 protected:
-    IDevice* device_;
+    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
 
     void SetUp() override {
-        device_ = tt::tt_metal::CreateDevice(
-            /*device_id=*/0,
-            /*num_hw_cqs=*/1,
-            l1_small_size_,
-            trace_region_size_);
+        device_holder_ = ttnn::open_mesh_device(/*device_id=*/0, l1_small_size_, trace_region_size_);
+        device_ = device_holder_.get();
     }
 
-    void TearDown() override { CloseDevice(device_); }
+    void TearDown() override { device_->close(); }
 
     TTNNFixtureWithDevice() : TTNNFixtureBase() {}
 
@@ -73,7 +71,8 @@ protected:
 
 class MultiCommandQueueSingleDeviceFixture : public TTNNFixtureBase {
 protected:
-    IDevice* device_;
+    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device_holder_;
 
     void SetUp() override {
         check_slow_dispatch();
@@ -84,16 +83,17 @@ protected:
                 tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
             dispatch_core_type = DispatchCoreType::ETH;
         }
-        device_ = tt::tt_metal::CreateDevice(
-            0, 2, trace_region_size_, l1_small_size_, DispatchCoreConfig{dispatch_core_type});
+        device_holder_ = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(
+            0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 2, DispatchCoreConfig{dispatch_core_type});
+        device_ = device_holder_.get();
     }
 
-    void TearDown() override { CloseDevice(device_); }
+    void TearDown() override { device_->close(); }
 };
 
 class MultiCommandQueueT3KFixture : public TTNNFixtureBase {
 protected:
-    std::map<chip_id_t, tt::tt_metal::IDevice*> devs;
+    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
 
     void SetUp() override {
         check_slow_dispatch();
@@ -103,11 +103,19 @@ protected:
         }
 
         // Enable Ethernet Dispatch for Multi-CQ tests.
-        devs = tt::tt_metal::detail::CreateDevices(
-            {0, 1, 2, 3, 4, 5, 6, 7}, 2, trace_region_size_, l1_small_size_, DispatchCoreConfig{DispatchCoreType::ETH});
+        devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+            {0, 1, 2, 3, 4, 5, 6, 7},
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            2,
+            DispatchCoreConfig{DispatchCoreType::ETH});
     }
 
-    void TearDown() override { tt::tt_metal::detail::CloseDevices(devs); }
+    void TearDown() override {
+        for (auto& [_, dev] : devs) {
+            dev->close();
+        }
+    }
 };
 
 }  // namespace ttnn
