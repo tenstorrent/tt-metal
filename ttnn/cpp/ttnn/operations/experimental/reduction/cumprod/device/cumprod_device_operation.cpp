@@ -62,12 +62,9 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         ((dim >= -static_cast<decltype(dim)>(input_tensor.get_padded_shape().rank())) &&
          (dim < static_cast<decltype(dim)>(input_tensor.get_padded_shape().rank()))),
-        "The requested cumulation axis is {}, while the input thensor has rank {}. DEBUG: {}, {}, {}",
+        "The requested cumulation axis is {}, while the input thensor has rank {}.",
         dim,
-        input_tensor.get_padded_shape().rank(),
-        -static_cast<decltype(dim)>(input_tensor.get_padded_shape().rank()),
-        dim >= -static_cast<decltype(dim)>(input_tensor.get_padded_shape().rank()),
-        dim < input_tensor.get_padded_shape().rank());
+        input_tensor.get_padded_shape().rank());
 
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
@@ -119,7 +116,7 @@ CumprodDeviceOperation::spec_return_value_t CumprodDeviceOperation::compute_outp
 CumprodDeviceOperation::tensor_return_value_t CumprodDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_out.has_value()) {
-        // TODO(jbbieniekTT): a copy of a Python object (referencing to the same tensor though) is returned here
+        // a copy of a Python object (referencing to the same tensor though) is returned here
         return *tensor_args.optional_out;
     }
     return create_device_tensor(
@@ -130,7 +127,7 @@ CumprodDeviceOperation::invocation_result_t CumprodDeviceOperation::invoke(
     const Tensor& input_tensor,
     const int32_t& dim,
     std::optional<DataType>& dtype,
-    std::optional<Tensor>& optional_out,
+    std::optional<Tensor> optional_out,
     const MemoryConfig& memory_config,
     const QueueId& queue_id) {
     return {

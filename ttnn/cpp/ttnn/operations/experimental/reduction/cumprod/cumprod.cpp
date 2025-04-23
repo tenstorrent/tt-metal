@@ -24,7 +24,7 @@ Tensor CumprodOperation::invoke(
     const Tensor& input_tensor,
     const int32_t& dim,
     std::optional<DataType>& dtype,
-    std::optional<Tensor>& optional_out,
+    std::optional<Tensor> optional_out,
     const std::optional<MemoryConfig>& memory_config,
     const QueueId& queue_id) {
     const auto& input_shape = input_tensor.get_logical_shape();
@@ -62,7 +62,7 @@ Tensor CumprodOperation::invoke(
             adjusted_input_tensor = ttnn::reshape(adjusted_input_tensor, new_shape);
 
             if (optional_out.has_value()) {
-                optional_out = ttnn::reshape(optional_out.value(), new_shape);
+                // optional_out = ttnn::reshape(optional_out.value(), new_shape);
             }
 
             tensor_rank = 4;
@@ -86,7 +86,7 @@ Tensor CumprodOperation::invoke(
             permuted_tensor,
             0,
             dtype,
-            optional_out,
+            std::nullopt,
             memory_config.has_value() ? memory_config.value() : permuted_tensor.memory_config(),
             queue_id);
 
@@ -95,20 +95,20 @@ Tensor CumprodOperation::invoke(
         if (optional_out.has_value()) {
             //     optional_out = ttnn::permute(optional_out.value(), permutation,
             //     optional_out.value().memory_config());
-            ttnn::copy(output_tensor, *optional_out);
+            // ttnn::copy(output_tensor, *optional_out);
         }
 
         if (initial_tensor_rank < 4) {
             output_tensor = ttnn::reshape(output_tensor, input_shape);
-            if (optional_out.has_value()) {
-                //     optional_out = ttnn::reshape(optional_out.value(), input_shape);
-            }
+        }
+
+        if (optional_out.has_value()) {
+            ttnn::copy(output_tensor, *optional_out);
         }
 
         return output_tensor;
     }
 
-    // For other dimensions, proceed with original cumprod
     return ttnn::prim::cumprod(
         adjusted_input_tensor,
         cum_axis,

@@ -99,7 +99,7 @@ struct CumprodDeviceOperation {
         const Tensor& input_tensor,
         const int32_t& dim,
         std::optional<DataType>& dtype,
-        std::optional<Tensor>& optional_out,
+        std::optional<Tensor> optional_out,
         const MemoryConfig& memory_config,
         const QueueId& queue_id = DefaultQueueId);
 };
