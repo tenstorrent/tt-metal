@@ -274,12 +274,21 @@ def from_torch(
         Tensor([[1.375, -1.30469, -0.714844],
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
-    if memory_config is not None and memory_config.is_sharded():
-        if memory_config.shard_spec is None:
-            raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
 
-        if memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
-            return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile)
+    if memory_config is not None:
+        if device is None:
+            raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
+
+        if memory_config.is_sharded():
+            if memory_config.shard_spec is None:
+                raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
+
+            if memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
+                return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile)
+
+    if pad_value is not None:
+        if layout != ttnn.TILE_LAYOUT:
+            raise RuntimeError("ttnn.from_torch: layout must be TILE_LAYOUT when pad_value is specified")
 
     logical_shape = None
     padded_shape = None
@@ -292,14 +301,6 @@ def from_torch(
         padded_shape = tensor.padded_shape
         tensor = tensor.reshape(tensor.padded_shape)
         tensor = ttnn.to_torch(tensor)
-
-    if memory_config is not None:
-        if device is None:
-            raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
-
-    if pad_value is not None:
-        if layout != ttnn.TILE_LAYOUT:
-            raise RuntimeError("ttnn.from_torch: layout must be TILE_LAYOUT when pad_value is specified")
 
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
