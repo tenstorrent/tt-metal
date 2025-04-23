@@ -40,7 +40,7 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-const ll_api::memory& get_risc_binary(const std::string_view path, ll_api::memory::Loading loading) {
+const ll_api::memory& get_risc_binary(std::string_view path, ll_api::memory::Loading loading) {
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;

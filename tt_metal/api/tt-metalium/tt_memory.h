@@ -35,7 +35,7 @@ private:
 
 public:
     memory();
-    memory(const std::string_view path, Loading loading);
+    memory(std::string_view path, Loading loading);
 
 public:
     // These can be large objects, so ban copying ...

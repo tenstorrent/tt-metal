@@ -63,7 +63,7 @@ private:
     class Weakener;
 
 public:
-    Impl(ElfFile& owner, const std::string_view path) : owner_(owner), path_(std::string(path)) {}
+    Impl(ElfFile& owner, std::string_view path) : owner_(owner), path_(std::string(path)) {}
     ~Impl() = default;
 
 public:
@@ -162,7 +162,7 @@ void ElfFile::ReleaseImpl() {
     pimpl_ = nullptr;
 }
 
-void ElfFile::ReadImage(const std::string_view path) {
+void ElfFile::ReadImage(std::string_view path) {
     int fd = open(path.data(), O_RDONLY | O_CLOEXEC);
     struct stat st;
     void* buffer = MAP_FAILED;
