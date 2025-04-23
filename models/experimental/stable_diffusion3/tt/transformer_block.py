@@ -50,7 +50,7 @@ class TtTransformerBlockParameters:
                 state,
                 dtype=dtype,
                 device=device,
-                weight_shape=[embedding_dim],
+                weight_shape=[embedding_dim + hidden_dim_padding],
             )
 
         has_spatial_attn = has_substate(state, "attn2")
@@ -198,7 +198,6 @@ class TtTransformerBlock:
         t = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         spatial_time = self._spatial_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         prompt_time = self._prompt_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
         ttnn.deallocate(t)
         if self._spatial_attn is not None:
             [
