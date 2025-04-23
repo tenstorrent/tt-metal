@@ -22,6 +22,16 @@ profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 machine_type_suffix = None
 
 
+def update_machine_type_suffix(machine_type: str):
+    global machine_type_suffix
+    machine_type_suffix = machine_type
+
+
+def reset_machine_type_suffix():
+    global machine_type_suffix
+    machine_type_suffix = None
+
+
 # Python enum mirroring test_fabric_edm_common.hpp
 class FabricTestMode(Enum):
     Linear = 0
@@ -365,7 +375,7 @@ def run_fabric_edm(
     )
 
     # Reset for the next test case
-    machine_type_suffix = None
+    reset_machine_type_suffix()
 
 
 @pytest.mark.ubench_quick_tests
@@ -674,8 +684,7 @@ def test_fabric_6u_4chip_cols_mcast_bw(
     is_ring = fabric_test_mode == FabricTestMode.FullRing
     if is_ring:
         pytest.skip("Baseline numbers not yet available for full-6u ring fabric test mode")
-    global machine_type_suffix
-    machine_type_suffix = "6u"
+    update_machine_type_suffix("6u")
     run_fabric_edm(
         is_unicast=is_unicast,
         num_messages=num_messages,
@@ -719,9 +728,7 @@ def test_fabric_6u_4chip_rows_mcast_bw(
     is_ring = fabric_test_mode == FabricTestMode.FullRing
     if is_ring:
         pytest.skip("Baseline numbers not yet available for full-6u ring fabric test mode")
-
-    global machine_type_suffix
-    machine_type_suffix = "6u"
+    update_machine_type_suffix("6u")
     run_fabric_edm(
         is_unicast=is_unicast,
         num_messages=num_messages,
