@@ -6,103 +6,14 @@ import pytest
 import ttnn
 import torch
 from loguru import logger
-import os
-import glob
-from PIL import Image
 from models.utility_functions import run_for_wormhole_b0
 from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50Trace2CQ
-from models.demos.ttnn_resnet.tests.demo_utils import get_batch
-from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
-from datasets import load_dataset
+from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
 from transformers import AutoImageProcessor
 from tqdm import tqdm
 from models.utility_functions import (
     profiler,
 )
-
-
-def get_input(image_path):
-    img = Image.open(image_path)
-    return img
-
-
-def get_label(image_path):
-    _, image_name = image_path.rsplit("/", 1)
-    image_name_exact, _ = image_name.rsplit(".", 1)
-    _, label_id = image_name_exact.rsplit("_", 1)
-    label = list(IMAGENET2012_CLASSES).index(label_id)
-    return label
-
-
-class InputExample(object):
-    def __init__(self, image, label=None):
-        self.image = image
-        self.label = label
-
-
-def get_data_loader(input_loc, batch_size, iterations):
-    img_dir = input_loc + "/"
-    data_path = os.path.join(img_dir, "*G")
-    files = glob.glob(data_path)
-
-    def loader():
-        examples = []
-        for f1 in files:
-            examples.append(
-                InputExample(
-                    image=get_input(f1),
-                    label=get_label(f1),
-                )
-            )
-            if len(examples) == batch_size:
-                yield examples
-                del examples
-                examples = []
-
-    def loader_hf():
-        examples = []
-        for f1 in files:
-            examples.append(
-                InputExample(
-                    image=f1["image"],
-                    label=f1["label"],
-                )
-            )
-            if len(examples) == batch_size:
-                yield examples
-                del examples
-                examples = []
-
-    if len(files) == 0:
-        ds = load_dataset("imagenet-1k", split="validation", use_auth_token=True)
-        files_raw = iter(ds)
-        files = []
-
-        for item in tqdm(files_raw, total=len(ds), desc="Loading samples"):
-            files.append(item)
-
-        del files_raw
-        return loader_hf()
-
-    return loader()
-
-
-def get_batch(loaded_images, image_processor):
-    images = None
-    labels = []
-    for image in loaded_images:
-        img = image.image
-        labels.append(image.label)
-        if img.mode == "L":
-            img = img.convert(mode="RGB")
-        img = image_processor(img, return_tensors="pt")
-        img = img["pixel_values"]
-
-        if images is None:
-            images = img
-        else:
-            images = torch.cat((images, img), dim=0)
-    return images, labels
 
 
 @run_for_wormhole_b0()
@@ -114,7 +25,7 @@ def get_batch(loaded_images, image_processor):
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b),),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
-def test_run_resnet50_trace_2cqs_inference(
+def test_run_resnet50_trace_2cqs_inference_accuracy(
     mesh_device,
     use_program_cache,
     batch_size_per_device,
@@ -139,15 +50,18 @@ def test_run_resnet50_trace_2cqs_inference(
         image_processor = AutoImageProcessor.from_pretrained(model_version)
         logger.info("ImageNet-1k validation Dataset")
         input_loc = str(model_location_generator("ImageNet_data"))
-        data_loader = get_data_loader(input_loc, batch_size, 0)
+        data_loader = get_data_loader(input_loc, batch_size, 0, download_entire_dataset=True)
 
         input_tensors_all = []
         input_labels_all = []
-        for batch in tqdm(data_loader, desc="Loading images"):
-            inputs, labels = get_batch(batch, image_processor)
-            input_tensors_all.append(inputs)
-            input_labels_all.append(labels)
-        logger.info("Processed ImageNet-1k validation Dataset")
+        for _ in tqdm(iter(int, 1), desc="Preprocess images"):
+            try:
+                inputs, labels = get_batch(data_loader, image_processor)
+                input_tensors_all.append(inputs)
+                input_labels_all.append(labels)
+            except StopIteration:
+                logger.info("Processed ImageNet-1k validation Dataset")
+                break
 
         logger.info("Starting inference")
         correct = 0
