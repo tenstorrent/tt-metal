@@ -16,54 +16,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::fused::normalization {
 
-RMSAllGather create_rms_struct(
-    const Tensor& input_tensor,
-    const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::vector<IDevice*>& devices,
-    const ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    float epsilon,
-    const ttnn::operations::normalization::LayerNormProgramConfig program_config,
-    const DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<DataType> dtype) {
-    uint32_t num_devices = devices.size();
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    std::optional<GlobalSemaphore> semaphore = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == input_tensor.device()) {
-            device_index = i;
-            semaphore = semaphores.at(i);  // Get raw pointer
-            if (i != 0) {
-                backward_device = devices.at(i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(num_devices - 1);
-            }
-            if (i != num_devices - 1) {
-                forward_device = devices.at(i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
-            }
-        }
-    }
-    return RMSAllGather(
-        epsilon,
-        memory_config.value_or(input_tensor.memory_config()),
-        program_config,
-        compute_kernel_config,
-        dtype,
-        topology,
-        num_links,
-        num_devices,
-        device_index,
-        semaphore.value(),
-        sub_device_id,
-        forward_device,
-        backward_device);
-}
 tt::tt_metal::operation::Hash RMSAllGather::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
@@ -381,7 +333,7 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
                     backward_device,
                     this->num_links,
                     this->ring_size,
-                    davice_index,
+                    device_index,
                     this->topology,
                     this->semaphore,
                     this->sub_device_id);

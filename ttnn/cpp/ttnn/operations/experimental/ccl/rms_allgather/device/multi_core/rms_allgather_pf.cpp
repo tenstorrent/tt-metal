@@ -1084,8 +1084,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
             CoreCoord bottom_right_core = {
                 (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
-            auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-            auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+            auto top_left_core_physical = mesh_device->worker_core_from_logical_core(top_left_core);
+            auto bottom_right_core_physical = mesh_device->worker_core_from_logical_core(bottom_right_core);
             mcast_start = top_left_core_physical;
             mcast_end = bottom_right_core_physical;
             if (writer_noc == NOC::NOC_1) {
@@ -1135,8 +1135,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
             CoreCoord bottom_right_core = {
                 (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
-            auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-            auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+            auto top_left_core_physical = mesh_device->worker_core_from_logical_core(top_left_core);
+            auto bottom_right_core_physical = mesh_device->worker_core_from_logical_core(bottom_right_core);
             mcast_start = top_left_core_physical;
             mcast_end = bottom_right_core_physical;
             if (reader_noc == NOC::NOC_1) {
