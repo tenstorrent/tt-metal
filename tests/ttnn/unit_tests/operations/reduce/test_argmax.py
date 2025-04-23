@@ -11,17 +11,22 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 
 
 @pytest.mark.parametrize(
-    argnames="tensor_shape, dim, keepdim",
+    argnames="tensor_shape, dim, keepdim, use_multicore",
     argvalues=[
-        ([], None, True),
-        ([32], -1, False),
-        ([32, 0], 1, True),
-        ([8, 10, 25], 2, True),
-        ([1, 32, 1024 * 8], -1, False),
-        ([32, 32, 32, 1], None, True),
+        ([], None, True, True),
+        ([32], -1, False, False),
+        ([32, 0], 1, True, True),
+        ([64], -1, True, False),
+        ([1, 512], -1, True, True),
+        ([1, 1024], -1, True, True),
+        ([1, 65], -1, True, True),
+        ([8, 10, 129], 2, True, False),
+        ([1, 8, 160], -1, False, True),
+        ([1, 256, 1024 * 8], -1, False, True),
+        ([32, 32, 32, 1], -1, True, True),
     ],
 )
-def test_argmax(device, tensor_shape, dim, keepdim) -> list:
+def test_argmax(device, tensor_shape, dim, keepdim, use_multicore):
     """
     Test the compatibility of the torch and ttnn output for argmax of different
     tensor shapes and dim values.
@@ -50,7 +55,10 @@ def test_argmax(device, tensor_shape, dim, keepdim) -> list:
     ttnn_errored = False
     ttnn_error_msg = ""
     try:
-        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim) if dim is not None else ttnn_op(ttnn_tensor)
+        if dim is not None:
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore)
+        else:
+            ttnn_result = ttnn_op(ttnn_tensor, use_multicore=use_multicore)
     except RuntimeError as e:
         ttnn_errored = True
         ttnn_error_msg = str(e)
@@ -62,13 +70,13 @@ def test_argmax(device, tensor_shape, dim, keepdim) -> list:
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:
         logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
-        return (True, "")
+        return
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
     pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
 
-    assert pcc_result, msg + f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result}"
+    assert pcc_result, msg + f"mismatch in pcc: torch: {torch_result}, ttnn: {ttnn_result}"
 
     # Convert torch dtype from uint64 to int32
     # Note: torch does not have uint32
