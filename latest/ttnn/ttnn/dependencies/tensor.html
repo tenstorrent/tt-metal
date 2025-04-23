@@ -313,7 +313,7 @@ The constructor takes following arguments:</p>
 </blockquote>
 </li>
 <li>
-<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, device: ttnn._ttnn.device.IDevice = None, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, device: ttnn._ttnn.multi_device.MeshDevice = None, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
 <blockquote>
 <div>
 <table class="docutils align-default">
@@ -366,7 +366,7 @@ The constructor takes following arguments:</p>
 </blockquote>
 </li>
 <li>
-<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, device: ttnn._ttnn.device.IDevice = None, memory_config: ttnn._ttnn.tensor.MemoryConfig, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, data: list[float], shape: Annotated[list[int], FixedSize(4)], data_type: ttnn._ttnn.tensor.DataType, layout: ttnn._ttnn.tensor.Layout, device: ttnn._ttnn.multi_device.MeshDevice = None, memory_config: ttnn._ttnn.tensor.MemoryConfig, tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
 <blockquote>
 <div>
 <table class="docutils align-default">
@@ -460,7 +460,7 @@ The constructor takes following arguments:</p>
 </blockquote>
 </li>
 <li>
-<p>__init__(self: ttnn._ttnn.tensor.Tensor, tensor: object, data_type: Optional[ttnn._ttnn.tensor.DataType] = None, device: ttnn._ttnn.device.IDevice = None, layout: ttnn._ttnn.tensor.Layout = &lt;Layout.ROW_MAJOR: 0&gt;, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
+<p>__init__(self: ttnn._ttnn.tensor.Tensor, tensor: object, data_type: Optional[ttnn._ttnn.tensor.DataType] = None, device: ttnn._ttnn.multi_device.MeshDevice = None, layout: ttnn._ttnn.tensor.Layout = &lt;Layout.ROW_MAJOR: 0&gt;, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), tile: Optional[ttnn._ttnn.tensor.Tile] = None) -&gt; None</p>
 <blockquote>
 <div>
 <table class="docutils align-default">
@@ -527,7 +527,7 @@ The constructor takes following arguments:</p>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="ttnn.Tensor.device">
-<span class="sig-name descname"><span class="pre">device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn._ttnn.device.IDevice</span></span></span><a class="headerlink" href="#ttnn.Tensor.device" title="Permalink to this definition"></a>
+<span class="sig-name descname"><span class="pre">device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn._ttnn.multi_device.MeshDevice</span></span></span><a class="headerlink" href="#ttnn.Tensor.device" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Get the device of the tensor.</p>
@@ -798,7 +798,7 @@ The constructor takes following arguments:</p>
 </blockquote>
 </li>
 <li>
-<p>to(self: ttnn._ttnn.tensor.Tensor, mesh_device: ttnn._ttnn.multi_device.MeshDevice, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), cq_id: ttnn._ttnn.types.QueueId = QueueId(0)) -&gt; ttnn._ttnn.tensor.Tensor</p>
+<p>to(self: ttnn._ttnn.tensor.Tensor, device: ttnn._ttnn.multi_device.MeshDevice, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), cq_id: ttnn._ttnn.types.QueueId = QueueId(0)) -&gt; ttnn._ttnn.tensor.Tensor</p>
 <blockquote>
 <div>
 <p>Move TT Tensor from host device to TT accelerator device.</p>
