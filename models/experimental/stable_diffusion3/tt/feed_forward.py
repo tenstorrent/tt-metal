@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 class TtFeedForwardParameters:
     in_proj: TtLinearParameters
     out_proj: TtLinearParameters
+    distributed: bool
 
     @classmethod
     def from_torch(
@@ -27,13 +28,14 @@ class TtFeedForwardParameters:
         state: dict[str, torch.Tensor],
         *,
         dtype: ttnn.DataType | None = None,
-        device: ttnn.Device,
+        device: ttnn.MeshDevice,
     ) -> TtFeedForwardParameters:
         return cls(
             in_proj=TtLinearParameters.from_torch(
                 substate(state, "net.0.proj"), dtype=dtype, device=device, shard_dim=-1
             ),
             out_proj=TtLinearParameters.from_torch(substate(state, "net.2"), dtype=dtype, device=device, shard_dim=-2),
+            distributed=device.get_num_devices() > 1,
         )
 
 
@@ -43,6 +45,7 @@ class TtFeedForward:
 
         self.in_proj = TtLinear(parameters.in_proj)
         self.out_proj = TtLinear(parameters.out_proj)
+        self._distributed = parameters.distributed
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         grid_size = x.device().compute_with_storage_grid_size()
@@ -57,13 +60,14 @@ class TtFeedForward:
         result = self.out_proj(x3, core_grid=core_grid)
         ttnn.deallocate(x3)
 
-        result = ttnn.reduce_scatter(
-            result,
-            dim=-1,
-            math_op=ttnn.ReduceType.Sum,
-            num_links=1,
-            memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            topology=ttnn.Topology.Ring,
-        )
+        if self._distributed:
+            result = ttnn.reduce_scatter(
+                result,
+                dim=-1,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=1,
+                memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+                topology=ttnn.Topology.Ring,
+            )
 
         return result
