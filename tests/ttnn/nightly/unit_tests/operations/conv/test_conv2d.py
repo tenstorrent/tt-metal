@@ -2999,28 +2999,29 @@ def test_block_sharding_relu_act_block_h(
 
 # fmt: off
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, activations_dtype, groups, kernel, stride, padding, dilation, auto_shard, use_shallow_conv_variant, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, activations_dtype, groups, kernel, stride, padding, dilation, auto_shard, use_shallow_conv_variant, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, shard_layout",
     (
         # model strawberry
-        (1, 10,   64, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, True,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 64,   64, 512,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, False,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 64,   64, 256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, False,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 64,   64, 128,   16, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, False,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1,  2,    1, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, True,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1, 10,   64, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, True,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, HS),
+        (1, 64,   64, 512,   64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, False,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, HS),
+        (1, 64,   64, 256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, False,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, HS),
+        (1, 64,   64, 128,   16, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (4, 4), (2, 2), (1, 1), (1, 1), True, False,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, HS),
+        (1,  2,    1, 1024, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, True,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, HS),
+        (1,  2,    1, 2560, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), False, False,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, HS),
 
         # model kiwi
-        (1,  4,   32, 288, 288, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (5, 5), (1, 1), (0, 0), (1, 1), True, True,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 32,   48, 284, 284, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (0, 0), (2, 2), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 48,   56, 280, 280, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (0, 0), (4, 4), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 56,   64, 272, 272, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (0, 0), (8, 8), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 64,  128, 256, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (2, 2), (1, 1), (0, 0), (1, 1), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 128, 256, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
-        (1, 256,   1, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False),
+        (1,  4,   32, 288, 288, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (5, 5), (1, 1), (0, 0), (1, 1), True, True,  0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, None),
+        (1, 32,   48, 284, 284, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (0, 0), (2, 2), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, None),
+        (1, 48,   56, 280, 280, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (0, 0), (4, 4), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, None),
+        (1, 56,   64, 272, 272, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (0, 0), (8, 8), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, None),
+        (1, 64,  128, 256, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (2, 2), (1, 1), (0, 0), (1, 1), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, None),
+        (1, 128, 256, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, None),
+        (1, 256,   1, 255, 255, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False, 0, 1, True, ttnn.MathFidelity.LoFi, False, False, False, None),
     ),
 )
  #fmt: on
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384*2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8*1024}], indirect=True)
 def test_conv2d_model_fruit(
     device,
     torch_tensor_map,
@@ -3044,7 +3045,8 @@ def test_conv2d_model_fruit(
     math_fidelity,
     fp32_accum,
     packer_l1_acc,
-    enable_split_reader
+    enable_split_reader,
+    shard_layout
 ):
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
@@ -3076,7 +3078,7 @@ def test_conv2d_model_fruit(
         deallocate_activation=deallocate_activation,
         groups=groups,
         has_bias=True,
-        shard_layout=None,
+        shard_layout=shard_layout,
         auto_shard=auto_shard,
         memory_config=None,
         input_mesh_mapper=None,
