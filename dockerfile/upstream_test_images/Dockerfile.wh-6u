@@ -30,6 +30,7 @@ RUN ls -hal
 # Can delete these to reduce container image size?
 COPY _tt-metal/build/ ./build/
 COPY _tt-metal/runtime/ ./runtime/
+COPY ttnn-*.whl ./
 
 RUN WHEEL_FILENAME=$(ls -1 *.whl) && pip3 install $WHEEL_FILENAME
 
