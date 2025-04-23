@@ -50,17 +50,9 @@ class TtMoeLayer(LightweightModule):
             mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
         )
 
-        self.compute_kernel = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self.compute_kernel = self.args.compute_kernel_config_lofi
 
-        self.compute_kernel_reduce = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
+        self.compute_kernel_reduce = self.args.compute_kernel_config_hifi2
 
         top8_mask = torch.full((1, 1, 1, 64), fill_value=torch.finfo(torch.float).min)
         top8_mask[:, :, :, :8] = 0.0
