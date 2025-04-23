@@ -67,9 +67,9 @@ class TransformerBlock(LightweightModule):
                     args=args,
                     layer_num=layer_num,
                     dtypes={
-                        "w1": ttnn.bfloat8_b,
-                        "w2": ttnn.bfloat8_b,
-                        "w3": ttnn.bfloat8_b,
+                        "w1": dtype,
+                        "w2": dtype,
+                        "w3": dtype,
                     },
                 ),
                 args=args,
@@ -124,7 +124,7 @@ class TransformerBlock(LightweightModule):
 
     def forward(
         self,
-        x: ttnn.Tensor,  # sharded across devices
+        x: ttnn.Tensor,
         current_pos,
         rot_mats=None,
         user_id=0,
@@ -141,7 +141,7 @@ class TransformerBlock(LightweightModule):
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
-        attn_in = self.attention_norm(x, mode)  # input is sharded, but output is replicated
+        attn_in = self.attention_norm(x, mode)
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -155,8 +155,6 @@ class TransformerBlock(LightweightModule):
             kv_cache=kv_cache,
         )  # attn_out is sharded across devices,
 
-        # TODO - save a copy in torch and then perform the computation on the side
-        # to check if this is accurate to what we are expecting.
         # Here x and attn_out are both fractured across devices
         h_val = ttnn.add(
             x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
@@ -166,7 +164,7 @@ class TransformerBlock(LightweightModule):
             x.deallocate(True)
 
         # Norms take fractured inputs and output replicated across devices
-        ff_in = self.ff_norm(h_val, mode)  # ff_in is replicated across devices
+        ff_in = self.ff_norm(h_val, mode)
         if TG and mode == "decode":
             ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
