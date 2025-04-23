@@ -189,6 +189,7 @@ def run_latency_test(
 @pytest.mark.parametrize("congestion_writers_message_size", [0])
 @pytest.mark.parametrize("congestion_writers_use_mcast", [False])
 def test_1D_line_fabric_latency_on_uncongested_fabric(
+    machine_type,
     line_size,
     latency_measurement_worker_line_index,
     enable_fused_payload_with_sync,
@@ -243,6 +244,7 @@ def test_1D_line_fabric_latency_on_uncongested_fabric(
 @pytest.mark.parametrize("congestion_writers_message_size", [0])
 @pytest.mark.parametrize("congestion_writers_use_mcast", [False])
 def test_1D_ring_fabric_latency_on_uncongested_fabric(
+    machine_type,
     line_size,
     latency_measurement_worker_line_index,
     enable_fused_payload_with_sync,

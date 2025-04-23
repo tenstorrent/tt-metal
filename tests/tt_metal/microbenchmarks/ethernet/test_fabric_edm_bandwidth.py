@@ -290,7 +290,11 @@ def process_results(
 def is_enabled_test_config(arch_name, machine_type):
     ## Temporary until we properly enable blackhole. Inserted here so some test flows that are being shifted left can be setup
     ## no before all the tests are *actually* running
-    return arch_name == "wh"
+    return arch_name == "wormhole_b0"
+
+
+def is_runnable_arch(arch_name):
+    return arch_name in ["wormhole_b0", "blackhole"]
 
 
 def run_fabric_edm(
