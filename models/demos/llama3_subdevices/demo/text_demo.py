@@ -538,10 +538,10 @@ def test_demo_text(
 
             # Always print perf after every iteration
             tokens_per_second_per_user = 1 / decode_iteration_time
-            if repeat_batches == 1:
-                logger.info(
-                    f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-                )
+            # if repeat_batches == 1:
+            logger.info(
+                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+            )
 
             current_pos += 1
 
