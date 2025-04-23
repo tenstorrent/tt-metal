@@ -42,7 +42,7 @@ public:
 
 public:
     TTNNFixtureBase() : TTNNFixtureBase(DEFAULT_TRACE_REGION_SIZE, DEFAULT_L1_SMALL_SIZE) { }
-    
+
     TTNNFixtureBase(int trace_region_size, int l1_small_size) :
         trace_region_size_(trace_region_size), l1_small_size_(l1_small_size) {
         std::srand(0);
@@ -108,10 +108,6 @@ protected:
     }
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(devs); }
-        std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
-    tt::ARCH arch_;
-    size_t num_devices_;
-
 };
 
 }  // namespace ttnn
