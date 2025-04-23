@@ -258,14 +258,16 @@ TEST_F(TensorDistributionT3000Test, NdComposerInvalidDims) {
 TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
     constexpr size_t kNumRows = 2;
     constexpr size_t kNumCols = 4;
+    constexpr size_t kInnerDim = 7;
+    constexpr size_t kOuterDim = 4;
     ASSERT_EQ(mesh_device_->shape(), MeshShape(kNumRows, kNumCols));
 
     std::vector<float> test_data;
     for (int i = 0; i < 4 * kNumRows * kNumCols * 7; ++i) {
         test_data.push_back(static_cast<float>(i));
     }
-    Tensor input_tensor =
-        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{4, kNumRows, kNumCols, 7}, DataType::FLOAT32));
+    Tensor input_tensor = Tensor::from_vector(
+        test_data, get_tensor_spec(ttnn::Shape{kOuterDim, kNumRows, kNumCols, kInnerDim}, DataType::FLOAT32));
 
     auto mapper = create_mesh_mapper(
         *mesh_device_,
@@ -283,7 +285,7 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
     for (const auto& tensor : device_tensors) {
-        EXPECT_EQ(tensor.get_logical_shape(), ttnn::Shape({4, 1, 2, 7}));
+        EXPECT_EQ(tensor.get_logical_shape(), ttnn::Shape({kOuterDim, 1, 2, kInnerDim}));
     }
 
     // Expect the first dim to be replicated.
@@ -299,7 +301,7 @@ TEST_F(TensorDistributionT3000Test, NdMapperShard3D) {
         },
         MeshShape(2, 2, 2));
     Tensor aggregated_tensor = aggregate_tensor(sharded_tensor, *composer);
-    EXPECT_EQ(aggregated_tensor.get_logical_shape(), ttnn::Shape({8, kNumRows, kNumCols, 7}));
+    EXPECT_EQ(aggregated_tensor.get_logical_shape(), ttnn::Shape({2 * kOuterDim, kNumRows, kNumCols, kInnerDim}));
     EXPECT_THAT(aggregated_tensor.to_vector<float>(), Pointwise(FloatEq(), expected_data));
 }
 
