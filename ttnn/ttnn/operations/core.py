@@ -274,7 +274,6 @@ def from_torch(
         Tensor([[1.375, -1.30469, -0.714844],
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
-
     if memory_config is not None:
         if device is None:
             raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
@@ -302,17 +301,14 @@ def from_torch(
         tensor = tensor.reshape(tensor.padded_shape)
         tensor = ttnn.to_torch(tensor)
 
+    tensor_creation_args = [tensor, dtype]
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
-        if tile is not None:
-            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile)
-        else:
-            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
-    else:
-        if tile is not None:
-            tensor = ttnn.Tensor(tensor, dtype, {}, tile)
-        else:
-            tensor = ttnn.Tensor(tensor, dtype)
+        tensor_creation_args[0] = shards
+        tensor_creation_args.append(mesh_mapper.config())
+    if tile is not None:
+        tensor_creation_args.append(tile)
+    tensor = ttnn.Tensor(*tensor_creation_args)
 
     if layout is not None and not (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b):
         if pad_value is not None:
