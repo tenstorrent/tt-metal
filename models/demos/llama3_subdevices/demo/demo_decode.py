@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 355, "max": 390}, 10: {"min": 195, "max": 215}, 80: {"min": 44, "max": 48}}
+TSU_THRESHOLDS = {1: {"min": 375, "max": 410}, 10: {"min": 195, "max": 215}, 80: {"min": 45.5, "max": 49.5}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -610,7 +610,7 @@ def run_llama3_demo(
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            1,  # max_generated_tokens
+            200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)

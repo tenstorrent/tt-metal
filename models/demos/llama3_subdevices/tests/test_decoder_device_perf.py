@@ -26,7 +26,7 @@ DECODE_OP_END_INDEX = -11
 perf_targets = {
     "RMSAllGather_0": {
         "op_name": "RMS_0",
-        "kernel_duration": 19087.09375,
+        "kernel_duration": 18763.21875,
         "op_to_op": 781.8888888888889,
         "non-overlapped-dispatch-time": 7260,
         "kernel_duration_relative_margin": 0.05,
@@ -35,7 +35,7 @@ perf_targets = {
     },
     "RMSAllGather_1": {
         "op_name": "RMS_1",
-        "kernel_duration": 18923.364583333332,
+        "kernel_duration": 18590.774305555555,
         "op_to_op": 747.8888888888889,
         "non-overlapped-dispatch-time": 7694.8,
         "kernel_duration_relative_margin": 0.05,
@@ -89,7 +89,7 @@ perf_targets = {
     },
     "Matmul_3": {
         "op_name": "FF3_MM",
-        "kernel_duration": 10848,
+        "kernel_duration": 10682.444444444445,
         "op_to_op": 688.7777777777778,
         "non-overlapped-dispatch-time": 6144.8,
         "kernel_duration_relative_margin": 0.01,
@@ -152,7 +152,7 @@ perf_targets = {
     },
     "RotaryEmbeddingLlamaFusedQK_0": {
         "op_name": "RotaryEmbeddingLlamaFusedQK",
-        "kernel_duration": 5617.111111111111,
+        "kernel_duration": 4287.0,
         "op_to_op": 606.1111111111111,
         "non-overlapped-dispatch-time": 2844.3,
         "kernel_duration_relative_margin": 0.1,
@@ -179,7 +179,7 @@ perf_targets = {
     },
     "BinaryDeviceOperation_0": {
         "op_name": "Binary_Residual_0",
-        "kernel_duration": 2485.1111111111113,
+        "kernel_duration": 1058.3333333333333,
         "op_to_op": 725.6666666666666,
         "non-overlapped-dispatch-time": 6316.8,
         "kernel_duration_relative_margin": 0.25,
@@ -188,7 +188,7 @@ perf_targets = {
     },
     "BinaryDeviceOperation_1": {
         "op_name": "Binary_Mult_Silu",
-        "kernel_duration": 1413.5555555555557,
+        "kernel_duration": 2923.5555555555557,
         "op_to_op": 661.0,
         "non-overlapped-dispatch-time": 6111.2,
         "kernel_duration_relative_margin": 0.1,
@@ -197,7 +197,7 @@ perf_targets = {
     },
     "BinaryDeviceOperation_2": {
         "op_name": "Binary_Residual_1",
-        "kernel_duration": 2923.222222222222,
+        "kernel_duration": 1051.2222222222222,
         "op_to_op": 731.4444444444445,
         "non-overlapped-dispatch-time": 6751.9,
         "kernel_duration_relative_margin": 0.1,
