@@ -173,11 +173,7 @@ void MAIN {
                         cb_qk_im,
                         cb_identity_scale_in,
                         Sq_chunk_t,
-                        Sk_chunk_t>(alias_cur_max);
-
-                    if (k_chunk > 0) {
-                        max_block_inplace<Sq_chunk_t>(alias_cur_max, alias_prev_max);
-                    }
+                        Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
 
                     /* QK -= cb_cur_max */
                     /* QK = exp(QK)*/
