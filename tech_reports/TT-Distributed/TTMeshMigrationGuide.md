@@ -4,13 +4,18 @@
 
 There is a major change being merged to TT-Metal & TTNN in relation to working with multiple devices. Currently, TTNN manages multi-device tensors and operations by creating a tensor on each of user exposed device and deploying the same OP on each device with a lot of non-trivial multi-threading and synchronization involved.
 This management of multiple devices is being lowered to Metal layer. More specifically:
-1.  Tensors will be allocated in lock-step on multiple physical devices while being backed by the newly introduced MeshBuffer. The cluster of physical devices is virtualized by a single MeshDevice and the MeshBuffer resides in the distributed memory space exposed by the MeshDevice. This implies that:
+1.  A TTNN user will always see a MeshDevice.
+    - This object has the same APIs as the Device object, currently exposed to users.
+	- When interfacing with mutiple devices, the MeshDevice will span the extent of the physical cluster.
+	- For cases where users want to control a single physical device a Unit-Mesh (1x1 MeshDevice) Handle will be provided.
+	- The user experience should remain unchanged in either case, since the MeshDevice APIs are backwards compatible with the Device APIs.
+2.  Tensors will be allocated in lock-step on multiple physical devices while being backed by the newly introduced MeshBuffer. The cluster of physical devices is virtualized by a single MeshDevice and the MeshBuffer resides in the distributed memory space exposed by the MeshDevice. This implies that:
 	- MultiDeviceStorage is being removed in favour of always using DeviceStorage
 	- Tensor allocations go through the MeshDevice allocator (instead of individual device allocators), so the buffer on each of the devices gets the same address.
 	- The behavior of `get_device_tensors` changes to return a single-device view into the multi-device Tensor (backed by a MeshBuffer).
 	- To call `aggregate_as_tensor` for Tensors on device, all of them must be backed by the same MeshBuffer.
 	- If a user wants to aggregate a collection of individual Tensor shards before sending them to device.`aggregate_as_tensor` can be called on the host tensors: `aggregate_as_tensor(host_tensors).to(mesh_device)`.
-2. Each operation is dispatched to multiple devices by Metal, instead of by TTNN.
+3. Each operation is dispatched to multiple devices by Metal, instead of by TTNN.
 	- TTNN lowers each user defined operation to a MeshWorkload instead of a Program.
 	- TT-Metal handles multi-threaded dispatch of the MeshWorkload to the MeshDevice, making TTNN runtime much simpler.
 	- The MeshWorkload structure allows users to natively express Multi-Device operations while providing a clean separation of the tasks between TTNN (OP Lowering) and TT-Metal (Workload Dispatch)
@@ -33,7 +38,9 @@ This major change comes with a few limitations. Specifically:
 4.  All workloads are executed in lock-step fashion across all devices within MeshDevice, one MeshWorkload at a time. The MeshWorkload itself can be homogenous (one program targeting the entire MeshDevice) or heterogenous (different programs running on different physical devices).
 
 
-## Migration Steps
+## Migration Steps (Applicable to C++ Users Only)
+
+This section provides a set of steps for C++ users to seamlessly port their codebase to TT-Mesh. For Python users, changes introduced by TT-Mesh should be effectively abstracted away, since the TTNN Python APIs have already been ported to support the new backend.
 
 ### 1. Update Device Management
 For cases where you want to explicitly control each physical device, instead of seeing a Virtualized MeshDevice, please follow the steps below.
