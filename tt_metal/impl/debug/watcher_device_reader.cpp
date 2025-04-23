@@ -587,7 +587,7 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
             break;
         case DebugSanitizeInlineWriteDramUnsupported:
             error_msg = get_noc_target_str(device_id, core, noc, san);
-            error_msg += " (inline dw writes does not support DRAM destination addresses).";
+            error_msg += " (inline dw writes do not support DRAM destination addresses).";
             break;
         case DebugSanitizeNocAddrMailbox:
             error_msg = get_noc_target_str(device_id, core, noc, san);
