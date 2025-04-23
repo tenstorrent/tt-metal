@@ -90,14 +90,7 @@ def test_transformer_block(
     time = torch.randn((batch_size, embedding_dim))
 
     ##
-    spatial_extra = spatial_sequence_length % TILE_SIZE
-    if spatial_extra > 0:
-        spatial_padding = TILE_SIZE - spatial_extra
-    else:
-        spatial_padding = 0
-    spatial_padded_4d = torch.nn.functional.pad(
-        spatial.unsqueeze(1), pad=(0, 0, 0, spatial_padding), mode="constant", value=0
-    )
+    spatial_padded_4d = spatial.unsqueeze(1)
     if pad_embedding_dim:
         spatial_padded_4d = torch.nn.functional.pad(
             spatial_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0
@@ -108,14 +101,7 @@ def test_transformer_block(
     )
 
     ##
-    prompt_extra = prompt_sequence_length % TILE_SIZE
-    if prompt_extra > 0:
-        prompt_padding = TILE_SIZE - prompt_extra
-    else:
-        prompt_padding = 0
-    prompt_padded_4d = torch.nn.functional.pad(
-        prompt.unsqueeze(1), pad=(0, 0, 0, prompt_padding), mode="constant", value=0
-    )
+    prompt_padded_4d = prompt.unsqueeze(1)
     if pad_embedding_dim:
         prompt_padded_4d = torch.nn.functional.pad(
             prompt_padded_4d, pad=(0, hidden_dim_padding), mode="constant", value=0

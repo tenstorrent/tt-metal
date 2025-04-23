@@ -126,14 +126,8 @@ def test_transformer(
         ),
     )
 
-    prompt_extra = prompt_sequence_length % TILE_SIZE
-    if prompt_extra > 0:
-        prompt_padding = TILE_SIZE - prompt_extra
-    else:
-        prompt_padding = 0
-    prompt_padded = torch.nn.functional.pad(prompt, pad=(0, 0, 0, prompt_padding), mode="constant", value=0.0)
     tt_prompt = ttnn.from_torch(
-        prompt_padded,
+        prompt,
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         layout=ttnn.TILE_LAYOUT,

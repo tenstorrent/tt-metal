@@ -96,7 +96,7 @@ class TtAttentionPart:
     def qkv(self, x: ttnn.Tensor, *, num_heads: int, deallocate: bool) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         # tracy.signpost("enter TtAttentionPart")
 
-        _batch_size, _, sequence_length, _embedding_dim = x.shape
+        _batch_size, sequence_length, _embedding_dim = x.shape
 
         # Input sharding
         if sequence_length > 1024:
@@ -137,7 +137,10 @@ class TtAttentionPart:
         #        qkv = to_memory_config(qkv, ttnn.DRAM_MEMORY_CONFIG, deallocate=True)
 
         num_local_heads = num_heads // self.device.get_num_devices()
-        q, k, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=num_local_heads, transpose_k_heads=False)
+        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+            qkv, num_heads=num_local_heads, transpose_key=False
+        )
+
         ttnn.deallocate(qkv)
 
         q = self._norm_q(q, deallocate=True)
@@ -220,26 +223,12 @@ class TtAttention:
         """
         device = spatial.device()
 
+        spatial = ttnn.squeeze(spatial, 1)
+        prompt = ttnn.squeeze(prompt, 1)
+
         # tracy.signpost("enter TtAttention")
 
         q, k, v = self._spatial_attn.qkv(spatial, num_heads=self._num_heads, deallocate=deallocate)
-        d0, d1, d2, d3 = q.shape
-        # Reshape to give padding information to SDPA
-        q = ttnn.reshape(
-            q,
-            (d0, d1, N, d3),
-            (d0, d1, d2, d3),
-        )
-        k = ttnn.reshape(
-            k,
-            (d0, d1, N, d3),
-            (d0, d1, d2, d3),
-        )
-        v = ttnn.reshape(
-            v,
-            (d0, d1, N, d3),
-            (d0, d1, d2, d3),
-        )
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -276,37 +265,15 @@ class TtAttention:
                 # memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
             )
             ttnn.deallocate(attn)
-            d0, d1, _, d3 = concatenated_attn.shape
-            # remove padding
-            concatenated_attn = ttnn.reshape(
-                concatenated_attn,
-                (d0, d1, d2, d3),
-                (d0, d1, d2, d3),
-            )
 
             spatial = self._spatial_attn.out_proj(concatenated_attn)
+
+            spatial = ttnn.unsqueeze(spatial, 1)
             return spatial, None
 
         assert self._prompt_attn is not None
 
         q2, k2, v2 = self._prompt_attn.qkv(prompt, num_heads=self._num_heads, deallocate=deallocate)
-        p0, p1, p2, p3 = q2.shape
-        # Reshape to give padding information to SDPA
-        q2 = ttnn.reshape(
-            q2,
-            (p0, p1, L, p3),
-            (p0, p1, p2, p3),
-        )
-        k2 = ttnn.reshape(
-            k2,
-            (p0, p1, L, p3),
-            (p0, p1, p2, p3),
-        )
-        v2 = ttnn.reshape(
-            v2,
-            (p0, p1, L, p3),
-            (p0, p1, p2, p3),
-        )
 
         spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
             q,
@@ -323,29 +290,17 @@ class TtAttention:
         # spatial = ttnn.to_memory_config(spatial, memory_config=ttnn.L1_MEMORY_CONFIG)
         # prompt = ttnn.to_memory_config(prompt, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        spatial = ttnn.experimental.nlp_concat_heads(
+        spatial = ttnn.transformer.concatenate_heads(
             spatial,
             # memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
         )
-        prompt = ttnn.experimental.nlp_concat_heads(
+        prompt = ttnn.transformer.concatenate_heads(
             prompt,
             # memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
         )
 
-        # remove padding
-        d0, d1, _, d3 = spatial.shape
-        spatial = ttnn.reshape(
-            spatial,
-            (d0, d1, d2, d3),
-            (d0, d1, d2, d3),
-        )
-
-        p0, p1, _, p3 = prompt.shape
-        prompt = ttnn.reshape(
-            prompt,
-            (p0, p1, p2, p3),
-            (p0, p1, p2, p3),
-        )
+        spatial = ttnn.unsqueeze(spatial, 1)
+        prompt = ttnn.unsqueeze(prompt, 1)
 
         if self.device.get_num_devices() > 1:
             spatial = ttnn.all_gather(spatial, dim=-1)
@@ -355,7 +310,6 @@ class TtAttention:
         prompt = self._prompt_attn.out_proj(prompt)
 
         # tracy.signpost("exit TtAttention")
-
         return spatial, prompt
 
 
