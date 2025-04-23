@@ -62,7 +62,7 @@ jobs:
           build-args: |
             TT_METAL_DEV_VERSION=latest
             TT_METAL_COMMIT_SHA=${{ github.sha }}
-            TEST_COMMAND=./tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
+            TEST_COMMAND="tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh"
           # Use run_number as it should be unique for every run, can trace to a commit, and is a
           # static counter managed by GitHub
           tags: ${{ needs.get-image-names.outputs.wh-6u-image-name }}
