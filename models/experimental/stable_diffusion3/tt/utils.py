@@ -140,7 +140,7 @@ def all_gather(
     memory_config: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
     assert cluster_axis is None or mesh_device is not None, "cluster_axis requires mesh_device to be set"
-    assert x.shape[dim] == x.padded_shape[dim]
+    assert x.shape[dim] == x.padded_shape[dim], f"dimension {dim} of {x.shape} should not be padded"
 
     shape = list(x.shape)
 
