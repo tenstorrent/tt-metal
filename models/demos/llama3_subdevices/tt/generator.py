@@ -287,6 +287,7 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
+        reset_inputs=False,
     ):
         assert (
             sampling_params is None or sampling_params.temperature == 0
@@ -304,7 +305,7 @@ class Generator:
             "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
-            tt_logits = self._easy_trace_text(**decode_kwargs)
+            tt_logits = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
         else:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -400,6 +401,7 @@ class Generator:
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
+        reset_inputs=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
@@ -412,13 +414,18 @@ class Generator:
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_trace
 
-            host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
+            # host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
 
+            # device_inputs = copy_host_to_device(
+            #     host_tensors=host_inputs,
+            #     device_tensors=device_inputs,
+            # )
+        if reset_inputs:
+            host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
             device_inputs = copy_host_to_device(
                 host_tensors=host_inputs,
-                device_tensors=device_inputs,
+                device_tensors=self.trace_inputs_text,
             )
-
         trace_logits_rm = self._decode_forward_trace_text(
             self.trace_id_text,
             self.trace_inputs_text,
