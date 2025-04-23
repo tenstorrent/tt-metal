@@ -16,6 +16,12 @@
 
 #include <optional>
 
+/**
+ * This header contains the structures that describe the program.
+ * Their purpose is to allow users to generate a full program description in a lightweight manner without creating the
+ * actual `Program` object.
+ */
+
 namespace tt::tt_metal {
 
 struct Tile;
@@ -50,6 +56,7 @@ struct CBDescriptor {
     FormatDescriptors format_descriptors;
     FormatDescriptors remote_format_descriptors;
 
+    // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;
     const experimental::GlobalCircularBuffer* global_circular_buffer = nullptr;
 };
