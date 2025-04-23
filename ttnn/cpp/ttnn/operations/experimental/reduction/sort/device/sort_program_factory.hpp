@@ -2,31 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "sort_device_operation.hpp"
+#pragma once
+
+#include "sort_device_operation_types.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/device_operation.hpp"
 
+namespace ttnn::operations::experimental::reduction::sort::program {
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::reduction::detail {
+struct SortProgramFactory {
+    struct shared_variables_t {
+        KernelHandle reader_kernel_id;
+        KernelHandle compute_kernel_id;
+        KernelHandle writer_kernel_id;
+    };
 
-operation::ProgramWithCallbacks sort_program_interleaved(
-    const Tensor& input_tensor,
-    const int8_t dim,
-    const bool descending,
-    const bool stable,
-    Tensor& value_tensor,
-    Tensor& index_tensor) {
-    tt::tt_metal::Program program{};
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    // TODO: Implementation in next PR
-    tt::log_warning("sort_program_interleaved not implemented yet!");
+    static cached_program_t create(const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+    static void override_runtime_arguments(
+        cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+};
 
-    return {std::move(program), {}};
-}
-
-}  // namespace ttnn::operations::experimental::reduction::detail
+}  // namespace ttnn::operations::experimental::reduction::sort::program

@@ -95,7 +95,7 @@ void py_module(py::module& module) {
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
 
-    reduction::detail::bind_reduction_sort_operation(module);
+    reduction::sort::detail::bind_reduction_sort_operation(module);
 
     reduction::detail::bind_cumsum_operation(module);
 
