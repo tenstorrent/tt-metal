@@ -64,12 +64,12 @@ void kernel_main() {
     }
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
-    uint32_t tile_index = tile_offset;
     constexpr uint32_t total_passes = 2;
     for (uint32_t ncht = 0; ncht < NCht; ncht++) {
         // We need to pass once in order to calcualte the sum and then to calculate the final value.
         for (uint32_t cur_pass = 0; cur_pass < total_passes; cur_pass++) {
             // We want to fill up the CB for input, and do so in chunks of blk
+            uint32_t tile_index = tile_offset + (ncht * Wt);
             for (uint32_t wt = 0; wt < Wt; wt += cb_length) {
                 // We read in the cb_length amount by the number of destination registers
                 for (uint32_t blk_i = 0; blk_i < cb_length; blk_i += blk) {
