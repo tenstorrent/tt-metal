@@ -12,6 +12,8 @@ from ..reference.transformer import SD3Transformer2DModel
 from ..tt.transformer import TtSD3Transformer2DModel, TtSD3Transformer2DModelParameters
 from ..tt.utils import assert_quality
 
+TILE_SIZE = 32
+
 
 @pytest.mark.parametrize(
     "mesh_device",
@@ -52,22 +54,27 @@ def test_transformer(
     else:
         embedding_dim = 2432
 
-    parameters = TtSD3Transformer2DModelParameters.from_torch(
-        torch_model.state_dict(),
-        num_heads=torch_model.config.num_attention_heads,
-        embedding_dim=embedding_dim,
-        device=mesh_device,
-        dtype=ttnn_dtype,
-    )
-
+    num_devices = mesh_device.get_num_devices()
     ## heads padding for T3K TP
-    pad_40_heads = 0
+    pad_embedding_dim = False
     if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
-        pad_40_heads = 1
-        embedding_dim_padding = 128
+        pad_embedding_dim = True
+        hidden_dim_padding = (
+            ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE
+        ) * num_devices - embedding_dim
         num_heads = 40
     else:
         num_heads = torch_model.config.num_attention_heads
+
+    parameters = TtSD3Transformer2DModelParameters.from_torch(
+        torch_model.state_dict(),
+        num_heads=num_heads,
+        unpadded_num_heads=torch_model.config.num_attention_heads,
+        embedding_dim=embedding_dim,
+        hidden_dim_padding=hidden_dim_padding,
+        device=mesh_device,
+        dtype=ttnn_dtype,
+    )
 
     guidance_cond = 1
     if batch_size == 2:
@@ -88,15 +95,6 @@ def test_transformer(
             timestep=timestep,
         )
 
-    """
-    tt_spatial = ttnn.from_torch(
-        spatial.permute([0, 2, 3, 1]),  # BCYX -> BYXC
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn_dtype,
-    )
-    """
     ## Pre-processing for the ttnn.fold
     spatial = torch.permute(spatial, (0, 2, 3, 1))  # BCYX -> BYXC
     batch_size, img_h, img_w, img_c = spatial.shape  # permuted input NHWC
@@ -128,7 +126,6 @@ def test_transformer(
         ),
     )
 
-    TILE_SIZE = 32
     prompt_extra = prompt_sequence_length % TILE_SIZE
     if prompt_extra > 0:
         prompt_padding = TILE_SIZE - prompt_extra
@@ -156,21 +153,6 @@ def test_transformer(
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.float32,
     )
-
-    # tt_spatial = allocate_tensor_on_device_like(tt_spatial_host, device=device)
-    # tt_prompt = allocate_tensor_on_device_like(tt_prompt_host, device=device)
-    # tt_pooled_projection = allocate_tensor_on_device_like(tt_pooled_projection_host, device=device)
-    # tt_timestep = allocate_tensor_on_device_like(tt_timestep_host, device=device)
-
-    # trace = tt_model.cache_and_trace(
-    #     spatial=tt_spatial, prompt=tt_prompt, pooled_projection=tt_pooled_projection, timestep=tt_timestep
-    # )
-    # tt_output = trace(
-    #     spatial=tt_spatial_host,
-    #     prompt=tt_prompt_host,
-    #     pooled_projection=tt_pooled_projection_host,
-    #     timestep=tt_timestep_host,
-    # )
     tt_output = tt_model(
         spatial=tt_spatial,
         prompt=tt_prompt,
