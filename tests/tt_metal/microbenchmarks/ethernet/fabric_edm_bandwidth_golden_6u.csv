@@ -187,3 +187,7 @@ mcast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,False,Tr
 unicast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,False,True,True,5.36951625207451,1310917.0537291283
 mcast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,True,True,True,10.45763915732262,2553134.5598932174
 unicast_RingAsLinear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,True,True,True,11.34550140205302,2769897.8032356007
+mcast_Linear_0x4_mesh,noc_unicast_write,2048,8,4,False,False,True,5.099294442399,2489889.8644526363
+mcast_Linear_0x4_mesh,noc_unicast_write,4096,8,4,False,False,True,6.496705504341471,1586109.742270867
+mcast_Linear_8x0_mesh,noc_unicast_write,2048,4,4,False,False,True,5.195646073959388,2536936.5595504823
+mcast_Linear_8x0_mesh,noc_unicast_write,4096,4,4,False,False,True,6.350775215726054,1550482.2304018687
