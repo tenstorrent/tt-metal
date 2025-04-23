@@ -31,25 +31,28 @@ std::vector<CoreCoord> reorder_connected_sockets(
         ethernet_cores_logical_virtual.emplace_back(core, core_physical);
     }
 
-    if (originated_eth_cores.size() > 0) {
-        auto physical_orig_core = local_device->virtual_core_from_logical_core(originated_eth_cores[0], CoreType::ETH);
-        // Sort by manhattan distance using physical_orig_core as the origin
-        std::sort(
-            ethernet_cores_logical_virtual.begin(),
-            ethernet_cores_logical_virtual.end(),
-            [&physical_orig_core](const auto& a, const auto& b) {
-                auto dist_a = std::abs(static_cast<int>(a.second.x) - static_cast<int>(physical_orig_core.x)) +
-                              std::abs(static_cast<int>(a.second.y) - static_cast<int>(physical_orig_core.y));
-                auto dist_b = std::abs(static_cast<int>(b.second.x) - static_cast<int>(physical_orig_core.x)) +
-                              std::abs(static_cast<int>(b.second.y) - static_cast<int>(physical_orig_core.y));
-                return dist_a < dist_b;
-            });
-    } else {
-        // Sort by the 'x' coordinate of the virtual (physical) core
-        std::sort(
-            ethernet_cores_logical_virtual.begin(),
-            ethernet_cores_logical_virtual.end(),
-            [](const auto& a, const auto& b) { return a.second.x < b.second.x; });
+    if (connected_sockets.size() > 1) {
+        if (originated_eth_cores.size() > 0) {
+            auto physical_orig_core =
+                local_device->virtual_core_from_logical_core(originated_eth_cores[0], CoreType::ETH);
+            // Sort by manhattan distance using physical_orig_core as the origin
+            std::sort(
+                ethernet_cores_logical_virtual.begin(),
+                ethernet_cores_logical_virtual.end(),
+                [&physical_orig_core](const auto& a, const auto& b) {
+                    auto dist_a = std::abs(static_cast<int>(a.second.x) - static_cast<int>(physical_orig_core.x)) +
+                                  std::abs(static_cast<int>(a.second.y) - static_cast<int>(physical_orig_core.y));
+                    auto dist_b = std::abs(static_cast<int>(b.second.x) - static_cast<int>(physical_orig_core.x)) +
+                                  std::abs(static_cast<int>(b.second.y) - static_cast<int>(physical_orig_core.y));
+                    return dist_a < dist_b;
+                });
+        } else {
+            // Sort by the 'x' coordinate of the virtual (physical) core
+            std::sort(
+                ethernet_cores_logical_virtual.begin(),
+                ethernet_cores_logical_virtual.end(),
+                [](const auto& a, const auto& b) { return a.second.x < b.second.x; });
+        }
     }
 
     // Extract the reordered logical sockets
@@ -338,57 +341,89 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     edm_builders_maps[EdmLineFabricOpInterface::Direction::FORWARD] = &this->edm_builders_forward_direction;
     edm_builders_maps[EdmLineFabricOpInterface::Direction::BACKWARD] = &this->edm_builders_backward_direction;
 
+    std::vector<CoreCoord> forward_connected_sockets;
+    std::vector<CoreCoord> backward_connected_sockets;
+    std::vector<std::vector<CoreCoord>> clothest_pairs;
+    if (!forward_device.has_value()) {
+        backward_connected_sockets = local_device->get_ethernet_sockets(backward_device.value()->id());
+        clothest_pairs.push_back({CoreCoord(-1, -1), backward_connected_sockets[0]});
+    } else if (!backward_device.has_value()) {
+        forward_connected_sockets = local_device->get_ethernet_sockets(forward_device.value()->id());
+        clothest_pairs.push_back({forward_connected_sockets[0], CoreCoord(-1, -1)});
+    } else {
+        forward_connected_sockets = local_device->get_ethernet_sockets(forward_device.value()->id());
+        backward_connected_sockets = local_device->get_ethernet_sockets(backward_device.value()->id());
+
+        auto find_closest_index = [&](const std::vector<CoreCoord>& sockets, const CoreCoord& base_virtual) -> size_t {
+            size_t closest_idx = 0;
+            auto candidate_virtual = local_device->virtual_core_from_logical_core(sockets[0], CoreType::ETH);
+            int min_distance = std::abs(static_cast<int>(candidate_virtual.x) - static_cast<int>(base_virtual.x)) +
+                               std::abs(static_cast<int>(candidate_virtual.y) - static_cast<int>(base_virtual.y));
+            for (size_t i = 1; i < sockets.size(); ++i) {
+                candidate_virtual = local_device->virtual_core_from_logical_core(sockets[i], CoreType::ETH);
+                int distance = std::abs(static_cast<int>(candidate_virtual.x) - static_cast<int>(base_virtual.x)) +
+                               std::abs(static_cast<int>(candidate_virtual.y) - static_cast<int>(base_virtual.y));
+                if (distance < min_distance) {
+                    min_distance = distance;
+                    closest_idx = i;
+                }
+            }
+            return closest_idx;
+        };
+
+        if (backward_connected_sockets.size() == 1) {
+            for (const auto& bwd_logi_core : backward_connected_sockets) {
+                CoreCoord bwd_virtual = local_device->virtual_core_from_logical_core(bwd_logi_core, CoreType::ETH);
+                size_t idx = find_closest_index(forward_connected_sockets, bwd_virtual);
+                clothest_pairs.push_back({forward_connected_sockets[idx], bwd_logi_core});
+            }
+        } else if (forward_connected_sockets.size() == 1) {
+            for (const auto& fwd_logi_core : forward_connected_sockets) {
+                CoreCoord fwd_virtual = local_device->virtual_core_from_logical_core(fwd_logi_core, CoreType::ETH);
+                size_t idx = find_closest_index(backward_connected_sockets, fwd_virtual);
+                clothest_pairs.push_back({fwd_logi_core, backward_connected_sockets[idx]});
+            }
+        } else {
+            for (const auto& fwd_logi_core : forward_connected_sockets) {
+                CoreCoord fwd_virtual = local_device->virtual_core_from_logical_core(fwd_logi_core, CoreType::ETH);
+                size_t idx = find_closest_index(backward_connected_sockets, fwd_virtual);
+                clothest_pairs.push_back({fwd_logi_core, backward_connected_sockets[idx]});
+            }
+        }
+    }
+
     std::optional<size_t> counted_num_links = std::nullopt;
     std::optional<size_t> obtained_channel_buffer_size = std::nullopt;
     const size_t max_num_links = desired_num_links.value_or(std::numeric_limits<std::size_t>::max());
-    for (size_t i = 0; i < device_pairs.size(); i++) {
-        if (!device_pairs[i].second.has_value()) {
-            continue;
-        }
-        log_trace(
-            tt::LogOp,
-            "Device {} is connected to {} at index {}",
-            local_device->id(),
-            device_pairs[i].second.value()->id(),
-            i);
-        auto& edm_builders = *edm_builders_maps[i];
 
-        tt::tt_metal::IDevice* remote_device = device_pairs[i].second.value();
-        const auto connected_sockets = local_device->get_ethernet_sockets(remote_device->id());
-        // re-order the connected_sockets based on virtual coords
-        auto reordered_connected_sockets = reorder_connected_sockets(local_device, connected_sockets);
-
-        TT_FATAL(edm_builders.size() == 0, "EDM builders already exist for this device");
-        edm_builders.clear();
-        for (const auto& core : reordered_connected_sockets) {
-            if (!local_device->is_active_ethernet_core(core, true)) {
+    for (uint32_t i = 0; i < std::min(max_num_links, clothest_pairs.size()); i++) {
+        for (uint32_t j = 0; j < 2; j++) {
+            auto& core = clothest_pairs[i][j];
+            if ((core.x == -1 && core.y == -1) || !local_device->is_active_ethernet_core(core, true)) {
                 continue;
             }
-            if (edm_builders[local_device->id()].size() >= max_num_links) {
-                break;
+            auto& edm_builders = *edm_builders_maps[j];
+            edm_builders.clear();
+            auto& device = j == 0 ? forward_device : backward_device;
+            if (!device.has_value()) {
+                continue;
             }
-            log_trace(
-                tt::LogOp,
-                "DEBUG: build EDM: device: {}, &program: {}: core-logi(x={},y={})",
-                local_device->id(),
-                (void*)program,
-                core.x,
-                core.y);
             edm_builders[local_device->id()].push_back(tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 local_device,
                 *program,
                 core,
-                device_pairs[i].first->id(),
-                device_pairs[i].second.value()->id(),
+                local_device->id(),
+                device.value()->id(),
                 config,
                 enable_persistent_mode,
                 build_in_worker_connection_mode));
         }
-        if (!counted_num_links.has_value()) {
-            TT_FATAL(!obtained_channel_buffer_size.has_value(), "No channel buffer size was counted");
-            counted_num_links = edm_builders[local_device->id()].size();
-            obtained_channel_buffer_size = edm_builders[local_device->id()].front().channel_buffer_size;
-        }
+    }
+    if (!counted_num_links.has_value()) {
+        TT_FATAL(!obtained_channel_buffer_size.has_value(), "No channel buffer size was counted");
+        int idx = backward_device.has_value() ? 1 : 0;
+        counted_num_links = edm_builders_maps[idx]->at(local_device->id()).size();
+        obtained_channel_buffer_size = edm_builders_maps[idx]->at(local_device->id()).front().channel_buffer_size;
     }
     TT_FATAL(counted_num_links.has_value(), "No links were counted");
     this->num_links = counted_num_links.value();
