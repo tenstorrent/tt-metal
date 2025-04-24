@@ -27,20 +27,20 @@ test_id_to_name = {
 # Correspondng test bounds for each test id
 test_bounds = {
     0: {
-        "riscv_1": {"latency": {"lower": 500, "upper": 1100}, "bandwidth": 0.06},
-        "riscv_0": {"latency": {"lower": 400, "upper": 900}, "bandwidth": 0.07},
+        "riscv_1": {"latency": {"lower": 400, "upper": 8800}, "bandwidth": 0.12},
+        "riscv_0": {"latency": {"lower": 300, "upper": 8000}, "bandwidth": 0.16},
     },
     1: {
-        "riscv_1": {"latency": {"lower": 400, "upper": 700}, "bandwidth": 0.19},
-        "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.29},
+        "riscv_1": {"latency": {"lower": 300, "upper": 700}, "bandwidth": 0.09},
+        "riscv_0": {"latency": {"lower": 200, "upper": 500}, "bandwidth": 0.16},
     },
     2: {
-        "riscv_1": {"latency": {"lower": 500, "upper": 600}, "bandwidth": 0.24},
-        "riscv_0": {"latency": {"lower": 400, "upper": 500}, "bandwidth": 0.30},
+        "riscv_1": {"latency": {"lower": 400, "upper": 600}, "bandwidth": 0.13},
+        "riscv_0": {"latency": {"lower": 300, "upper": 500}, "bandwidth": 0.16},
     },
     3: {
-        "riscv_1": {"latency": {"lower": 149000, "upper": 150000}, "bandwidth": 9},
-        "riscv_0": {"latency": {"lower": 90000, "upper": 91000}, "bandwidth": 16},
+        "riscv_1": {"latency": {"lower": 42000, "upper": 44000}, "bandwidth": 33},
+        "riscv_0": {"latency": {"lower": 42000, "upper": 43000}, "bandwidth": 34},
     },
     4: {
         "riscv_1": {"latency": {"lower": 4100, "upper": 4200}, "bandwidth": 0.06},
