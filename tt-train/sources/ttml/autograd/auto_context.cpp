@@ -86,4 +86,12 @@ core::distributed::MPIContext& AutoContext::get_mpi_context() const {
     }
     return *m_mpi_context;
 }
+
+void AutoContext::init_mpi_context(int argc, char** argv) {
+    if (m_mpi_context) {
+        throw std::runtime_error("MPIContext is already initialized.");
+    }
+    m_mpi_context = std::make_unique<core::distributed::MPIContext>(argc, argv);
+}
+
 }  // namespace ttml::autograd

@@ -14,6 +14,7 @@ void synchronize_parameters(const serialization::NamedParameters& parameters);
 void send_tensor(const ttnn::Tensor& tensor, int dest, int tag = -1);
 void recv_tensor(ttnn::Tensor& tensor, int source, int tag = -1);
 void broadcast_tensor(ttnn::Tensor& tensor, int root);
+void broadcast_tensor_to_group(ttnn::Tensor& tensor, int root, std::span<int> client_ranks);
 
 // by default reduction is sum
 // this ops expects that client ranks will call send_tensor

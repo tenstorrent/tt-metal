@@ -15,9 +15,8 @@ private:
     std::unique_ptr<Pimpl> m_pimpl;
 
 public:
-    MPIContext();
+    MPIContext(int argc, char** argv);
     ~MPIContext();
-    void init(int argc, char** argv);
     void finalize();
     int get_rank() const;
     int get_size() const;
@@ -25,6 +24,8 @@ public:
     void send(std::span<std::byte> data, int dest, int tag = -1) const;
     void recv(std::span<std::byte> data, int source, int tag = -1) const;
     void broadcast(std::span<std::byte> data, int root) const;
+    // TODO: implement split
+    // MPIContext split(int color, int key) const;
 };
 
 }  // namespace ttml::core::distributed

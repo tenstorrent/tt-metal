@@ -67,14 +67,11 @@ private:
 
 // ——— MPIContext public wrappers ———
 
-MPIContext::MPIContext() : m_pimpl(std::make_unique<Pimpl>()) {
+MPIContext::MPIContext(int argc, char** argv) : m_pimpl(std::make_unique<Pimpl>()) {
+    m_pimpl->init(argc, argv);
 }
 
 MPIContext::~MPIContext() = default;
-
-void MPIContext::init(int argc, char** argv) {
-    m_pimpl->init(argc, argv);
-}
 
 void MPIContext::finalize() {
     m_pimpl->finalize();

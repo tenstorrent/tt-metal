@@ -76,6 +76,22 @@ void broadcast_tensor(ttnn::Tensor& tensor, int root) {
         ttnn::assign(tensor, cpu_tensor.to_device(tensor.device()));
     }
 }
+
+// @dmakoviichuk TODO: optimize it using split and broadcast
+void broadcast_tensor_to_group(ttnn::Tensor& tensor, int root, std::span<int> client_ranks) {
+    auto* device = &autograd::ctx().get_device();
+    auto& mpi_context = autograd::ctx().get_mpi_context();
+    int rank = mpi_context.get_rank();
+
+    if (rank == root) {
+        for (int client : client_ranks) {
+            send_tensor(tensor, client);
+        }
+    } else if (std::find(client_ranks.begin(), client_ranks.end(), rank) != client_ranks.end()) {
+        recv_tensor(tensor, root);
+    }
+}
+
 // @dmakoviichuk TODO:
 // optimize this code
 void reduce_tensor(ttnn::Tensor& tensor, std::span<int> client_ranks) {

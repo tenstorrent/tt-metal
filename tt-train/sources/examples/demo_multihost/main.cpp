@@ -4,6 +4,7 @@
 
 #include <fmt/core.h>
 
+#include <CLI/CLI.hpp>
 #include <array>
 #include <cstdio>  // for popen, pclose
 #include <iostream>
@@ -11,7 +12,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <vector>
+
+#include "autograd/auto_context.hpp"
 
 struct board_entry {
     std::string pci_dev_id;
@@ -87,19 +89,41 @@ std::vector<board_entry> get_tt_smi_boards() {
     return parse_tt_smi_output(command_output);
 }
 
-int main(int argc, char** argv) {
+void print_tt_smi() {
     try {
         std::vector<board_entry> boards = get_tt_smi_boards();
-        std::cout << "Parsed boards:\n";
+        fmt::print("Parsed boards:\n");
         for (const auto& b : boards) {
-            std::cout << "PCI Dev ID:      " << b.pci_dev_id << "\n"
-                      << "Board Type:      " << b.board_type << "\n"
-                      << "Device Series:   " << b.device_series << "\n"
-                      << "Board Number:    " << b.board_number << "\n"
-                      << "-----------------------------\n";
+            fmt::print(
+                "PCI Dev ID:      {}\n"
+                "Board Type:      {}\n"
+                "Device Series:   {}\n"
+                "Board Number:    {}\n"
+                "-----------------------------\n",
+                b.pci_dev_id,
+                b.board_type,
+                b.device_series,
+                b.board_number);
         }
     } catch (const std::exception& ex) {
-        std::cerr << "Error: " << ex.what() << std::endl;
+        fmt::print(stderr, "Error: {}\n", ex.what());
     }
+}
+
+int main(int argc, char** argv) {
+    ttml::autograd::ctx().init_mpi_context(argc, argv);
+    CLI::App app{"NanoGPT Example"};
+    argv = app.ensure_utf8(argv);
+
+    bool print_tt_smi_output = false;
+
+    // app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
+    app.add_option("-t,--tt_smi", print_tt_smi_output, "print tt-smi on all hosts")->default_val(print_tt_smi_output);
+
+    CLI11_PARSE(app, argc, argv);
+    if (print_tt_smi_output) {
+        print_tt_smi();
+    }
+
     return 0;
 }
