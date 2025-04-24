@@ -40,18 +40,21 @@ bool is_input_batched(const ttnn::Shape& shape) {
  * When one of the input tensors has zero volume (a dimension with size 0), this function:
  * 1. Computes the correct output shape using compute_matmul_output_shape
  * 2. Creates an output tensor with that shape, filled with zeros
+ * 3. Optionally adds bias to the output tensor
  *
  * @param input_tensor_a First input tensor
  * @param input_tensor_b Second input tensor
  * @param memory_config Memory configuration for the output tensor
  * @param dtype Data type for the output tensor
- * @return Zero-filled tensor with the appropriate output shape
+ * @param bias Optional bias tensor to add to the result
+ * @return Zero-filled tensor with the appropriate output shape, with bias applied if provided
  */
 Tensor handle_zero_volume_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const MemoryConfig& memory_config,
-    const std::optional<DataType>& dtype) {
+    const std::optional<DataType>& dtype,
+    const std::optional<const ttnn::Tensor>& bias = std::nullopt) {
     // Calculate the expected output shape
     ttnn::Shape output_shape = compute_matmul_output_shape(input_tensor_a, input_tensor_b);
 
@@ -59,13 +62,29 @@ Tensor handle_zero_volume_matmul(
     DataType output_dtype = dtype.value_or(input_tensor_a.get_dtype());
 
     // Create a tensor filled with zeros
-    return ttnn::full(
+    auto output_tensor = ttnn::full(
         output_shape,
         0.0f,
         output_dtype,
         input_tensor_a.get_layout(),
         std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*input_tensor_a.device()),
         memory_config);
+
+    // Apply bias if provided
+    if (bias.has_value()) {
+        output_tensor = ttnn::add(
+            /* lhs=*/output_tensor,
+            /* rhs=*/bias.value(),
+            /* output_dtype=*/std::nullopt,
+            /* memory_config=*/memory_config,
+            /* output=*/std::nullopt,
+            /* post_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
+            /* lhs_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
+            /* rhs_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
+            /* use_legacy=*/false);
+    }
+
+    return output_tensor;
 }
 
 }  // namespace detail
@@ -94,7 +113,7 @@ ttnn::Tensor bound_matmul(
     // Check for zero volume tensors
     if (input_tensor_a.get_logical_volume() == 0 || input_tensor_b.get_logical_volume() == 0) [[unlikely]] {
         return detail::handle_zero_volume_matmul(
-            input_tensor_a, input_tensor_b, parameters.output_mem_config, parameters.output_dtype);
+            input_tensor_a, input_tensor_b, parameters.output_mem_config, parameters.output_dtype, bias);
     }
 
     const auto& input_tensor_a_adjusted = parameters.transpose_a
@@ -145,7 +164,16 @@ ttnn::Tensor bound_matmul(
     }
 
     if (post_process_bias) {
-        output_tensor = ttnn::add(output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
+        output_tensor = ttnn::add(
+            /* lhs=*/output_tensor,
+            /* rhs=*/bias.value(),
+            /* output_dtype=*/std::nullopt,
+            /* memory_config=*/parameters.output_mem_config,
+            /* output=*/std::nullopt,
+            /* post_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
+            /* lhs_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
+            /* rhs_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
+            /* use_legacy=*/false);
     }
 
     if (parameters.user_fused_activation.has_value() && !has_user_grid) {

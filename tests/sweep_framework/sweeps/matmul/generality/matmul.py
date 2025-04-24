@@ -27,7 +27,6 @@ parameters = {
         "shapes": [((m, k), (k, n)) for m, k, n in itertools.product(DIM_SIZES, DIM_SIZES, DIM_SIZES)],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # Batched matrix multiplication: (b, m, k) x (1, k, n) -> (b, m, n)
     "batched_matrix": {
@@ -36,49 +35,42 @@ parameters = {
         ],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # Vector-matrix: (k) x (k, n) -> (n)
     "vector_matrix": {
         "shapes": [((k,), (k, n)) for k, n in itertools.product(DIM_SIZES, DIM_SIZES)],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # Matrix-vector: (m, k) x (k) -> (m)
     "matrix_vector": {
         "shapes": [((m, k), (k,)) for m, k in itertools.product(DIM_SIZES, DIM_SIZES)],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # Vector-vector: (k) x (k) -> scalar
     "vector_vector": {
         "shapes": [((k,), (k,)) for k in DIM_SIZES],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # 1D x 3D: (k) x (b, k, n) -> (b, n)
     "vector_3d": {
         "shapes": [((k,), (1, k, n)) for k, n in itertools.product(DIM_SIZES, DIM_SIZES)],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # 3D x 1D: (b, m, k) x (k) -> (b, m)
     "3d_vector": {
         "shapes": [((b, m, k), (k,)) for b, m, k in itertools.product(DIM_SIZES, DIM_SIZES, DIM_SIZES)],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # 1D x 4D: (k) x (a, b, k, n) -> (a, b, n)
     "vector_4d": {
         "shapes": [((k,), (1, 1, k, n)) for k, n in itertools.product(DIM_SIZES, DIM_SIZES)],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # 4D x 1D: (a, b, m, k) x (k) -> (a, b, m)
     "4d_vector": {
@@ -87,28 +79,24 @@ parameters = {
         ],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # 2D matrix x 3D matrix: (m, k) x (1, k, n) -> (m, n)
     "matrix_3d": {
         "shapes": [((m, k), (1, k, n)) for m, k, n in itertools.product(DIM_SIZES, DIM_SIZES, DIM_SIZES)],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # 3D matrix x 2D matrix: (b, m, k) x (k, n) -> (b, m, n)
     "3d_matrix": {
         "shapes": [((b, m, k), (k, n)) for b, m, k, n in itertools.product(DIM_SIZES, DIM_SIZES, DIM_SIZES, DIM_SIZES)],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # 2D matrix x 4D matrix: (m, k) x (1, 1, k, n) -> (m, n)
     "matrix_4d": {
         "shapes": [((m, k), (1, 1, k, n)) for m, k, n in itertools.product(DIM_SIZES, DIM_SIZES, DIM_SIZES)],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # 4D matrix x 2D matrix: (a, b, m, k) x (k, n) -> (a, b, m, n)
     "4d_matrix": {
@@ -118,9 +106,7 @@ parameters = {
         ],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
-    # Not working yet
     # 3D matrix x 4D matrix: (1, m, k) x (a, b, k, n) -> (a, b, m, n)
     "3d_4d": {
         "shapes": [
@@ -128,7 +114,6 @@ parameters = {
         ],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # 4D matrix x 3D matrix: (a, b, m, k) x (1, k, n) -> (a, b, m, n)
     "4d_3d": {
@@ -138,7 +123,6 @@ parameters = {
         ],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
     # 4D matrix x 4D matrix: (a, b, m, k) x (c, d, k, n) -> (a, b, c, d, m, n)
     "4d_4d": {
@@ -148,7 +132,6 @@ parameters = {
         ],
         "transpose_a": [False],
         "transpose_b": [False],
-        "has_bias": [False],
     },
 }
 
@@ -194,10 +177,10 @@ def get_matmul_dimensions(shape_a, shape_b, transpose_a, transpose_b):
     return inner_dim_a, inner_dim_b, output_shape
 
 
-def run_matmul(device, shapes, transpose_a, transpose_b, has_bias) -> tuple:
+def run_matmul(device, shapes, transpose_a, transpose_b) -> tuple:
     """
     Test the compatibility of the torch and ttnn matmul for the given operation and different
-    tensor shapes, transpose options, and bias inclusion.
+    tensor shapes, transpose options.
     Checks for the exactness of shape, values, and dtype of the output tensors.
     """
     shape_a, shape_b = shapes
@@ -276,14 +259,12 @@ def test_matmul(
     shapes,
     transpose_a,
     transpose_b,
-    has_bias,
 ):
     result, error_msg = run_matmul(
         device,
         shapes,
         transpose_a,
         transpose_b,
-        has_bias,
     )
     assert result, error_msg
 
@@ -292,7 +273,6 @@ def run(
     shapes,
     transpose_a,
     transpose_b,
-    has_bias,
     *,
     device,
 ) -> tuple:
@@ -301,5 +281,4 @@ def run(
         shapes,
         transpose_a,
         transpose_b,
-        has_bias,
     )
