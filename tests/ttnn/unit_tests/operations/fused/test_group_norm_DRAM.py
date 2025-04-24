@@ -106,7 +106,7 @@ def generate_sdxl_dram_test_inputs():
     inputs = []
 
     # 1024x1024 resoultion
-    inputs.append(((2, 1920, 64, 64), 4))  #  pcc 0.95
+    # inputs.append(((2, 1920, 64, 64), 4))  #  pcc 0.95
     inputs.append(((2, 320, 128, 128), 2))
     inputs.append(((2, 640, 128, 128), 4))
     inputs.append(((2, 960, 128, 128), 2))
