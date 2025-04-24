@@ -7,6 +7,8 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "debug/dprint.h"
+#include "ckernel.h"
 
 void kernel_main() {
     // READER
@@ -190,7 +192,9 @@ void kernel_main() {
     constexpr uint32_t in1_dram_block_size_bytes = in1_dram_block_num_tiles * in1_single_tile_size_bytes;
     uint32_t in1_block_w_bytes = in1_block_w * in1_single_tile_size_bytes;
 #endif
-
+    uint64_t kernel_absolute_start_time = ckernel::read_wall_clock();
+    uint64_t iteration_start_time[num_blocks_h_dim][num_blocks_w_dim][num_blocks_inner_dim];
+    uint64_t iteration_end_time[num_blocks_h_dim][num_blocks_w_dim][num_blocks_inner_dim];
     for (uint32_t b = 0; b < batch; ++b) {
 #ifdef IN1_DRAM_SHARDED
         uint32_t l1_read_addr_in1_offset = 0;
@@ -207,6 +211,7 @@ void kernel_main() {
                 uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                    iteration_start_time[bh][bw][block] = ckernel::read_wall_clock();
                     if constexpr (fuse_op) {
                         fused_op_receiver.update_current_block_start_tile_id(
                             block, in1_tensor_current_inner_dim_block_start_tile_id, in1_tensor_start_tile_id);
@@ -320,6 +325,7 @@ void kernel_main() {
 #ifndef IN1_SHARDED
                     cb_push_back(cb_id_in1, in1_block_num_tiles);
 #endif
+                    iteration_end_time[bh][bw][block] = ckernel::read_wall_clock();
                 }
 #ifdef FUSE_BIAS
                 // Only read bias on first batch, or we have multiple output blocks
@@ -496,7 +502,25 @@ void kernel_main() {
         }
         out_tensor_start_tile_id += MtNt;
     }
+    uint64_t kernel_absolute_end_time = ckernel::read_wall_clock();
+    DPRINT << "KERNEL: reader_bmm_tile_layout_in1_sender_writer_padding.cpp\n";
+    DPRINT << "    kernel_absolute_start_time " << kernel_absolute_start_time << "\n";
+    DPRINT << "    kernel_absolute_end_time " << kernel_absolute_end_time << "\n";
+    DPRINT << "    kernel_absolute_duration " << kernel_absolute_end_time - kernel_absolute_start_time << "\n";
 
+    for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+        for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+            for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                DPRINT << "    bh: " << bh << ", bw: " << bw << ", block: " << block
+                       << ", start_time: " << iteration_start_time[bh][bw][block] << "\n";
+                DPRINT << "    bh: " << bh << ", bw: " << bw << ", block: " << block
+                       << ", end_time: " << iteration_end_time[bh][bw][block] << "\n";
+                DPRINT << "    bh: " << bh << ", bw: " << bw << ", block: " << block
+                       << ", duration: " << iteration_end_time[bh][bw][block] - iteration_start_time[bh][bw][block]
+                       << "\n";
+            }
+        }
+    }
 #if OUT_SHARDED
     cb_wait_front(
         cb_id_out0,

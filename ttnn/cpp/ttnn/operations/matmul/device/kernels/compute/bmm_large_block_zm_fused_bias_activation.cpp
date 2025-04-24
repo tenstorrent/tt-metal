@@ -8,6 +8,8 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "mod_div_lib.h"
+#include "debug/dprint.h"
+#include "ckernel.h"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
@@ -139,6 +141,9 @@ void MAIN {
 
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    uint64_t kernel_absolute_start_time = ckernel::read_wall_clock();
+    uint64_t iteration_start_time[num_blocks_h_dim][num_blocks_w_dim][num_blocks_inner_dim];
+    uint64_t iteration_end_time[num_blocks_h_dim][num_blocks_w_dim][num_blocks_inner_dim];
     for (uint32_t b = 0; b < batch; b++) {
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
@@ -157,6 +162,7 @@ void MAIN {
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
+                    iteration_start_time[bh][bw][block] = ckernel::read_wall_clock();
                     bool last_out = block == (num_blocks_inner_dim - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
@@ -309,6 +315,7 @@ void MAIN {
 
                     cb_pop_front(in0_cb_id, in0_block_num_tiles);
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
+                    iteration_end_time[bh][bw][block] = ckernel::read_wall_clock();
                 }
 
 #ifdef FUSE_BIAS
@@ -404,6 +411,24 @@ void MAIN {
                     mm_block_init_short(
                         in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                 }
+            }
+        }
+    }
+    uint64_t kernel_absolute_end_time = ckernel::read_wall_clock();
+    DPRINT << "KERNEL: bmm_large_block_zm_fused_bias_activation.cpp\n";
+    DPRINT << "    kernel_absolute_start_time " << kernel_absolute_start_time << "\n";
+    DPRINT << "    kernel_absolute_end_time " << kernel_absolute_end_time << "\n";
+    DPRINT << "    kernel_absolute_duration " << kernel_absolute_end_time - kernel_absolute_start_time << "\n";
+
+    for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+        for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+            for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                // DPRINT << "    bh: " << bh << ", bw: " << bw << ", block: " << block << ", start_time: " <<
+                // iteration_start_time[bh][bw][block] << "\n"; DPRINT << "    bh: " << bh << ", bw: " << bw << ",
+                // block: " << block << ", end_time: " << iteration_end_time[bh][bw][block] << "\n";
+                DPRINT << "    bh: " << bh << ", bw: " << bw << ", block: " << block
+                       << ", duration: " << iteration_end_time[bh][bw][block] - iteration_start_time[bh][bw][block]
+                       << "\n";
             }
         }
     }
