@@ -97,7 +97,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
     // Create circular buffers
     CircularBufferConfig l1_cb_config =
         CircularBufferConfig(total_size_bytes, {{l1_cb_index, test_config.l1_data_format}})
-            .set_page_size(l1_cb_index, test_config.page_size_bytes);
+            .set_page_size(l1_cb_index, total_size_bytes);
     auto l1_cb = CreateCircularBuffer(program, test_config.cores, l1_cb_config);
 
     // Kernels
@@ -126,6 +126,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
     // Launch program and record outputs
     vector<uint32_t> packed_output;
     detail::WriteToBuffer(input_dram_buffer, packed_input);
+    MetalContext::instance().get_cluster().dram_barrier(device->id());
     detail::LaunchProgram(device, program);
     detail::ReadFromBuffer(output_dram_buffer, packed_output);
 
@@ -232,6 +233,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
     // So 1024 * 1024 / 64 = x * x = 128 * 128 => x = 128
 
     // Fails: (when num dram banks isnt 1, 1), possibly due to the noc_addr_from_bank_id function in kernel
+    // TODO: Expand test case to cover multiple dram banks
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
