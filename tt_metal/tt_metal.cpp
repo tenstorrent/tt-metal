@@ -32,7 +32,7 @@
 #include <variant>
 
 #include "buffer_types.hpp"
-#include "circular_buffer_types.hpp"
+#include "circular_buffer_config.hpp"
 #include "data_types.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
