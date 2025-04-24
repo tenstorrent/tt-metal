@@ -615,6 +615,21 @@ def run_llama3_demo(
             False,  # stress_test
             127,  # start_pos
         ),
+        (  # Stress test: batch-32 very long generations but at same token index
+            "instruct",
+            80,
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            20000,  # max_generated_tokens (same index for stress test)
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            True,  # stress_test
+            0,  # start_pos
+        ),
     ],
     ids=[
         "full",  # full demo
@@ -622,6 +637,7 @@ def run_llama3_demo(
         "stress-test",  # stress test with many iterations and same token index, full model
         "mini-stress-test",  # mini stress test with 2048 max_generated_tokens
         "measure-device-perf",  # 10L demo for device performance measurements
+        "nd-hang-test",  # testing for nd-hang across multiple iterations
     ],
 )
 @pytest.mark.parametrize(
