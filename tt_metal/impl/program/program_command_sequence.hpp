@@ -31,6 +31,7 @@ struct ProgramCommandSequence {
     std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
     uint32_t runtime_args_fetch_size_bytes;
     HostMemDeviceCommand device_command_sequence;
+    HostMemDeviceCommand go_msg_command_sequence;
     std::vector<uint32_t*> cb_configs_payloads;
     std::vector<std::vector<std::shared_ptr<CircularBuffer>>> circular_buffers_on_core_ranges;
     // Note: some RTAs may be have their RuntimeArgsData modified so the source-of-truth of their data is the command
