@@ -1832,8 +1832,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             Tensor new_slice_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
-            if (updated_grad.storage_type() != StorageType::DEVICE &&
-                updated_grad.storage_type() != StorageType::MULTI_DEVICE) {
+            if (updated_grad.storage_type() != StorageType::DEVICE) {
                 Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
                 pad_updated_grad = pad_updated_grad.to_layout(Layout::TILE);
                 updated_grad = pad_updated_grad.to_device(input.device());

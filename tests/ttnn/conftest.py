@@ -53,6 +53,7 @@ def pre_and_post(request):
             if report_path.exists():
                 logger.warning(f"Removing existing log directory: {report_path}")
                 shutil.rmtree(report_path)
+            ttnn.database.DEVICE_IDS_IN_DATABASE.clear()
         yield
 
     if ttnn.database.SQLITE_CONNECTION is not None:

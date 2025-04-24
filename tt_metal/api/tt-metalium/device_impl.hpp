@@ -89,6 +89,7 @@ public:
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
+    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
 
     CoreCoord compute_with_storage_grid_size() const override;
 
@@ -150,7 +151,8 @@ public:
     void init_command_queue_device() override;
 
     void init_fabric() override;
-
+    void set_ethernet_core_count_on_dispatcher(uint32_t num_ethernet_cores);
+    uint32_t get_ethernet_core_count_on_dispatcher() const;
     // Puts device into reset
     bool close() override;
 
@@ -197,6 +199,9 @@ public:
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
 
     bool is_mmio_capable() const override;
+    // TODO #20966: Remove these APIs
+    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+    void set_mesh_device(std::shared_ptr<distributed::MeshDevice> mesh_device) { this->mesh_device = mesh_device; };
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
@@ -248,6 +253,8 @@ private:
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
+    // TODO #20966: Remove this member
+    std::weak_ptr<distributed::MeshDevice> mesh_device;
 
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
@@ -278,6 +285,7 @@ private:
     uint32_t trace_buffers_size_ = 0;
     bool uninitialized_error_fired_ =
         false;  // To avoid spam with warnings about calling Device methods when it's not initialized.
+    uint32_t ethernet_core_count_on_dispatcher_ = 0;
 };
 
 }  // namespace tt::tt_metal

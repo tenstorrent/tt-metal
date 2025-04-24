@@ -20,7 +20,6 @@
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "dispatch_s.hpp"
 #include "hal_types.hpp"
 #include "mux.hpp"
@@ -36,7 +35,7 @@ void DispatchKernel::GenerateStaticConfigs() {
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -347,6 +346,21 @@ void DispatchKernel::GenerateDependentConfigs() {
 }
 
 void DispatchKernel::CreateKernel() {
+    // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
+    // Num num_virtual_active_eth_cores is set if the user application requested virtualizing the
+    // number of ethernet cores across devices (to essentially fake uniformity). This value is the
+    // max number of ethernet cores acorss all chip in the cluster.
+    // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
+    // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
+    // ethernet cores in the chip.
+    uint32_t num_virtual_active_eth_cores = dynamic_cast<Device*>(device_)->get_ethernet_core_count_on_dispatcher();
+    uint32_t num_physical_active_eth_cores =
+        MetalContext::instance()
+            .get_cluster()
+            .get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true)
+            .size();
+    bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
+
     std::vector<uint32_t> compile_args = {
         static_config_.dispatch_cb_base.value(),
         static_config_.dispatch_cb_log_page_size.value(),
@@ -393,10 +407,14 @@ void DispatchKernel::CreateKernel() {
 
         static_config_.first_stream_used.value(),
 
+        virtualize_num_eth_cores,
+        num_virtual_active_eth_cores,
+        num_physical_active_eth_cores,
+
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 39);
+    TT_ASSERT(compile_args.size() == 42);
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
     auto upstream_virtual_core =
         device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
@@ -433,7 +451,7 @@ void DispatchKernel::CreateKernel() {
 void DispatchKernel::ConfigureCore() {
     // For all dispatchers, need to clear the dispatch message
     std::vector<uint32_t> zero = {0x0};
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     uint32_t dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
@@ -466,7 +484,7 @@ void DispatchKernel::UpdateArgsForFabric(
     dependent_config_.downstream_mesh_id = downstream_mesh_id;
     dependent_config_.downstream_dev_id = downstream_dev_id;
     dependent_config_.outbound_eth_chan = outbound_eth_chan;
-    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map(GetCoreType());
     static_config_.client_interface_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_INTERFACE);
 }

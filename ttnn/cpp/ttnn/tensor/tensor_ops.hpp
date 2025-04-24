@@ -22,6 +22,8 @@ namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to_device(
     const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id);
+Tensor tensor_to_device(
+    const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id);
 
 Tensor tensor_to_device(
     const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id);
@@ -31,6 +33,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevic
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device);
 
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id);
+Tensor tensor_cpu(const Tensor& input_tensor, distributed::MeshDevice* mesh_device, bool blocking, QueueId cq_id);
 
 void tensor_print(const Tensor& input_tensor);
 

@@ -83,7 +83,7 @@ ttnn::Tensor bound_matmul(
         post_process_bias ? std::nullopt : bias,
         parameters,
         DefaultQueueId,
-        optional_output_tensor = optional_output_tensor);
+        optional_output_tensor);
 
     if (post_process_bias) {
         output_tensor = ttnn::add(output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
@@ -118,7 +118,7 @@ Tensor MatmulOperation::invoke(
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<Tensor> optional_output_tensor,
-    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb,
+    const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
@@ -162,7 +162,7 @@ Tensor LinearOperation::invoke(
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     std::optional<ttnn::Tensor> optional_output_tensor,
-    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb,
+    const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "common_test_utils.hpp"
-
-#include <cmath>
 #include <stdexcept>
+#include <cmath>
+
 #include <vector>
 
 namespace test_utils {

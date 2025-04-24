@@ -402,11 +402,11 @@ def insert_output_tensors(report_path, operation_id, output_tensors):
             store_tensor(report_path, tensor)
 
 
-def insert_buffers(report_path, operation_id):
+def insert_buffers(report_path, operation_id, devices):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
-    for buffer in ttnn._ttnn.reports.get_buffers():
+    for buffer in ttnn._ttnn.reports.get_buffers(list(devices)):
         cursor.execute(
             f"""INSERT INTO buffers VALUES (
                 {operation_id},
@@ -419,10 +419,10 @@ def insert_buffers(report_path, operation_id):
     sqlite_connection.commit()
 
 
-def insert_buffer_pages(report_path, operation_id):
+def insert_buffer_pages(report_path, operation_id, devices):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
-    for buffer_page in ttnn._ttnn.reports.get_buffer_pages():
+    for buffer_page in ttnn._ttnn.reports.get_buffer_pages(list(devices)):
         cursor.execute(
             f"""INSERT INTO buffer_pages VALUES (
                 {operation_id},

@@ -21,7 +21,6 @@
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
@@ -141,9 +140,7 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
 
 JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t /*device_id*/, uint8_t num_hw_cqs, bool is_fw) {
     // Get the dispatch message address for this device
-    CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    uint32_t dispatch_message_addr =
-        DispatchMemMap::get(dispatch_core_type, num_hw_cqs).get_dispatch_message_addr_start();
+    uint32_t dispatch_message_addr = MetalContext::instance().dispatch_mem_map().get_dispatch_message_addr_start();
 
     // Prepare the container for build states
     const auto& hal = MetalContext::instance().hal();
