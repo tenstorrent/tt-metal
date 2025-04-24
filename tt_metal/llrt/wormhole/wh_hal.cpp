@@ -33,7 +33,7 @@ namespace tt {
 
 namespace tt_metal {
 
-void Hal::initialize_wh() {
+void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
@@ -43,7 +43,7 @@ void Hal::initialize_wh() {
     HalCoreInfoType tensix_mem_map = wormhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
 
-    HalCoreInfoType active_eth_mem_map = wormhole::create_active_eth_mem_map();
+    HalCoreInfoType active_eth_mem_map = wormhole::create_active_eth_mem_map(is_base_routing_fw_enabled);
     this->core_info_.push_back(active_eth_mem_map);
 
     HalCoreInfoType idle_eth_mem_map = wormhole::create_idle_eth_mem_map();

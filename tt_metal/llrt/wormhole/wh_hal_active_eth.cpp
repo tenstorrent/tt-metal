@@ -21,7 +21,7 @@
 
 namespace tt::tt_metal::wormhole {
 
-HalCoreInfoType create_active_eth_mem_map() {
+HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     std::vector<DeviceAddr> mem_map_bases;
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -36,7 +36,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
         eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+        is_base_routing_fw_enabled ? eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE
+                                   : eth_l1_mem::address_map::ROUTING_DISABLED_ERISC_L1_UNRESERVED_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_ETH_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_ETH_MAILBOX_ADDRESS_HOST(go_message);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
@@ -51,8 +52,6 @@ HalCoreInfoType create_active_eth_mem_map() {
         eth_l1_mem::address_map::RETRAIN_COUNT_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_DISABLED_ERISC_L1_UNRESERVED)] =
-        eth_l1_mem::address_map::ROUTING_DISABLED_ERISC_L1_UNRESERVED_BASE;
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -68,7 +67,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
         eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_SIZE;
+        is_base_routing_fw_enabled ? eth_l1_mem::address_map::ERISC_L1_UNRESERVED_SIZE
+                                   : eth_l1_mem::address_map::ROUTING_DISABLED_ERISC_L1_UNRESERVED_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SIZE;
@@ -79,8 +79,6 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_DISABLED_ERISC_L1_UNRESERVED)] =
-        eth_l1_mem::address_map::ROUTING_DISABLED_ERISC_L1_UNRESERVED_SIZE;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types(1);

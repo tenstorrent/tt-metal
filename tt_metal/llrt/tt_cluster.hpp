@@ -82,6 +82,9 @@ enum class EthRouterMode : uint32_t {
 
 class Cluster {
 public:
+    static ClusterType get_cluster_type_from_cluster_desc(
+        const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc = nullptr);
+    static bool is_base_routing_fw_enabled(ClusterType cluster_type);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
