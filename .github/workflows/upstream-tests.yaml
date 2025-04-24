@@ -32,6 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       wh-6u-image-tag: ${{ steps.set-wh-6u-image-tag.outputs.wh-6u-image-tag }}
+      wh-6u-profiler-image-tag: ${{ steps.set-wh-6u-image-tag.outputs.wh-6u-profiler-image-tag }}
     steps:
       - name: Set image tags
         id: set-wh-6u-image-tag
