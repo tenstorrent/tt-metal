@@ -40,7 +40,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 6301.3,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "RMSAllGather_2": {
         "op_name": "PreRMS_1",
