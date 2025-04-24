@@ -381,9 +381,9 @@ inline void fabric_send_generic(
                 tensor0_page_size);
             tile_id++;
             if constexpr (last_dim) {
-                if (tile_id % num_tiles_per_chip == 0) {
+                if (tile_id % tile_cols_per_chip == 0) {
                     row++;
-                    tile_id = row * (num_tiles_per_chip * ring_size) + tile_id_start;
+                    tile_id = row * (tile_cols_per_chip * ring_size) + tile_id_start;
                 }
             }
         }

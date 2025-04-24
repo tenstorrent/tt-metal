@@ -19,7 +19,7 @@ bool AllGatherAsync::is_tensor_aligned_by_tile(const Tensor& input_tensor) {
 }
 
 bool AllGatherAsync::best_effort_interleave(
-    const Tensor& input_tensor, const uint32_t dim, const BufferType output_buffer_type) {
+    const Tensor& input_tensor, const uint32_t dim, const BufferType output_buffer_type, bool use_optimized) {
     using namespace tt::constants;
     auto input_tensor_shape = input_tensor.get_padded_shape();
     auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
@@ -48,7 +48,12 @@ bool AllGatherAsync::best_effort_interleave(
     bool is_interleaved = input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
     bool is_tiled = input_tensor_page_layout == tt::tt_metal::Layout::TILE;
 
-    return (is_dim3_bf16 || is_dim3_bf8 || is_dim2) && is_interleaved && is_tiled;
+    bool canbe_optimized = (is_dim3_bf16 || is_dim3_bf8 || is_dim2) && is_interleaved && is_tiled;
+    if (use_optimized) {
+        return canbe_optimized;
+    }
+    // allow generic case
+    return canbe_optimized || (fit_tile && is_interleaved && is_tiled);
 }
 
 void AllGatherAsync::validate_with_output_tensors(
@@ -171,8 +176,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] input_shard_num_cores: {}", input_shard_num_cores);
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
-    if (AllGatherAsync::best_effort_interleave(input_tensor, dim, output_mem_config.buffer_type) ||
-        AllGatherAsync::is_tensor_aligned_by_tile(input_tensor)) {
+    if (AllGatherAsync::best_effort_interleave(input_tensor, dim, output_mem_config.buffer_type)) {
         return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
     }
 
