@@ -780,8 +780,8 @@ class Base3DDenseHead(nn.Module, metaclass=ABCMeta):
     def predict(self, x: Tuple[Tensor], batch_data_samples, rescale: bool = False):
         # batch_input_metas = [data_samples.metainfo for data_samples in batch_data_samples]
         batch_input_metas = batch_data_samples  # modified and passed the input
-        outs = self(x)
-        predictions = self.predict_by_feat(*outs, batch_input_metas=batch_input_metas, rescale=rescale)
+        # outs = self(x)
+        predictions = self.predict_by_feat(*x, batch_input_metas=batch_input_metas, rescale=rescale)
         return predictions
 
     def predict_by_feat(
