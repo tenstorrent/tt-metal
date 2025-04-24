@@ -275,7 +275,6 @@ def run_rms_trace(
     if warmup_iters > 0:
         ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
         ttnn.release_trace(mesh_device, trace_id_warmup)
-        ttnn.synchronize_device(mesh_device)
     profiler.end("rms-trace-warmup")
 
     signpost("start")
@@ -283,7 +282,6 @@ def run_rms_trace(
 
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    ttnn.synchronize_device(mesh_device)
     profiler.end("rms-trace")
     signpost("stop")
     time_taken = profiler.get_duration("rms-trace") - profiler.get_duration("rms-trace-warmup")
