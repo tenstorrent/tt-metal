@@ -121,7 +121,7 @@ jobs:
           context: ${{ github.workspace }}
       - name: Tag and push latest
         # TODO - get rid of my branch and make this generic for both images
-        if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rkim/21067-upstream-tests') && contains(matrix.image-config.image-tag, 'profiler') }}
+        if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rkim/21067-upstream-tests') && !contains(matrix.image-config.image-tag, 'profiler') }}
         run: |
           # TODO - To clean up, not sure if we should split out image name and tag
           IMAGE_NAME="${{ env.WH_6U_IMAGE_NAME }}"
