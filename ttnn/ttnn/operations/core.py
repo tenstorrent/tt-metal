@@ -302,6 +302,7 @@ def from_torch(
         tensor = ttnn.to_torch(tensor)
 
     tensor_creation_args = [tensor, dtype]
+    # TODO: Try calling the ttnn sharding path directly and the tilize directly removing the need to reformat after tilizing bfb
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
         tensor_creation_args[0] = shards
