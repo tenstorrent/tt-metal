@@ -308,8 +308,12 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Test cannot run on specified device.");
         }
 
-        auto [dev_l_mesh_id, dev_l_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_l);
-        auto [dev_r_mesh_id, dev_r_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_r);
+        auto dev_l_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(test_device_id_l);
+        auto dev_r_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(test_device_id_r);
+        auto dev_l_mesh_id = dev_l_fabric_node_id.mesh_id;
+        auto dev_l_chip_id = dev_l_fabric_node_id.chip_id;
+        auto dev_r_mesh_id = dev_r_fabric_node_id.mesh_id;
+        auto dev_r_chip_id = dev_r_fabric_node_id.chip_id;
 
         log_info(
             LogTest,

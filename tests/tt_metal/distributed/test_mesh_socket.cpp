@@ -1661,7 +1661,7 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
-    auto current_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(current_device_id);
+    auto current_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(current_device_id);
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 1);
     auto sender_virtual_coord = md0->worker_core_from_logical_core(sender_logical_coord);
@@ -1701,8 +1701,8 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
         recv_config,
         send_socket,
         recv_socket,
-        current_mesh_chip_id.second,
-        current_mesh_chip_id.second,
+        current_fabric_node_id.chip_id,
+        current_fabric_node_id.chip_id,
         sender_virtual_coord,
         recv_virtual_coord,
         socket_fifo_size);
@@ -1713,7 +1713,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
     auto current_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
-    auto current_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(current_device_id);
+    auto current_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(current_device_id);
     std::size_t socket_fifo_size = 1024;
     const auto& worker_grid = md0->compute_with_storage_grid_size();
     std::vector<CoreCoord> sender_logical_coords;
@@ -1780,8 +1780,8 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
             recv_config,
             send_socket,
             recv_socket,
-            current_mesh_chip_id.second,
-            current_mesh_chip_id.second,
+            current_fabric_node_id.chip_id,
+            current_fabric_node_id.chip_id,
             sender_virtual_coord,
             recv_virtual_coord,
             socket_fifo_size);
@@ -1897,15 +1897,15 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
         const auto& sender_config = sender_configs_per_dev_coord[sender_device_coord][sender_idx];
         const auto& recv_config = recv_configs_per_dev_coord[recv_device_coord][recv_idx];
 
-        auto sender_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(sender_device_id);
-        auto receiver_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(receiver_device_id);
+        auto sender_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(sender_device_id);
+        auto receiver_fabric_node_id = control_plane->get_fabric_node_id_from_physical_chip_id(receiver_device_id);
         verify_socket_configs(
             sender_config,
             recv_config,
             send_socket_l1,
             recv_socket_l1,
-            receiver_mesh_chip_id.second,
-            sender_mesh_chip_id.second,
+            receiver_fabric_node_id.chip_id,
+            sender_fabric_node_id.chip_id,
             sender_virtual_coord,
             recv_virtual_coord,
             socket_fifo_size);

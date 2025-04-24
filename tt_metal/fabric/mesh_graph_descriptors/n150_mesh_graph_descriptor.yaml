@@ -19,7 +19,7 @@ Mesh: [
   id: 0,
   board: N150,
   topology: [1, 1],
-  host_mapping: [[]]}
+  host_ranks: [[0]]}
 ]
 
 Graph: [
