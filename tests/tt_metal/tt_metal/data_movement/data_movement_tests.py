@@ -48,36 +48,12 @@ test_bounds = {
     },
 }
 
+
 def run_dm_tests(profile, verbose, gtest_filter, plot, report):
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
 
     # Profile tests
     if profile or not os.path.exists(log_file_path) or gtest_filter:
-        profile_dm_tests(verbose=verbose, gtest_filter=gtest_filter)
-
-    # Gather analysis stats
-    dm_stats = gather_analysis_stats(log_file_path, verbose=verbose)
-
-    # Print stats if explicitly requested
-    if verbose:
-        print_stats(dm_stats)
-
-    # Plot results
-    if plot:
-        plot_dm_stats(dm_stats)
-
-    # Export results to csv
-    if report:
-        export_dm_stats_to_csv(dm_stats)
-
-    # Check performance (TODO: enable assertions)
-    performance_check(dm_stats, verbose=verbose)
-
-    logger.info("Data movement tests completed.")
-
-
-def profile_dm_tests(verbose=False, gtest_filter=None):
-    if verbose:
         profile_dm_tests(verbose=verbose, gtest_filter=gtest_filter)
 
     # Gather analysis stats
