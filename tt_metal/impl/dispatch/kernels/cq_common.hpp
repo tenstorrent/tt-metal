@@ -7,8 +7,6 @@
 #include "core_config.h"
 #include "risc_attribs.h"
 #include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "debug/ring_buffer.h"
 #include "cq_helpers.hpp"
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
@@ -155,7 +153,7 @@ FORCE_INLINE void cq_noc_async_write_with_state(
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
     }
     if constexpr (send) {
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc);
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc, cmd_buf);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
 }
