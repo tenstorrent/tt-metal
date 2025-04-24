@@ -134,6 +134,18 @@ bool validate_optional_output_tensors_for_early_exit(
            output_tensor_1.get_logical_shape() == original_lshape;
 }
 
+void convert_tensor_dtype(Tensor& tensor, const DataType& target_dtype, IDevice* device) {
+    if (tensor.get_dtype() == target_dtype) {
+        // No need to change the dtype
+        return;
+    }
+    // Convert the tensor to the target dtype
+    // ttnn::to_dtype does not convert the tensor on Device, need to move it to CPU first
+    tensor = tensor.cpu();  // blocking
+    tensor = ttnn::to_dtype(tensor, target_dtype);
+    tensor = tensor.to_device(device);
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -173,8 +185,14 @@ std::vector<Tensor> ExecuteSort::invoke(
         output_tensors = reduction_common::tuple_to_vector_optional(*optional_output_tensors);
         output_tensors[0] = CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
             output_tensors[0].value(), dim, is_dim_last_idx, is_rank_le_4d, descending);
+
         output_tensors[1] = CMAKE_UNIQUE_NAMESPACE::pre_sort_transform_tensor(
             output_tensors[1].value(), dim, is_dim_last_idx, is_rank_le_4d, descending);
+
+        const auto target_index_dtype = DataType::UINT16;
+        CMAKE_UNIQUE_NAMESPACE::convert_tensor_dtype(
+            output_tensors[1].value(), target_index_dtype, input_tensor.device());
+
     } else {
         output_tensors = std::vector<std::optional<Tensor>>{
             std::nullopt,  // Placeholder for values tensor

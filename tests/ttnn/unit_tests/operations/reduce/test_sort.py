@@ -23,7 +23,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([1, 2048, 1, 64], -1, False),
     ],
 )
-def test_sort_output_shape(shape, dim, descending, device):
+def test_sort_standard(shape, dim, descending, device):
     torch.manual_seed(0)
 
     torch_dtype = torch.bfloat16
@@ -59,7 +59,7 @@ def test_sort_output_shape(shape, dim, descending, device):
         ([1, 2048, 1, 64], -1, False),
     ],
 )
-def test_sort_output_shape_prealocated_output(shape, dim, descending, device):
+def test_sort_prealocated_output(shape, dim, descending, device):
     torch.manual_seed(0)
 
     torch_dtype = torch.bfloat16
