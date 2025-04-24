@@ -108,6 +108,8 @@ Cluster::Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal
 
     this->initialize_ethernet_sockets();
 
+    this->initialize_active_idle_ethernet_cores();
+
     this->set_tunnels_from_mmio_device();
 
     this->assert_risc_reset();
@@ -414,12 +416,12 @@ const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {
 void Cluster::generate_virtual_to_umd_coord_mapping() {
     for (auto chip_id : this->cluster_desc_->get_all_chips()) {
         this->virtual_worker_cores_[chip_id] = {};
-        for (const tt::umd::CoreCoord& core :
-             get_soc_desc(chip_id).get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED)) {
+        const auto& soc_desc = this->get_soc_desc(chip_id);
+        for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED)) {
             this->virtual_worker_cores_[chip_id].insert({core.x, core.y});
         }
         this->virtual_eth_cores_[chip_id] = {};
-        for (const tt::umd::CoreCoord& core : get_soc_desc(chip_id).get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
+        for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
             this->virtual_eth_cores_[chip_id].insert({core.x, core.y});
         }
     }
@@ -607,7 +609,8 @@ void Cluster::write_core(
         tt::watcher_sanitize_host_noc_write(
             soc_desc,
             this->virtual_worker_cores_.at(chip_id),
-            this->virtual_eth_cores_.at(chip_id),
+            this->virtual_active_eth_cores_.at(chip_id),
+            this->virtual_inactive_eth_cores_.at(chip_id),
             {core.x, core.y},
             addr,
             sz_in_bytes);
@@ -626,7 +629,14 @@ void Cluster::read_core(
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
-        tt::watcher_sanitize_host_noc_read(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {core.x, core.y}, addr, size_in_bytes);
+        tt::watcher_sanitize_host_noc_read(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            this->virtual_active_eth_cores_.at(chip_id),
+            this->virtual_inactive_eth_cores_.at(chip_id),
+            {core.x, core.y},
+            addr,
+            size_in_bytes);
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
@@ -645,7 +655,14 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
-        tt::watcher_sanitize_host_noc_write(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {target.x, target.y}, addr, size_in_bytes);
+        tt::watcher_sanitize_host_noc_write(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            this->virtual_active_eth_cores_.at(chip_id),
+            this->virtual_inactive_eth_cores_.at(chip_id),
+            {target.x, target.y},
+            addr,
+            size_in_bytes);
     }
     tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
     this->driver_->write_to_device_reg(mem_ptr, size_in_bytes, target.chip, target_coord, addr);
@@ -660,7 +677,14 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (rtoptions_.get_watcher_enabled()) {
-        tt::watcher_sanitize_host_noc_read(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {target.x, target.y}, addr, size_in_bytes);
+        tt::watcher_sanitize_host_noc_read(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            this->virtual_active_eth_cores_.at(chip_id),
+            this->virtual_inactive_eth_cores_.at(chip_id),
+            {target.x, target.y},
+            addr,
+            size_in_bytes);
     }
     tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
     this->driver_->read_from_device_reg(mem_ptr, target.chip, target_coord, addr, size_in_bytes);
@@ -996,39 +1020,71 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
     return device_ids;
 }
 
+void Cluster::initialize_active_idle_ethernet_cores() {
+    std::unordered_set<int> channels_to_skip = {};
+    // UMD routing FW uses these cores for base routing
+    // channel 15 is used by syseng tools.
+    if (this->is_galaxy_cluster()) {
+        // TODO: This may need to change, if we need additional eth cores for dispatch on Galaxy
+        channels_to_skip = {0, 1, 2, 3, 15};
+    } else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
+        channels_to_skip = {8, 9, 15};
+    }
+    for (auto chip_id : this->cluster_desc_->get_all_chips()) {
+        const auto& soc_desc = get_soc_desc(chip_id);
+        auto& virtual_active_eth_cores = this->virtual_active_eth_cores_[chip_id];
+        virtual_active_eth_cores.clear();
+        if (arch_ == ARCH::BLACKHOLE) {
+            // Can't just use `get_ethernet_cores_grouped_by_connected_chips` because there are some active ethernet
+            // cores without links. Only risc1 on these cores is available for Metal and should not be classified as
+            // idle to ensure that Metal does not try to program both riscs.
+            std::set<uint32_t> logical_active_eth_channels = cluster_desc_->get_active_eth_channels(chip_id);
+            for (auto logical_active_eth_channel : logical_active_eth_channels) {
+                tt::umd::CoreCoord logical_active_eth =
+                    soc_desc.get_eth_core_for_channel(logical_active_eth_channel, CoordSystem::VIRTUAL);
+                virtual_active_eth_cores.insert(CoreCoord(logical_active_eth.x, logical_active_eth.y));
+            }
+        } else {
+            const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
+            for (const auto& [other_chip_id, eth_cores] : connected_chips) {
+                for (const auto& eth_core : eth_cores) {
+                    if (this->frequent_retrain_cores_.at(chip_id).find(eth_core) !=
+                        this->frequent_retrain_cores_.at(chip_id).end()) {
+                        continue;
+                    }
+
+                    virtual_active_eth_cores.insert(this->get_virtual_coordinate_from_logical_coordinates(
+                        chip_id, {eth_core.x, eth_core.y}, CoreType::ETH));
+                }
+            }
+        }
+        auto& virtual_idle_eth_cores = this->virtual_inactive_eth_cores_[chip_id];
+        virtual_idle_eth_cores.clear();
+        for (const auto& [eth_core, chan] : soc_desc.logical_eth_core_to_chan_map) {
+            if (this->cluster_desc_->is_chip_mmio_capable(chip_id) and
+                (channels_to_skip.find(chan) != channels_to_skip.end())) {
+                continue;
+            }
+            auto virtual_eth_core =
+                this->get_virtual_coordinate_from_logical_coordinates(chip_id, {eth_core.x, eth_core.y}, CoreType::ETH);
+            if (virtual_active_eth_cores.find(virtual_eth_core) == virtual_active_eth_cores.end()) {
+                virtual_idle_eth_cores.insert(virtual_eth_core);
+            }
+        }
+    }
+}
+
 std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     chip_id_t chip_id, bool skip_reserved_tunnel_cores) const {
     std::unordered_set<CoreCoord> active_ethernet_cores;
-    if (arch_ == ARCH::BLACKHOLE) {
-        // Can't just use `get_ethernet_cores_grouped_by_connected_chips` because there are some active ethernet cores
-        // without links. Only risc1 on these cores is available for Metal and should not be classified as idle
-        // to ensure that Metal does not try to program both riscs.
-        const auto& soc_desc = get_soc_desc(chip_id);
-        std::set<uint32_t> logical_active_eth_channels = cluster_desc_->get_active_eth_channels(chip_id);
-        for (auto logical_active_eth_channel : logical_active_eth_channels) {
-            tt::umd::CoreCoord logical_active_eth =
-                soc_desc.get_eth_core_for_channel(logical_active_eth_channel, CoordSystem::LOGICAL);
-            active_ethernet_cores.insert(CoreCoord(logical_active_eth.x, logical_active_eth.y));
+    for (const auto& virtual_eth_core : this->virtual_active_eth_cores_.at(chip_id)) {
+        auto eth_core = this->get_logical_ethernet_core_from_virtual(chip_id, virtual_eth_core);
+        const auto& routing_info = this->device_eth_routing_info_.at(chip_id).at(eth_core);
+        if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or routing_info == EthRouterMode::FABRIC_ROUTER) and
+            skip_reserved_tunnel_cores) {
+            continue;
         }
-
-    } else {
-        const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
-        for (const auto& [other_chip_id, eth_cores] : connected_chips) {
-            for (const auto& eth_core : eth_cores) {
-                const auto& routing_info = this->device_eth_routing_info_.at(chip_id).at(eth_core);
-                if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or
-                     routing_info == EthRouterMode::FABRIC_ROUTER) and
-                    skip_reserved_tunnel_cores) {
-                    continue;
-                }
-                if (this->frequent_retrain_cores_.at(chip_id).find(eth_core) !=
-                    this->frequent_retrain_cores_.at(chip_id).end()) {
-                    continue;
-                }
-
-                active_ethernet_cores.insert(eth_core);
-            }
-        }
+        active_ethernet_cores.insert(eth_core);
     }
     return active_ethernet_cores;
 }
@@ -1103,25 +1159,10 @@ std::vector<CoreCoord> Cluster::get_fabric_ethernet_routers_between_src_and_dest
 }
 
 std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chip_id) const {
-    std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
     std::unordered_set<CoreCoord> inactive_ethernet_cores;
-    std::unordered_set<int> channels_to_skip = {};
-    // UMD routing FW uses these cores for base routing
-    // channel 15 is used by syseng tools.
-    if (this->is_galaxy_cluster()) {
-        // TODO: This may need to change, if we need additional eth cores for dispatch on Galaxy
-        channels_to_skip = {0, 1, 2, 3, 15};
-    }
-    else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-        channels_to_skip = {8, 9, 15};
-    }
-    for (const auto &[eth_core, chan] : get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
-        if (this->cluster_desc_->is_chip_mmio_capable(chip_id) and (channels_to_skip.find(chan) != channels_to_skip.end())) {
-            continue;
-        }
-        if (active_ethernet_cores.find(eth_core) == active_ethernet_cores.end()) {
-            inactive_ethernet_cores.insert(eth_core);
-        }
+    for (const auto& virtual_eth_core : this->virtual_inactive_eth_cores_.at(chip_id)) {
+        auto eth_core = this->get_logical_ethernet_core_from_virtual(chip_id, virtual_eth_core);
+        inactive_ethernet_cores.insert(eth_core);
     }
     return inactive_ethernet_cores;
 }

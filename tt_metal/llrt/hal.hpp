@@ -371,12 +371,23 @@ uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix 
     tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
         tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
 
-#define HAL_MEM_ETH_BASE                                                              \
+#define HAL_MEM_ACTIVE_ETH_BASE                                                       \
+    ((tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::GRAYSKULL) \
+         ? 0                                                                          \
+         : tt::tt_metal::MetalContext::instance().hal().get_dev_addr(                 \
+               tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::BASE))
+#define HAL_MEM_ACTIVE_ETH_SIZE                                                       \
+    ((tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::GRAYSKULL) \
+         ? 0                                                                          \
+         : tt::tt_metal::MetalContext::instance().hal().get_dev_size(                 \
+               tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::BASE))
+
+#define HAL_MEM_IDLE_ETH_BASE                                                         \
     ((tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::GRAYSKULL) \
          ? 0                                                                          \
          : tt::tt_metal::MetalContext::instance().hal().get_dev_addr(                 \
                tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE))
-#define HAL_MEM_ETH_SIZE                                                              \
+#define HAL_MEM_IDLE_ETH_SIZE                                                         \
     ((tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::GRAYSKULL) \
          ? 0                                                                          \
          : tt::tt_metal::MetalContext::instance().hal().get_dev_size(                 \
