@@ -111,6 +111,7 @@ jobs:
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+          ./build/test/ttnn/unit_tests_ttnn_ccl --gtest_filter="EdmFabric.RingDeadlockStabilityTest"
           pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick";
           pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "quick";
           pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py;

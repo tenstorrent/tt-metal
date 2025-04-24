@@ -1046,7 +1046,7 @@ bool check_dateline(
             // Row dateline
             // chip0 is the first row, chip1 is the last row on the same column
             (chip0 < physical_mesh_shape[1] && chip1 >= (physical_mesh_shape[1] * (physical_mesh_shape[0] - 1)) &&
-             chip1 % physical_mesh_shape[1] == 0);
+             chip1 % physical_mesh_shape[1] == chip0);
     }
     return false;
 }

@@ -1391,14 +1391,32 @@ TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
 }
 
 TEST(EdmFabric, RingDeadlockStabilityTest) {
-    const size_t num_mcasts = 200000;
-    const size_t num_links = 1;
-    const size_t num_op_invocations = 5;
-    const bool line_sync = true;
-    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with forward mcast only");
-    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, true, false);
-    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with backward mcast only");
-    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, false, true);
-    log_trace(tt::LogTest, "Running RingDeadlockStabilityTest with forward and backward mcast");
-    RunRingDeadlockStabilityTestWithPersistentFabric(num_mcasts, num_links, num_op_invocations, true, true);
+    constexpr size_t num_mcasts = 200000;
+    constexpr size_t num_op_invocations = 5;
+    constexpr bool line_sync = true;
+    size_t num_links = 1;
+    std::vector<size_t> num_devices;
+    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    if (cluster_type == tt::ClusterType::GALAXY) {
+        num_devices = {4, 8};
+        num_links = 4;
+    } else {
+        num_devices = {8};
+    }
+    for (const auto& num_devices : num_devices) {
+        log_trace(
+            tt::LogTest, "Running RingDeadlockStabilityTest with forward mcast only with {} devices", num_devices);
+        RunRingDeadlockStabilityTestWithPersistentFabric(
+            num_mcasts, num_links, num_devices, num_op_invocations, true, false);
+        log_trace(
+            tt::LogTest, "Running RingDeadlockStabilityTest with backward mcast only with {} devices", num_devices);
+        RunRingDeadlockStabilityTestWithPersistentFabric(
+            num_mcasts, num_links, num_devices, num_op_invocations, false, true);
+        log_trace(
+            tt::LogTest,
+            "Running RingDeadlockStabilityTest with forward and backward mcast with {} devices",
+            num_devices);
+        RunRingDeadlockStabilityTestWithPersistentFabric(
+            num_mcasts, num_links, num_devices, num_op_invocations, true, true);
+    }
 }
