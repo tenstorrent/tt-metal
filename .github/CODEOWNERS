@@ -27,9 +27,6 @@ tests/scripts/run_pre_post_commit_regressions_multi_device.sh @aliuTT @tt-aho @T
 tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
 tt_stl/**/CMakeLists.txt @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt @tenstorrent/metalium-developers-infra
 
-# Metalium - public API
-tt_metal/api/ @tenstorrent/metalium-api-owners
-
 # metal - base
 tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt @jbaumanTT
 tt_metal/**/CMakeLists.txt @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt @jbaumanTT @tenstorrent/metalium-developers-infra
@@ -39,6 +36,9 @@ tt_metal/impl/**/CMakeLists.txt @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @
 tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT
 tt_metal/impl/device/**/CMakeLists.txt @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT @tenstorrent/metalium-developers-infra
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
+
+# Metalium - public API
+tt_metal/api/ @tenstorrent/metalium-api-owners
 
 # fabric
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
