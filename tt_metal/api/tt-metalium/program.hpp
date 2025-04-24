@@ -13,6 +13,7 @@
 #include <tt-metalium/program_device_map.hpp>
 #include <tt-metalium/worker_config_buffer.hpp>
 #include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace tt {
 
@@ -123,6 +124,7 @@ enum class ProgramBinaryStatus : uint8_t {
 class Program {
 public:
     Program();
+    explicit Program(const ProgramDescriptor& descriptor);
 
     Program(const Program& other) = delete;
     Program& operator=(const Program& other) = delete;
