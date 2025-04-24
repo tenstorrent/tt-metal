@@ -147,8 +147,8 @@ def prepare_split_conv_params(
     ]
 
     if bias is not None:
-        if split_in > 1:
-            bias_chunks = list(torch.split(bias, Cin_split, 3))
+        if split_out > 1:
+            bias_chunks = list(torch.split(bias, Cout_split, 3))
         else:
             bias_chunks = [bias]
 
@@ -160,7 +160,7 @@ def prepare_split_conv_params(
             for bias in bias_chunks
         ]
     else:
-        tt_bias = None
+        tt_bias = [None]
 
     conv_params = [
         [
