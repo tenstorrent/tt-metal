@@ -615,7 +615,7 @@ def run_llama3_demo(
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            1,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
