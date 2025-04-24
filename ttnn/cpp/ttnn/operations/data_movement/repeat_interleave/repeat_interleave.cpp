@@ -7,7 +7,8 @@
 #include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "cpp/ttnn/operations/copy.hpp"
+// #include "cpp/ttnn/operations/copy.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn {
 namespace operations {
