@@ -83,10 +83,22 @@ def run_rms_trace(
             32,
             128,
         ),
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        core_grid=input_shard_grid,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
+    )
+    ag_shape = [1, 1, 32, 256]
+    stats_tensor = torch.zeros(ag_shape, dtype=torch.bfloat16)
+    tt_stats = ttnn.from_torch(
+        stats_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ag_memory_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, dims=(None, 3), mesh_shape=list(ttnn.MeshShape(1, num_devices))
+        ),
     )
 
     output_pad_width = math.ceil(padded_dim_per_core / num_devices / 32) * 32
@@ -134,14 +146,6 @@ def run_rms_trace(
     )
     logger.info("Compiling model")
     if use_new_version:
-        tt_stats = ttnn.fused_rms_1_1_32_8192(
-            input_tensor,
-            layer_norm_config,
-            1,
-            mesh_device,
-            ccl_semaphore_handles,
-            is_pre=True,
-        )
         tt_out = ttnn.fused_rms_1_1_32_8192(
             input_tensor,
             layer_norm_config,
@@ -153,60 +157,41 @@ def run_rms_trace(
             epsilon=epsilon,
             weight=gamma_tensor,
             stats=tt_stats,
-            is_pre=False,
         )
 
         logger.info("Capturing trace")
         if warmup_iters > 0:
             trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
             for _ in range(warmup_iters):
-                tt_stats = ttnn.fused_rms_1_1_32_8192(
+                tt_out = ttnn.fused_rms_1_1_32_8192(
                     input_tensor,
                     layer_norm_config,
                     1,
                     mesh_device,
                     ccl_semaphore_handles,
-                    is_pre=True,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=output_memory_config,
+                    epsilon=epsilon,
+                    weight=gamma_tensor,
+                    stats=tt_stats,
                 )
-                # tt_out = ttnn.fused_rms_1_1_32_8192(
-                #    input_tensor,
-                #    layer_norm_config,
-                #    1,
-                #    mesh_device,
-                #    ccl_semaphore_handles,
-                #    dtype=ttnn.bfloat8_b,
-                #    memory_config=output_memory_config,
-                #    epsilon=epsilon,
-                #    weight=gamma_tensor,
-                #    stats=tt_stats,
-                #    is_pre=False,
-                # )
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             logger.info("Done warmup")
             ttnn.synchronize_device(mesh_device)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for _ in range(num_iters):
-            tt_stats = ttnn.fused_rms_1_1_32_8192(
+            tt_out = ttnn.fused_rms_1_1_32_8192(
                 input_tensor,
                 layer_norm_config,
                 1,
                 mesh_device,
                 ccl_semaphore_handles,
-                is_pre=True,
+                dtype=ttnn.bfloat8_b,
+                memory_config=output_memory_config,
+                epsilon=epsilon,
+                weight=gamma_tensor,
+                stats=tt_stats,
             )
-            # tt_out = ttnn.fused_rms_1_1_32_8192(
-            #    input_tensor,
-            #    layer_norm_config,
-            #    1,
-            #    mesh_device,
-            #    ccl_semaphore_handles,
-            #    dtype=ttnn.bfloat8_b,
-            #    memory_config=output_memory_config,
-            #    epsilon=epsilon,
-            #    weight=gamma_tensor,
-            #    stats=tt_stats,
-            #    is_pre=False,
-            # )
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     else:
         tt_stats = ttnn.rms_norm_pre_all_gather(
@@ -290,7 +275,6 @@ def run_rms_trace(
     if warmup_iters > 0:
         ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
         ttnn.release_trace(mesh_device, trace_id_warmup)
-        ttnn.synchronize_device(mesh_device)
     profiler.end("rms-trace-warmup")
 
     signpost("start")
@@ -298,7 +282,6 @@ def run_rms_trace(
 
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    ttnn.synchronize_device(mesh_device)
     profiler.end("rms-trace")
     signpost("stop")
     time_taken = profiler.get_duration("rms-trace") - profiler.get_duration("rms-trace-warmup")
@@ -362,12 +345,24 @@ def run_rms_fuse_impl(
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
-            256,
+            128,
         ),
         core_grid=input_shard_grid,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
+    )
+    ag_shape = [1, 1, 32, 128]
+    stats_tensor = torch.zeros(ag_shape, dtype=torch.bfloat16)
+    tt_stats = ttnn.from_torch(
+        stats_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ag_memory_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, dims=(None, 3), mesh_shape=list(ttnn.MeshShape(1, num_devices))
+        ),
     )
     output_pad_width = math.ceil(padded_dim_per_core / num_devices / 32) * 32
     if output_shard_grid is None:
@@ -423,14 +418,7 @@ def run_rms_fuse_impl(
             )
         )
     for i in range(num_iters):
-        tt_stats = ttnn.fused_rms_1_1_32_8192(
-            input_tensor[i],
-            layer_norm_config,
-            1,
-            mesh_device,
-            ccl_semaphore_handles[i],
-            is_pre=True,
-        )
+        # TODO: Change OP infra so that pre makes the post shape, also create external tensor
         tt_out = ttnn.fused_rms_1_1_32_8192(
             input_tensor[i],
             layer_norm_config,
@@ -442,10 +430,8 @@ def run_rms_fuse_impl(
             epsilon=epsilon,
             weight=gamma_tensor[i],
             stats=tt_stats,
-            is_pre=False,
         )
         tt_out_array.append(tt_out)
-        ttnn.deallocate(tt_stats)
     for i in range(num_iters):
         tt_out_torch = ttnn.to_torch(
             tt_out_array[i],

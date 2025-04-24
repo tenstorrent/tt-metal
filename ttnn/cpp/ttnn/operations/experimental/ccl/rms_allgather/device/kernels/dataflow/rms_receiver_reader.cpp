@@ -22,6 +22,12 @@ void kernel_main() {
     constexpr uint32_t cb_ex_partial2 = get_compile_time_arg_val(11);  // E[(x-E[x])^2] partial reduce
     constexpr uint32_t cb_ex2 = get_compile_time_arg_val(12);          // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(13);
+    constexpr uint32_t post_semaphore_id = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_ex_global = get_compile_time_arg_val(15);  // [E[x], E[X^2]] global to all cores
+    uint32_t post_reduce_sender_semaphore_addr = get_semaphore(post_semaphore_id);
+    volatile tt_l1_ptr uint32_t* post_reduce_sender_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_reduce_sender_semaphore_addr);
+    noc_semaphore_set(post_reduce_sender_semaphore_addr_ptr, INVALID);
 
     const uint32_t all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(0);
     const bool is_second_stage_reader = get_arg_val<uint32_t>(1);
@@ -30,7 +36,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_remote_noc_x = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(4));
     volatile tt_l1_ptr uint32_t* in0_remote_noc_y = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(4 + num_x));
 
-    const DataFormat data_format = get_dataformat(cb_ex_partial2);          // data format
+    const DataFormat data_format = get_dataformat(cb_ex_partial2);  // data format
 
     uint32_t reduce_second_stage_semaphore_addr = get_semaphore(reduce_second_stage_semaphore_id);
     uint32_t reduce_receiver_semaphore_addr = get_semaphore(reduce_receiver_semaphore_id);
@@ -140,4 +146,10 @@ void kernel_main() {
         cb_wait_front(cb_ex2, 1);
         noc_semaphore_inc(reduce_second_stage_receiver_semaphore_noc_addr, 1);
     }
+    cb_pop_front(cb_ex_partial2, 1);
+    // Signal the compute kernel cb_ex_global ready
+    cb_reserve_back(cb_ex_global, 1);
+    noc_semaphore_wait(post_reduce_sender_semaphore_addr_ptr, VALID);
+    cb_push_back(cb_ex_global, 1);
+    cb_pop_front(cb_ex2, 1);
 }
