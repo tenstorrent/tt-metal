@@ -72,7 +72,6 @@ enum class StorageType {
     OWNED,
     DEVICE,
     BORROWED,           // for storing torch/numpy/etc tensors
-    MULTI_DEVICE,       // on-device storage for multi-device context
     MULTI_DEVICE_HOST,  // host storage for multi-device context
 };
 

@@ -61,9 +61,7 @@ void RMSAllGather::validate(
         a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or
             a.get_dtype() == DataType::BFLOAT8_B,
         "Error");
-    TT_FATAL(
-        a.storage_type() == StorageType::DEVICE || a.storage_type() == StorageType::MULTI_DEVICE,
-        "Operands to frmsnorm need to be on device!");
+    TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to frmsnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
 
     if (b.has_value()) {
