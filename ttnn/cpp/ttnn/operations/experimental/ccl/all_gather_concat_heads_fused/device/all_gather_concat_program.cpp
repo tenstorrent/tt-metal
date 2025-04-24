@@ -135,8 +135,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
 
-    auto sender_worker_core_range = CoreRangeSet(CoreRange({1, 0}, {3, 0}));
-    auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, 3, true);
+    auto sender_worker_core_range = CoreRangeSet(CoreRange({1, 0}, {num_links, 0}));
+    auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, num_links, true);
     // Tensor Info
     const uint32_t logical_dim_2 = input_tensor.get_logical_shape()[2];
     const auto input_tensor_num_pages =
@@ -337,6 +337,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             .compile_args = all_gather_reader_ct_args});
 
     // Writer
+    uint32_t out_ready_sem_wait_value = ring_size * num_links;
     std::vector<uint32_t> all_gather_writer_ct_args = {
         ring_index,                       // my_chip_id
         reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
@@ -346,7 +347,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         op_config.get_page_size(),        // tensor0_page_size
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
-        llama_configuration.num_semaphore_ranges};
+        llama_configuration.num_semaphore_ranges,
+        out_ready_sem_wait_value};
 
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -456,7 +458,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         // Set writer runtime args
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
-        uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
             temp_tensor.buffer()->address(),  // tensor_address0
             semaphore.address(),              // out_ready_sem_bank_addr (absolute address)

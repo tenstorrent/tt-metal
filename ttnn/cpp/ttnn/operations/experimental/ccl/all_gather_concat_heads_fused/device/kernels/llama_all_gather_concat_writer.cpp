@@ -26,6 +26,7 @@ constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
 constexpr uint32_t num_sem_ranges = get_compile_time_arg_val(8);
+constexpr uint32_t out_ready_sem_wait_value = get_compile_time_arg_val(9);
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -48,7 +49,6 @@ void kernel_main() {
     bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
     constexpr uint8_t out_ready_sem_noc0_x = 19;       // get_arg_val<uint32_t>(arg_idx++);
     constexpr uint8_t out_ready_sem_noc0_y = 18;       // get_arg_val<uint32_t>(arg_idx++);
-    constexpr uint32_t out_ready_sem_wait_value = 12;  // get_arg_val<uint32_t>(arg_idx++);
 
     const uint32_t concat_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t concat_semaphore_send_addr2 = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
