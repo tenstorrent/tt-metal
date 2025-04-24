@@ -9,7 +9,6 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-volatile"
 #pragma GCC diagnostic ignored "-Wdeprecated-this-capture"
 
-#include <cpp/ttnn/operations/copy.hpp>                                                            // NOLINT
 #include <cpp/ttnn/operations/core/core.hpp>                                                       // NOLINT
 #include <cpp/ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp>                               // NOLINT
 #include <cpp/ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp>             // NOLINT
@@ -25,6 +24,7 @@
 #include <ttnn/distributed/api.hpp>                                                                // NOLINT
 #include <ttnn/distributed/types.hpp>                                                              // NOLINT
 #include <ttnn/operations/ccl/all_gather/all_gather.hpp>                                           // NOLINT
+#include <ttnn/operations/copy/typecast/typecast.hpp>  // NOLINT                                                            // NOLINT
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>                           // NOLINT
 #include <ttnn/operations/core/to_dtype/to_dtype_op.hpp>                                           // NOLINT
 #include <ttnn/operations/creation.hpp>                                                            // NOLINT
