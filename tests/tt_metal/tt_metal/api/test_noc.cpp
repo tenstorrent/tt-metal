@@ -437,6 +437,11 @@ TEST_F(DeviceFixture, TensixInlineWriteDedicatedNocMisaligned) {
 
 // Both data movement riscs issue inline writes using the same noc
 TEST_F(DeviceFixture, TensixInlineWriteDynamicNoc) {
+    // #21082
+    auto arch = tt::get_arch_from_string(get_umd_arch_name());
+    if (arch == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP();
+    }
     CoreCoord writer_core{0, 0};
     CoreCoord receiver_core(0, 1);
     uint32_t value_to_write = 39;
