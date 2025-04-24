@@ -312,8 +312,11 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 # Ensure the virtual environment is activated on shell startup
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
+# Install torch. ttnn team would like to remove this dependency, but this is a temporary solution to unblock
+# tt-installer and downstream container users. See GitHub issue https://github.com/tenstorrent/tt-metal/issues/17057
 RUN mkdir -p /etc && \
     echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
+RUN pip3 install torch
 
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
