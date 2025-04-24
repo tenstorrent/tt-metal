@@ -24,6 +24,9 @@ namespace {
 using ::testing::ElementsAre;
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
+using ::ttnn::device_operation::mesh_device_operation_utils::all_tensors_have_uniform_storage;
+using ::ttnn::device_operation::mesh_device_operation_utils::extract_tensor_coordinates;
+using ::ttnn::device_operation::mesh_device_operation_utils::filter_tensor_shards;
 
 // Returns device tensor with `num_device_shards` populated.
 Tensor make_tensor_with_num_shards(const TensorSpec& tensor_spec, int num_device_shards, MeshDevice* mesh_device) {
@@ -144,6 +147,153 @@ TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
         device_operation::MeshDeviceOperationAdapter<ExampleDeviceOperation>::get_type_name(
             ExampleDeviceOperation::operation_attributes_t{.attribute = true, .some_other_attribute = 42}),
         "ExampleDeviceOperation");
+}
+
+using LaunchOperationT3000Test = tt::tt_metal::T3000MeshDeviceFixture;
+
+TEST_F(LaunchOperationT3000Test, UniformTensor) {
+    const TensorSpec tensor_spec = TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto full_tensor = tt::tt_metal::allocate_tensor_on_mesh(tensor_spec, mesh_device_.get());
+
+    EXPECT_TRUE(all_tensors_have_uniform_storage(full_tensor));
+
+    EXPECT_THAT(
+        extract_tensor_coordinates(full_tensor),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{0, 1},
+            ttnn::MeshCoordinate{0, 2},
+            ttnn::MeshCoordinate{0, 3},
+            ttnn::MeshCoordinate{1, 0},
+            ttnn::MeshCoordinate{1, 1},
+            ttnn::MeshCoordinate{1, 2},
+            ttnn::MeshCoordinate{1, 3}));
+}
+
+TEST_F(LaunchOperationT3000Test, UnevenTensor) {
+    const TensorSpec tensor_spec = TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto uneven_tensor = make_tensor_with_num_shards(tensor_spec, 2, mesh_device_.get());
+
+    EXPECT_THAT(uneven_tensor.device_storage().specs, SizeIs(2));
+
+    EXPECT_FALSE(all_tensors_have_uniform_storage(uneven_tensor));
+    EXPECT_THAT(
+        extract_tensor_coordinates(uneven_tensor),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{0, 1}));
+}
+
+TEST_F(LaunchOperationT3000Test, FilterTensorShards) {
+    const TensorSpec tensor_spec = TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto full_tensor = tt::tt_metal::allocate_tensor_on_mesh(tensor_spec, mesh_device_.get());
+
+    EXPECT_TRUE(all_tensors_have_uniform_storage(full_tensor));
+    EXPECT_THAT(
+        extract_tensor_coordinates(full_tensor),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{0, 1},
+            ttnn::MeshCoordinate{0, 2},
+            ttnn::MeshCoordinate{0, 3},
+            ttnn::MeshCoordinate{1, 0},
+            ttnn::MeshCoordinate{1, 1},
+            ttnn::MeshCoordinate{1, 2},
+            ttnn::MeshCoordinate{1, 3}));
+
+    // Filter the first 2 shards and the last 3 shards.
+    filter_tensor_shards(
+        {ttnn::MeshCoordinate{0, 0},
+         ttnn::MeshCoordinate{0, 1},
+         ttnn::MeshCoordinate{1, 1},
+         ttnn::MeshCoordinate{1, 2},
+         ttnn::MeshCoordinate{1, 3}},
+        full_tensor);
+
+    EXPECT_FALSE(all_tensors_have_uniform_storage(full_tensor));
+    EXPECT_THAT(
+        extract_tensor_coordinates(full_tensor),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{0, 1},
+            ttnn::MeshCoordinate{1, 1},
+            ttnn::MeshCoordinate{1, 2},
+            ttnn::MeshCoordinate{1, 3}));
+
+    // Filter the first and the last shards.
+    filter_tensor_shards(
+        {ttnn::MeshCoordinate{0, 0},  //
+         ttnn::MeshCoordinate{1, 3}},
+        full_tensor);
+
+    EXPECT_FALSE(all_tensors_have_uniform_storage(full_tensor));
+    EXPECT_THAT(
+        extract_tensor_coordinates(full_tensor),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{1, 3}));
+
+    // Filter the rest.
+    filter_tensor_shards(/*tensor_coordinates=*/{}, full_tensor);
+
+    EXPECT_FALSE(all_tensors_have_uniform_storage(full_tensor));
+    EXPECT_THAT(extract_tensor_coordinates(full_tensor), IsEmpty());
+}
+
+TEST_F(LaunchOperationT3000Test, LaunchOpFilterTensorShards) {
+    const TensorSpec tensor_spec = TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{}));
+    auto full_tensor = make_tensor_with_num_shards(tensor_spec, 8, mesh_device_.get());
+    auto sum = ttnn::add(full_tensor, full_tensor);
+
+    EXPECT_TRUE(all_tensors_have_uniform_storage(sum));
+    EXPECT_THAT(
+        extract_tensor_coordinates(sum),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{0, 1},
+            ttnn::MeshCoordinate{0, 2},
+            ttnn::MeshCoordinate{0, 3},
+            ttnn::MeshCoordinate{1, 0},
+            ttnn::MeshCoordinate{1, 1},
+            ttnn::MeshCoordinate{1, 2},
+            ttnn::MeshCoordinate{1, 3}));
+
+    auto uneven_tensor = make_tensor_with_num_shards(tensor_spec, 2, mesh_device_.get());
+    auto sum_uneven = ttnn::add(uneven_tensor, uneven_tensor);
+
+    EXPECT_FALSE(all_tensors_have_uniform_storage(sum_uneven));
+    EXPECT_THAT(
+        extract_tensor_coordinates(sum_uneven),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{0, 1}));
+}
+
+TEST_F(LaunchOperationT3000Test, CachingHeterogeneousDispatch) {
+    mesh_device_->enable_program_cache();
+    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 0);
+
+    const TensorSpec tensor_spec = TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{}));
+    auto full_tensor = make_tensor_with_num_shards(tensor_spec, 8, mesh_device_.get());
+    auto sum = ttnn::add(full_tensor, full_tensor);
+
+    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1);
+
+    auto sum2 = ttnn::add(full_tensor, full_tensor);
+    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1);
+
+    auto uneven_tensor = make_tensor_with_num_shards(tensor_spec, 2, mesh_device_.get());
+    auto sum_uneven = ttnn::add(uneven_tensor, uneven_tensor);
+
+    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 2);
+
+    auto sum3 = ttnn::add(uneven_tensor, uneven_tensor);
+    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 2);
 }
 
 }  // namespace

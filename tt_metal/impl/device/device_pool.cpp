@@ -178,7 +178,7 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 
 DevicePool* DevicePool::_inst = nullptr;
 
-void DevicePool::init_profiler_devices() const {
+void DevicePool::init_profiler() const {
 #if defined(TRACY_ENABLE)
     for (const auto& dev : this->get_all_active_devices()) {
         // For Galaxy init, we only need to loop over mmio devices
@@ -217,7 +217,12 @@ void DevicePool::initialize(
     size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) noexcept {
+    size_t worker_l1_size,
+    bool init_profiler,
+    bool use_max_eth_core_count_on_all_devices,
+    bool initialize_fabric_and_dispatch_fw) noexcept {
+    // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
+    // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::MetalContext::instance().initialize(
@@ -232,6 +237,8 @@ void DevicePool::initialize(
     _inst->worker_l1_size = worker_l1_size;
     _inst->num_hw_cqs = num_hw_cqs;
     _inst->l1_bank_remap.assign(l1_bank_remap.begin(), l1_bank_remap.end());
+    _inst->init_profiler_ = init_profiler;
+    _inst->initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
     // Track the thread where the Device Pool was created. Certain functions
     // modifying the state of this instance, for example those responsible for
     // (un)registering worker threads, can only be called in the creation thread
@@ -261,12 +268,16 @@ void DevicePool::initialize(
     }
 
     _inst->skip_remote_devices = skip;
-
+    _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids);
     tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(
         true, target_mmio_ids);
     _inst->init_firmware_on_active_devices();
-    _inst->wait_for_fabric_router_sync();
+}
+
+void DevicePool::initialize_fabric_and_dispatch_fw() const {
+    this->initialize_active_devices();
+    this->wait_for_fabric_router_sync();
 }
 
 void DevicePool::initialize_host(IDevice* dev) const {
@@ -442,6 +453,27 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     for (const auto& device_id : devices_to_activate) {
         if (not this->is_device_active(device_id)) {
             this->activate_device(device_id);
+        }
+    }
+    // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
+    // Record the maximum number of active ethernet cores across all devices.
+    // TT-Mesh dispatch assumes that all physical devices in the Mesh have the maximum number of active
+    // ethernet cores (uniformity assumption)
+    // Dispatch firmware running on each physical device knows how many ethernet cores are actually
+    // available and will dispatch to/wait on the correct number of cores (effectively ignoring the
+    // value host dispatch provides, if its incorrect).
+    if (use_max_eth_core_count_on_all_devices_) {
+        std::size_t max_eth_core_count = 0;
+        for (const auto& device : this->devices) {
+            max_eth_core_count = std::max(
+                MetalContext::instance()
+                    .get_cluster()
+                    .get_active_ethernet_cores(device->id(), /*skip_reserved_tunnel_cores*/ true)
+                    .size(),
+                max_eth_core_count);
+        }
+        for (auto& device : this->devices) {
+            dynamic_cast<Device*>(device.get())->set_ethernet_core_count_on_dispatcher(max_eth_core_count);
         }
     }
 
@@ -623,8 +655,13 @@ void DevicePool::init_firmware_on_active_devices() const {
             }
         }
     }
-    this->init_profiler_devices();
-    this->initialize_active_devices();
+
+    if (init_profiler_) {
+        this->init_profiler();
+    }
+    if (initialize_fabric_and_dispatch_fw_) {
+        this->initialize_fabric_and_dispatch_fw();
+    }
 }
 
 DevicePool::DevicePool() {
@@ -685,7 +722,7 @@ bool DevicePool::close_device(chip_id_t device_id) {
     return pass;
 }
 
-void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
+void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
@@ -722,15 +759,16 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // the main thread will modify device state while the CCL is running on device.
     // On TG - this should not be done on MMIO mapped devices, since we don't run
     // any workloads on them
-    for (const auto& dev_id : devices_to_close) {
-        auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and dev->is_mmio_capable()) {
-            continue;
+    if (!skip_synchronize) {
+        for (const auto& dev_id : devices_to_close) {
+            auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+            if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and dev->is_mmio_capable()) {
+                continue;
+            }
+            dev->synchronize();  // Synchronize worker queue
+            Synchronize(dev);    // Synchronize device
         }
-        dev->synchronize();  // Synchronize worker queue
-        Synchronize(dev);    // Synchronize device
     }
-
     // Terminate fabric routers
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();

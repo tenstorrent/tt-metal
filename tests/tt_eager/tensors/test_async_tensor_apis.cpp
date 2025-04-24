@@ -83,8 +83,6 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
         auto thread_local_tensor = device_tensor.cpu().to_layout(Layout::ROW_MAJOR);
         readback_tensor.set_storage(thread_local_tensor.get_storage());
         readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
-        readback_tensor.tensor_attributes->metadata_populated = true;
-        readback_tensor.tensor_attributes->num_workers_completed++;
         // Ensure that the readback buffer is owned inside and outside the lambda
         std::visit(
             [](auto&& storage) {
@@ -251,8 +249,16 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         /*layout=*/std::nullopt,
         *device);
     uint32_t tensor_to_self_assign_address = get_device_buffer_address(tensor_to_self_assign);
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wself-assign-overloaded"
+#pragma clang diagnostic ignored "-Wself-move"
+#endif
     tensor_to_self_assign = tensor_to_self_assign;
     tensor_to_self_assign = std::move(tensor_to_self_assign);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
     EXPECT_EQ(get_device_buffer_address(tensor_to_self_assign), tensor_to_self_assign_address);
     auto barrier_tensor = tensor_to_self_assign.cpu();
     device->enable_async(false);
@@ -308,8 +314,6 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
             log_info(LogTest, "Worker populating empty host readback_tensor");
             readback_tensor.set_storage(thread_local_tensor.get_storage());
             readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
-            readback_tensor.tensor_attributes->metadata_populated = true;
-            readback_tensor.tensor_attributes->num_workers_completed++;
             // Ensure that this buffer is currently owned by both the thread_local and read_back tensors
             // This is because we explictly pass in the buffer to a new tensor_attr object
             std::visit(
