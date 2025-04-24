@@ -232,6 +232,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
 
+    auto actual_size = program.get_cb_memory_size();
+    auto l1_usage = calculate_L1_usage(
+        input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
+    if (actual_size != l1_usage) {
+        TT_FATAL(0, "Calculated CB size {} does not match with the actual CB size {}", actual_size, l1_usage);
+    }
+
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
         log_debug(tt::LogOp, "in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
