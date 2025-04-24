@@ -31,9 +31,7 @@ def test_ttnn_point_scatter(device, use_pretrained_weight, reset_seeds):
         train_cfg=None,
     )
     if use_pretrained_weight == True:
-        state_dict = torch.load(
-            "/home/ubuntu/pointpillars_mmdetect/mmdetection3d/hv_pointpillars_fpn_sbn-all_4x8_2x_nus-3d_20210826_104936-fca299c1.pth"
-        )["state_dict"]
+        state_dict = torch.load("hv_pointpillars_fpn_sbn-all_4x8_2x_nus-3d_20210826_104936-fca299c1.pth")["state_dict"]
         reference_model.load_state_dict(state_dict)
     reference_model.eval()
     reference_model = reference_model.pts_middle_encoder

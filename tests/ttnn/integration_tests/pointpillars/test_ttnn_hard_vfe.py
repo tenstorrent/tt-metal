@@ -56,7 +56,7 @@ def test_ttnn_hard_vfe(device, use_pretrained_weight, reset_seeds):
     )
     if use_pretrained_weight == True:
         state_dict = torch.load(
-            "/home/ubuntu/pointpillars_mmdetect/mmdetection3d/hv_pointpillars_fpn_sbn-all_4x8_2x_nus-3d_20210826_104936-fca299c1.pth"
+            "/home/ubuntu/punith/tt-metal/hv_pointpillars_fpn_sbn-all_4x8_2x_nus-3d_20210826_104936-fca299c1.pth"
         )["state_dict"]
         reference_model.load_state_dict(state_dict)
     reference_model.eval()
@@ -66,9 +66,9 @@ def test_ttnn_hard_vfe(device, use_pretrained_weight, reset_seeds):
         initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device)
     )
 
-    features = torch.load("models/experimental/functional_pointpillars/reference/features_hard_vfe.pt")
-    num_points = torch.load("models/experimental/functional_pointpillars/reference/num_points_hard_vfe.pt")
-    coors = torch.load("models/experimental/functional_pointpillars/reference/coors_hard_vfe.pt")
+    features = torch.load("models/experimental/functional_pointpillars/features.pt")
+    num_points = torch.load("models/experimental/functional_pointpillars/num_points.pt")
+    coors = torch.load("models/experimental/functional_pointpillars/coors.pt")
     img_feats = None
     img_metas = None  # It's not none, using none as we are not using this variable inside the hardvfe
 
