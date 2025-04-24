@@ -84,6 +84,12 @@ run_bert_func() {
 
 }
 
+run_resnet_stability() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/wormhole/resnet50/tests/test_resnet50_stability.py -k "short"
+
+}
+
 run_resnet_func() {
 
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/wormhole/resnet50/demo/demo.py
