@@ -268,9 +268,9 @@ class TtMVXFasterRCNN:
         img_feats, pts_feats = self.extract_feat(batch_inputs_dict, batch_input_metas)
 
         if pts_feats and self.with_pts_bbox:
-            results_list_3d = self.pts_bbox_head.predict(pts_feats, batch_data_samples, **kwargs)
+            outs = self.pts_bbox_head(pts_feats)
         else:
-            results_list_3d = None
+            outs = None
 
         if img_feats and self.with_img_bbox:
             # TODO check this for camera modality
@@ -280,4 +280,4 @@ class TtMVXFasterRCNN:
 
         # print("results_list_3d", results_list_3d)
         # detsamples = self.add_pred_to_datasample(batch_data_samples, results_list_3d, results_list_2d)
-        return results_list_3d
+        return outs
