@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "tt_metal/hw/inc/debug/dprint_pages.h"
 // #include <unistd.h>
 
 template <uint8_t noc_ind = noc_index>
@@ -23,6 +24,7 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
 }
 
 void kernel_main() {
+    DPRINT << "reader_llama_reduce_scatter" << ENDL();
     // Constants for indexing
     constexpr uint8_t x_index = 0;
     constexpr uint8_t y_index = 1;
@@ -50,6 +52,30 @@ void kernel_main() {
     constexpr uint32_t packet_worker_end_y = get_compile_time_arg_val(17);
     constexpr uint32_t num_sender_cores = get_compile_time_arg_val(18);
     constexpr uint32_t total_num_read_txns = get_compile_time_arg_val(19);
+
+    // DPRINT the selected compile-time arguments
+    DPRINT << ENDL();
+    DPRINT << "Compile-time arguments:" << ENDL();
+    DPRINT << "input_tensor_cb_id: " << input_tensor_cb_id << ENDL();
+    DPRINT << "fabric_sender_cb_id: " << fabric_sender_cb_id << ENDL();
+    DPRINT << "packet_header_cb_id: " << packet_header_cb_id << ENDL();
+    DPRINT << "fabric_receiver_cb_id: " << fabric_receiver_cb_id << ENDL();
+    DPRINT << "accumulator_cb_id: " << accumulator_cb_id << ENDL();
+    DPRINT << "output_tensor_cb_id: " << output_tensor_cb_id << ENDL();
+    DPRINT << "chip_id: " << chip_id << ENDL();
+    DPRINT << "tiles_per_core_width: " << tiles_per_core_width << ENDL();
+    DPRINT << "tiles_per_core_width_output: " << tiles_per_core_width_output << ENDL();
+    DPRINT << "num_pages_per_packet: " << num_pages_per_packet << ENDL();
+    DPRINT << "input_shard_cores_per_device: " << input_shard_cores_per_device << ENDL();
+    DPRINT << "num_devices: " << num_devices << ENDL();
+    DPRINT << "page_size_bytes: " << page_size_bytes << ENDL();
+    DPRINT << "output_cores_per_device: " << output_cores_per_device << ENDL();
+    DPRINT << "packet_worker_start_x: " << packet_worker_start_x << ENDL();
+    DPRINT << "packet_worker_start_y: " << packet_worker_start_y << ENDL();
+    DPRINT << "packet_worker_end_x: " << packet_worker_end_x << ENDL();
+    DPRINT << "packet_worker_end_y: " << packet_worker_end_y << ENDL();
+    DPRINT << "num_sender_cores: " << num_sender_cores << ENDL();
+    DPRINT << "total_num_read_txns: " << total_num_read_txns << ENDL();
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -81,6 +107,19 @@ void kernel_main() {
     uint32_t sender_shard_end = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
 
+    // DPRINT the selected runtime arguments
+    DPRINT << ENDL();
+    DPRINT << "Runtime arguments:" << ENDL();
+    DPRINT << "receiver_semaphore_address: " << receiver_semaphore_address << ENDL();
+    DPRINT << "local_semaphore_address: " << local_semaphore_address << ENDL();
+    DPRINT << "sender_core: " << (sender_core ? "true" : "false") << ENDL();
+    DPRINT << "worker_core: " << (worker_core ? "true" : "false") << ENDL();
+    DPRINT << "linear_input_packet_start_idx: " << linear_input_packet_start_idx << ENDL();
+    DPRINT << "receiver_core: " << (receiver_core ? "true" : "false") << ENDL();
+    DPRINT << "sender_shard_start: " << sender_shard_start << ENDL();
+    DPRINT << "sender_shard_end: " << sender_shard_end << ENDL();
+    DPRINT << "sender_total_num_pages: " << sender_total_num_pages << ENDL();
+
     // Bank base addresses (compute once)
     const uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);
 
@@ -88,14 +127,14 @@ void kernel_main() {
 
     if (sender_core) {
         for (uint32_t target_device_id : device_order) {
-            const uint32_t base_core = target_device_id * input_shard_cores_per_device;
+            const uint32_t base_offset = target_device_id;
 
             uint32_t num_pages_read = 0;
             uint32_t num_pages_reserve_push = 0;
             uint32_t shard_idx = sender_shard_start;
             while (num_pages_read < sender_total_num_pages) {
-                const uint8_t curr_core = base_core + schedule[shard_idx][0];
-                const uint32_t read_offset = schedule[shard_idx][1];
+                const uint8_t curr_core = schedule[shard_idx][0];
+                const uint32_t read_offset = base_offset + schedule[shard_idx][1];
                 const uint32_t read_size = schedule[shard_idx][2];
                 num_pages_reserve_push += read_size;
 
@@ -110,6 +149,8 @@ void kernel_main() {
 
                 cb_reserve_back(fabric_sender_cb_id, num_pages_reserve_push);
                 noc_async_read(shard_noc_addr, sender_read_addr, transfer_size);
+                DPRINT << "shard_noc_addr: " << shard_noc_addr << " print_bf16_pages: " << ENDL();
+                // tt::data_movement::common::print_bf16_pages(sender_read_addr, page_size_bytes, read_size);
 
                 if (num_pages_reserve_push >= curr_packet_num_pages) {
                     noc_async_read_barrier();

@@ -34,7 +34,7 @@ PACKET_WORKER_CRS = ttnn.CoreRangeSet(
 
 
 def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme="random"):
-    factor = 0
+    factor = 1
     torch_fracture_tensors = []
     for _ in range(num_devices_fracture):
         torch_scatter_tensors = []
@@ -46,13 +46,12 @@ def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_
                         torch_input_tensors.append(torch.rand(1, 1, shard_height, 32))
                     elif scheme == "sequential":
                         torch_input_tensors.append(torch.ones(1, 1, shard_height, 32) * factor)
-                        factor += 1
+                        # factor += 1
                     else:
                         raise ValueError(f"Invalid scheme: {scheme}")
             torch_scatter_tensors.append(torch.cat(torch_input_tensors, dim=dim))
 
         torch_fracture_tensors.append(torch.cat(torch_scatter_tensors, dim=1))
-
     return torch.cat(torch_fracture_tensors, dim=0)
 
 
@@ -148,6 +147,7 @@ def run_reduce_scatter_test(
         input = gen_tensor(
             dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme=scheme
         )
+        print(input)
 
         intermediate_tensor = torch.zeros(
             [
@@ -394,7 +394,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode, dtype):
         num_iters,
         trace_mode,
         num_links=3,
-        scheme="random",
+        scheme="sequential",
         dtype=dtype,
     )
 
