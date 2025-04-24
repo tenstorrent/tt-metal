@@ -31,6 +31,7 @@ target_sources(
             hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
             hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
             hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
+            fabric_routing_mode.h
 )
 
 target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
