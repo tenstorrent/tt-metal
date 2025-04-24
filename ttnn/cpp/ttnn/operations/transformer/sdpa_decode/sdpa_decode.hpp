@@ -73,11 +73,11 @@ struct ExecutePagedScaledDotProductAttentionDecode {
 
 namespace transformer {
 
-constexpr auto scaled_dot_product_attention_decode = ttnn::register_operation_with_auto_launch_op<
+constexpr auto scaled_dot_product_attention_decode = ttnn::register_operation<
     "ttnn::transformer::scaled_dot_product_attention_decode",
     ttnn::operations::transformer::ExecuteScaledDotProductAttentionDecode>();
 
-constexpr auto paged_scaled_dot_product_attention_decode = ttnn::register_operation_with_auto_launch_op<
+constexpr auto paged_scaled_dot_product_attention_decode = ttnn::register_operation<
     "ttnn::transformer::paged_scaled_dot_product_attention_decode",
     ttnn::operations::transformer::ExecutePagedScaledDotProductAttentionDecode>();
 

@@ -22,9 +22,8 @@ struct CumprodOperation {
 }  // namespace operations::experimental::reduction
 
 namespace experimental {
-constexpr auto cumprod = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::cumprod",
-    ttnn::operations::experimental::reduction::CumprodOperation>();
+constexpr auto cumprod = ttnn::
+    register_operation<"ttnn::experimental::cumprod", ttnn::operations::experimental::reduction::CumprodOperation>();
 
 }  // namespace experimental
 }  // namespace ttnn

@@ -20,6 +20,5 @@ struct MorehDot {
 }  // namespace ttnn::operations::moreh::moreh_dot
 
 namespace ttnn {
-constexpr auto moreh_dot =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_dot", ttnn::operations::moreh::moreh_dot::MorehDot>();
+constexpr auto moreh_dot = ttnn::register_operation<"ttnn::moreh_dot", ttnn::operations::moreh::moreh_dot::MorehDot>();
 }  // namespace ttnn
