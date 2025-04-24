@@ -115,9 +115,7 @@ class TtFPN:
 
                 laterals[i - 1] = laterals[i - 1] + ttnn.to_layout(
                     ttnn.upsample(
-                        ttnn.to_layout(
-                            laterals[i], layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-                        ),
+                        ttnn.to_layout(laterals[i], layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG),
                         scale_factor=prev_shape[0] // laterals[i].shape[1],
                         **self.upsample_cfg,
                     ),

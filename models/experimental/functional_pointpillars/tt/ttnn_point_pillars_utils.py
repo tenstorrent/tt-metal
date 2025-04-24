@@ -9,6 +9,7 @@ import numpy as np
 from mmengine.structures import InstanceData
 
 from torch import nn as nn
+import ttnn
 
 
 def load_ext(name, funcs):
@@ -20,40 +21,22 @@ def load_ext(name, funcs):
 
 ext_module = load_ext("_ext", ["nms", "softnms", "nms_match", "nms_rotated", "nms_quadri"])
 
-# def get_paddings_indicator(actual_num, max_num, axis: int = 0):
-#     device = actual_num.device()
-#     actual_num = ttnn.unsqueeze(actual_num, axis + 1)
-#     # tiled_actual_num: [N, M, 1]
-#     print(actual_num.shape)
-#     max_num_shape = [1] * len(actual_num.shape)
-#     print(max_num_shape)
-#     max_num_shape[axis + 1] = -1
-#     max_num = ttnn.reshape(ttnn.arange(0, max_num, device=actual_num.device(), dtype=ttnn.uint32), max_num_shape)
 
-#     actual_num = ttnn.to_layout(actual_num, layout=ttnn.TILE_LAYOUT, dtype=ttnn.uint32)
+def get_paddings_indicator(actual_num, max_num, axis: int = 0):
+    device = actual_num.device()
+    actual_num = ttnn.unsqueeze(actual_num, axis + 1)
 
-#     # tiled_actual_num: [[3,3,3,3,3], [4,4,4,4,4], [2,2,2,2,2]]
-#     # tiled_max_num: [[0,1,2,3,4], [0,1,2,3,4], [0,1,2,3,4]]
-#     # return max_num
-#     actual_num = ttnn.to_torch(actual_num)
-#     max_num = ttnn.to_torch(max_num)
-#     paddings_indicator = actual_num > max_num
-
-#     # paddings_indicator shape: [batch_size, max_num]
-#     paddings_indicator = ttnn.from_torch(paddings_indicator, device=device, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT)
-#     return paddings_indicator
-
-
-def get_paddings_indicator(actual_num: Tensor, max_num: Tensor, axis: int = 0) -> Tensor:
-    actual_num = torch.unsqueeze(actual_num, axis + 1)
-    # tiled_actual_num: [N, M, 1]
     max_num_shape = [1] * len(actual_num.shape)
     max_num_shape[axis + 1] = -1
-    max_num = torch.arange(max_num, dtype=torch.int, device=actual_num.device).view(max_num_shape)
-    # tiled_actual_num: [[3,3,3,3,3], [4,4,4,4,4], [2,2,2,2,2]]
-    # tiled_max_num: [[0,1,2,3,4], [0,1,2,3,4], [0,1,2,3,4]]
-    paddings_indicator = actual_num.int() > max_num
-    # paddings_indicator shape: [batch_size, max_num]
+    max_num = ttnn.reshape(ttnn.arange(0, max_num, device=actual_num.device(), dtype=ttnn.int32), max_num_shape)
+
+    actual_num = ttnn.to_layout(actual_num, layout=ttnn.TILE_LAYOUT)
+    actual_num = ttnn.from_device(actual_num)
+    actual_num = ttnn.to_dtype(actual_num, dtype=ttnn.int32)
+    actual_num = ttnn.to_device(actual_num, device=device)
+    max_num = ttnn.to_layout(max_num, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)
+    paddings_indicator = ttnn.gt(actual_num, max_num, use_legacy=False)
+
     return paddings_indicator
 
 
