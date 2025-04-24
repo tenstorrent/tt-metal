@@ -33,7 +33,10 @@ std::vector<CoreCoord> reorder_connected_sockets(
 
     if (connected_sockets.size() > 1) {
         if (originated_eth_cores.size() > 0) {
-            // Replace sorting against a single origin with multi-origin sort.
+            // Sort by manhattan distance to the originated eth cores.
+            // originated_eth_cores.size() cores in ethernet_cores_logical_virtual are
+            // sorted based on their distance to the originated_eth_cores.
+            // Remaining cores in ethernet_cores_logical_virtual are appended in any order
             std::vector<std::pair<CoreCoord, CoreCoord>> remaining = ethernet_cores_logical_virtual;
             std::vector<std::pair<CoreCoord, CoreCoord>> sorted_pairs;
             for (size_t i = 0; i < originated_eth_cores.size(); i++) {
@@ -66,6 +69,7 @@ std::vector<CoreCoord> reorder_connected_sockets(
     for (auto& core_pair : ethernet_cores_logical_virtual) {
         reordered_connected_sockets.push_back(core_pair.first);
     }
+
     return reordered_connected_sockets;
 }
 
