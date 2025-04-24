@@ -235,7 +235,7 @@ TestConstCharStrNC{4,4}
 TestStrBR{4,4}
 +++++++++++++++)";
 
-static void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program and command queue
     Program program = Program();
 

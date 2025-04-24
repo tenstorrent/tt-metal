@@ -70,7 +70,7 @@ little mouse learned that bravery and kindness can change the world.",
     "contains several newline characters",
     "and should be displayed over multiple lines."};
 
-static void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintFixture* fixture, IDevice* device) {
     std::vector<CoreCoord> cores;
     cores.emplace_back(0, 0);
     cores.emplace_back(0, 1);
