@@ -111,7 +111,8 @@ jobs:
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
       - name: Tag and push latest
-        if: ${{ github.ref == 'refs/heads/main' }}
+        # TODO - get rid of my branch
+        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rkim/21067-upstream-tests' }}
         run: |
           # TODO - To clean up, not sure if we should split out image name and tag
           IMAGE_NAME="${{ env.WH_6U_IMAGE_NAME }}"
