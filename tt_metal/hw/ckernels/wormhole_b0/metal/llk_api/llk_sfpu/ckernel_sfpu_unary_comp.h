@@ -21,7 +21,7 @@ inline void calculate_unary_ne(uint value) {
     c_value.u = value;
     vFloat s = c_value.f;
 
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
         v_if(v == s) { v = 0.0f; }
@@ -41,7 +41,7 @@ inline void calculate_unary_eq(uint value) {
     c_value.u = value;
     vFloat s = c_value.f;
 
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
         v_if(v == s) { v = 1.0f; }
@@ -61,7 +61,7 @@ inline void calculate_unary_gt(uint value) {
     c_value.u = value;
     vFloat s = c_value.f;
 
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
         v_if(v > s) { v = 1.0f; }
@@ -81,7 +81,7 @@ inline void calculate_unary_lt(uint value) {
     c_value.u = value;
     vFloat s = c_value.f;
 
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
         v_if(v < s) { v = 1.0f; }
