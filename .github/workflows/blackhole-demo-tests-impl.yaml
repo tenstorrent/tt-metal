@@ -56,6 +56,8 @@ jobs:
         with:
           name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
+        # For now we're relying on runner-label == BH to target baremetal blackhole machines in order to confirm that the demo functionality works on blackhole VMs
+        # VMs will target a different runner label so they won't touch the perf governor but still run the models.
         if: ${{ contains(matrix.test-group.name, 'performance') && inputs.runner-label == 'BH' }}
         run: |
           sudo cpupower frequency-set -g performance
