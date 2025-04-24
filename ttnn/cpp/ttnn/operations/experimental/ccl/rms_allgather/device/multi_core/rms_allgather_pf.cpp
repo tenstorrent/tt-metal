@@ -88,16 +88,15 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     tt::tt_metal::Program program{};
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
-    uint32_t page_size = 0;
     uint32_t output_page_size = 0;
     uint32_t stats_page_size;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.value().get_dtype());
-    if (a.get_layout() == Layout::TILE) {
-        page_size = a.tensor_spec().tile().get_tile_size(in_data_format);
-    } else {
-        page_size = a.buffer()->page_size();
+    tt::DataFormat residual_data_format = in_data_format;
+    if (b)
+    {
+        tt::DataFormat residual_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().get_dtype());
     }
     if (output.get_layout() == Layout::TILE) {
         output_page_size = output.tensor_spec().tile().get_tile_size(out_data_format);
@@ -179,6 +178,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                           : tt::DataFormat::Float16_b;
     // tile sizes
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
+    uint32_t residual_single_tile_size = tt::tt_metal::detail::TileSize(residual_data_format);
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
     uint32_t stats_single_tile_size = tt::tt_metal::detail::TileSize(stats_data_format);
@@ -260,7 +260,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t in0_CB_tiles = in0_block_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
     // block size for in1 (tensor b)
-    uint32_t in1_CB_size = in0_CB_size;
+    uint32_t in1_CB_size = in0_CB_tiles * residual_single_tile_size;
     // in2 - scaler
     uint32_t in2_CB_size = bfloat16_tile_size;
     // in3 - eps
@@ -472,23 +472,23 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, all_cores, cb_reserved_packet_header_config);
 
-    uint32_t add_out_cb_index = tt::CBIndex::c_21;
-    uint32_t in1_cb_index = tt::CBIndex::c_22;
+    uint32_t updated_residual_index = tt::CBIndex::c_21;
+    uint32_t original_input_index = tt::CBIndex::c_22;
 
     CBHandle cb_in1 = 0;
     CBHandle cb_add_out = 0;
 
     if (b) {
         tt::tt_metal::CircularBufferConfig add_out_cb_config =
-            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{add_out_cb_index, in_data_format}})
-                .set_page_size(add_out_cb_index, in_single_tile_size)
+            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{updated_residual_index, in_data_format}})
+                .set_page_size(updated_residual_index, in_single_tile_size)
                 .set_globally_allocated_address(*a.buffer());
         cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
 
         tt::tt_metal::CircularBufferConfig in1_cb_config =
             tt::tt_metal::CircularBufferConfig(
-                in1_CB_size, {{in1_cb_index, tt::tt_metal::datatype_to_dataformat_converter(b.value().get_dtype())}})
-                .set_page_size(in1_cb_index, in_single_tile_size)
+                in1_CB_size, {{original_input_index, tt::tt_metal::datatype_to_dataformat_converter(b.value().get_dtype())}})
+                .set_page_size(original_input_index, in_single_tile_size)
                 .set_globally_allocated_address(*b.value().buffer());
         cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
     }
@@ -603,7 +603,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         (std::uint32_t)single_tile_size,
         (std::uint32_t)ex_cb_partial2_index,
         (std::uint32_t)ex2_cb_index,
-        (std::uint32_t)add_out_cb_index,
         (std::uint32_t)ex_cb_external2_index,
         (std::uint32_t)post_reduce_sender_semaphore_id,
         (std::uint32_t)cb_stats_reduced_index,
@@ -703,11 +702,11 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         pre_in4_cb_index,
         ex_cb_partial2_index,
         ex2_cb_index,
-        add_out_cb_index,
+        updated_residual_index,
         ex_cb_external2_index,
         cb_to_allgather_writer,
         pre_x_cb_index,
-        in1_cb_index,
+        original_input_index,
         pre_in0_cb_index,
         output_cb_index,
         cb_stats_index,
