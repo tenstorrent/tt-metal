@@ -124,8 +124,8 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     SetRuntimeArgs(program, receiver_kernel, slave_core_set, {sem_id});
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, runtime_host_id);
-    program.set_runtime_id(runtime_host_id++);
+    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Input
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(

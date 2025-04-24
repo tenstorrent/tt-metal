@@ -124,8 +124,8 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
             .compile_args = writer_compile_args});
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, runtime_host_id);
-    program.set_runtime_id(runtime_host_id++);
+    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Launch program and record outputs
     vector<uint32_t> packed_output;
