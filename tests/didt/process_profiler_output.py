@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from loguru import logger
 
 from tt_metal.tools.profiler.process_device_log import import_device_profile_log
 
@@ -27,10 +28,10 @@ for device in devices_data["devices"].keys():
     num_of_iter = sum(1 for i in first_core_data if (i[0]["zone_name"] == "TRISC-FW" and i[0]["zone_phase"] == "begin"))
     num_of_blocks = len(first_core_math) // num_of_iter
     num_of_cores = len(devices_data["devices"][device]["cores"].keys())
-    print(f"============ Device:{device} data ============")
-    print(f"num_of_iter: {num_of_iter}")
-    print(f"num_of_blocks: {num_of_blocks}")
-    print(f"num_of_cores: {num_of_cores}")
+    logger.info(f"============ Device:{device} data ============")
+    logger.info(f"num_of_iter: {num_of_iter}")
+    logger.info(f"num_of_blocks: {num_of_blocks}")
+    logger.info(f"num_of_cores: {num_of_cores}")
 
     per_core_diff = [list(range(num_of_blocks))]
     start_time_per_core = []
@@ -63,7 +64,7 @@ for device in devices_data["devices"].keys():
     # Standard deviation of start time per block among all cores
     stddevs = pd.DataFrame(start_time_per_core).std()
 
-    print(f"Mean standard deviation is {stddevs.mean():.3f}")
+    logger.info(f"Mean standard deviation is {stddevs.mean():.3f}")
 
     stddevs = stddevs.round(3)
     stddevs = pd.DataFrame({"Block ID": stddevs.index, "stddev": stddevs.values})

@@ -267,7 +267,6 @@ def mesh_device(request, silicon_arch_name, device_params):
         num_devices_requested = min(param, len(device_ids))
         mesh_shape = ttnn.MeshShape(1, num_devices_requested)
 
-    assert silicon_arch_name != "grayskull", "Mesh device is not supported for Grayskull."
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
     updated_device_params = get_updated_device_params(device_params)

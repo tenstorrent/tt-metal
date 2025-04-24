@@ -1247,14 +1247,16 @@ void add_stagger_defines_if_needed(
     // cores; when there is 48 cores or less, we never enable stagger since the
     // delay impacts op performance
     constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
+    // TODO: determine min core threshold for throttle to be needed on BH
+    constexpr uint32_t BH_MM_MAX_CORES_NO_STAGGER = 0;
 
     // Apply stagger delay on Wormhole B0 on odd rows, so that only half of cores start doing work at once.
     // This is done to mitigate di/dt issues, in case the environment var is set.
     // See issue #9857.
     const char* stagger_type = std::getenv("TT_MATMUL_STAGGER_TYPE");
     const char* stagger_value = std::getenv("TT_MATMUL_STAGGER_VALUE");
-    if (stagger_type && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) &&
-        num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
+    if (stagger_type && ((arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) ||
+                         (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_STAGGER))) {
         // TODO check range for stagger_type
         mm_kernel_defines["MM_STAGGER_TYPE"] = stagger_type;
 
@@ -1283,25 +1285,22 @@ void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<string,
     const bool enable_throttle_mm_perf = std::getenv("TT_THROTTLE_MM_PERF");
     const uint32_t throttle_level = enable_throttle_mm_perf ? std::stoi(std::getenv("TT_THROTTLE_MM_PERF")) : 0;
     if (throttle_level && mm_throttle_needed) {
+        mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
         if (throttle_level == 5) {
-            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
             tt::log_info(tt::LogOp, "Throttle matmul perf to max 33%");
         } else if (throttle_level == 4) {
-            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
             tt::log_info(tt::LogOp, "Throttle matmul perf to max 40%");
         } else if (throttle_level == 3) {
-            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
             tt::log_info(tt::LogOp, "Throttle matmul perf to max 50%");
         } else if (throttle_level == 2) {
-            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
             tt::log_info(tt::LogOp, "Throttle matmul perf to max 67%");
         } else if (throttle_level == 1) {
-            mm_kernel_defines["THROTTLE_MM"] = std::to_string(throttle_level);
             tt::log_info(tt::LogOp, "Throttle matmul perf to max 73%");
         } else {
+            mm_kernel_defines["THROTTLE_MM"] = std::to_string(0);
             log_error(
                 tt::LogOp,
-                "Throttle matmul perf ignored: invalid number of NOPs requested - only {{1,2,3,4,5}} are supported");
+                "Throttle matmul perf ignored: invalid throttle level requested - only {{1,2,3,4,5}} are supported");
         }
     }
 }

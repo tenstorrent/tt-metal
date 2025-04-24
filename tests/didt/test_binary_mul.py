@@ -104,9 +104,6 @@ def test_binary_mul(
     in0_shape = [1, 1, 640 * compute_grid.y, 576 * compute_grid.x]
     in1_shape = in0_shape
 
-    # in0_mem_config = ttnn.create_sharded_memory_config(in0_shape, ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
-    # in1_mem_config = ttnn.create_sharded_memory_config(in0_shape, ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
-    # out_mem_config = ttnn.create_sharded_memory_config(in0_shape, ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
     in0_mem_config = ttnn.L1_MEMORY_CONFIG
     in1_mem_config = ttnn.L1_MEMORY_CONFIG
     out_mem_config = ttnn.L1_MEMORY_CONFIG

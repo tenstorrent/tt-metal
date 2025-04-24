@@ -71,8 +71,6 @@ class FF1Test(OpTestBase):
         for _ in range(self.non_mm_loops[0]):
             ttnn.cos(
                 self.weights,
-                # self.weights,
-                # activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU)],
             )
 
         for _ in range(self.mm_loops[0] - 1):

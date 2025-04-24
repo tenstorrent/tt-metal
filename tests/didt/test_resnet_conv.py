@@ -138,7 +138,6 @@ class ResnetConvTest(OpTestBase):
             conv_config=self.program_config,
             compute_config=self.compute_config,
             groups=self.groups,
-            # grid_opt=ttnn.CoreCoord(self.compute_with_storage_grid_size[0], self.compute_with_storage_grid_size[1]),
         )
         self.reader_patterns_cache.clear()
         return tt_output_tensor_on_device
