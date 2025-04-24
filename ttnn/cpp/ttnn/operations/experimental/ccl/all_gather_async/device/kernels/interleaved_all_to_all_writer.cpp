@@ -80,8 +80,7 @@ void kernel_main() {
 
     DPRINT << "rt args: \n";
     DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    // DPRINT << "tile_id_start: " << (uint32_t)tile_id_start << "\n";
-    // DPRINT << "tile_id_end: " << (uint32_t)tile_id_end << "\n";
+
     DPRINT << "wait_output_semaphore: " << (uint32_t)wait_output_semaphore << "\n";
     DPRINT << "reset_global_semaphore: " << (uint32_t)reset_global_semaphore << "\n";
     DPRINT << "out_ready_sem_bank_addr: " << (uint32_t)out_ready_sem_bank_addr << "\n";
@@ -115,15 +114,6 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
-    // pkt_hdr_forward->to_chip_multicast(
-    //     tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-    // pkt_hdr_backward->to_chip_multicast(
-    //     tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
-
-    // pkt_hdr_forward->to_chip_multicast(
-    //     tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-    // pkt_hdr_backward->to_chip_multicast(
-    //     tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
 
     // interleaved addrgen
     constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
@@ -164,7 +154,6 @@ void kernel_main() {
 
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += packet_size_in_pages) {
-                // DPRINT << "tile_id: " << tile_id << "\n";
                 cb_wait_front(cb0_id, packet_size_in_pages);
                 size_t l1_read_addr = get_read_ptr(cb0_id);
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, packet_size_in_pages);
@@ -175,19 +164,6 @@ void kernel_main() {
                     uint32_t col_tile = out_col_id + j;
                     uint32_t tile_id = out_row_id * out_col_tiles + col_tile;
                     uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
-                    // DPRINT << "j: " << j << "\n";
-                    // DPRINT << "noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
-                    // DPRINT << "tile_id: " << tile_id << "\n";
-
-                    // This issues a flush barrier
-                    // write_and_advance_local_read_address_for_fabric_write(
-                    //     noc0_dest_noc_addr,
-                    //     pkt_hdr_forward,
-                    //     pkt_hdr_backward,
-                    //     fabric_connection,
-                    //     l1_read_addr,
-                    //     contig_pages_advanced * tensor0_page_size);
 
                     if (cur_is_forward) {
                         pkt_hdr_forward->to_noc_unicast_write(
