@@ -46,13 +46,17 @@ class LMHead(LightweightModule):
         if args.is_galaxy:
             num_splits = 1
             cache_file_name = (
-                None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0_dram"
+                None
+                if args.dummy_weights
+                else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0_dram_width_sharded"
             )
             padded_lm_head = torch.zeros(1, 1, args.dim, self.padded_vocab_size)
             padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
 
             if args.is_70b:
-                memory_config = ttnn.DRAM_MEMORY_CONFIG
+                memory_config = args.create_dram_sharded_mem_config_lm_head(
+                    k=args.dim // 4, n=self.padded_vocab_size // 8
+                )
             else:
                 memory_config = (
                     ttnn.DRAM_MEMORY_CONFIG
@@ -181,6 +185,7 @@ class LMHead(LightweightModule):
                     dtype=ttnn.bfloat8_b,
                     sub_device_id=worker_sub_device_id,
                 )
+                output = ttnn.to_memory_config(output, self.args.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"])
             else:
                 output = ttnn.linear(
                     x,
