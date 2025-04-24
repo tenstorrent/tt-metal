@@ -108,7 +108,7 @@ void MAIN {
 #endif
 
     // X^2
-    mul_tiles_init(cb_in0, cb_in0);
+    mul_tiles_init(cb_in, cb_in);
     index_h_offset = 0;
     cb_reserve_back(cb_x2, num_tiles_per_block);
     index_subblock_w_offset = 0;
