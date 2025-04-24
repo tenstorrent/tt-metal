@@ -206,7 +206,8 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocMulticastInvalidRange = 8,
     DebugSanitizeNocAlignment = 9,
     DebugSanitizeNocMixedVirtualandPhysical = 10,
-    DebugSanitizeNocAddrMailbox = 11,
+    DebugSanitizeInlineWriteDramUnsupported = 11,
+    DebugSanitizeNocAddrMailbox = 12,
 };
 
 struct debug_assert_msg_t {
