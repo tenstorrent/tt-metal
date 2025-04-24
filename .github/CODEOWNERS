@@ -1,9 +1,8 @@
 # Order is important; the last matching pattern takes the most
 # precedence.
 
-# Default owners
-* @tenstorrent/metalium-developers-infra
-
+# Top-level files
+/* @tenstorrent/metalium-developers-infra
 METALIUM_GUIDE.md @davorchap
 
 # CI/CD
@@ -11,12 +10,15 @@ METALIUM_GUIDE.md @davorchap
 .github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
 
 /infra/ @tenstorrent/metalium-developers-infra
+scripts/build_scripts/ @tenstorrent/metalium-developers-infra
+cmake/ @tenstorrent/metalium-developers-infra
 
 # Testing scripts and infra
 conftest.py @tenstorrent/metalium-developers-infra
 /conftest.py @cfjchu @SeanNijjar @tenstorrent/metalium-developers-infra
 
 # test scripts
+tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra
 tests/scripts/run_pre_post_commit_regressions_multi_device.sh @aliuTT @tt-aho @TT-BrianLiu @tenstorrent/metalium-developers-infra
