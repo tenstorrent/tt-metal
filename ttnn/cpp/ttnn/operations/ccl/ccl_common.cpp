@@ -112,7 +112,8 @@ SenderRecieverConfig get_device_sender_receiver_config(
     SenderRecieverConfig config;
     const auto& mesh_view = mesh_device->get_view();
     TT_FATAL(
-        mesh_view.is_mesh_2d(), "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+        mesh_view.is_mesh_2d(),
+        "CLL operation invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     const auto view_index = (cluster_axis == 0) ? mesh_coord[1] : mesh_coord[0];
     config.device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
 
