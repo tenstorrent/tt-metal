@@ -178,6 +178,7 @@ void kernel_main() {
         *stats_set_semaphore_addr_ptr = VALID;
         noc_semaphore_set_multicast_loopback_src(
             stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_blocks, false, false);
+        noc_async_write_barrier();
         fabric_connection.close_finish();  // Includes a noc async write barrier
     } else {
         // Wait for the signal that the stats semaphore was written in the all gather core

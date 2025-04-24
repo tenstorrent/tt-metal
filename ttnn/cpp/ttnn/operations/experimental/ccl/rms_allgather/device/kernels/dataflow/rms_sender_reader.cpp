@@ -133,6 +133,7 @@ void kernel_main() {
 
         noc_semaphore_set_multicast_loopback_src(
             post_reduce_sender_semaphore_addr, post_reduce_sender_semaphore_noc_addr, num_blocks, false, false);
+        noc_async_write_barrier();
     };
 
     const auto& post_global_reduce_sender = [&](const uint32_t cb_ex, const uint32_t cb_ex_global)
