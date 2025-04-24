@@ -293,3 +293,17 @@ install(
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal # FIXME: fix the include paths for jit_build
         COMPONENT metalium-runtime
 )
+
+set(ENABLE_TESTING OFF CACHE BOOL "Disable building prometheus-cpp tests" FORCE)
+set(ENABLE_PUSH OFF CACHE BOOL "Disable building prometheus-cpp tests" FORCE)
+FetchContent_Declare(prometheus_cpp GIT_REPOSITORY https://github.com/jupp0r/prometheus-cpp.git GIT_TAG v1.3.0)
+FetchContent_MakeAvailable(prometheus_cpp)
+
+add_executable(metrics_demo metrics_demo.cpp)
+target_link_libraries(
+    metrics_demo
+    PRIVATE
+        tt_metal
+        prometheus-cpp::core
+        prometheus-cpp::pull
+)
