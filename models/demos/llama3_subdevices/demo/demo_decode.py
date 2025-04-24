@@ -268,7 +268,7 @@ def run_llama3_demo(
 
     # Prepare the encoded prompts for the decode input
     tt_out_tok = ttnn.from_torch(
-        encoded_prompts_tensor_whole_sequence[:, :1].reshape(1, 1, batch_size),
+        encoded_prompts_tensor_whole_sequence[:, :1].reshape(1, 1, 1, batch_size),
         device=mesh_device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -316,7 +316,7 @@ def run_llama3_demo(
             tt_out_rm, (1, 1, 1, tt_out_rm.shape[3]), (1, 1, tt_out_rm.shape[2], tt_out_rm.shape[3])
         )
         _ = ttnn.argmax(
-            tt_out_rm, dim=3, keepdim=False, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
+            tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
         )
         logger.info(f"sampling done")
 
@@ -357,7 +357,7 @@ def run_llama3_demo(
     tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
     tt_out_rm = ttnn.reshape(tt_out_rm, (1, 1, 1, tt_out_rm.shape[3]), (1, 1, tt_out_rm.shape[2], tt_out_rm.shape[3]))
     _ = ttnn.argmax(
-        tt_out_rm, dim=3, keepdim=False, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
+        tt_out_rm, dim=3, keepdim=True, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
     )
 
     if not stress_test:
@@ -385,7 +385,7 @@ def run_llama3_demo(
     )
 
     tt_out_tok_reset = ttnn.from_torch(
-        encoded_prompts_tensor_whole_sequence[:, :1].reshape(1, 1, batch_size),
+        encoded_prompts_tensor_whole_sequence[:, :1].reshape(1, 1, 1, batch_size),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
@@ -440,15 +440,15 @@ def run_llama3_demo(
             tt_out_tok_cpu,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
-                dims=(2, 1),
+                dims=(3, 1),
                 mesh_shape=model_args.cluster_shape,
             ),
-        )[0, 0, :batch_size]
+        )[0, 0, 0, :batch_size]
         # Append the generated token to the list of outputs
         if iteration in range(len(encoded_prompts[0])):
             all_outputs.append(encoded_prompts[0][iteration])  # Update list of TT outputs
             tt_out_tok_reset = ttnn.from_torch(
-                encoded_prompts_tensor_whole_sequence[:, iteration].reshape(1, 1, batch_size),
+                encoded_prompts_tensor_whole_sequence[:, iteration].reshape(1, 1, 1, batch_size),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
