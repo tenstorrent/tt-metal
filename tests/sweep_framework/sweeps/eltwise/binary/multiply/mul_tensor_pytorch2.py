@@ -4,8 +4,10 @@
 
 from typing import Optional, Tuple
 from functools import partial
+import itertools
 
 import torch
+import pytest
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -30,7 +32,6 @@ parameters = {
             {"self": [1, 1, 1, 17], "other": -3.4028234663852886e38},
             {"self": [1, 1, 1, 1], "other": -3.4028234663852886e38},
             {"self": [1, 1, 1, 201], "other": -3.4028234663852886e38},
-            {"self": [1, 1, 1, 2048], "other": -3.4028234663852886e38},
             {"self": [1, 1, 1, 256], "other": -3.3895313892515355e38},
             {"self": [1, 1, 1, 25], "other": -3.4028234663852886e38},
             {"self": [1, 1, 1, 2], "other": -3.4028234663852886e38},
@@ -88,9 +89,6 @@ parameters = {
             {"self": [1, 24, 49, 32], "other": 0.1767766952966369},
             {"self": [1, 24, 64, 64], "other": 16.0},
             {"self": [1, 24, 768], "other": 0.125},
-            {"self": [1, 3, 16, 16, 2], "other": 2.0},
-            {"self": [1, 3, 32, 32, 2], "other": 2.0},
-            {"self": [1, 3, 64, 64, 2], "other": 2.0},
             {"self": [1, 3, 64, 64], "other": 16.0},
             {"self": [1, 32, 49, 32], "other": 0.1767766952966369},
             {"self": [1, 32, 6144], "other": 0.044715},
@@ -263,15 +261,12 @@ parameters = {
             {"self": [1, 288, 1, 1], "other": [1, 288, 7, 7]},
             {"self": [1, 2904, 1, 1], "other": [1, 2904, 24, 24]},
             {"self": [1, 3, 16, 16, 2], "other": [1, 3, 16, 16, 2]},
-            {"self": [1, 3, 16, 16, 2], "other": []},
             {"self": [1, 3, 300, 300], "other": [300, 1]},
             {"self": [1, 3, 300, 300], "other": [300]},
             {"self": [1, 3, 32, 32, 2], "other": [1, 3, 32, 32, 2]},
-            {"self": [1, 3, 32, 32, 2], "other": []},
             {"self": [1, 3, 320, 320], "other": [320, 1]},
             {"self": [1, 3, 320, 320], "other": [320]},
             {"self": [1, 3, 64, 64, 2], "other": [1, 3, 64, 64, 2]},
-            {"self": [1, 3, 64, 64, 2], "other": []},
             {"self": [1, 3, 800, 1066], "other": [1066]},
             {"self": [1, 3, 800, 1066], "other": [800, 1]},
             {"self": [1, 3024, 1, 1], "other": [1, 3024, 7, 7]},
@@ -322,8 +317,6 @@ parameters = {
             {"self": [1, 64, 30, 40], "other": [40]},
             {"self": [1, 64, 360, 640], "other": [1, 64, 1, 1]},
             {"self": [1, 64, 400, 544], "other": [1, 64, 1, 1]},
-            {"self": [1, 64, 480, 640], "other": [480, 1]},
-            {"self": [1, 64, 480, 640], "other": [640]},
             {"self": [1, 64, 5120], "other": [1, 64, 5120]},
             {"self": [1, 64, 60, 80], "other": [1, 1, 60, 80]},
             {"self": [1, 64, 60, 80], "other": [60, 1]},
@@ -364,9 +357,6 @@ parameters = {
             {"self": [12], "other": []},
             {"self": [136], "other": []},
             {"self": [13], "other": []},
-            {"self": [16, 1], "other": [1, 1, 32]},
-            {"self": [16, 6, 64, 64], "other": [6, 1, 1]},
-            {"self": [16, 8, 64, 64], "other": [8, 1, 1]},
             {"self": [17], "other": []},
             {"self": [1], "other": [1]},
             {"self": [2, 1], "other": []},
@@ -376,14 +366,10 @@ parameters = {
             {"self": [3234, 1], "other": [3234, 1]},
             {"self": [3234, 2], "other": [2]},
             {"self": [34], "other": []},
-            {"self": [4, 12, 64, 64], "other": [12, 1, 1]},
-            {"self": [4, 16, 64, 64], "other": [16, 1, 1]},
             {"self": [50], "other": []},
             {"self": [512], "other": [1, 1, 512]},
             {"self": [512], "other": [1, 10, 512]},
             {"self": [512], "other": [1, 15, 512]},
-            {"self": [64, 3, 64, 64], "other": [3, 1, 1]},
-            {"self": [64, 4, 64, 64], "other": [4, 1, 1]},
             {"self": [68], "other": []},
             {"self": [768], "other": [1, 1, 768]},
             {"self": [768], "other": [1, 10, 768]},
@@ -405,6 +391,34 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "mul_test_Failure": {
+        "input_shape": [
+            # Shapes that reported PCC Drop with legacy flag
+            {"self": [1, 1, 1, 2048], "other": -3.4028234663852886e38},
+            {"self": [16, 1], "other": [1, 1, 32]},
+            {"self": [16, 6, 64, 64], "other": [6, 1, 1]},
+            {"self": [16, 8, 64, 64], "other": [8, 1, 1]},
+            {"self": [4, 12, 64, 64], "other": [12, 1, 1]},
+            {"self": [4, 16, 64, 64], "other": [16, 1, 1]},
+            {"self": [64, 3, 64, 64], "other": [3, 1, 1]},
+            {"self": [64, 4, 64, 64], "other": [4, 1, 1]},
+            # Additional runtime error shapes, out of memory errors
+            {"self": [1, 3, 16, 16, 2], "other": 2.0},
+            {"self": [1, 3, 32, 32, 2], "other": 2.0},
+            {"self": [1, 3, 64, 64, 2], "other": 2.0},
+            {"self": [1, 3, 64, 64, 2], "other": []},
+            {"self": [1, 64, 480, 640], "other": [480, 1]},
+            {"self": [1, 64, 480, 640], "other": [640]},
+            {"self": [1, 3, 16, 16, 2], "other": []},
+            {"self": [1, 3, 32, 32, 2], "other": []},
+        ],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
 }
 
 
@@ -412,7 +426,7 @@ parameters = {
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
-def run(
+def run_mul(
     input_shape,
     input_a_dtype,
     input_b_dtype,
@@ -424,6 +438,7 @@ def run(
     device,
 ) -> list:
     torch.manual_seed(0)
+    print(input_shape)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -459,9 +474,63 @@ def run(
     # else:
     #     input_tensor_b = input_shape["other"]
 
+    # print(input_tensor_a, input_tensor_b)
+
     start_time = start_measuring_time()
-    result = ttnn.mul(input_tensor_a, input_tensor_b)
+    print(input_a_memory_config, input_b_memory_config)
+    result = ttnn.mul(input_tensor_a, input_tensor_b, use_legacy=False)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99), e2e_perf]
+
+
+def run(
+    input_shape,
+    input_a_dtype,
+    input_b_dtype,
+    input_a_layout,
+    input_b_layout,
+    input_a_memory_config,
+    input_b_memory_config,
+    *,
+    device,
+) -> list:
+    return run_mul(
+        input_shape,
+        input_a_dtype,
+        input_b_dtype,
+        input_a_layout,
+        input_b_layout,
+        input_a_memory_config,
+        input_b_memory_config,
+        device=device,
+    )
+
+
+param_keys = parameters["mul_test_Failure"].keys()
+param_values = itertools.product(*parameters["mul_test_Failure"].values())
+
+
+@pytest.mark.parametrize(",".join(param_keys), list(param_values))
+def test_mul_failure_Case(
+    input_shape,
+    input_a_dtype,
+    input_b_dtype,
+    input_a_layout,
+    input_b_layout,
+    input_a_memory_config,
+    input_b_memory_config,
+    *,
+    device,
+) -> list:
+    return run_mul(
+        input_shape,
+        input_a_dtype,
+        input_b_dtype,
+        input_a_layout,
+        input_b_layout,
+        input_a_memory_config,
+        input_b_memory_config,
+        device=device,
+    )
