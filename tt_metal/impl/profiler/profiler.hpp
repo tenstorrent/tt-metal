@@ -241,9 +241,9 @@ void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* 
 void write_control_buffer_to_core(
     IDevice* device,
     const CoreCoord& core,
-    const profiler_msg_t* profiler_msg,
+    const HalProgrammableCoreType core_type,
     const ProfilerDumpState state,
-    const std::vector<uint32_t>& control_buffer);
+    std::vector<uint32_t>& control_buffer);
 
 }  // namespace tt_metal
 

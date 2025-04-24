@@ -144,7 +144,7 @@ void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
 
-        write_control_buffer_to_core(device, curr_core, profiler_msg, ProfilerDumpState::NORMAL, control_buffer);
+        write_control_buffer_to_core(device, curr_core, CoreType, ProfilerDumpState::NORMAL, control_buffer);
     }
 #endif
 }
