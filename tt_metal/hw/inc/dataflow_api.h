@@ -1462,7 +1462,7 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * Unlike using \a noc_async_write, there are also no address alignment concerns.
  * Also, see \a noc_async_write_barrier.
  *
- * The destination node can be either a DRAM bank, Tensix core+L1 memory
+ * The destination node can be either a Tensix core+L1 memory
  * address or a PCIe controller.
  *
  * Return value: None
@@ -1478,6 +1478,8 @@ template <bool write_to_stream_reg = false, bool posted = false>
 FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    // This API does not support DRAM addresses
+    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
 #ifdef ARCH_BLACKHOLE
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
