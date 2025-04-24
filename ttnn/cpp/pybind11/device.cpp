@@ -69,14 +69,6 @@ void ttnn_device(py::module& module) {
     module.def("close_device", [](MeshDevice& device) { ttnn::close_device(device); }, py::arg("device"));
 
     module.def(
-        "enable_program_cache", [](MeshDevice& device) { ttnn::enable_program_cache(device); }, py::arg("device"));
-
-    module.def(
-        "disable_and_clear_program_cache",
-        [](MeshDevice& device) { ttnn::disable_and_clear_program_cache(device); },
-        py::arg("device"));
-
-    module.def(
         "deallocate_buffers", [](MeshDevice* device) { ttnn::deallocate_buffers(device); }, py::arg("device"), R"doc(
         Deallocate all buffers associated with Device handle
     )doc");

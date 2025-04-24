@@ -50,9 +50,6 @@ def close_device(device: "ttnn.device.Device"):
     ttnn._ttnn.device.close_device(device)
 
 
-enable_program_cache = ttnn._ttnn.device.enable_program_cache
-disable_and_clear_program_cache = ttnn._ttnn.device.disable_and_clear_program_cache
-
 synchronize_device = ttnn._ttnn.device.synchronize_device
 GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice

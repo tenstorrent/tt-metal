@@ -119,7 +119,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     use_reduce_scatter_async=False,
     use_persistent_output=False,
 ):
-    ttnn.enable_program_cache(mesh_device)
+    mesh_device.enable_program_cache()
 
     per_reduce_scatter_output_shape = list(per_chip_input_shape)
     per_reduce_scatter_output_shape[dim] *= num_devices_per_line
