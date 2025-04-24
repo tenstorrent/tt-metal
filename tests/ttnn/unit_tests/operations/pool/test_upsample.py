@@ -211,9 +211,6 @@ def upsample_multicore_common(
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     out_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
 
-    print(f"in_shard_mem_config: {in_sharded_mem_config}")
-    print(f"out_shard_mem_config: {out_sharded_mem_config}")
-
     scale_factor = (scale_h, scale_w)
     input_tensor = ttnn.from_torch(tt_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
@@ -374,6 +371,99 @@ def test_bilinear_multi_core(
 
     torch_result = torch_result.permute(0, 2, 3, 1)
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_result, output_tensor, pcc=0.999)
+    allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
+    logger.info(pcc_msg)
+
+    assert allclose
+    assert passing
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "scale_h, scale_w",
+    (
+        (2, 2),
+        (4, 4),
+    ),
+)
+@pytest.mark.parametrize(
+    "batch_size, channels, height, width, core_grid, shard_height, shard_width, shard_strategy",
+    (
+        (
+            1,
+            32,
+            14,
+            2,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
+                }
+            ),
+            16,
+            32,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+        (
+            1,
+            128,
+            132,
+            20,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(1, 5)),
+                }
+            ),
+            64,
+            128,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+        (
+            1,
+            64,
+            14,
+            2,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                }
+            ),
+            16,
+            32,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+    ),
+)
+def test_nearest_upsample_with_uneven_input_shards(
+    device, batch_size, channels, height, width, scale_h, scale_w, core_grid, shard_height, shard_width, shard_strategy
+):
+    if device.core_grid.x * device.core_grid.y < core_grid.num_cores():
+        pytest.skip("Not enough cores for specified core grid")
+
+    assert (
+        shard_height * core_grid.num_cores() > height
+    ), "Expected all test cases in this test suite to contain uneven shards (i.e. physical size > logical size)"
+    if shard_strategy == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        assert shard_width == channels, "Shard width must match number of input channels when height sharding"
+
+    input_shape = [batch_size, channels, height, width]
+    input = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_nhw_c = input.permute(0, 2, 3, 1)
+
+    input_shard_shape = (shard_height, shard_width)
+
+    input_shard_spec = ttnn.ShardSpec(core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(shard_strategy, ttnn.BufferType.L1, input_shard_spec)
+
+    tt_input_tensor = ttnn.from_torch(input_nhw_c, device=device, memory_config=input_mem_config)
+    output_tensor = ttnn.upsample(tt_input_tensor, (scale_h, scale_w), mode="nearest")
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    upsample = nn.Upsample(scale_factor=(scale_h, scale_w), mode="nearest")
+    torch_result = upsample(input)
+    torch_result = torch_result.permute(0, 2, 3, 1)
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_result, output_tensor, pcc=0.99999)
     allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
     logger.info(pcc_msg)
 
