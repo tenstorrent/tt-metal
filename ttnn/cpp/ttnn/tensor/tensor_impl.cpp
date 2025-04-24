@@ -1350,7 +1350,7 @@ Tensor pad(
             output_strides.push_back(compute_stride(output_padded_shape, index));
         }
 
-        auto flat_output_index = 0;
+        size_t flat_output_index = 0;
         auto output_buffer = owned_buffer::create<T>(output_padded_shape.volume());
         std::function<void(std::size_t)> pad_to_tile = [&](std::size_t dim) -> void {
             for (auto i = 0; i < pad_size[dim][0] * output_strides[dim]; i++) {
@@ -1360,7 +1360,7 @@ Tensor pad(
             for (auto i = 0; i < input_padded_shape[dim]; i++) {
                 input_indices[dim] = i;
                 if (dim == input_padded_shape.rank() - 1) {
-                    auto flat_input_index = compute_flat_input_index(input_indices, input_strides);
+                    size_t flat_input_index = compute_flat_input_index(input_indices, input_strides);
                     output_buffer[flat_output_index++] = input_buffer[flat_input_index];
                 } else {
                     pad_to_tile(dim + 1);
