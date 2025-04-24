@@ -109,20 +109,21 @@ RUN mkdir -p /tmp/json \
     && make -C /tmp/json/build install \
     && rm -rf /tmp/json
 
-ARG MAGIC_ENUM_VERSION=0.9.7
-RUN mkdir -p /tmp/magic_enum \
-    && wget -O /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz "https://github.com/Neargye/magic_enum/archive/refs/tags/v${MAGIC_ENUM_VERSION}.tar.gz" \
-    && tar -xzf /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz -C /tmp/magic_enum --strip-components=1 \
-    && cmake \
-         -S /tmp/magic_enum \
-         -B /tmp/magic_enum/build \
-         -DCMAKE_BUILD_TYPE=Release \
-         -DMAGIC_ENUM_OPT_BUILD_TESTS=OFF \
-         -DMAGIC_ENUM_OPT_BUILD_EXAMPLES=OFF \
-         -DMAGIC_ENUM_OPT_INSTALL=ON \
-    && make -C /tmp/magic_enum/build -j$(nproc) \
-    && make -C /tmp/magic_enum/build install \
-    && rm -rf /tmp/magic_enum
+# Problematic with packaging
+# ARG MAGIC_ENUM_VERSION=0.9.7
+# RUN mkdir -p /tmp/magic_enum \
+#     && wget -O /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz "https://github.com/Neargye/magic_enum/archive/refs/tags/v${MAGIC_ENUM_VERSION}.tar.gz" \
+#     && tar -xzf /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz -C /tmp/magic_enum --strip-components=1 \
+#     && cmake \
+#          -S /tmp/magic_enum \
+#          -B /tmp/magic_enum/build \
+#          -DCMAKE_BUILD_TYPE=Release \
+#          -DMAGIC_ENUM_OPT_BUILD_TESTS=OFF \
+#          -DMAGIC_ENUM_OPT_BUILD_EXAMPLES=OFF \
+#          -DMAGIC_ENUM_OPT_INSTALL=ON \
+#     && make -C /tmp/magic_enum/build -j$(nproc) \
+#     && make -C /tmp/magic_enum/build install \
+#     && rm -rf /tmp/magic_enum
 
 ARG TAKSFLOW_VERSION=3.7.0
 RUN mkdir -p /tmp/taskflow \
