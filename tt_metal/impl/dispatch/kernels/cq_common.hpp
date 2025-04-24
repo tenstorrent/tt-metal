@@ -162,11 +162,16 @@ FORCE_INLINE void cq_noc_async_write_with_state(
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config
 // (dst_noc, VC..) have been specified.
-template <bool write_last_packet = true, bool update_counters = false, enum CQNocWait wait_first = CQ_NOC_WAIT>
+template <
+    bool write_last_packet = true,
+    bool update_counters = false,
+    enum CQNocWait wait_first = CQ_NOC_WAIT,
+    uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
 inline uint32_t cq_noc_async_write_with_state_any_len(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
     if (size > NOC_MAX_BURST_SIZE) {
-        cq_noc_async_write_with_state<CQ_NOC_SnDL, wait_first>(src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
+        cq_noc_async_write_with_state<CQ_NOC_SnDL, wait_first, CQ_NOC_SEND, cmd_buf>(
+            src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
         src_addr += NOC_MAX_BURST_SIZE;
         dst_addr += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
@@ -175,7 +180,8 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
             noc_nonposted_writes_acked[noc] += ndests;
         }
         while (size > NOC_MAX_BURST_SIZE) {
-            cq_noc_async_write_with_state<CQ_NOC_SnDl>(src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests, noc);
+            cq_noc_async_write_with_state<CQ_NOC_SnDl, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf>(
+                src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests, noc);
             src_addr += NOC_MAX_BURST_SIZE;
             dst_addr += NOC_MAX_BURST_SIZE;
             size -= NOC_MAX_BURST_SIZE;
@@ -186,7 +192,8 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
         }
     }
     if constexpr (write_last_packet) {
-        cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, size, ndests, noc);
+        cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf>(
+            src_addr, dst_addr, size, ndests, noc);
         if constexpr (update_counters) {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += ndests;
