@@ -430,6 +430,8 @@ def test_tg_trace_rms_fuse(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_iters", [20])
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("fused_add", [True, False])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -446,6 +448,7 @@ def test_rms_fuse(
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
+    fused_add,
 ):
     run_rms_fuse_impl(
         mesh_device,
@@ -457,6 +460,7 @@ def test_rms_fuse(
         input_shard_grid,
         output_shard_grid,
         ttnn.Topology.Linear,
+        fused_add,
         num_iters=num_iters,
     )
 
