@@ -14,7 +14,7 @@
 
 CONTRIBUTING.md @tenstorrent/metalium-developers-infra
 
-CODEOWNERS @tenstorrent/metalium-developers-infra
+.github/CODEOWNERS @tenstorrent/metalium-developers-infra
 
 INSTALLING.md @tenstorrent/metalium-developers-infra
 METALIUM_GUIDE.md @davorchap
