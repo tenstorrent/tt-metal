@@ -298,9 +298,11 @@ def run_rms_fuse_impl(
     input_shard_grid,
     output_shard_grid,
     all_gather_topology,
+    fused_add,
     num_iters=1,
     enable_async=False,
-    input_dtype=ttnn.bfloat8_b,
+    input_dtype=ttnn.bfloat16,
+    residual_dtype=ttnn.bfloat16,
     layout=ttnn.TILE_LAYOUT,
     topology=ttnn.Topology.Linear,
     epsilon=1e-05,
@@ -380,11 +382,14 @@ def run_rms_fuse_impl(
     )
     input_tensor_torch = []
     gamma_torch = []
+    residual_torch = []
+    residual_tensor = []
     input_tensor = []
     gamma_tensor = []
     tt_out_array = []
     for i in range(num_iters):
         input_tensor_torch.append(torch.randn(input_shape))
+        residual_torch.append(torch.randn(input_shape))
         gamma_torch.append(torch.randn((1, 1, 1, input_shape[3])))
         input_tensor.append(
             ttnn.as_tensor(
@@ -398,6 +403,21 @@ def run_rms_fuse_impl(
                 memory_config=input_memory_config,
             )
         )
+        if fused_add:
+            residual_tensor.append(
+                ttnn.as_tensor(
+                    residual_torch[i],
+                    dtype=residual_dtype,
+                    device=mesh_device,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device=mesh_device, dims=(None, 3), mesh_shape=list(ttnn.MeshShape(1, num_devices))
+                    ),
+                    layout=layout,
+                    memory_config=input_memory_config,
+                )
+            )
+        else:
+            residual_tensor.append(None)
         gamma_tensor.append(
             ttnn.as_tensor(
                 gamma_torch[i].reshape(
@@ -429,6 +449,7 @@ def run_rms_fuse_impl(
             memory_config=output_memory_config,
             epsilon=epsilon,
             weight=gamma_tensor[i],
+            residual_input_tensor=residual_tensor[i],
             stats=tt_stats,
         )
         tt_out_array.append(tt_out)
@@ -437,7 +458,25 @@ def run_rms_fuse_impl(
             tt_out_array[i],
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(1, num_devices)),
         )[0].unsqueeze(0)
-        ref_lnorm = get_torch_rms(input_tensor_torch[i], [3], gamma_torch[i], torch.zeros_like(gamma_torch[i]), epsilon)
+        if fused_add:
+            residual_out_torch = ttnn.to_torch(
+                residual_tensor[i],
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(1, num_devices)),
+            )
+            ref_res_add = input_tensor_torch[i] + residual_torch[i]
+            passing, output = comp_pcc(residual_out_torch, ref_res_add, 0.999)
+            if not passing:
+                print(residual_out_torch)
+                print(ref_res_add)
+                print(input_tensor_torch[i])
+                print(residual_torch[i])
+                mesh_device.reset_sub_device_stall_group()
+            logger.info(output)
+            assert passing
+
+        else:
+            ref_res_add = input_tensor_torch[i]
+        ref_lnorm = get_torch_rms(ref_res_add, [3], gamma_torch[i], torch.zeros_like(gamma_torch[i]), epsilon)
         passing, output = comp_pcc(tt_out_torch, ref_lnorm, 0.999)
         logger.info(output)
         if not passing:
