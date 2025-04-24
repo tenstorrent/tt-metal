@@ -16,16 +16,10 @@ METALIUM_GUIDE.md @davorchap
 conftest.py @tenstorrent/metalium-developers-infra
 /conftest.py @cfjchu @SeanNijjar @tenstorrent/metalium-developers-infra
 
-tests/scripts/run_pre_post_commit_regressions.sh @tenstorrent/metalium-developers-infra
-tests/scripts/run_tests.sh @tenstorrent/metalium-developers-infra
+# test scripts
+tests/scripts/ @tenstorrent/metalium-developers-infra
+tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra
 tests/scripts/run_pre_post_commit_regressions_multi_device.sh @aliuTT @tt-aho @TT-BrianLiu @tenstorrent/metalium-developers-infra
-tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh @tenstorrent/metalium-developers-infra
-tests/scripts/run_models.sh @tenstorrent/metalium-developers-infra
-tests/scripts/single_card/ @tenstorrent/metalium-developers-infra
-tests/scripts/single_card/nightly/ @tenstorrent/metalium-developers-infra
-tests/scripts/t3000/ @tenstorrent/metalium-developers-infra
-tests/scripts/tg/ @tenstorrent/metalium-developers-infra
-tests/scripts/tgg/ @tenstorrent/metalium-developers-infra
 
 # Metalium - public API
 tt_metal/api @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt
@@ -76,10 +70,6 @@ tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
 
 # Metalium - flatbuffer schemas
 tt_metal/impl/flatbuffer/ @kmabeeTT @nsmithtt @omilyutin-tt
-
-# test scripts
-tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra
-tests/scripts/run_performance.sh @tenstorrent/metalium-developers-infra
 
 # TTNN
 ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @cfjchu @TT-BrianLiu @omilyutin-tt
