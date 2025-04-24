@@ -6,6 +6,8 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "debug/dprint.h"
+#include "ckernel.h"
 
 void kernel_main() {
     // in0 mcast args
@@ -33,10 +35,14 @@ void kernel_main() {
     const uint64_t in0_mcast_sender_semaphore_noc_addr =
         get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
 
+    uint64_t kernel_absolute_start_time = ckernel::read_wall_clock();
+    uint64_t iteration_start_time[num_blocks_h_dim][num_blocks_w_dim][num_blocks_inner_dim];
+    uint64_t iteration_end_time[num_blocks_h_dim][num_blocks_w_dim][num_blocks_inner_dim];
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                    iteration_start_time[bh][bw][block] = ckernel::read_wall_clock();
                     // Operand 0
                     cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
@@ -50,7 +56,27 @@ void kernel_main() {
                     noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
 
                     cb_push_back(cb_id_in0, in0_block_num_tiles);
+                    iteration_end_time[bh][bw][block] = ckernel::read_wall_clock();
                 }
+            }
+        }
+    }
+    uint64_t kernel_absolute_end_time = ckernel::read_wall_clock();
+    DPRINT << "KERNEL: reader_bmm_tile_layout_in0_receiver.cpp\n";
+    DPRINT << "    kernel_absolute_start_time " << kernel_absolute_start_time << "\n";
+    DPRINT << "    kernel_absolute_end_time " << kernel_absolute_end_time << "\n";
+    DPRINT << "    kernel_absolute_duration " << kernel_absolute_end_time - kernel_absolute_start_time << "\n";
+
+    for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+        for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+            for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                DPRINT << "    bh: " << bh << ", bw: " << bw << ", block: " << block
+                       << ", start_time: " << iteration_start_time[bh][bw][block] << "\n";
+                DPRINT << "    bh: " << bh << ", bw: " << bw << ", block: " << block
+                       << ", end_time: " << iteration_end_time[bh][bw][block] << "\n";
+                DPRINT << "    bh: " << bh << ", bw: " << bw << ", block: " << block
+                       << ", duration: " << iteration_end_time[bh][bw][block] - iteration_start_time[bh][bw][block]
+                       << "\n";
             }
         }
     }

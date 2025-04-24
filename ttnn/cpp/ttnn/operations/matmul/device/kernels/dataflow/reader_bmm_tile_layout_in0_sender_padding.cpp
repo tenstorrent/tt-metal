@@ -7,6 +7,8 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "debug/dprint.h"
+#include "ckernel.h"
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -114,7 +116,9 @@ void kernel_main() {
     uint32_t in0_start_address = get_write_ptr(cb_id_in0);
 #endif
 #endif
-
+    uint64_t kernel_absolute_start_time = ckernel::read_wall_clock();
+    uint64_t iteration_start_time[num_blocks_h_dim][num_blocks_w_dim][num_blocks_inner_dim];
+    uint64_t iteration_end_time[num_blocks_h_dim][num_blocks_w_dim][num_blocks_inner_dim];
     for (uint32_t b = 0; b < batch; ++b) {
 #ifdef IN0_SHARDED
         uint32_t in0_tensor_current_h_dim_block_start_addr = noc_shard_read_start_addr;
@@ -127,6 +131,7 @@ void kernel_main() {
 #endif
                 uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                    iteration_start_time[bh][bw][block] = ckernel::read_wall_clock();
                     if constexpr (fuse_op) {
                         fused_op_receiver.update_current_block_start_tile_id(
                             block, in0_tensor_current_inner_dim_block_start_tile_id, in0_tensor_start_tile_id);
@@ -223,6 +228,7 @@ void kernel_main() {
                         cb_push_back(cb_id_in0, in0_block_num_tiles);
                     }
 #endif
+                    iteration_end_time[bh][bw][block] = ckernel::read_wall_clock();
                 }
             }
 #ifdef IN0_SHARDED
@@ -231,6 +237,25 @@ void kernel_main() {
             in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
         }
         in0_tensor_start_tile_id += MtKt;
+    }
+    uint64_t kernel_absolute_end_time = ckernel::read_wall_clock();
+    DPRINT << "KERNEL: reader_bmm_tile_layout_in0_sender_padding.cpp\n";
+    DPRINT << "    kernel_absolute_start_time " << kernel_absolute_start_time << "\n";
+    DPRINT << "    kernel_absolute_end_time " << kernel_absolute_end_time << "\n";
+    DPRINT << "    kernel_absolute_duration " << kernel_absolute_end_time - kernel_absolute_start_time << "\n";
+
+    for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+        for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+            for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                DPRINT << "    bh: " << bh << ", bw: " << bw << ", block: " << block
+                       << ", start_time: " << iteration_start_time[bh][bw][block] << "\n";
+                DPRINT << "    bh: " << bh << ", bw: " << bw << ", block: " << block
+                       << ", end_time: " << iteration_end_time[bh][bw][block] << "\n";
+                DPRINT << "    bh: " << bh << ", bw: " << bw << ", block: " << block
+                       << ", duration: " << iteration_end_time[bh][bw][block] - iteration_start_time[bh][bw][block]
+                       << "\n";
+            }
+        }
     }
     noc_async_write_barrier();
 }
