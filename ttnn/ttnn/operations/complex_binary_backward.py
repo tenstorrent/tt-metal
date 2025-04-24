@@ -2,11 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
-
 
 def _golden_function_complex_add(grad_tensor, input_tensor_a, input_tensor_b, alpha, *args, **kwargs):
+    import torch
+
     input_tensor_a.retain_grad()
 
     pyt_y = torch.add(input_tensor_a, input_tensor_b, alpha=alpha)
@@ -27,6 +26,8 @@ def _golden_function_complex_add(grad_tensor, input_tensor_a, input_tensor_b, al
 
 
 def _golden_function_complex_sub(grad_tensor, input_tensor_a, input_tensor_b, alpha, *args, **kwargs):
+    import torch
+
     input_tensor_a.retain_grad()
 
     pyt_y = torch.sub(input_tensor_a, input_tensor_b, alpha=alpha)
@@ -47,6 +48,8 @@ def _golden_function_complex_sub(grad_tensor, input_tensor_a, input_tensor_b, al
 
 
 def _golden_function_complex_mul(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
     input_tensor_a.retain_grad()
 
     pyt_y = torch.mul(input_tensor_a, input_tensor_b)
@@ -67,6 +70,8 @@ def _golden_function_complex_mul(grad_tensor, input_tensor_a, input_tensor_b, *a
 
 
 def _golden_function_complex_div(grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
     input_tensor_a.retain_grad()
 
     pyt_y = torch.div(input_tensor_a, input_tensor_b)
