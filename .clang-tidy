@@ -171,7 +171,6 @@ Checks: >
   -readability-redundant-string-cstr,
   -readability-redundant-string-init,
   -readability-static-accessed-through-instance,
-  -readability-static-definition-in-anonymous-namespace,
   -readability-suspicious-call-argument,
   -readability-uppercase-literal-suffix,
   -readability-use-anyofallof

@@ -34,7 +34,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice* device, const string& risc) {
+void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice* device, const string& risc) {
     // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
     // by machine
     const string& device_core_risc = std::to_string(device->id()) + ":(x=*,y=*):" + risc + ": ";
@@ -48,7 +48,7 @@ static void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice
     }
 }
 
-static void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_kernel = false) {
+void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_kernel = false) {
     std::vector<string> golden_output;
 
     CoreRange cores({0, 0}, {0, 1});

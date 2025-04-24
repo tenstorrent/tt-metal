@@ -28,7 +28,7 @@ ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::S
     return ttnn::Shape(std::move(updated_shape));
 }
 
-static ttnn::Tensor pad_impl(
+ttnn::Tensor pad_impl(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     std::span<const uint32_t> output_padded_shape,
@@ -164,7 +164,7 @@ static ttnn::Tensor pad_impl(
     }
 }
 
-static ttnn::Tensor pad_impl(
+ttnn::Tensor pad_impl(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     ttnn::SmallVector<PadSpecDim> padding,
