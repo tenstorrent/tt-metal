@@ -33,19 +33,26 @@ std::vector<CoreCoord> reorder_connected_sockets(
 
     if (connected_sockets.size() > 1) {
         if (originated_eth_cores.size() > 0) {
-            auto physical_orig_core =
-                local_device->virtual_core_from_logical_core(originated_eth_cores[0], CoreType::ETH);
-            // Sort by manhattan distance using physical_orig_core as the origin
-            std::sort(
-                ethernet_cores_logical_virtual.begin(),
-                ethernet_cores_logical_virtual.end(),
-                [&physical_orig_core](const auto& a, const auto& b) {
-                    auto dist_a = std::abs(static_cast<int>(a.second.x) - static_cast<int>(physical_orig_core.x)) +
-                                  std::abs(static_cast<int>(a.second.y) - static_cast<int>(physical_orig_core.y));
-                    auto dist_b = std::abs(static_cast<int>(b.second.x) - static_cast<int>(physical_orig_core.x)) +
-                                  std::abs(static_cast<int>(b.second.y) - static_cast<int>(physical_orig_core.y));
+            // Replace sorting against a single origin with multi-origin sort.
+            std::vector<std::pair<CoreCoord, CoreCoord>> remaining = ethernet_cores_logical_virtual;
+            std::vector<std::pair<CoreCoord, CoreCoord>> sorted_pairs;
+            for (size_t i = 0; i < originated_eth_cores.size(); i++) {
+                auto origin = local_device->virtual_core_from_logical_core(originated_eth_cores[i], CoreType::ETH);
+                auto it = std::min_element(remaining.begin(), remaining.end(), [&origin](const auto& a, const auto& b) {
+                    int dist_a = std::abs(static_cast<int>(a.second.x) - static_cast<int>(origin.x)) +
+                                 std::abs(static_cast<int>(a.second.y) - static_cast<int>(origin.y));
+                    int dist_b = std::abs(static_cast<int>(b.second.x) - static_cast<int>(origin.x)) +
+                                 std::abs(static_cast<int>(b.second.y) - static_cast<int>(origin.y));
                     return dist_a < dist_b;
                 });
+                if (it != remaining.end()) {
+                    sorted_pairs.push_back(*it);
+                    remaining.erase(it);
+                }
+            }
+            // Append remaining pairs in any order.
+            sorted_pairs.insert(sorted_pairs.end(), remaining.begin(), remaining.end());
+            ethernet_cores_logical_virtual = sorted_pairs;
         } else {
             // Sort by the 'x' coordinate of the virtual (physical) core
             std::sort(
@@ -344,14 +351,21 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     std::vector<CoreCoord> forward_connected_sockets;
     std::vector<CoreCoord> backward_connected_sockets;
     std::vector<std::vector<CoreCoord>> clothest_pairs;
-    if (!forward_device.has_value()) {
+    if (!forward_device.has_value() || !backward_device.has_value()) {
         // Line edge case, local_device is last device
-        backward_connected_sockets = local_device->get_ethernet_sockets(backward_device.value()->id());
-        clothest_pairs.push_back({CoreCoord(-1, -1), backward_connected_sockets[0]});
-    } else if (!backward_device.has_value()) {
-        // Line edge case, local_device is first device
-        forward_connected_sockets = local_device->get_ethernet_sockets(forward_device.value()->id());
-        clothest_pairs.push_back({forward_connected_sockets[0], CoreCoord(-1, -1)});
+        auto connected_sockets = forward_device.has_value()
+                                     ? local_device->get_ethernet_sockets(forward_device.value()->id())
+                                     : local_device->get_ethernet_sockets(backward_device.value()->id());
+        // sort by .x and put them all with (-1,-1) in the pair
+        std::sort(
+            connected_sockets.begin(), connected_sockets.end(), [](const auto& a, const auto& b) { return a.x < b.x; });
+        for (const auto& logi_core : connected_sockets) {
+            if (forward_device.has_value()) {
+                clothest_pairs.push_back({logi_core, CoreCoord(-1, -1)});
+            } else {
+                clothest_pairs.push_back({CoreCoord(-1, -1), logi_core});
+            }
+        }
     } else {
         // middle device. backward or forward
         forward_connected_sockets = local_device->get_ethernet_sockets(forward_device.value()->id());
