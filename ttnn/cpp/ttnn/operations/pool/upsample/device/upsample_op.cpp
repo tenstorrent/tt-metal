@@ -4,12 +4,8 @@
 
 #include "upsample_op.hpp"
 
-#include <algorithm>
-#include <cmath>
-
+#include "ttnn/tensor/types.hpp"
 #include <tt-metalium/util.hpp>
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::upsample {
@@ -56,41 +52,25 @@ std::vector<TensorSpec> UpSample::compute_output_specs(const std::vector<Tensor>
     uint32_t out_w = input_shape[2] * scale_factor_w_;
     uint32_t out_c = input_shape[3];
 
-    auto output_shape = ttnn::Shape({out_n, out_h, out_w, out_c});
+    ttnn::Shape output_shape = ttnn::Shape({out_n, out_h, out_w, out_c});
 
     if (output_mem_config_.is_sharded()) {
-        if (!input.memory_config().is_sharded()) {
-            TT_THROW("Output memory config is sharded but input memory config is not sharded");
-        }
-        auto mem_config = output_mem_config_;
-        auto input_shard_spec = input.memory_config().shard_spec.value();
-        if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            auto ncores = input_shard_spec.num_cores();
-            std::array<uint32_t, 2> output_shard_shape = {
-                div_up(output_shape[0] * output_shape[1] * output_shape[2], ncores), output_shape[-1]};
-            auto output_shard_spec = input_shard_spec;
-            output_shard_spec.shape = output_shard_shape;
-            mem_config.shard_spec = output_shard_spec;
-            log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
-            log_debug(LogOp, "output_shard_spec: {}", output_shard_spec);
-            return {
-                TensorSpec(output_shape, TensorLayout(input.get_dtype(), PageConfig(input.get_layout()), mem_config))};
-        }
-        if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            auto shard_grid = input_shard_spec.grid.ranges();
-            TT_FATAL(shard_grid.size() == 1, "Block sharded input should have only one CoreRange");
-            auto core_range = *shard_grid.begin();
-            uint32_t ncores_w = core_range.end_coord.x + 1;
-            uint32_t ncores_h = core_range.end_coord.y + 1;
-            auto output_shard_spec = mem_config.shard_spec.value();
-            auto output_shard_shape = output_shard_spec.shape;
-            log_debug(LogOp, "ncores_w, ncores_h: {} {}", ncores_w, ncores_h);
-            log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
-            return {
-                TensorSpec(output_shape, TensorLayout(input.get_dtype(), PageConfig(input.get_layout()), mem_config))};
-        }
+        TT_FATAL(
+            input.memory_config().is_sharded(),
+            "Output memory config is sharded but input memory config is not sharded");
+        TT_FATAL(
+            input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+                input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Input memory config is not HEIGHT or BLOCK sharded");
+        TT_FATAL(
+            input.memory_config().shard_spec->grid.ranges().size() == 1 ||
+                input.memory_config().memory_layout != TensorMemoryLayout::BLOCK_SHARDED,
+            "Block sharded input should have only one CoreRange");
 
-        TT_THROW("input memory config is not HEIGHT or BLOCK sharded");
+        MemoryConfig mem_config = output_mem_config_;
+        mem_config.shard_spec->shape = {
+            input.shard_spec()->shape[0] * scale_factor_h_ * scale_factor_w_, input.shard_spec()->shape[1]};
+        return {TensorSpec(output_shape, TensorLayout(input.get_dtype(), PageConfig(input.get_layout()), mem_config))};
     }
 
     return {
