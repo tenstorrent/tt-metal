@@ -494,6 +494,7 @@ on:
           - matmul.short.matmul_traces
           - matmul.short.matmul
           - matmul.generality.matmul
+          - matmul.generality.linear
           - losses.l1_loss
           - losses.mse_loss
           - data_movement.concat.concat_interleaved_n_tensors
