@@ -1,40 +1,18 @@
 # Order is important; the last matching pattern takes the most
 # precedence.
 
-.pre-commit-config.yaml @tenstorrent/metalium-developers-infra
-.clang-format @tenstorrent/metalium-developers-infra
-.clang-tidy @tenstorrent/metalium-developers-infra
+# Default owners
+* @tenstorrent/metalium-developers-infra
 
+METALIUM_GUIDE.md @davorchap
+
+# CI/CD
 .github/ @tenstorrent/metalium-developers-infra
 .github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
 
-.gitattributes @tenstorrent/metalium-developers-infra
-
 /infra/ @tenstorrent/metalium-developers-infra
 
-CONTRIBUTING.md @tenstorrent/metalium-developers-infra
-
-.github/CODEOWNERS @tenstorrent/metalium-developers-infra
-
-INSTALLING.md @tenstorrent/metalium-developers-infra
-METALIUM_GUIDE.md @davorchap
-
-# Build stuff
-
-MANIFEST.in @tenstorrent/metalium-developers-infra
-setup.py @tenstorrent/metalium-developers-infra
-pyproject.toml @tenstorrent/metalium-developers-infra
-requirements*.txt @tenstorrent/metalium-developers-infra
-
-scripts/build_scripts/ @tenstorrent/metalium-developers-infra
-cmake/ @tenstorrent/metalium-developers-infra
-build_metal.sh @tenstorrent/metalium-developers-infra
-
-/CMakeLists.txt @tenstorrent/metalium-developers-infra
-tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
-
 # Testing scripts and infra
-
 conftest.py @tenstorrent/metalium-developers-infra
 /conftest.py @cfjchu @SeanNijjar @tenstorrent/metalium-developers-infra
 
@@ -243,8 +221,6 @@ docs/source/ttnn/ @patrickroberts @ayerofieiev-tt @razorback3 @dongjin-na
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho
 scripts/profiler/ @mo-tenstorrent
 scripts/docker @tenstorrent/metalium-developers-infra
-
-dockerfile @tenstorrent/metalium-developers-infra
 
 ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
 
