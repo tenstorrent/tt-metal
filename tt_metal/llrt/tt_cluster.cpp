@@ -143,16 +143,16 @@ void Cluster::generate_cluster_descriptor() {
         this->cluster_desc_ = this->mock_cluster_desc_ptr_.get();
     } else {
         this->cluster_desc_ = this->driver_->get_cluster_description();
-        for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
+        for (const auto& chip_id : this->driver_->get_target_device_ids()) {
             if (this->cluster_desc_->get_board_type(chip_id) == BoardType::GALAXY) {
                 this->cluster_type_ = ClusterType::TG;
                 break;
             }
         }
-        TT_ASSERT(this->cluster_desc_->get_all_chips().size() > 0, "No chips detected in the cluster");
-        const auto board_type = this->cluster_desc_->get_board_type(*this->cluster_desc_->get_all_chips().begin());
+        TT_ASSERT(this->driver_->get_target_device_ids().size() > 0, "No chips detected in the cluster");
+        const auto board_type = this->cluster_desc_->get_board_type(*this->driver_->get_target_device_ids().begin());
         bool all_same_board = true;
-        for (const auto& chip_id : this->cluster_desc_->get_all_chips()) {
+        for (const auto& chip_id : this->driver_->get_target_device_ids()) {
             if (this->cluster_desc_->get_board_type(chip_id) != board_type) {
                 all_same_board = false;
                 break;
@@ -161,7 +161,7 @@ void Cluster::generate_cluster_descriptor() {
 
         if (all_same_board) {
             if (board_type == BoardType::N300) {
-                if (this->cluster_desc_->get_all_chips().size() == 8) {
+                if (this->driver_->get_target_device_ids().size() == 8) {
                     this->cluster_type_ = ClusterType::T3K;
                 } else {
                     this->cluster_type_ = ClusterType::N300;
@@ -169,15 +169,15 @@ void Cluster::generate_cluster_descriptor() {
             } else if (board_type == BoardType::N150) {
                 this->cluster_type_ = ClusterType::N150;
             } else if (board_type == BoardType::P100) {
-                if (this->cluster_desc_->get_all_chips().size() == 1) {
+                if (this->driver_->get_target_device_ids().size() == 1) {
                     this->cluster_type_ = ClusterType::P100;
                 }
             } else if (board_type == BoardType::P150) {
-                if (this->cluster_desc_->get_all_chips().size() == 1) {
+                if (this->driver_->get_target_device_ids().size() == 1) {
                     this->cluster_type_ = ClusterType::P150;
-                } else if (this->cluster_desc_->get_all_chips().size() == 2) {
+                } else if (this->driver_->get_target_device_ids().size() == 2) {
                     this->cluster_type_ = ClusterType::P150_X2;
-                } else if (this->cluster_desc_->get_all_chips().size() == 4) {
+                } else if (this->driver_->get_target_device_ids().size() == 4) {
                     this->cluster_type_ = ClusterType::P150_X4;
                 }
             } else if (board_type == BoardType::UBB) {
@@ -192,7 +192,7 @@ void Cluster::generate_cluster_descriptor() {
         this->devices_grouped_by_assoc_mmio_device_[0] = dummy_card;
         this->device_to_mmio_device_[0] = 0;
     } else {
-        for (chip_id_t device_id : this->cluster_desc_->get_all_chips()) {
+        for (chip_id_t device_id : this->driver_->get_target_device_ids()) {
             chip_id_t closest_mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
             std::set<chip_id_t> &device_ids = this->devices_grouped_by_assoc_mmio_device_[closest_mmio_device_id];
             device_ids.insert(device_id);
@@ -204,25 +204,28 @@ void Cluster::generate_cluster_descriptor() {
     if (this->cluster_type_ == ClusterType::TG) {
         // TODO: don't think this check is correct, we want to have total num hugepages == num chips even for Galaxy
         TT_FATAL(
-            this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->cluster_desc_->get_all_chips().size()/4,
-            "Machine setup error: Insufficient number of hugepages available, expected >= {} for {} devices but have {}. "
+            this->arch_ == tt::ARCH::BLACKHOLE or
+                total_num_hugepages >= this->driver_->get_target_device_ids().size() / 4,
+            "Machine setup error: Insufficient number of hugepages available, expected >= {} for {} devices but have "
+            "{}. "
             "Increase number of hugepages!",
-            this->cluster_desc_->get_all_chips().size()/4,
-            this->cluster_desc_->get_all_chips().size(),
+            this->driver_->get_target_device_ids().size() / 4,
+            this->driver_->get_target_device_ids().size(),
             total_num_hugepages);
     } else if (this->target_type_ != TargetDevice::Simulator) {
         // TODO (abhullar): ignore hugepage set up for BH bringup
         TT_FATAL(
-            this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->cluster_desc_->get_all_chips().size(),
-            "Machine setup error: Insufficient number of hugepages available, expected one per device ({}) but have {}. "
+            this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->driver_->get_target_device_ids().size(),
+            "Machine setup error: Insufficient number of hugepages available, expected one per device ({}) but have "
+            "{}. "
             "Increase number of hugepages!",
-            this->cluster_desc_->get_all_chips().size(),
+            this->driver_->get_target_device_ids().size(),
             total_num_hugepages);
     }
 
     if (this->arch_ == tt::ARCH::WORMHOLE_B0 and not this->is_galaxy_cluster()) {
         // Give UMD Limited access to eth cores 8 and 9 for Non-Galaxy Wormhole Clusters
-        for (const auto& [mmio_device_id, _] : this->cluster_desc_->get_chips_with_mmio()) {
+        for (const auto& mmio_device_id : this->driver_->get_target_mmio_device_ids()) {
             driver_->configure_active_ethernet_cores_for_mmio_device(mmio_device_id, {});
         }
     }
@@ -333,7 +336,7 @@ void Cluster::start_driver(tt_device_params &device_params) const {
     TT_FATAL(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_driver()");
 
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
-        for (const auto [mmio_device_id, _]: this->cluster_desc_->get_chips_with_mmio()) {
+        for (const auto mmio_device_id : this->driver_->get_target_mmio_device_ids()) {
             ll_api::configure_static_tlbs(
                 this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
         }
@@ -371,19 +374,19 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_all_chip_ethernet_coordi
 
 size_t Cluster::number_of_user_devices() const {
     if (this->cluster_type_ == ClusterType::TG) {
-        const auto& chips = this->cluster_desc_->get_all_chips();
+        const auto& chips = this->driver_->get_target_device_ids();
         return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
             return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
         });
     } else {
-        return this->cluster_desc_->get_number_of_chips();
+        return this->driver_->get_target_device_ids().size();
     }
 }
 
-std::unordered_set<chip_id_t> Cluster::user_exposed_chip_ids() const {
+std::set<chip_id_t> Cluster::user_exposed_chip_ids() const {
     if (this->cluster_type_ == ClusterType::TG) {
-        std::unordered_set<chip_id_t> galaxy_boards;
-        const auto& chips = this->cluster_desc_->get_all_chips();
+        std::set<chip_id_t> galaxy_boards;
+        const auto& chips = this->driver_->get_target_device_ids();
         for (const auto& id : chips) {
             if (this->cluster_desc_->get_board_type(id) == BoardType::GALAXY) {
                 galaxy_boards.insert(id);
@@ -391,7 +394,7 @@ std::unordered_set<chip_id_t> Cluster::user_exposed_chip_ids() const {
         }
         return galaxy_boards;
     } else {
-        return this->cluster_desc_->get_all_chips();
+        return this->driver_->get_target_device_ids();
     }
 }
 
@@ -407,7 +410,7 @@ const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {
 }
 
 void Cluster::generate_virtual_to_umd_coord_mapping() {
-    for (auto chip_id : this->cluster_desc_->get_all_chips()) {
+    for (auto chip_id : this->driver_->get_target_device_ids()) {
         this->virtual_worker_cores_[chip_id] = {};
         for (const tt::umd::CoreCoord& core :
              get_soc_desc(chip_id).get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED)) {
@@ -422,7 +425,7 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
 
 void Cluster::generate_virtual_to_profiler_flat_id_mapping() {
 #if defined(TRACY_ENABLE)
-    for (auto chip_id : this->cluster_desc_->get_all_chips()) {
+    for (auto chip_id : this->driver_->get_target_device_ids()) {
         auto board_type = this->get_board_type(chip_id);
         if (this->virtual_routing_to_profiler_flat_id_.find(board_type) != this->virtual_routing_to_profiler_flat_id_.end()) {
             continue;
@@ -851,7 +854,7 @@ void Cluster::set_tunnels_from_mmio_device() {
 
 // Ethernet cluster api
 void Cluster::initialize_ethernet_sockets() {
-    for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
+    for (const auto& chip_id : this->driver_->get_target_device_ids()) {
         if (this->ethernet_sockets_.find(chip_id) == this->ethernet_sockets_.end()) {
             this->ethernet_sockets_.insert({chip_id, {}});
         }
@@ -885,7 +888,7 @@ void Cluster::initialize_ethernet_sockets() {
 
 void Cluster::disable_ethernet_cores_with_retrain() {
     std::vector<uint32_t> read_vec;
-    const auto& chips = this->cluster_desc_->get_all_chips();
+    const auto& chips = this->driver_->get_target_device_ids();
     for (const auto& chip_id : chips) {
         if (this->frequent_retrain_cores_.find(chip_id) == this->frequent_retrain_cores_.end()) {
             this->frequent_retrain_cores_.insert({chip_id, {}});

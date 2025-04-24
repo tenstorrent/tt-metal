@@ -94,11 +94,11 @@ public:
     // for user facing host apis
     std::unordered_map<chip_id_t, eth_coord_t> get_user_chip_ethernet_coordinates() const;
     size_t number_of_user_devices() const;
-    std::unordered_set<chip_id_t> user_exposed_chip_ids() const;
+    std::set<chip_id_t> user_exposed_chip_ids() const;
 
-    size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
+    size_t number_of_devices() const { return this->driver_->get_target_device_ids().size(); }
 
-    size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
+    size_t number_of_pci_devices() const { return this->driver_->get_target_mmio_device_ids().size(); }
 
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
 

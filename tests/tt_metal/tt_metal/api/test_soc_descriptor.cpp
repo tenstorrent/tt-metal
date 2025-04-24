@@ -62,7 +62,7 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     ASSERT_TRUE(num_devices > 0);
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
-    for (int device_id = 0; device_id < num_devices; device_id++) {
+    for (int device_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         uint32_t harvested_rows_mask =
             tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);

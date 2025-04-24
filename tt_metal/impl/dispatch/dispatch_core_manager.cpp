@@ -268,11 +268,12 @@ void dispatch_core_manager::reset_dispatch_core_manager(
     this->dispatch_core_assignments.clear();
     this->available_dispatch_cores_by_device.clear();
     this->dispatch_core_config_ = dispatch_core_config;
-    for (chip_id_t device_id = 0; device_id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
-         device_id++) {
-        std::list<CoreCoord>& logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
+    for (chip_id_t device_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+        auto mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+        std::list<CoreCoord>& logical_dispatch_cores = this->available_dispatch_cores_by_device[mmio_device_id];
         for (const CoreCoord& logical_dispatch_core :
-             tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, dispatch_core_config)) {
+             tt::get_logical_dispatch_cores(mmio_device_id, MAX_NUM_HW_CQS, dispatch_core_config)) {
             logical_dispatch_cores.push_back(logical_dispatch_core);
         }
 
@@ -283,8 +284,8 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
         if (dispatch_core_config.get_core_type() == CoreType::ETH) {
             for (const auto& idle_eth_core :
-                 tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id)) {
-                add_dispatch_core_to_device(device_id, idle_eth_core);
+                 tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(mmio_device_id)) {
+                add_dispatch_core_to_device(mmio_device_id, idle_eth_core);
             }
         }
     }

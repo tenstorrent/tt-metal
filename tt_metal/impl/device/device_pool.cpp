@@ -249,7 +249,8 @@ void DevicePool::initialize(
     std::vector<chip_id_t> target_mmio_ids;
     for (const auto& device_id : device_ids) {
         TT_FATAL(
-            device_id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(),
+            tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().find(device_id) !=
+                tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().end(),
             "Device index {} out of range. There are {} devices available.",
             device_id,
             tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices());
@@ -266,7 +267,6 @@ void DevicePool::initialize(
             "Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, "
             "consider using CreateDevices API.");
     }
-
     _inst->skip_remote_devices = skip;
     _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids);
@@ -362,7 +362,8 @@ void DevicePool::initialize_active_devices() const {
 
 void DevicePool::activate_device(chip_id_t id) {
     TT_FATAL(
-        id < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(),
+        tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().find(id) !=
+            tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().end(),
         "Device index {} out of range. There are {} devices available.",
         id,
         tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices());
@@ -669,8 +670,8 @@ DevicePool::DevicePool() {
     log_debug(tt::LogMetal, "DevicePool constructor");
     bool use_numa_node_based_thread_binding = parse_env("TT_METAL_NUMA_BASED_AFFINITY", false);
     std::vector<chip_id_t> all_device_ids;
-    for (int i = 0; i < tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices(); i++) {
-        all_device_ids.emplace_back((chip_id_t)i);
+    for (chip_id_t device_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+        all_device_ids.emplace_back(device_id);
     }
     std::unordered_set<uint32_t> free_cores = {};
     this->worker_thread_to_cpu_core_map = device_cpu_allocator::get_device_id_to_core_map(
