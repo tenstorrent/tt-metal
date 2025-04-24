@@ -29,6 +29,23 @@ DRAM_OUTPUT_SHAPE_BH = (750_000, 16, 40)
 SHARDING_INPUT_SHAPE_BH = (1, 6_000, 6_000)
 
 
+def reshape_input_shapes(test_case: str):
+    if is_blackhole():
+        return (
+            (L1_INPUT_SHAPE_BH, L1_OUTPUT_SHAPE_BH)
+            if test_case == "l1"
+            else (DRAM_INPUT_SHAPE_BH, DRAM_OUTPUT_SHAPE_BH)
+        )
+    elif is_wormhole_b0():
+        return (
+            (L1_INPUT_SHAPE_WH, L1_OUTPUT_SHAPE_WH)
+            if test_case == "l1"
+            else (DRAM_INPUT_SHAPE_WH, DRAM_OUTPUT_SHAPE_WH)
+        )
+    else:
+        raise RuntimeError("Unidentifiable device")
+
+
 if is_blackhole():
     l1_input_shape, l1_output_shape = (L1_INPUT_SHAPE_BH, L1_OUTPUT_SHAPE_BH)
     dram_input_shape, dram_output_shape = (DRAM_INPUT_SHAPE_BH, DRAM_OUTPUT_SHAPE_BH)
@@ -44,8 +61,8 @@ else:
 @pytest.mark.parametrize(
     "shapes_memory_config",
     [
-        (l1_input_shape, l1_output_shape, ttnn.L1_MEMORY_CONFIG),
-        (dram_input_shape, dram_output_shape, ttnn.DRAM_MEMORY_CONFIG),
+        (*reshape_input_shapes("l1"), ttnn.L1_MEMORY_CONFIG),
+        (*reshape_input_shapes("dram"), ttnn.DRAM_MEMORY_CONFIG),
     ],
 )
 def test_stress_reshape(device, use_program_cache, shapes_memory_config):
@@ -62,8 +79,17 @@ def test_stress_reshape(device, use_program_cache, shapes_memory_config):
     assert True
 
 
+def sharding_input_shape():
+    if is_blackhole():
+        return SHARDING_INPUT_SHAPE_BH
+    elif is_wormhole_b0():
+        return SHARDING_INPUT_SHAPE_WH
+    else:
+        raise RuntimeError("Unidentifiable device")
+
+
 def test_stress_reshard(device, use_program_cache):
-    input_tensor_shape = sharding_input_shape
+    input_tensor_shape = sharding_input_shape()
     core_grid = get_device_core_grid(device)
 
     l1_shard_grid = ttnn.CoreRangeSet(
