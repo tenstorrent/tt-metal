@@ -6,17 +6,13 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
+#include "dm_common.hpp"
 
 namespace tt::tt_metal {
 
 using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
-
-namespace unit_tests::dm {
-// Unique id for each test run
-uint32_t runtime_host_id = 0;
-}  // namespace unit_tests::dm
 
 namespace unit_tests::dm::dram {
 // Test config, i.e. test parameters
