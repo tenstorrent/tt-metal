@@ -153,7 +153,6 @@ class TtLayerNorm:
         stats = utils.all_gather(
             stats,
             dim=-1,
-            cluster_axis=1,
             mesh_device=self._device,
             # all_gather currently requires linear topology when specifying a cluster axis
             topology=ttnn.Topology.Linear,
