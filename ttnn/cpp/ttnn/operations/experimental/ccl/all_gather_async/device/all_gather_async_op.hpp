@@ -88,12 +88,14 @@ struct AllGatherAsync {
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 
-    bool is_minimal_interleaved(const Tensor& input_tensor) const;
     AllGatherAsyncVersion select_version(const Tensor& input_tensor) const;
 };
 
 namespace ccl {
 namespace all_gather_async_detail {
+bool best_effort_interleave(const Tensor& input_tensor, const uint32_t dim, const BufferType output_buffer_type);
+bool is_tensor_aligned_by_tile(const Tensor& input_tensor);
+
 AllGatherAsync create_all_gather_async_struct(
     const Tensor& input_tensor,
     const uint32_t dim,

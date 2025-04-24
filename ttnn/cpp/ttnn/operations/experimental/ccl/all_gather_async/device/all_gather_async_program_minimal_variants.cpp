@@ -124,6 +124,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
     const auto output_tensor_page_layout = output_tensor.layout();
 
+    bool use_best_effort =
+        ccl::all_gather_async_detail::best_effort_interleave(input_tensor, dim, output_tensor_buffer_type) &&
+        num_links == 1;
+
     // KERNEL CREATION
     // Reader
     bool last_dim = dim == input_tensor_shape.rank() - 1;
@@ -138,7 +142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         op_config.get_page_size(),                        // tensor0_page_size
         last_dim,                                         // last_dim
         num_banks,                                        // num_banks
-        num_links,                                        // num_links
+        use_best_effort,                                  // use_best_effort
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
     for (const auto& arg : reader_kernel_config.compile_args) {
@@ -168,7 +172,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         dynamic_alternate,                                 // alternate
         last_dim,                                          // last_dim
         num_banks,                                         // num_bansks
-        num_links,                                         // num_links
+        use_best_effort,                                   // use_best_effort
     };
     for (const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);

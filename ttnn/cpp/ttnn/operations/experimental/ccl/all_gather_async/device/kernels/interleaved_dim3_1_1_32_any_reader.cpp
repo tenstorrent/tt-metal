@@ -21,7 +21,7 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(3);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(4);
 constexpr bool last_dim = get_compile_time_arg_val(5);
 constexpr uint32_t num_banks = get_compile_time_arg_val(6);
-constexpr uint32_t num_links = get_compile_time_arg_val(7);
+constexpr bool use_best_effort = get_compile_time_arg_val(7);
 
 template <bool DRAM>
 inline void pack_full_contig(uint32_t contig_total, uint32_t& tile_id, InterleavedAddrGenFast<DRAM>& addrgen) {
@@ -252,7 +252,7 @@ void kernel_main() {
     auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
         .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
 
-    if constexpr (num_links == 1) {
+    if constexpr (use_best_effort) {
         if constexpr (last_dim) {
             if constexpr (packet_size_in_pages == 2) {
                 pack_dim3_bf16_remain_even(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);

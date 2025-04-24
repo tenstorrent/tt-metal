@@ -32,7 +32,7 @@ constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_target
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
 constexpr bool last_dim = get_compile_time_arg_val(10);
 constexpr uint32_t num_banks = get_compile_time_arg_val(11);
-constexpr uint32_t num_links = get_compile_time_arg_val(12);
+constexpr bool use_best_effort = get_compile_time_arg_val(12);
 
 // for performance experiment by dynamic_alternate switch
 inline void fabric_write_wrapper(
@@ -465,7 +465,7 @@ void kernel_main() {
     //      |   24|   25|   26|   27|   28|   29|   30|   31|
     //
 
-    if constexpr (num_links == 1) {
+    if constexpr (use_best_effort) {
         if constexpr (last_dim) {
             if constexpr (packet_size_in_pages == 2) {  // bf16
                 fabric_send_dim3_bf16_remain_even<is_dram>(
