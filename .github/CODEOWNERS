@@ -22,7 +22,7 @@ tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-
 tests/scripts/run_pre_post_commit_regressions_multi_device.sh @aliuTT @tt-aho @TT-BrianLiu @tenstorrent/metalium-developers-infra
 
 # Metalium - public API
-tt_metal/api @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt
+tt_metal/api/ @tenstorrent/metalium-api-owners
 
 # metal - base
 tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt @jbaumanTT
@@ -224,6 +224,3 @@ ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
 
 # tt-train
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt
-
-# tt-metal public apis
-tt_metal/api/ @tenstorrent/metalium-api-owners
