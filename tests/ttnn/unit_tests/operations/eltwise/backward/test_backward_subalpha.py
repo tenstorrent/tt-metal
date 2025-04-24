@@ -77,7 +77,7 @@ def test_bw_subalpha_opt_output(input_shapes, device, are_required_outputs):
         _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.subalpha_bw(
         grad_tensor,
         input_tensor,
@@ -87,7 +87,7 @@ def test_bw_subalpha_opt_output(input_shapes, device, are_required_outputs):
         other_grad=other_grad,
         queue_id=cq_id,
     )
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     tt_output_tensor_on_device = [input_grad, other_grad]
 

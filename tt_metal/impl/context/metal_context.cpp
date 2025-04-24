@@ -36,7 +36,12 @@ void MetalContext::initialize(
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
+    // Need DispatchMemMap for both dispatch core types
     tt_metal::DispatchSettings::initialize(*cluster_);
+    dispatch_mem_map_[magic_enum::enum_integer(CoreType::WORKER)] =
+        std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs);
+    dispatch_mem_map_[magic_enum::enum_integer(CoreType::ETH)] =
+        std::make_unique<DispatchMemMap>(CoreType::ETH, num_hw_cqs);
 
     // TODO: Move FW, fabric, dispatch init here
 }
@@ -78,6 +83,16 @@ dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
 DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
     TT_FATAL(dispatch_query_manager_, "Trying to get dispatch_query_manager before intializing it.");
     return *dispatch_query_manager_;
+}
+
+const DispatchMemMap& MetalContext::dispatch_mem_map() const {
+    return dispatch_mem_map(dispatch_core_config_.get_core_type());
+}
+
+const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
+    auto& mem_map = dispatch_mem_map_[magic_enum::enum_integer(core_type)];
+    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before intializing it.", core_type);
+    return *mem_map;
 }
 
 }  // namespace tt::tt_metal

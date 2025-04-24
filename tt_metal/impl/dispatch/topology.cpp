@@ -29,7 +29,6 @@
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
 #include "fabric_edm_packet_header.hpp"
 #include "fabric_host_interface.h"
 #include "fabric_types.hpp"
@@ -864,7 +863,7 @@ void configure_dispatch_cores(IDevice* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    auto& my_dispatch_constants = DispatchMemMap::get(dispatch_core_type);
+    auto& my_dispatch_constants = MetalContext::instance().dispatch_mem_map();
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};
