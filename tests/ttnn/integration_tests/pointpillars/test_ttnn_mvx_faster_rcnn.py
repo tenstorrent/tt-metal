@@ -211,8 +211,8 @@ def test_ttnn_mvx_faster_rcnn(device, use_pretrained_weight, reset_seeds):
 
     ttnn_output_final = ttnn_model.pts_bbox_head.predict(ttnn_output, ttnn_batch_data_samples_modified)
 
-    print("reference_output_final", reference_output_final)
-    print("ttnn_output_final", ttnn_output_final)
+    print("reference_output_final", reference_output_final[0]["labels_3d"].shape)
+    print("ttnn_output_final", ttnn_output_final[0]["labels_3d"].shape)
 
     # for i in range(len(ttnn_output)):
     #     for j in range(len(ttnn_output[i])):

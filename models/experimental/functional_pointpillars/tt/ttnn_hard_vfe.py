@@ -60,10 +60,7 @@ class TtVFELayer:
             return ttnn.squeeze(aggregated, dim=1)
         else:
             # [K, 1, units]
-            aggregated = ttnn.to_torch(aggregated)
-
-            repeated = aggregated.repeat(1, voxel_count, 1)
-            repeated = ttnn.from_torch(repeated, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+            repeated = ttnn.repeat(aggregated, [1, voxel_count, 1])
             concatenated = ttnn.concat([pointwise, repeated], dim=2)
             # [K, T, 2 * units]
             return concatenated
@@ -189,8 +186,7 @@ class TtHardVFE:
             ttnn.deallocate(features_ls[i])
         voxel_count = voxel_feats.shape[1]
 
-        mask = get_paddings_indicator(ttnn.to_torch(num_points), voxel_count, axis=0)
-        mask = ttnn.from_torch(mask, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.uint32)
+        mask = get_paddings_indicator(num_points, voxel_count, axis=0)
         mask = ttnn.from_device(mask)
         mask = ttnn.to_dtype(mask, dtype=ttnn.bfloat16)
         mask = ttnn.to_device(mask, device=device)
