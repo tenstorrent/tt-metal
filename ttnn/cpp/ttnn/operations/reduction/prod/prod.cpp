@@ -78,7 +78,14 @@ Tensor ProdOperation::invoke(
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     const int size = static_cast<int>(input_a.get_logical_shape().rank());
+
+    const auto old_rank = input_a.get_logical_shape().rank();
+
+    auto input_tensor_4d = (old_rank > 4)   ? data_movement::squeeze_from_ND_to_4D(input_a)
+                           : (old_rank < 4) ? ttnn::unsqueeze_to_4D(input_a)
+                                            : input_a;
     if (all_dimensions) {
+        TT_FATAL(!keepdim, "Not possible to keepdim with all_dimensions enabled, as this returns a scalar");
         return prod_all(input_a, output_mem_config);
     }
     TT_FATAL(
@@ -86,9 +93,6 @@ Tensor ProdOperation::invoke(
         "Dimension for prod is out of range (expected to be in range of [-{}, {}]",
         size,
         size - 1);
-
-    const auto old_rank = input_a.get_logical_shape().rank();
-    auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a);
 
     // update the dim because we unsqueezed input to 4d
     const int64_t old_dim = dim;

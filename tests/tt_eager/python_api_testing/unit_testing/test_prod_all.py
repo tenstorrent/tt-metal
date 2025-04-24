@@ -40,6 +40,7 @@ def get_tensors(input_shape, output_shape, device):
         ([1, 1, 32, 32]),
         ([1, 4, 32, 32]),
         ([2, 2, 32, 32]),
+        ([16, 16]),
         # ([6, 4, 32, 32]), #Fails : expected result is inf but the result generated in nan
         # ([1, 1, 320, 320]), #Fails : expected result is inf but the result generated in nan
         # ([1, 3, 320, 64]), #Fails : expected result is inf but the result generated in nan
@@ -67,7 +68,7 @@ def test_prod(shapes, device):
     # TODO(Dongjin) : check while changing rtol after enabling fp32_dest_acc_en
     rtol = atol = 0.12
     # passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
-    passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu[0], pcc=0.999, rtol=rtol, atol=atol)
+    passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
     logger.info(f"Out passing={passing}")
     logger.info(f"Output pcc={output_pcc}")
