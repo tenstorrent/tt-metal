@@ -11,9 +11,6 @@ from models.demos.ttnn_resnet.tests.resnet50_performant_imagenet import ResNet50
 from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
 from transformers import AutoImageProcessor
 from tqdm import tqdm
-from models.utility_functions import (
-    profiler,
-)
 
 
 @run_for_wormhole_b0()
@@ -36,7 +33,6 @@ def test_run_resnet50_trace_2cqs_inference_accuracy(
     model_location_generator,
 ):
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
-    profiler.clear()
     with torch.no_grad():
         resnet50_trace_2cq = ResNet50Trace2CQ()
 
@@ -65,11 +61,8 @@ def test_run_resnet50_trace_2cqs_inference_accuracy(
 
         logger.info("Starting inference")
         correct = 0
-        total_inference_time = 0
         iteration = 0
         for inputs, labels in zip(input_tensors_all, input_labels_all):
-            predictions = []
-            profiler.start(f"run")
             tt_inputs_host = ttnn.from_torch(
                 inputs,
                 dtype=ttnn.bfloat16,
@@ -79,25 +72,12 @@ def test_run_resnet50_trace_2cqs_inference_accuracy(
             output = resnet50_trace_2cq.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
             output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
             prediction = output[:, 0, 0, :].argmax(dim=-1)
-            profiler.end(f"run")
-            total_inference_time += profiler.get(f"run")
             for i in range(batch_size):
-                predictions.append(imagenet_label_dict[prediction[i].item()])
-                logger.info(
-                    f"Iter: {iteration} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} -- Predicted Label: {predictions[-1]}"
-                )
-                if imagenet_label_dict[labels[i]] == predictions[-1]:
+                if labels[i] == prediction[i].item():
                     correct += 1
             iteration += 1
         resnet50_trace_2cq.release_resnet50_trace_2cqs_inference()
         accuracy = correct / (batch_size * iteration)
         logger.info(f"=============")
         logger.info(f"Accuracy: {accuracy}")
-
-        # ensuring inference time fluctuations is not noise
-        inference_time_avg = total_inference_time / (iteration)
-
-    print(f"Batch size: {batch_size}, iterations: {iteration}")
-    logger.info(
-        f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
-    )
+        assert accuracy >= 0.7556
