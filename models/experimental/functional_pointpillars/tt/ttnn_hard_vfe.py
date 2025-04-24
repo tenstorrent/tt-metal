@@ -51,7 +51,7 @@ class TtVFELayer:
         ttnn.deallocate(x)
         # [K, T, units]
         if self.max_out:
-            aggregated = ttnn.max(pointwise, dim=1)
+            aggregated = ttnn.max(pointwise, dim=1, keepdim=True)
         else:
             # this is for fusion layer
             return pointwise
@@ -60,10 +60,7 @@ class TtVFELayer:
             return ttnn.squeeze(aggregated, dim=1)
         else:
             # [K, 1, units]
-            aggregated = ttnn.to_torch(aggregated)
-
-            repeated = aggregated.repeat(1, voxel_count, 1)
-            repeated = ttnn.from_torch(repeated, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+            repeated = ttnn.repeat(aggregated, [1, voxel_count, 1])
             concatenated = ttnn.concat([pointwise, repeated], dim=2)
             # [K, T, 2 * units]
             return concatenated
@@ -159,7 +156,9 @@ class TtHardVFE:
             num_points_bf16 = ttnn.from_device(num_points)
             num_points_bf16 = ttnn.to_dtype(num_points_bf16, dtype=ttnn.bfloat16)
             num_points_bf16 = ttnn.to_device(num_points_bf16, device=device)
-            points_mean = ttnn.div(ttnn.sum(features[:, :, :3], dim=1), ttnn.reshape(num_points_bf16, (-1, 1, 1)))
+            points_mean = ttnn.div(
+                ttnn.sum(features[:, :, :3], dim=1, keepdim=1), ttnn.reshape(num_points_bf16, (-1, 1, 1))
+            )
             # TODO: maybe also do cluster for reflectivity
             f_cluster = ttnn.sub(features[:, :, :3], points_mean)
             features_ls.append(f_cluster)
@@ -189,8 +188,7 @@ class TtHardVFE:
             ttnn.deallocate(features_ls[i])
         voxel_count = voxel_feats.shape[1]
 
-        mask = get_paddings_indicator(ttnn.to_torch(num_points), voxel_count, axis=0)
-        mask = ttnn.from_torch(mask, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.uint32)
+        mask = get_paddings_indicator(num_points, voxel_count, axis=0)
         mask = ttnn.from_device(mask)
         mask = ttnn.to_dtype(mask, dtype=ttnn.bfloat16)
         mask = ttnn.to_device(mask, device=device)

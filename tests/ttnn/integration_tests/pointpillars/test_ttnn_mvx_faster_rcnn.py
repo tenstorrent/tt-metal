@@ -146,7 +146,7 @@ def test_ttnn_mvx_faster_rcnn(device, use_pretrained_weight, reset_seeds):
     )
     if use_pretrained_weight == True:
         state_dict = torch.load(
-            "/home/ubuntu/pointpillars_mmdetect/mmdetection3d/hv_pointpillars_fpn_sbn-all_4x8_2x_nus-3d_20210826_104936-fca299c1.pth"
+            "/home/ubuntu/punith/tt-metal/hv_pointpillars_fpn_sbn-all_4x8_2x_nus-3d_20210826_104936-fca299c1.pth"
         )["state_dict"]
         reference_model.load_state_dict(state_dict)
     reference_model.eval()
@@ -155,13 +155,11 @@ def test_ttnn_mvx_faster_rcnn(device, use_pretrained_weight, reset_seeds):
         initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device)
     )
 
-    batch_inputs_dict = torch.load(
-        "/home/ubuntu/punith/tt-metal/models/experimental/functional_pointpillars/reference/batch_inputs_dict.pt"
-    )
+    batch_inputs_dict = torch.load("models/experimental/functional_pointpillars/batch_inputs_dict.pt")
     # print("batch_inputs_dict",batch_inputs_dict["voxels"]['coors'].shape,batch_inputs_dict["voxels"]['coors'].dtype)
 
     batch_data_samples_modified = torch.load(
-        "/home/ubuntu/punith/tt-metal/models/experimental/functional_pointpillars/reference/batch_inputs_metas_motdified.pt"
+        "models/experimental/functional_pointpillars/batch_input_metas_modified.pt"
     )  # modified
     # print("batch_data_samples_modified", batch_data_samples_modified)
 
@@ -211,8 +209,8 @@ def test_ttnn_mvx_faster_rcnn(device, use_pretrained_weight, reset_seeds):
 
     ttnn_output_final = ttnn_model.pts_bbox_head.predict(ttnn_output, ttnn_batch_data_samples_modified)
 
-    print("reference_output_final", reference_output_final)
-    print("ttnn_output_final", ttnn_output_final)
+    print("reference_output_final", reference_output_final[0]["labels_3d"].shape)
+    print("ttnn_output_final", ttnn_output_final[0]["labels_3d"].shape)
 
     # for i in range(len(ttnn_output)):
     #     for j in range(len(ttnn_output[i])):
