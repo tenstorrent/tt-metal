@@ -39,9 +39,11 @@ class UpsampleBlock:
         )
 
     def __call__(self, hidden_states):
+        # Prepare upsample op
         if hidden_states.layout == ttnn.TILE_LAYOUT:
-            # Upsample op requires row-major input
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+        if hidden_states.shape[1] == 1:
+            hidden_states = ttnn.reshape(hidden_states, [1, self.input_height, self.input_width, self.in_channels])
 
         hidden_states = ttnn.upsample(hidden_states, self.scale_factor)
 

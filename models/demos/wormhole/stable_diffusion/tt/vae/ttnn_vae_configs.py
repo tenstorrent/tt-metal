@@ -59,3 +59,10 @@ UPBLOCK_RESNET_CONV_IN_CHANNEL_SPLIT_FACTORS = [
         (4, 4),  # upblock 3, resnet 2
     ],
 ]
+
+UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS = [
+    (1, 1),  # upblock 0
+    (2, 2),  # upblock 1
+    (4, 2),  # upblock 2
+    (1, 1),  # upblock 3 (no upsample here)
+]
