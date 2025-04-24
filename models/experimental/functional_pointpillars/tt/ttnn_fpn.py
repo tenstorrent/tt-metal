@@ -6,6 +6,41 @@ from typing import List, Union
 import torch.nn.functional as F
 from models.experimental.functional_pointpillars.tt.common import TtConv
 import ttnn
+import math
+
+
+def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
+    gcd_nhw_width = math.gcd(nhw, width)
+    cores = nhw // gcd_nhw_width
+    if cores > max_cores:
+        for divisor in range(max_cores, 0, -1):
+            if nhw % divisor == 0 and (nhw // divisor) % width == 0:
+                cores = divisor
+                break
+    return cores
+
+
+def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: int = 8):
+    rows = num_cores // grid_cols
+    assert rows <= grid_rows, "Not enough cores for specified core grid"
+    ranges = []
+    if rows != 0:
+        ranges.append(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(grid_rows - 1, rows - 1),
+            )
+        )
+    remainder = num_cores % grid_rows
+    if remainder != 0:
+        assert rows + 1 <= grid_rows, "Not enough cores for specified core grid"
+        ranges.append(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, rows),
+                ttnn.CoreCoord(remainder - 1, rows),
+            )
+        )
+    return ttnn.CoreRangeSet({*ranges})
 
 
 class TtFPN:
@@ -112,20 +147,32 @@ class TtFPN:
                 laterals[i - 1] = laterals[i - 1] + F.interpolate(laterals[i], **self.upsample_cfg)
             else:
                 prev_shape = [laterals[i - 1].shape[1], laterals[i - 1].shape[2]]
+                laterals[i] = ttnn.to_layout(
+                    laterals[i], layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
 
-                laterals[i - 1] = laterals[i - 1] + ttnn.to_layout(
-                    ttnn.upsample(
-                        ttnn.to_layout(
-                            laterals[i], layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-                        ),
-                        scale_factor=prev_shape[0] // laterals[i].shape[1],
-                        **self.upsample_cfg,
-                    ),
-                    layout=ttnn.TILE_LAYOUT,
+                nhw = laterals[i].shape[0] * laterals[i].shape[1] * laterals[i].shape[2]
+                num_cores = determine_num_cores_for_upsample(nhw, laterals[i].shape[2])
+                core_grid = get_core_grid_from_num_cores(num_cores)
+                shardspec = ttnn.create_sharded_memory_config_(
+                    laterals[i].shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
                 )
-                laterals[i - 1] = ttnn.to_layout(
-                    laterals[i - 1], layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                if laterals[i].is_sharded():
+                    laterals[i] = ttnn.reshard(laterals[i], shardspec)
+                else:
+                    laterals[i] = ttnn.interleaved_to_sharded(laterals[i], shardspec)
+                upsample_tensor = ttnn.upsample(
+                    laterals[i],
+                    scale_factor=prev_shape[0] // laterals[i].shape[1],
+                    **self.upsample_cfg,
                 )
+                upsample_tensor = ttnn.sharded_to_interleaved(upsample_tensor, ttnn.L1_MEMORY_CONFIG)
+                upsample_tensor = ttnn.to_layout(upsample_tensor, layout=ttnn.TILE_LAYOUT)
+
+                laterals[i] = ttnn.sharded_to_interleaved(laterals[i], ttnn.DRAM_MEMORY_CONFIG)
+
+                laterals[i - 1] = laterals[i - 1] + upsample_tensor
+                ttnn.deallocate(upsample_tensor)
 
         # build outputs
         # part 1: from original levels
