@@ -323,8 +323,8 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
         case SanitizeInlineWriteDram: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write 4 bytes "
-                "from local L1[{:#08x}] to DRAM core w/ virtual coords {} DRAM[addr=0x{:08x}] (inline dw writes does "
-                "not support DRAM destination addresses).",
+                "from local L1[{:#08x}] to DRAM core w/ virtual coords {} DRAM[addr=0x{:08x}] (inline dw writes do not "
+                "support DRAM destination addresses).",
                 device->id(),
                 (is_eth_core) ? "active ethnet" : "worker",
                 core.x,
