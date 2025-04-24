@@ -24,7 +24,6 @@ Test expectations are that pcc checks pass and sufficient test attribute data is
 ## Test Cases
 Three different test cases are implemented using the above parameters.
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
-Each test case is given a different test id 0-2 for ease of distinction and further processing.
 Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
 1. DRAM Interleaved Packet Sizes: Tests different number of transactions and transaction sizes by varying the num_of_transactions and transaction_size_pages parameters.
