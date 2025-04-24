@@ -441,14 +441,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             .set_page_size(ex_cb_external2_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external2_config);
 
-    // in0 sharded
-    uint32_t pre_in0_cb_index = tt::CBIndex::c_5;
-    tt::tt_metal::CircularBufferConfig pre_in0_cb_config =
-        tt::tt_metal::CircularBufferConfig(in0_CB_size, {{pre_in0_cb_index, in_data_format}})
-            .set_page_size(pre_in0_cb_index, in_single_tile_size)
-            .set_globally_allocated_address(*a.buffer());
-    auto pre_cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, pre_in0_cb_config);
-
     // x
     uint32_t pre_x_cb_index = tt::CBIndex::c_6;
     tt::tt_metal::CircularBufferConfig pre_x_cb_config =
@@ -474,25 +466,55 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     uint32_t updated_residual_index = tt::CBIndex::c_21;
     uint32_t original_input_index = tt::CBIndex::c_22;
+    // All of these take either residual or input as input, one for pre, one for post
+    uint32_t in0_cb_index = tt::CBIndex::c_12;
+    uint32_t pre_in0_cb_index = tt::CBIndex::c_5;
 
     CBHandle cb_in1 = 0;
     CBHandle cb_add_out = 0;
+    CBHandle cb_in0 = 0;
+    CBHandle pre_cb_in0 = 0;
 
     if (b) {
-        tt::tt_metal::CircularBufferConfig add_out_cb_config =
-            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{updated_residual_index, in_data_format}})
-                .set_page_size(updated_residual_index, in_single_tile_size)
+        // Tensors that do the b fusing
+        tt::tt_metal::CircularBufferConfig in1_cb_config =
+            tt::tt_metal::CircularBufferConfig(in0_CB_size, {{original_input_index, in_data_format}})
+                .set_page_size(original_input_index, in_single_tile_size)
                 .set_globally_allocated_address(*a.buffer());
+        cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
+
+        tt::tt_metal::CircularBufferConfig add_out_cb_config =
+            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{updated_residual_index, residual_data_format}})
+                .set_page_size(updated_residual_index, residual_single_tile_size)
+                .set_globally_allocated_address(*b.value().buffer());
         cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
 
-        tt::tt_metal::CircularBufferConfig in1_cb_config =
-            tt::tt_metal::CircularBufferConfig(
-                in1_CB_size, {{original_input_index, tt::tt_metal::datatype_to_dataformat_converter(b.value().get_dtype())}})
-                .set_page_size(original_input_index, in_single_tile_size)
+        // Other CBs should use the now updated b as an input
+        tt::tt_metal::CircularBufferConfig in0_cb_config =
+            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{in0_cb_index, residual_data_format}})
+                .set_page_size(in0_cb_index, residual_single_tile_size)
                 .set_globally_allocated_address(*b.value().buffer());
-        cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
-    }
+        cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
 
+        tt::tt_metal::CircularBufferConfig pre_in0_cb_config =
+            tt::tt_metal::CircularBufferConfig(in1_CB_size, {{pre_in0_cb_index, residual_data_format}})
+                .set_page_size(pre_in0_cb_index, residual_single_tile_size)
+                .set_globally_allocated_address(*b.value().buffer());
+        pre_cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, pre_in0_cb_config);
+    } else {
+        // There is no b so just use a as the input
+        tt::tt_metal::CircularBufferConfig in0_cb_config =
+            tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
+                .set_page_size(in0_cb_index, in_single_tile_size)
+                .set_globally_allocated_address(*a.buffer());
+        cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
+
+        tt::tt_metal::CircularBufferConfig pre_in0_cb_config =
+            tt::tt_metal::CircularBufferConfig(in0_CB_size, {{pre_in0_cb_index, in_data_format}})
+                .set_page_size(pre_in0_cb_index, in_single_tile_size)
+                .set_globally_allocated_address(*a.buffer());
+        pre_cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, pre_in0_cb_config);
+    }
     // Create post circular buffers
 
     // ex_global
@@ -520,14 +542,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                 .set_page_size(in5_cb_index, gamma_single_tile_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, in5_cb_config);
     }
-
-    // in0 sharded
-    uint32_t in0_cb_index = tt::CBIndex::c_12;
-    tt::tt_metal::CircularBufferConfig in0_cb_config =
-        tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
-            .set_page_size(in0_cb_index, in_single_tile_size)
-            .set_globally_allocated_address(*a.buffer());
-    auto cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
 
     // in3 eps
     uint32_t in3_cb_index = tt::CBIndex::c_13;
