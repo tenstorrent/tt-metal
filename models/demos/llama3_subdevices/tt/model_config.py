@@ -115,6 +115,60 @@ LM_HEAD_32_GRID = [
     (5, 1),
 ]
 
+LM_HEAD_INPUT_GRID = [
+    (6, 6),
+    (6, 7),
+    (6, 9),
+    (6, 0),
+    (6, 1),
+    (6, 2),
+    (6, 4),
+    (6, 5),
+    (5, 5),
+    (5, 6),
+    (5, 7),
+    (5, 9),
+    (5, 0),
+    (5, 1),
+    (5, 2),
+    (5, 4),
+    (1, 4),
+    (1, 5),
+    (1, 9),
+    (1, 0),
+    (2, 0),
+    (2, 4),
+    (2, 5),
+    (2, 9),
+]
+
+LM_HEAD_OUTPUT_GRID = [
+    (1, 9),
+    (2, 9),
+    (1, 0),
+    (2, 0),
+    (1, 4),
+    (2, 4),
+    (1, 5),
+    (2, 5),
+    (5, 0),
+    (6, 0),
+    (5, 9),
+    (6, 9),
+    (5, 1),
+    (6, 1),
+    (5, 7),
+    (6, 7),
+    (5, 6),
+    (6, 6),
+    (5, 2),
+    (6, 2),
+    (5, 4),
+    (6, 4),
+    (5, 5),
+    (6, 5),
+]
+
 
 def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test):
     """
@@ -1103,11 +1157,8 @@ class TtModelArgs:
             core_range = ttnn.CoreRange(
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
-            LM_HEAD_RING_SIZE = 32
+            LM_HEAD_RING_SIZE = 24
             self.lm_head_shape = (8192 // 4, 128 * 1024 // 8)
-            # lm_head_ring_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-            #     self.start_core, LM_HEAD_RING_SIZE, self.sub_core_grids, row_wise=False
-            # )
 
             lm_head_ring_core_range_set = ttnn.CoreRangeSet(
                 [
@@ -1116,6 +1167,26 @@ class TtModelArgs:
                         ttnn.CoreCoord(x, y),
                     )
                     for x, y in LM_HEAD_32_GRID
+                ]
+            )
+
+            lm_head_ring_core_input_range_set = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in LM_HEAD_INPUT_GRID
+                ]
+            )
+
+            lm_head_ring_core_output_range_set = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in LM_HEAD_OUTPUT_GRID
                 ]
             )
 
@@ -1129,8 +1200,8 @@ class TtModelArgs:
                 ]
             )
             self.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.lm_head_shape[0] // LM_HEAD_RING_SIZE),
-                core_grid=lm_head_ring_core_range_set,
+                shape=(32, 2304 // LM_HEAD_RING_SIZE),  # padded shape
+                core_grid=lm_head_ring_core_input_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -1142,25 +1213,25 @@ class TtModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            self.model_config["LM_HEAD_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(self.lm_head_shape[0], self.lm_head_shape[1] // LM_HEAD_RING_SIZE),
-                core_grid=lm_head_ring_core_range_set,
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
             self.model_config["LM_HEAD_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.lm_head_shape[1] // LM_HEAD_RING_SIZE),
+                shape=(32, 16896 // LM_HEAD_RING_SIZE),  # padded shape
+                core_grid=lm_head_ring_core_output_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, self.lm_head_shape[1] // 32),
                 core_grid=lm_head_ring_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            self.model_config["LM_HEAD_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
+            self.model_config["LM_HEAD_TG_RING_PROGCFG"] = self.matmul_1d_ring_lm_head_config(
                 1,
                 32,
                 self.dim // 4,
-                self.lm_head_shape[1],
+                16896,  # use padded shape
                 LM_HEAD_RING_SIZE,
                 prefetch=False,
             )
@@ -1851,6 +1922,23 @@ class TtModelArgs:
         )
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
+    def create_dram_sharded_mem_config_lm_head(self, k, n):
+        """Create DRAM-sharded memory config for width-sharded tensors for LM_HEAD"""
+
+        def round_up(a, b):
+            """
+            Round up a to the nearest multiple of b
+            """
+            return b * math.ceil(a / b)
+
+        num_cores = 24
+        N_per_shard = round_up(math.ceil(n // num_cores), ttnn.TILE_SIZE)
+        N_per_shard_in_dram = N_per_shard * 2
+        in1_shard_shape = [k, N_per_shard_in_dram]
+        in1_shard_spec = ttnn.ShardSpec(self.dram_weight_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+        return memory_config
+
     def matmul_config(
         self,
         m: int,
@@ -2038,6 +2126,62 @@ class TtModelArgs:
             gather_in0=True,
             hop_cores=hop_core_range_set,
             num_global_cb_receivers=2 if prefetch else 1,
+        )
+
+        return program_config
+
+    def matmul_1d_ring_lm_head_config(
+        self,
+        B,
+        M,
+        K,
+        N,
+        num_cores,
+        prefetch=True,
+    ):
+        M *= B  # Fuse batch always enabled
+
+        in0_block_h = M // ttnn.TILE_SIZE
+        in0_block_w = K // num_cores // ttnn.TILE_SIZE
+        out_block_h = M // ttnn.TILE_SIZE
+        out_block_w = N // num_cores // ttnn.TILE_SIZE
+
+        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
+        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1
+        num_blocks_total = num_blocks_y * num_blocks_x
+
+        if num_blocks_total != num_cores:
+            assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
+
+        out_subblock_h = 1
+        out_subblock_w = 8
+        while out_block_w % out_subblock_w != 0:
+            out_subblock_w -= 1
+
+        hop_grid = [(3, 6)]
+        hop_core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in hop_grid
+            }
+        )
+        grid = num_to_coregrid(num_cores)
+
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=out_block_h,
+            per_core_N=out_block_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+            hop_cores=hop_core_range_set,
         )
 
         return program_config
