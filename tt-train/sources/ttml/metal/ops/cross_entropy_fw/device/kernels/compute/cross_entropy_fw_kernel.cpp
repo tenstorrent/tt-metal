@@ -34,18 +34,15 @@ constexpr uint32_t block_size = get_compile_time_arg_val(1);         // size of 
 constexpr uint32_t Wt = get_compile_time_arg_val(2);                 // number of tiles in inner dimension
 
 constexpr auto cb_input = tt::CBIndex::c_0;
-constexpr auto cb_target = tt::CBIndex::c_1;
 constexpr auto cb_mask = tt::CBIndex::c_2;
 constexpr auto cb_max_mask = tt::CBIndex::c_3;
 constexpr auto cb_scaler = tt::CBIndex::c_4;  // used to reduction
-constexpr auto cb_max_value_before_reduction = tt::CBIndex::c_5;
-constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_6;
-constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_7;
-constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_8;
-constexpr auto cb_output_before_reduction = tt::CBIndex::c_9;
-constexpr auto cb_output = tt::CBIndex::c_10;
-
-constexpr uint32_t cb_target_logits = tt::CBIndex::c_13;
+constexpr auto cb_target_logits = tt::CBIndex::c_6;
+constexpr auto cb_max_value_before_reduction = tt::CBIndex::c_7;
+constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_8;
+constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_9;
+constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_10;
+constexpr auto cb_output = tt::CBIndex::c_11;
 
 constexpr uint32_t onetile = 1;
 
@@ -73,6 +70,14 @@ void find_max_value_in_row() {
                 // this is limitation of the function mask_tile
                 // mask tile currently does not work for mask register that is not next to data register
                 const uint32_t mask_register = working_register + 1U;  // mask register should be next to data register
+
+                // NEXT 4 LINES ARE IMPORTANT AS WE FLASH WHAT IS INSIDE TRASH PADDING. IT CAN HAPPEN THAT VALUE INSIDE
+                // IS NAN, SO NAN+(-INF)=NAN AND NOT -INF AS WE EXPECTED. AS WELL AS -INF * 0 = NAN
+                copy_tile_init(cb_mask);
+                copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+                mask_tile_init();
+                mask_tile(working_register, mask_register);  // mask should be next to tile register.
+
                 copy_tile_init(cb_max_mask);
                 copy_tile(cb_max_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
@@ -115,6 +120,14 @@ void find_max_value_in_row() {
                     // mask tile currently does not work for mask register that is not next to data register
                     const uint32_t mask_register =
                         working_register + 1U;  // mask register should be next to data register
+
+                    // NEXT 4 LINES ARE IMPORTANT AS WE FLASH WHAT IS INSIDE TRASH PADDING. IT CAN HAPPEN THAT VALUE
+                    // INSIDE IS NAN, SO NAN+(-INF)=NAN AND NOT -INF AS WE EXPECTED. AS WELL AS -INF * 0 = NAN
+                    copy_tile_init(cb_mask);
+                    copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+                    mask_tile_init();
+                    mask_tile(working_register, mask_register);  // mask should be next to tile register.
+
                     copy_tile_init(cb_max_mask);
                     copy_tile(cb_max_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
@@ -190,15 +203,6 @@ void calculate_sum_exp_x() {
     for (uint32_t col = 0; col < Wt; ++col) {
         auto working_register = col == 0 ? accum_register : tile_register;
 
-        // subtract max value from each tile
-        // sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
-        // sub_tiles_bcast_cols(
-        //     cb_input,
-        //     cb_max_value_after_reduction,
-        //     /* tile idx */ col,
-        //     /* tile idx */ 0,
-        //     /* reg tile idx */ working_register);
-
         copy_tile_init(cb_input);
         copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
 
@@ -218,9 +222,6 @@ void calculate_sum_exp_x() {
 
                 mask_tile_init();
                 mask_tile(working_register, mask_register);  // mask should be next to tile register
-
-                // mul_binary_tile_init();
-                // mul_binary_tile(working_register, mask_register);  // choose (x - max(x)) by index
             }
         }
 
@@ -251,20 +252,22 @@ void calculate_sum_exp_x() {
     const uint32_t tile_register = 1U;
 
     tile_regs_acquire();
+
+    const uint32_t max_value_register = 3U;
+    unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    unary_bcast<BroadcastType::COL>(
+        cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
     for (uint32_t col = 0; col < Wt;) {
         cb_wait_front(cb_input, block_size);  // wait until reader kernel has written block_size tiles to input buffer
         reconfig_data_format(cb_max_value_after_reduction, cb_input);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
             auto working_register = col == 0 ? accum_register : tile_register;
 
-            // subtract max value from each tile
-            sub_bcast_cols_init_short(cb_input, cb_max_value_after_reduction);
-            sub_tiles_bcast_cols(
-                cb_input,
-                cb_max_value_after_reduction,
-                /* tile idx */ block_idx,
-                /* tile idx */ 0,
-                /* reg tile idx */ working_register);
+            copy_tile_init(cb_input);
+            copy_tile(cb_input, /* tile_idx */ block_idx, /* register_idx */ working_register);
+
+            sub_binary_tile_init();
+            sub_binary_tile(working_register, max_value_register);  // subtract max value from each tile
 
             exp_tile_init();
             exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
@@ -341,7 +344,7 @@ void MAIN {
     cb_wait_front(cb_scaler, onetile);
 
     init_sfpu(cb_input, cb_output);
-    binary_op_init_common(cb_input, cb_target, cb_output);
+    binary_op_init_common(cb_input, cb_target_logits, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         find_max_value_in_row();  // find max value in each row
@@ -350,180 +353,44 @@ void MAIN {
         calculate_sum_exp_x();   // calculate sum of exp(x - max(x))
         reduce_log_sum_exp_x();  // reduce sum(exp(x - max(x))), take log and push to cb_exp_sum_after_reduction
 
-        cb_wait_front(cb_exp_sum_after_reduction, onetile);  // <- here get log(sum(exp(x - max(x)))
-        cb_reserve_back(cb_output, onetile);                 // reserve onetile tiles in output buffer
+        cb_wait_front(cb_exp_sum_after_reduction, onetile);  //  wait log(sum(exp(x - max(x)))
+        cb_wait_front(cb_target_logits, onetile);
+        cb_reserve_back(cb_output, onetile);  // reserve onetile tiles in output buffer
 
-        //  set [input*target +  log(sum of exp(x - max())] to output
-        {
-#ifdef EVERYTHING_FITS_IN_L1
-            // need to read input third time
-            // cb_wait_front(cb_input, Wt);   // wait until reader kernel has written Wt tiles to input buffer
-            cb_wait_front(cb_target, Wt);  // wait until reader kernel has written Wt tiles to target buffer
-            const uint32_t accum_register = 0;
-            tile_regs_acquire();
-            // reconfig_data_format(cb_input, cb_max_value_after_reduction);
-            //  choose correct input logit(logits*target)
-            for (uint32_t col = 0; col < Wt; col++) {
-                auto working_register = col == 0 ? accum_register : 1U;
-                auto target_register = working_register + 1U;
-                copy_tile_init(cb_input);
-                copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
+        const uint32_t result_register = 0;
+        tile_regs_acquire();
+        // calculate result as: -target_logits + max_value + log(sum(exp(x - max(x))))
+        // -(target_logits - max_value) == -target_logits + max_value
+        copy_tile_init(cb_target_logits);
+        copy_tile(cb_target_logits, /* tile_idx */ 0, /* register_idx */ result_register);
 
-                copy_tile_init(cb_target);
-                copy_tile(cb_target, /* tile_idx */ col, /* register_idx */ target_register);
+        negative_tile_init();
+        negative_tile(result_register);
 
-                mul_binary_tile_init();
-                mul_binary_tile(working_register, target_register);  // choose (x - max(x)) by index
+        reconfig_data_format(cb_max_value_after_reduction, cb_exp_sum_after_reduction);
+        add_tiles_init(cb_max_value_after_reduction, cb_exp_sum_after_reduction, /* acc_to_dest */ true);
+        add_tiles(
+            cb_max_value_after_reduction,
+            cb_exp_sum_after_reduction,
+            /* tile_idx */ 0,
+            /* tile_idx */ 0,
+            result_register);
 
-                if constexpr (do_mask_w) {
-                    if (col + 1 == Wt) {
-                        // this is limitation of the function mask_tile
-                        // mask tile currently does not work for mask register that is not next to data register
-                        const uint32_t mask_register = working_register + 1U;  // mask register should be next to data
-                        // register
-                        copy_tile_init(cb_mask);
-                        copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+        tile_regs_commit();
 
-                        mask_tile_init();
-                        mask_tile(working_register, mask_register);  // mask should be next to tile register
-                    }
-                }
+        tile_regs_wait();
+        pack_reconfig_data_format(cb_output);
+        pack_tile(result_register, cb_output);
+        tile_regs_release();
+        cb_push_back(cb_output, onetile);
 
-                if (col > 0) {
-                    add_binary_tile_init();
-                    add_binary_tile(accum_register, working_register);
-                }
-            }
-            negative_tile_init();
-            negative_tile(accum_register);
-            tile_regs_commit();
-
-#else
-
-            tile_regs_acquire();
-            const uint32_t accum_register = 0;
-            for (uint32_t col = 0; col < Wt;) {
-                cb_wait_front(cb_input, block_size);
-                cb_wait_front(cb_target, block_size);
-                for (uint32_t block_idx = 0; block_idx < block_size; block_idx++, col++) {
-                    auto working_register = col == 0 ? accum_register : 1U;
-                    auto target_register = working_register + 1U;
-                    copy_tile_init(cb_input);
-                    copy_tile(cb_input, /* tile_idx */ block_idx, /* register_idx */ working_register);
-
-                    copy_tile_init(cb_target);
-                    copy_tile(cb_target, /* tile_idx */ block_idx, /* register_idx */ target_register);
-
-                    mul_binary_tile_init();
-                    mul_binary_tile(working_register, target_register);  // choose (x - max(x)) by index
-
-                    if constexpr (do_mask_w) {
-                        if (col + 1 == Wt) {
-                            // this is limitation of the function mask_tile
-                            // mask tile currently does not work for mask register that is not next to data register
-                            const uint32_t mask_register =
-                                working_register + 1U;  // mask register should be next to data
-                            // register
-                            copy_tile_init(cb_mask);
-                            copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
-
-                            mask_tile_init();
-                            mask_tile(working_register, mask_register);  // mask should be next to tile register
-                        }
-                    }
-
-                    if (col > 0) {
-                        add_binary_tile_init();
-                        add_binary_tile(accum_register, working_register);
-                    }
-                }
-                cb_pop_front(cb_input, block_size);   // delete block_size tiles from input buffer
-                cb_pop_front(cb_target, block_size);  // delete block_size tiles from target buffer
-            }
-
-            negative_tile_init();
-            negative_tile(accum_register);
-            tile_regs_commit();
-
-#endif
-
-            tile_regs_wait();
-            cb_reserve_back(cb_output_before_reduction, onetile);
-            pack_reconfig_data_format(cb_output_before_reduction);
-            pack_tile(accum_register, cb_output_before_reduction);
-            tile_regs_release();
-            cb_push_back(cb_output_before_reduction, onetile);
-
-            cb_wait_front(cb_output_before_reduction, onetile);
-
-            cb_wait_front(cb_target_logits, onetile);
-            const uint32_t reduction_register = 0;
-            tile_regs_acquire();
-
-            // reconfig_data_format(cb_output_before_reduction, cb_scaler);
-            // reduce_init_delta<false, PoolType::SUM, ReduceDim::REDUCE_ROW>(
-            //     cb_output_before_reduction, cb_scaler, cb_output_before_reduction);
-            // reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-            //     cb_output_before_reduction,
-            //     cb_scaler,
-            //     /* tile_idx */ 0,
-            //     /* tile_idx */ 0,
-            //     /* reduction_register */ reduction_register);
-            // reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_output_before_reduction);
-
-            copy_tile_init(cb_target_logits);
-            copy_tile(cb_target_logits, /* tile_idx */ 0, /* register_idx */ reduction_register);
-
-            negative_tile_init();
-            negative_tile(reduction_register);
-
-            // TODO: use this instead of twice copy tile
-            // reconfig_data_format(cb_max_value_after_reduction, cb_exp_sum_after_reduction);
-            // add_tiles_init(cb_max_value_after_reduction, cb_exp_sum_after_reduction, /* acc_to_dest */ true);
-            // add_tiles(
-            //     cb_max_value_after_reduction,
-            //     cb_exp_sum_after_reduction,
-            //     /* tile_idx */ 0,
-            //     /* tile_idx */ 0,
-            //     reduction_register);
-
-            copy_tile_init(cb_max_value_after_reduction);
-            copy_tile(cb_max_value_after_reduction, /* tile_idx */ 0, /* register_idx */ reduction_register + 1U);
-
-            add_binary_tile_init();
-            add_binary_tile(reduction_register, reduction_register + 1U);
-
-            copy_tile_init(cb_exp_sum_after_reduction);
-            copy_tile(cb_exp_sum_after_reduction, /* tile_idx */ 0, /* register_idx */ reduction_register + 1U);
-
-            add_binary_tile_init();
-            add_binary_tile(
-                reduction_register, reduction_register + 1U);  // add log(sum(exp(x - max(x)))) to (x -max(x))
-
-            // test output :
-            // uint32_t test_register = 1U;
-            // copy_tile_init(cb_max_value_after_reduction);
-            // copy_tile(cb_max_value_after_reduction, /* tile_idx */ 0, /* register_idx */ test_register);
-
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_output);
-            pack_tile(reduction_register, cb_output);
-            tile_regs_release();
-            cb_push_back(cb_output, onetile);
-
-            cb_pop_front(cb_max_value_after_reduction, onetile);  // pop tile after reduction
-            cb_pop_front(cb_exp_sum_after_reduction, onetile);    // pop tile after reduction
-            cb_pop_front(cb_output_before_reduction, onetile);    // pop tile before reduction
-
-            cb_pop_front(cb_target_logits, onetile);  // pop logits tile
+        cb_pop_front(cb_max_value_after_reduction, onetile);  // pop tile after reduction
+        cb_pop_front(cb_exp_sum_after_reduction, onetile);    // pop tile after reduction
+        cb_pop_front(cb_target_logits, onetile);              // pop logits tile
 
 #ifdef EVERYTHING_FITS_IN_L1
-            cb_pop_front(cb_input, Wt);   // pop Wt tiles from input buffer
-            cb_pop_front(cb_target, Wt);  // pop Wt tiles from target buffer
+        cb_pop_front(cb_input, Wt);  // pop Wt tiles from input buffer
 #endif
-        }
     }
 
     // pop scaler and masks

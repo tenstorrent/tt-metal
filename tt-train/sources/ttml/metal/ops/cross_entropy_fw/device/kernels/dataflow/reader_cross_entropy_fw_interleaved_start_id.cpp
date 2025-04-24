@@ -24,13 +24,11 @@ float bfloat16_to_float(uint16_t bf16_bits) {
     return result;
 }
 
-// target -> (N, H)
-// input -> (N, C, H, W)
-
-// tasks number = N * C * (H / 32)
-// tiled_row = start_row + i
-// tiled_H = (H + 31) / 32
+// calculate page and offset for target indexes
 std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uint32_t tiled_H) {
+    // tasks number = N * C * (H / 32)
+    // tiled_row = start_row + i
+    // tiled_H = (H + 31) / 32
     // tiled_row -> [0, tasks_number)
     uint32_t n = tiled_row / tiled_H;
     uint32_t h = (tiled_row % tiled_H) * 32;
@@ -74,17 +72,13 @@ void kernel_main() {
     uint32_t start_row =
         get_arg_val<uint32_t>(runtime_args_counter++);  // pre calculated num_rows_written in program factory
 
-    uint32_t target_indexes_address = get_arg_val<uint32_t>(runtime_args_counter++);  // target indexes buffer address
-
     constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
     constexpr uint32_t cb_target_idx = tt::CBIndex::c_1;
     constexpr uint32_t cb_mask_idx = tt::CBIndex::c_2;
     constexpr uint32_t cb_max_mask_idx = tt::CBIndex::c_3;
     constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_4;  // used for reduction
-
-    constexpr uint32_t cb_target_indexes = tt::CBIndex::c_11;
-    constexpr uint32_t cb_input_tile = tt::CBIndex::c_12;
-    constexpr uint32_t cb_target_logits = tt::CBIndex::c_13;
+    constexpr uint32_t cb_input_tile = tt::CBIndex::c_5;
+    constexpr uint32_t cb_target_logits = tt::CBIndex::c_6;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -113,8 +107,6 @@ void kernel_main() {
         max_mask_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_max_mask_idx));  // write max mask tile
     }
 
-    DPRINT << "Mask W: " << mask_w << ENDL();
-    DPRINT << "Wt: " << Wt << ENDL();
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
     constexpr uint16_t minus_inf = 0xFF80;  // (bfloat16)-inf -> uint16_t
@@ -137,43 +129,24 @@ void kernel_main() {
     }
     cb_push_back(cb_scaler_idx, onetile);
 
-    // auto row_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_mask_idx));
-    // for (uint32_t h = 0; h < TILE_HEIGHT; ++h) {
-    //     for (uint32_t w = 0; w < TILE_WIDTH; ++w) {
-    //         uint32_t tiled_idx = get_tilized_idx(h, w);
-    //         DPRINT << bfloat16_to_float(row_ptr[tiled_idx]) << " ";
-    //     }
-    //     DPRINT << ENDL();
-    // }
-
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
     const DataFormat data_format = get_dataformat(cb_input_idx);
 
     const InterleavedAddrGenFast</* is_dram */ true> input_address_generator = {
         .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_format};
 
-    const InterleavedAddrGenFast</* is_dram */ true> target_address_generator = {
-        .bank_base_address = target_address, .page_size = tile_bytes, .data_format = data_format};
-
     const InterleavedAddrGen</* is_dram */ true> target_indexes_address_generator = {
-        .bank_base_address = target_indexes_address, .page_size = target_indexes_page_size};
-
-    DPRINT << "Page Size: " << target_indexes_page_size << ENDL();
-
-    DPRINT << "Aligned Page Size: " << target_indexes_address_generator.aligned_page_size << ENDL();
+        .bank_base_address = target_address, .page_size = target_indexes_page_size};
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         // calculate the address of the first tile in the row
         // start_row is the number of rows already processed in other cores
         uint32_t idx = (start_row + i) * Wt;  // (take already processed rows + current row)*Wt(number of tiles in row)
 
-        // target - onetile
         // read target indexes
-        cb_reserve_back(cb_target_indexes, onetile);
+        cb_reserve_back(cb_target_idx, onetile);
         uint32_t l1_target_indexes_write_addr =
-            get_write_ptr(cb_target_indexes);  // get the address of the first tile in the target buffer
-
-        DPRINT << "---------ROW INDEX: " << start_row + i << " ---------" << ENDL();
+            get_write_ptr(cb_target_idx);  // get the address of the first tile in the target buffer
 
         auto [page, offset] = get_page_and_offset(start_row + i, tiled_H);
 
@@ -181,47 +154,20 @@ void kernel_main() {
         noc_async_read(
             noc_async_target_indexes_page_addr,
             l1_target_indexes_write_addr,
-            target_indexes_read_page_size);  // read the tile from the target buffer
-
-        DPRINT << "Tiled_H: " << tiled_H << ENDL();
-        DPRINT << "Page: " << page << ENDL();
-        DPRINT << "Offset: " << offset << ENDL();
-
-        // noc_async_read_page(
-        //     /* target_indexes for current row*/ page,
-        //     target_indexes_address_generator,
-        //     l1_target_indexes_write_addr,
-        //     /* offset*/ offset);   // read the tile from the target buffer
-        noc_async_read_barrier();  // wait until all tiles are read
-        // cb_push_back(cb_target_indexes, onetile);  // push the tile to the back of the target buffer
-
-        // auto ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_target_indexes));
-        // for (uint32_t j = 0; j < TARGET_INDEXES_ELEMENTS_NUMBER; ++j) {
-        //     // auto ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_target_indexes));
-        //     // uint32_t target_value =
-        //     //     *reinterpret_cast<uint32_t*>(get_read_ptr(cb_target_indexes) + j * sizeof(uint32_t));
-        //     DPRINT << "target_value[" << j + (start_row + i) * 32 << "] = " << *(ptr + j) << ENDL();
-        // }
+            target_indexes_read_page_size);  // read the page from the target buffer
+        noc_async_read_barrier();            // wait until all tiles are read
 
         cb_reserve_back(cb_input_tile, onetile);
         cb_reserve_back(cb_target_logits, onetile);
 
-        auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_target_indexes));
+        uint32_t l1_input_tile_write_addr = get_write_ptr(cb_input_tile);
+        uint32_t l1_target_logits_write_addr = get_write_ptr(cb_target_logits);
 
-        // uint32_t* ptr = reinterpret_cast<uint32_t*>(get_read_ptr(cb_target_indexes));
-        // for (uint32_t h = 0; h < TILE_HEIGHT; ++h) {
-        //     uint32_t value = ptr[h];
-        //     DPRINT << "target_value[" << h << "] = " << value << ENDL();
-        // }
-
+        auto target_indexes_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_target_idx));
         for (uint32_t h = 0; h < TILE_HEIGHT; ++h) {
             uint32_t target_value_idx = h;  // only first row of the tile is used
 
             uint32_t target_value = target_indexes_l1_ptr[target_value_idx];
-            //  DPRINT << "target_indexes[" << target_value_idx << "] = " << target_value << ENDL();
-
-            uint32_t l1_input_tile_write_addr = get_write_ptr(cb_input_tile);
-            uint32_t l1_target_logits_write_addr = get_write_ptr(cb_target_logits);
 
             noc_async_read_tile(idx + (target_value / TILE_WIDTH), input_address_generator, l1_input_tile_write_addr);
             noc_async_read_barrier();
@@ -232,23 +178,8 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_target_logits_write_addr);
 
             auto idx_inside_tile = get_tilized_idx(h, target_value);  // only first row of the tile is used
-            // DPRINT << "idx_inside_tile: " << idx_inside_tile << ENDL();
-            // DPRINT << "target_logits: " << read_input_tile_l1_ptr[idx_inside_tile] << ENDL();
-            // if (h == 0) {
-            //     for (uint32_t j = 0; j < 256; ++j) {
-            //         DPRINT << "Input_tensor[" << j << "] = " << bfloat16_to_float(read_input_tile_l1_ptr[j]) <<
-            //         ENDL();
-            //     }
-            // }
-
-            // DPRINT << "Input_tensor[" << h + (start_row + i) * 32 << ": " << idx_inside_tile
-            //        << "] = " << bfloat16_to_float(read_input_tile_l1_ptr[idx_inside_tile]) << ENDL();
-
             uint32_t inplace_idx = get_tilized_idx(h, 0);
             target_logits_write_l1_ptr[inplace_idx] = read_input_tile_l1_ptr[idx_inside_tile];
-
-            // DPRINT << "Target_logits[" << h + (start_row + i) * 32 << ": " << inplace_idx
-            //        << "] = " << bfloat16_to_float(target_logits_write_l1_ptr[inplace_idx]) << ENDL();
         }
 
         cb_push_back(cb_target_logits, onetile);
@@ -266,17 +197,6 @@ void kernel_main() {
         noc_async_read_barrier();        // wait until all tiles are read
         cb_push_back(cb_input_idx, Wt);  // push the tile to the back of the input buffer
 
-        // read target buffer
-        cb_reserve_back(cb_target_idx, Wt);  // reserve Wt tiles in target buffer == wait until cb will has Wt tiles
-        uint32_t l1_target_write_addr =
-            get_write_ptr(cb_target_idx);  // get the address of the first tile in the target buffer
-        for (uint32_t j = 0; j < Wt; ++j) {
-            noc_async_read_tile(
-                idx + j, target_address_generator, l1_target_write_addr);  // read the tile from the target buffer
-            l1_target_write_addr += tile_bytes;                            // move to the next tile
-        }
-        noc_async_read_barrier();         // wait until all tiles are read
-        cb_push_back(cb_target_idx, Wt);  // push the tile to the back of the target buffer
 #else
         // read input buffer by blocks to calculate max value in row
         for (uint32_t j = 0; j < Wt; j += block_size) {
@@ -302,29 +222,6 @@ void kernel_main() {
             cb_push_back(cb_input_idx, block_size);
         }
 
-        // read input and target buffers by blocks to final calculation
-        for (uint32_t j = 0; j < Wt; j += block_size) {
-            cb_reserve_back(cb_input_idx, block_size);
-            uint32_t l1_write_addr = get_write_ptr(cb_input_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                noc_async_read_tile(idx + j + block_idx, input_address_generator, l1_write_addr);
-                l1_write_addr += tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_idx, block_size);
-
-            // read block_size tiles from target buffer
-            {
-                cb_reserve_back(cb_target_idx, block_size);
-                uint32_t l1_target_write_addr = get_write_ptr(cb_target_idx);
-                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                    noc_async_read_tile(idx + j + block_idx, target_address_generator, l1_target_write_addr);
-                    l1_target_write_addr += tile_bytes;
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_target_idx, block_size);
-            }
-        }
 #endif
     }
 }

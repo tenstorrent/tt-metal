@@ -17,7 +17,7 @@ struct CrossEntropyForwardDeviceOperation {
     using tensor_args_t = tensor_args_t;
     using spec_return_value_t = spec_return_value_t;
     using tensor_return_value_t = tensor_return_value_t;
-    using program_factory_t = std::variant<CrossEntropyForwardProgramFactory>;  // Add program factory for cross entropy
+    using program_factory_t = std::variant<CrossEntropyForwardProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -34,7 +34,6 @@ struct CrossEntropyForwardDeviceOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& target_tensor,
-        const ttnn::Tensor& target_indexes,
         const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 };
 

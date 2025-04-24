@@ -10,9 +10,8 @@ namespace ttml::metal::ops::cross_entropy_fw {
 
 struct CrossEntropyForwardOperation {
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,   // logits : model output (B, 1, S, D)
-        const ttnn::Tensor& target_tensor,  // target : ground truth (B, 1, S, D)
-        const ttnn::Tensor& target_indexes  // target_idx : ground truth (B, 1, S, 1)
+        const ttnn::Tensor& input_tensor,  // logits : model output (N, 1, H, W)
+        const ttnn::Tensor& target_tensor  // target : ground truth (N, H)
     );
 };
 }  // namespace ttml::metal::ops::cross_entropy_fw

@@ -34,16 +34,20 @@ constexpr auto kTargetCbIndex = tt::CBIndex::c_1;
 constexpr auto kMaskCbIndex = tt::CBIndex::c_2;
 constexpr auto kMaxMaskCbIndex = tt::CBIndex::c_3;
 constexpr auto kScalerCbIndex = tt::CBIndex::c_4;  // used to reduction
-constexpr auto kMaxValueBeforeReductionCbIndex = tt::CBIndex::c_5;
-constexpr auto kMaxValueAfterReductionCbIndex = tt::CBIndex::c_6;
-constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_7;
-constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_8;
-constexpr auto kOutputBeforeReductionCbIndex = tt::CBIndex::c_9;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
+constexpr auto kInputTileCbIndex = tt::CBIndex::c_5;
+constexpr auto kTargetLogitsCbIndex = tt::CBIndex::c_6;
+constexpr auto kMaxValueBeforeReductionCbIndex = tt::CBIndex::c_7;
+constexpr auto kMaxValueAfterReductionCbIndex = tt::CBIndex::c_8;
+constexpr auto kExpSumBeforeReductionCbIndex = tt::CBIndex::c_9;
+constexpr auto KExpSumAfterReductionCbIndex = tt::CBIndex::c_10;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_11;
 
+constexpr uint32_t kNumTargetIndexesTiles = 1U;
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumMaxValueTiles = 1U;
+constexpr uint32_t kNumInputTilesByIndx = 1U;
 constexpr uint32_t kMaxValueBeforeReductionTiles = 1U;
+constexpr uint32_t kNumTargetLogitsTiles = 1U;
 constexpr uint32_t kNumMaxValueAfterReductionTiles = 1U;
 constexpr uint32_t kNumExpSumBeforeReductionTiles = 1U;
 constexpr uint32_t kNumExpSumAfterReductionTiles = 1U;
@@ -156,8 +160,6 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* input_buffer,
     const tt::tt_metal::Buffer* target_buffer,
     const tt::tt_metal::Buffer* output_buffer,
-    // TODO: delete it latter - it is used only for debugging
-    const tt::tt_metal::Buffer* target_idx_buffer,
 
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -183,11 +185,7 @@ void assign_per_core_runtime_args(
             program,
             kernels.reader,
             core,
-            {input_buffer->address(),
-             target_buffer->address(),
-             num_rows_per_core,
-             num_rows_written,
-             target_idx_buffer->address()});
+            {input_buffer->address(), target_buffer->address(), num_rows_per_core, num_rows_written});
 
         // Writer kernel: (dst_addr, dst_rms_addr number_of_rows, offset_in_rows)
         SetRuntimeArgs(
@@ -209,12 +207,6 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     // -------------------------------------------------------------------------
     const auto& input = tensor_args.input;
     const auto& target = tensor_args.target;
-
-    // TODO: delete it later
-    const auto& target_indexes = tensor_args.target_indexes;
-
-    fmt::print("Target indexes alignment: {}\n", target_indexes.buffer()->alignment());
-    fmt::print("Input alignment: {}\n", input.buffer()->alignment());
 
     auto* device = input.device();
 
@@ -240,25 +232,24 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     uint32_t total_rows_to_process = NC * Ht;
 
     // get size of target indexes inner dimension
-    uint32_t target_indexes_inner_dim_size = target_indexes.get_logical_shape()[-1] * target_indexes.element_size();
+    uint32_t target_indexes_inner_dim_size = target.get_logical_shape()[-1] * target.element_size();
     // read target indexes by pages(32 indexes in page)
     uint32_t uint32_read_page_size = tt::datum_size(tt::DataFormat::UInt32) * kPageElementsNumber;
     // tiled height of target indexes
     uint32_t tiled_H =
-        (target_indexes.get_logical_shape()[-1] + 31) / tt::constants::TILE_HEIGHT;  // round up to nearest tile height
+        (target.get_logical_shape()[-1] + 31) / tt::constants::TILE_HEIGHT;  // round up to nearest tile height
 
     // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    // get the number of inner dimension(D) - we will caclulate log softmax on this dimension
-    uint32_t num_inner = input.get_logical_shape()[-1];  // (B, 1, S, D) and we take D here
+    // get the number of inner dimension
+    uint32_t num_inner = input.get_logical_shape()[-1];  // (N, 1, C, H)
 
     // mask_w - this mask used to avoid calculation of extra data(data which will be added to create full tile 32x32)??
-    uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;  // <- width index of first trash value in tile
-    // std::cout << "[PROGRAM FACTORY]: MASK_W: " << mask_w << std::endl;
-    // std::cout << "[PROGRAM FACTORY]: Wt: " << Wt << std::endl;
+    uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;  // width index of first trash value in tile
+
     // compile arguments
     uint32_t block_size = get_block_size(Wt);
 
@@ -269,23 +260,20 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    // TODO: add calculation of required  memory and check if it fits in L1
-    // then add possibility to kernels to process data by blocks
     uint32_t twice_block_size = 2U * block_size;
-
-    uint32_t index_block_size = 32U;  // block_size
 
     const uint32_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
     const uint64_t mask_scaler_maxmask_memory =
         (kNumMaskTiles + kNumScalerTiles + kNumMaskTiles) * bfloat16_single_tile_size_bytes;
-    const uint64_t output_memory = (kNumOutputBeforeReductionTiles + kNumOutputTiles) * bfloat16_single_tile_size_bytes;
+    const uint64_t output_memory = kNumOutputTiles * bfloat16_single_tile_size_bytes;
     const uint64_t max_value_memory =
         (kNumMaxValueAfterReductionTiles + kMaxValueBeforeReductionTiles) * bfloat16_single_tile_size_bytes;
     const uint64_t exp_sum_memory =
         (kNumExpSumBeforeReductionTiles + kNumExpSumAfterReductionTiles) * float32_single_tile_size_bytes;
-    const uint64_t input_memory = 2U * Wt * bfloat16_single_tile_size_bytes;
+    const uint64_t input_memory =
+        Wt * bfloat16_single_tile_size_bytes + 2U * bfloat16_single_tile_size_bytes + uint32_read_page_size;
 
     // Total L1 memory required
     const uint64_t required_L1_in_bytes =
@@ -295,8 +283,6 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
 
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
 
-    const uint32_t num_target_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
-
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
     auto target_indexes_data_format = tt::DataFormat::UInt32;
@@ -305,7 +291,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
     auto cb_target = create_circular_buffer(
-        program, all_cores, kTargetCbIndex, data_format, bfloat16_single_tile_size_bytes, num_target_tiles);
+        program, all_cores, kTargetCbIndex, target_indexes_data_format, uint32_read_page_size, kNumTargetIndexesTiles);
 
     auto cb_mask = create_circular_buffer(
         program, all_cores, kMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
@@ -315,6 +301,12 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
 
     auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+
+    auto cb_input_tile_by_idx = create_circular_buffer(
+        program, all_cores, kInputTileCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumInputTilesByIndx);
+
+    auto cb_target_inputs = create_circular_buffer(
+        program, all_cores, kTargetLogitsCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumTargetLogitsTiles);
 
     auto cb_max_value_before_reduction = create_circular_buffer(
         program,
@@ -348,14 +340,6 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         bfloat16_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
 
-    auto cb_output_before_refuction = create_circular_buffer(
-        program,
-        all_cores,
-        kOutputBeforeReductionCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        kNumOutputBeforeReductionTiles);
-
     auto cb_output = create_circular_buffer(
         program,
         all_cores,
@@ -363,16 +347,6 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         data_format,
         bfloat16_single_tile_size_bytes,
         kNumOutputTiles);  // create twice block_size variable it looks like I need 1 tile here
-
-    // TODO: check and fix it later
-    auto cb_target_idx = create_circular_buffer(
-        program, all_cores, tt::CBIndex::c_11, target_indexes_data_format, uint32_read_page_size, 1U);
-
-    auto cb_input_tile_by_idx =
-        create_circular_buffer(program, all_cores, tt::CBIndex::c_12, data_format, bfloat16_single_tile_size_bytes, 1U);
-
-    auto cb_target_inputs =
-        create_circular_buffer(program, all_cores, tt::CBIndex::c_13, data_format, bfloat16_single_tile_size_bytes, 1U);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -395,13 +369,6 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
         magic_enum::enum_name(output_buffer->buffer_type()));
-
-    // TODO: delete it later - it is used only for debugging
-    auto* target_indexes_buffer = target_indexes.buffer();
-    TT_FATAL(
-        target_indexes_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "Target indexes buffer must be in DRAM. Target indexes buffer of type {}",
-        magic_enum::enum_name(target_indexes_buffer->buffer_type()));
 
     // configure defines
     std::map<std::string, std::string> defines;
@@ -467,7 +434,6 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         input_buffer,
         target_buffer,
         output_buffer,
-        target_indexes_buffer,
         num_cores,
         num_cores_y,
         num_rows_per_core_group_1,
@@ -512,9 +478,6 @@ void CrossEntropyForwardProgramFactory::override_runtime_arguments(
     auto* target_buffer = tensor_args.target.buffer();
     auto* output_buffer = tensor_return_value.buffer();
 
-    // TODO: delete it later - it is used only for debugging
-    auto* target_idx_buffer = tensor_args.target_indexes.buffer();
-
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, cross_entropy_fw_reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, cross_entropy_fw_writer_kernel_id);
@@ -532,10 +495,6 @@ void CrossEntropyForwardProgramFactory::override_runtime_arguments(
             auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[kInputBufferIdx] = input_buffer->address();
             runtime_args[kTargetBufferIdx] = target_buffer->address();
-
-            // TODO: delete it later - it is used only for debugging
-            // 4 is the number of target_indexes buffer in the reader runtime args
-            runtime_args[4] = target_idx_buffer->address();
         }
 
         // Update output buffers for the writer kernel

@@ -64,12 +64,9 @@ void CrossEntropyForwardDeviceOperation::validate_on_program_cache_miss(
 
     const auto& input_tensor = tensor_args.input;
     const auto& target_tensor = tensor_args.target;
-    const auto& target_indexes_tensor = tensor_args.target_indexes;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
     check_tensor(input_tensor, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-    check_tensor(target_tensor, "Target", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-    check_tensor(
-        target_indexes_tensor, "Target Indexes", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
+    check_tensor(target_tensor, "Target", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::UINT32);
     if (preallocated_output_tensor.has_value()) {
         check_tensor(
             preallocated_output_tensor.value(),
@@ -123,14 +120,12 @@ std::
     CrossEntropyForwardDeviceOperation::invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& target_tensor,
-        const ttnn::Tensor& target_indexes,
         const std::optional<ttnn::Tensor>& preallocated_output) {
     return {
         operation_attributes_t{},
         tensor_args_t{
             .input = input_tensor,
             .target = target_tensor,
-            .target_indexes = target_indexes,
             .preallocated_output = preallocated_output,
         }};
 }
