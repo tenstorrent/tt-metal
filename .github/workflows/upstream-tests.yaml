@@ -8,6 +8,8 @@ on:
   schedule:
     - cron: '0 12 * * *'
 
+# any reason to bake the test script in as entrypoint??? WHY NOT ONE IMAGE
+# well, that's because of the two builds...
 env:
   WH_6U_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u
   WH_6U_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-wh-6u
@@ -54,10 +56,16 @@ jobs:
         image-config:
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile.wh-6u
-            # Need to update these
+            test-command: tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
+            # TODO - Need to update these from above build-artifacts
             build-artifact-name: TTMetal_build_any
             wheel-artifact-name: eager-dist-ubuntu-22.04-any
-            test-command: tests/scripts/wh_6u/run_wh_6u_upstream_tests.sh
+          - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile.wh-6u
+            test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
+            # TODO - Need to update these from above build-artifacts
+            build-artifact-name: TTMetal_build_any_profiler
+            wheel-artifact-name: eager-dist-ubuntu-22.04-any-profiler
     steps:
       - uses: actions/checkout@v4
       - name: Download artifacts from metal
@@ -111,8 +119,8 @@ jobs:
           tags: ${{ matrix.image-config.image-tag }}
           context: ${{ github.workspace }}
       - name: Tag and push latest
-        # TODO - get rid of my branch
-        if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rkim/21067-upstream-tests' }}
+        # TODO - get rid of my branch and make this generic for both images
+        if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rkim/21067-upstream-tests') && contains(matrix.image-config.image-tag, 'profiler') }}
         run: |
           # TODO - To clean up, not sure if we should split out image name and tag
           IMAGE_NAME="${{ env.WH_6U_IMAGE_NAME }}"
@@ -131,12 +139,14 @@ jobs:
       - in-service
       - pipeline-functional
     steps:
-      # likely need to put this into a script which can be parameterized on the build number
+      # TODO -likely need to put this into a script which can be parameterized on the build number
       # and whether to only pull
       - name: Pull image
         timeout-minutes: 10
         run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
-        # likely will be one script later - but for now we can call directly
       - name: Run image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+      - name: Run profiler image
+        timeout-minutes: 10
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
