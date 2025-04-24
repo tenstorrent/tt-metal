@@ -914,6 +914,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
 void DeviceProfiler::setSyncInfo(std::tuple<double, double, double> sync_info) { device_sync_info = sync_info; }
 
 void DeviceProfiler::updateTracyContext(std::pair<uint32_t, CoreCoord> device_core) {
+#if defined(TRACY_ENABLE)
     chip_id_t device_id = device_core.first;
     CoreCoord worker_core = device_core.second;
 
@@ -973,6 +974,7 @@ void DeviceProfiler::updateTracyContext(std::pair<uint32_t, CoreCoord> device_co
                 cpu_time);
         }
     }
+#endif
 }
 
 bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled(); }

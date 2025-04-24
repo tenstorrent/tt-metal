@@ -596,7 +596,7 @@ void syncAllDevices(chip_id_t first_connected_device_id) {
                                (receiverSquareSum * accumulateSampleCount - receiverSum * receiverSum);
 
             uint64_t shift = (double)(senderSum - freqScale * (double)receiverSum) / accumulateSampleCount +
-                             (senderBase - receiverBase);
+                             (senderBase - freqScale * receiverBase);
             deviceDeviceSyncInfo.emplace(sender.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
             deviceDeviceSyncInfo.at(sender.first)
                 .emplace(receiver.first, (std::pair<double, int64_t>){freqScale, shift});
@@ -616,6 +616,7 @@ void syncAllDevices(chip_id_t first_connected_device_id) {
     }
 
     // Propagate sync info with DFS through sync tree
+    sync_set_devices.clear();
     setSyncInfo(first_connected_device_id, (std::pair<double, int64_t>){1.0, 0}, root_sync_info, deviceDeviceSyncInfo);
 }
 
@@ -628,7 +629,6 @@ void ProfilerSync(ProfilerSyncState state) {
     static chip_id_t first_connected_device_id = -1;
     if (state == ProfilerSyncState::INIT) {
         do_sync_on_close = true;
-        sync_set_devices.clear();
         auto ethernet_connections = tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections();
         std::set<chip_id_t> visited_devices = {};
         constexpr int TOTAL_DEVICE_COUNT = 36;
