@@ -1,10 +1,11 @@
-import pytest
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import ttnn
-import time
 
 
-# @pytest.mark.benchmark(group="from_torch")
 def test_benchmark_from_torch_zero_copy(benchmark):
     # Zero copy from_torch: row_major + physical_shape == logical_shape2d + bfloat16->bfloat16
     torch_tensor = torch.rand((8096, 8096), dtype=torch.bfloat16)
