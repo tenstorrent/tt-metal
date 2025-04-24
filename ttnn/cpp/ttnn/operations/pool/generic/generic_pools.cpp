@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "generic_pools.hpp"
-#include <tt-metalium/buffer_constants.hpp>
+#include "tt-metalium/constants.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -65,7 +65,7 @@ Tensor Pool2DOp<pool_type>::invoke(
                     (applied_shard_scheme.value() == TensorMemoryLayout::BLOCK_SHARDED),
                 "Only height, width, or block sharding strategies are supported.");
             shard_layout = applied_shard_scheme.value();
-        parallel_config = conv::determine_parallel_config(
+            parallel_config = conv::determine_parallel_config(
                                             shard_layout,
                                             batch_size,
                                             channels,
@@ -77,7 +77,7 @@ Tensor Pool2DOp<pool_type>::invoke(
                                             false,
                                             false,
                                             false);
-                                        }
+        }
         else { //auto-sharding
             parallel_config = pool::determine_pool_config_for_auto_shard(
                 input_tensor,
@@ -85,6 +85,7 @@ Tensor Pool2DOp<pool_type>::invoke(
                 channels,
                 pool_type
                 );
+                tt::log_debug(tt::LogOp, "auto sharding spec: {}", parallel_config.shard_scheme);
         }
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
@@ -157,13 +158,16 @@ Tensor Pool2DOp<pool_type>::invoke(
         is_out_tiled,
         in_place_halo);
 
-    auto output_tensor = ttnn::prim::pool2d(
-        queue_id,
-        haloed_tensor,
-        sliding_window_config,
-        pool_type,
-        DataType::BFLOAT16,  // input_tensor.dtype(), // currently only bfp16 output is supported
-        out_memory_config);
+
+
+        auto output_tensor = ttnn::prim::pool2d(
+            queue_id,
+            haloed_tensor,
+            sliding_window_config,
+            pool_type,
+            DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
+            out_memory_config);
+
 
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
         output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);

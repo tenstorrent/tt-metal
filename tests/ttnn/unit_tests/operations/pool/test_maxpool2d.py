@@ -256,7 +256,7 @@ def test_max_pool2d_localrun(device, dtype, input_spec):
         dilation_w,
         dtype,
         device,
-        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        sharding=None,  # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,    # auto-sharding!
         ceil_mode=ceil_mode,
     )
 
@@ -464,6 +464,7 @@ def test_run_max_pool_mem_config(device, dtype, input_spec, memory_config):
         dilation_w,
         dtype,
         device,
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         memory_config=memory_config,
     )

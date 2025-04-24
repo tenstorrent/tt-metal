@@ -12,8 +12,6 @@
 #include <optional>
 #include <tuple>
 
-#include "pool2d_utils.hpp"
-#include <tt-metalium/buffer_constants.hpp>
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -81,19 +79,20 @@ uint32_t calculate_L1_usage(
     Pool2DType pool_type) {
     const auto input_shape = input.get_padded_shape();
 
-    tt::DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
-    tt::DataFormat out_df = in_df;
+    auto in_dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
+    tt::DataFormat in_df = datatype_to_dataformat_converter(in_dtype);
+    // tt::DataFormat out_df = in_df;
     uint32_t in_nbytes = datum_size(in_df);
-    uint32_t out_nbytes = datum_size(out_df);
+    uint32_t out_nbytes = in_nbytes;
 
     auto pconfig = input.memory_config();
-    auto grid_size = input.shard_spec().value().grid.bounding_box().grid_size();
+    auto grid_size = input_memory.shard_spec.value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (pconfig.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_shards_c = 1;
     } else if (pconfig.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        num_shards_c = input.shard_spec().value().grid.num_cores();
-    } else if (input.shard_spec().value().orientation == ShardOrientation::COL_MAJOR) {
+        num_shards_c = input_memory.shard_spec.value().grid.num_cores();
+    } else if (input_memory.shard_spec.value().orientation == ShardOrientation::COL_MAJOR) {
         num_shards_c = grid_size.y;
     } else {
         num_shards_c = grid_size.x;
@@ -196,8 +195,14 @@ uint32_t calculate_L1_usage(
         max_pool_partials_cb_config_size = max_pool_partials_cb_npages * max_pool_partials_cb_pagesize;
     }
 
-    return in_scalar_cb_config_size + raw_in_cb_config_size + in_one_cb_size + in_reader_indices_cb_config_size +
-           in_cb_config_0_size + in_cb_config_1_size + out_cb_config_size + max_pool_partials_cb_config_size;
+    return in_scalar_cb_config_size
+           //+ raw_in_cb_config_size                 /* global, involved */  // input, ignore (should be global?)
+           + in_one_cb_size
+           //+ in_reader_indices_cb_config_size      /* global */    // ignore
+           + in_cb_config_0_size +
+           in_cb_config_1_size
+           //+ out_cb_config_size                    /* global, involved */
+           + max_pool_partials_cb_config_size;
 }
 
 sliding_window::ParallelConfig determine_pool_config_for_auto_shard(

@@ -55,7 +55,7 @@ def run_max_pool2d(
     dilation_w,
     dtype,
     device,
-    sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    sharding=None,  # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ceil_mode=False,
     memory_config=None,
     in_place=False,
