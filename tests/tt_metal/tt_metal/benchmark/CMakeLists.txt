@@ -1,4 +1,5 @@
 set(BENCHMARK_SRCS "host_tilizer_untilizer/tilizer_untilizer.cpp")
+set(BENCHMARK_SRCS "padding/pad_rm.cpp")
 
 foreach(TEST_SRC ${BENCHMARK_SRCS})
     get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
@@ -10,6 +11,7 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
     target_link_libraries(
         ${TEST_TARGET}
         PUBLIC
+            ttnn
             test_metal_common_libs
             benchmark::benchmark
     )
@@ -21,6 +23,8 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
             ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
             ${PROJECT_SOURCE_DIR}/tests
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
+            ${PROJECT_SOURCE_DIR}/ttnn/cpp
+            ${PROJECT_SOURCE_DIR}/ttnn/
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
     set_target_properties(
