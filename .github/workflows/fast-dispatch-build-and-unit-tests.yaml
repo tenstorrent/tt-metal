@@ -83,5 +83,5 @@ jobs:
         with:
           prefix: "test_reports_"
       - name: Generate system logs on failure
-        uses: ./.github/actions/generate-system-logs
+        uses: tenstorrent/tt-metal/.github/actions/generate-system-logs@main
         if: ${{ failure() }}
