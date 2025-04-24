@@ -1237,13 +1237,16 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                     runtime_args[runtime_args[0] + 2] = gamma_address;
                 }
             }
-            UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *src_buffer_a);
 
             if (b_tensor.has_value()) {
-                UpdateDynamicCircularBufferAddress(program, cb_in1, *b_tensor.value().buffer());
-                UpdateDynamicCircularBufferAddress(program, cb_add_out, *src_buffer_a);
+                UpdateDynamicCircularBufferAddress(program, cb_in1, *src_buffer_a);
+                UpdateDynamicCircularBufferAddress(program, cb_add_out, *b_tensor.value().buffer());
+                UpdateDynamicCircularBufferAddress(program, cb_in0, *b_tensor.value().buffer());
+                UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *b_tensor.value().buffer());
+            } else {
+                UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
+                UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *src_buffer_a);
             }
-            UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
             if (!skip_write_back) {
                 UpdateDynamicCircularBufferAddress(program, cb_output_reshard, *dst_buffer);
             } else {
