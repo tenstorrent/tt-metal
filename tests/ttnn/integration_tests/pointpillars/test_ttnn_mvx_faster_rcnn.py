@@ -198,14 +198,26 @@ def test_ttnn_mvx_faster_rcnn(device, use_pretrained_weight, reset_seeds):
         parameters=parameters,
         device=device,
     )
-    # print("ttnn_model", ttnn_model)
     ttnn_output = ttnn_model(
         batch_inputs_dict=ttnn_batch_inputs_dict, batch_data_samples=ttnn_batch_data_samples_modified
     )
 
-    print("reference_ouptut", reference_output)
-    print("ttnn_output", ttnn_output)
+    reference_output_final = reference_model.pts_bbox_head.predict(reference_output, batch_data_samples_modified)
+    for i in range(len(ttnn_output)):
+        for j in range(len(ttnn_output[i])):
+            ttnn_output[i][j] = ttnn.to_torch(ttnn_output[i][j])
+            ttnn_output[i][j] = ttnn_output[i][j].permute(0, 3, 1, 2)
+            ttnn_output[i][j] = ttnn_output[i][j].to(dtype=torch.float)
+
+    ttnn_output_final = ttnn_model.pts_bbox_head.predict(ttnn_output, ttnn_batch_data_samples_modified)
+
+    print("reference_output_final", reference_output_final)
+    print("ttnn_output_final", ttnn_output_final)
 
     # for i in range(len(ttnn_output)):
-    #     passing, pcc = assert_with_pcc(reference_output[i], ttnn.to_torch(ttnn_output[i]).permute(0, 3, 1, 2), 0.98)
-    #     logger.info(f"Passing: {passing}, PCC: {pcc}")
+    #     for j in range(len(ttnn_output[i])):
+    #         output_temp=ttnn_output[i][j]
+    #         output_temp=ttnn.to_torch(output_temp)
+    #         output_temp=output_temp.permute(0,3,1,2)
+    #         passing, pcc = assert_with_pcc(reference_output[i][j], output_temp,0.97)
+    #         logger.info(f"Passing: {passing}, PCC: {pcc}")

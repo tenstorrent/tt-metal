@@ -7,7 +7,6 @@ from functools import partial
 import importlib
 import numpy as np
 from mmengine.structures import InstanceData
-import ttnn
 
 from torch import nn as nn
 
@@ -528,8 +527,8 @@ class TtBase3DDenseHead(nn.Module, metaclass=ABCMeta):
     def predict(self, x: Tuple[Tensor], batch_data_samples, rescale: bool = False):
         # batch_input_metas = [data_samples.metainfo for data_samples in batch_data_samples]
         batch_input_metas = batch_data_samples  # modified and passed the input
-        outs = self(x)
-        predictions = self.predict_by_feat(*outs, batch_input_metas=batch_input_metas, rescale=rescale)
+        # outs = self(x)
+        predictions = self.predict_by_feat(*x, batch_input_metas=batch_input_metas, rescale=rescale)
         return predictions
 
     def predict_by_feat(
@@ -542,17 +541,17 @@ class TtBase3DDenseHead(nn.Module, metaclass=ABCMeta):
         rescale: bool = False,
         **kwargs,
     ):
-        for i in range(len(cls_scores)):
-            cls_scores[i] = ttnn.to_torch(cls_scores[i])
-            cls_scores[i] = cls_scores[i].permute(0, 3, 1, 2)
-            cls_scores[i] = cls_scores[i].to(dtype=torch.float)
-        for i in range(len(bbox_preds)):
-            bbox_preds[i] = ttnn.to_torch(bbox_preds[i])
-            bbox_preds[i] = bbox_preds[i].permute(0, 3, 1, 2)
-            bbox_preds[i] = bbox_preds[i].to(dtype=torch.float)
-        for i in range(len(dir_cls_preds)):
-            dir_cls_preds[i] = ttnn.to_torch(dir_cls_preds[i])
-            dir_cls_preds[i] = dir_cls_preds[i].permute(0, 3, 1, 2)
+        # for i in range(len(cls_scores)):
+        #     cls_scores[i] = ttnn.to_torch(cls_scores[i])
+        #     cls_scores[i] = cls_scores[i].permute(0, 3, 1, 2)
+        #     cls_scores[i] = cls_scores[i].to(dtype=torch.float)
+        # for i in range(len(bbox_preds)):
+        #     bbox_preds[i] = ttnn.to_torch(bbox_preds[i])
+        #     bbox_preds[i] = bbox_preds[i].permute(0, 3, 1, 2)
+        #     bbox_preds[i] = bbox_preds[i].to(dtype=torch.float)
+        # for i in range(len(dir_cls_preds)):
+        #     dir_cls_preds[i] = ttnn.to_torch(dir_cls_preds[i])
+        #     dir_cls_preds[i] = dir_cls_preds[i].permute(0, 3, 1, 2)
 
         assert len(cls_scores) == len(bbox_preds)
         assert len(cls_scores) == len(dir_cls_preds)
