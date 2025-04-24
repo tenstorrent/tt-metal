@@ -44,6 +44,7 @@ void RMSAllGather::validate(
     TT_FATAL(
         input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 4 input tensors");
     auto& a = input_tensors.at(0);
+    TT_FATAL(a.get_padded_shape().rank() == 4, "Input shape must be rank 4");
     uint32_t input_width = a.get_tensor_spec().tile().get_tile_shape()[1];
     uint32_t input_height = a.get_tensor_spec().tile().get_tile_shape()[0];
     const auto& b = optional_input_tensors.at(0);
