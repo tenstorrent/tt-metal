@@ -7,17 +7,20 @@ import torch
 from diffusers import AutoencoderKL
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
+    UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
+)
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_upsample import UpsampleBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "input_channels, input_height, input_width, out_channels, output_height, output_width, conv_in_channel_split_factor, conv_out_channel_split_factor, block_id",
+    "input_channels, input_height, input_width, out_channels, output_height, output_width, conv_channel_split_factor, block_id",
     [
-        (512, 64, 64, 512, 128, 128, 1, 1, 0),
-        (512, 128, 128, 512, 256, 256, 2, 2, 1),
-        (256, 256, 256, 256, 512, 512, 4, 2, 2),
+        (512, 64, 64, 512, 128, 128, UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS[0], 0),
+        (512, 128, 128, 512, 256, 256, UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS[1], 1),
+        (256, 256, 256, 256, 512, 512, UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS[2], 2),
     ],
 )
 def test_upsample(
@@ -28,8 +31,7 @@ def test_upsample(
     out_channels,
     output_height,
     output_width,
-    conv_in_channel_split_factor,
-    conv_out_channel_split_factor,
+    conv_channel_split_factor,
     block_id,
     use_program_cache,
 ):
@@ -50,8 +52,8 @@ def test_upsample(
         out_channels,
         output_height,
         output_width,
-        conv_in_channel_split_factor,
-        conv_out_channel_split_factor,
+        conv_channel_split_factor[0],
+        conv_channel_split_factor[1],
     )
 
     # Prepare ttnn input

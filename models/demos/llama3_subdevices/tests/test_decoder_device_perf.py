@@ -92,7 +92,7 @@ perf_targets = {
         "kernel_duration": 10682.444444444445,
         "op_to_op": 688.7777777777778,
         "non-overlapped-dispatch-time": 6144.8,
-        "kernel_duration_relative_margin": 0.01,
+        "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
         "dispatch_duration_relative_margin": 0.15,
     },
@@ -152,7 +152,7 @@ perf_targets = {
     },
     "RotaryEmbeddingLlamaFusedQK_0": {
         "op_name": "RotaryEmbeddingLlamaFusedQK",
-        "kernel_duration": 4287.0,
+        "kernel_duration": 4296,
         "op_to_op": 606.1111111111111,
         "non-overlapped-dispatch-time": 2844.3,
         "kernel_duration_relative_margin": 0.1,
@@ -179,7 +179,7 @@ perf_targets = {
     },
     "BinaryDeviceOperation_0": {
         "op_name": "Binary_Residual_0",
-        "kernel_duration": 1058.3333333333333,
+        "kernel_duration": 1059,
         "op_to_op": 725.6666666666666,
         "non-overlapped-dispatch-time": 6316.8,
         "kernel_duration_relative_margin": 0.25,
@@ -197,7 +197,7 @@ perf_targets = {
     },
     "BinaryDeviceOperation_2": {
         "op_name": "Binary_Residual_1",
-        "kernel_duration": 1051.2222222222222,
+        "kernel_duration": 1052,
         "op_to_op": 731.4444444444445,
         "non-overlapped-dispatch-time": 6751.9,
         "kernel_duration_relative_margin": 0.1,

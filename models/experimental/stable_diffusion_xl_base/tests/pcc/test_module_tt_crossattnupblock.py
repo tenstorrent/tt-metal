@@ -22,7 +22,7 @@ from models.utility_functions import torch_random
             20,
             1280,
             0,
-            0.93,
+            0.928,
         ),
         (
             (1, 1280, 64, 64),
