@@ -405,6 +405,13 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
     }
 
+    // compute defines
+    // reader defines
+    std::map<string, string> compute_defines;
+    if (b.has_value()) {
+        compute_defines["FUSE_PRE_ADD"] = "1";
+    }
+
     // Create pre circular buffers
 
     // in1 sharded
@@ -820,7 +827,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args});
+            .compile_args = compute_compile_time_args,
+            .defines = compute_defines});
     if (num_none_all_to_all_workers > 0) {
         compute_compile_time_args.at(4) = 0;
         compute_kernels_id = CreateKernel(
@@ -831,7 +839,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .math_approx_mode = math_approx_mode,
-                .compile_args = compute_compile_time_args});
+                .compile_args = compute_compile_time_args,
+                .defines = compute_defines});
     }
 
     // Runtime Args
@@ -1237,7 +1246,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                     runtime_args[runtime_args[0] + 2] = gamma_address;
                 }
             }
-
+            // Repoint to the input buffers
             if (b_tensor.has_value()) {
                 UpdateDynamicCircularBufferAddress(program, cb_in1, *src_buffer_a);
                 UpdateDynamicCircularBufferAddress(program, cb_add_out, *b_tensor.value().buffer());
