@@ -231,10 +231,14 @@ struct debug_assert_msg_t {
     volatile uint8_t which;
 };
 
-enum debug_assert_tripped_enum {
+typedef enum debug_assert_tripped_enum {
     DebugAssertOK = 2,
     DebugAssertTripped = 3,
-};
+    DebugAssertNCriscNOCReadsFlushedTripped = 4,
+    DebugAssertNCriscNOCNonpostedWritesSentTripped = 5,
+    DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped = 6,
+    DebugAssertNCriscNOCPostedWritesSentTripped = 7
+} debug_assert_type_t;
 
 // XXXX TODO(PGK): why why why do we not have this standardized
 enum riscv_id_t {

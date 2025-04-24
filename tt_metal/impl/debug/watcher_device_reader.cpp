@@ -616,32 +616,61 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
 }
 
 void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& core_str, const mailboxes_t* mbox_data) {
-    uint32_t launch_msg_read_ptr = mbox_data->launch_msg_rd_ptr;
     const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
     const debug_assert_msg_t* assert_status = &mbox_data->watcher.assert_status;
     switch (assert_status->tripped) {
         case DebugAssertTripped: {
             // TODO: Get rid of this once #6098 is implemented.
-            std::string line_num_warning =
+            const string line_num_warning =
                 "Note that file name reporting is not yet implemented, and the reported line number for the assert may "
                 "be from a different file.";
-            string error_msg = fmt::format(
+            const string error_msg = fmt::format(
                 "{}: {} tripped an assert on line {}. Current kernel: {}. {}",
                 core_str,
                 get_riscv_name(core.coord, assert_status->which),
                 assert_status->line_num,
                 GetKernelName(core, launch_msg, assert_status->which).c_str(),
                 line_num_warning.c_str());
-            log_warning("Watcher stopped the device due to tripped assert, see watcher log for more details");
-            log_warning(error_msg.c_str());
-            DumpWaypoints(core, mbox_data, true);
-            DumpRingBuffer(core, mbox_data, true);
-            LogRunningKernels(core, launch_msg);
-            set_watcher_exception_message(error_msg);
-            TT_THROW("Watcher detected tripped assert and stopped device.");
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
             break;
         }
-        case DebugAssertOK:
+        case DebugAssertNCriscNOCReadsFlushedTripped: {
+            const string error_msg = fmt::format(
+                "Watcher detected an inter-kernel data race in core {} RISC {} due to kernel completing with pending "
+                "NOC transactions (missing NCRISC NOC reads flushed barrier)",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which));
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertNCriscNOCNonpostedWritesSentTripped: {
+            const string error_msg = fmt::format(
+                "Watcher detected an inter-kernel data race in core {} RISC {} due to kernel completing with pending "
+                "NOC transactions (missing NCRISC NOC non-posted writes sent barrier)",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which));
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped: {
+            const string error_msg = fmt::format(
+                "Watcher detected an inter-kernel data race in core {} RISC {} due to kernel completing with pending "
+                "NOC transactions (missing NCRISC NOC non-posted atomics flushed barrier)",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which));
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertNCriscNOCPostedWritesSentTripped: {
+            const string error_msg = fmt::format(
+                "Watcher detected an inter-kernel data race in core {} RISC {} due to kernel completing with pending "
+                "NOC transactions (missing NCRISC NOC posted writes sent barrier)",
+                core_str,
+                get_riscv_name(core.coord, assert_status->which));
+            this->DumpAssertTrippedDetails(core, error_msg, mbox_data);
+            break;
+        }
+        case DebugAssertOK: {
             if (assert_status->line_num != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
                 assert_status->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
                 TT_THROW(
@@ -651,6 +680,7 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
                     assert_status->line_num);
             }
             break;
+        }
         default:
             LogRunningKernels(core, launch_msg);
             TT_THROW(
@@ -658,6 +688,18 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
                 core.coord.str(),
                 assert_status->tripped);
     }
+}
+
+void WatcherDeviceReader::DumpAssertTrippedDetails(
+    CoreDescriptor& core, const string& error_msg, const mailboxes_t* mbox_data) {
+    log_warning("Watcher stopped the device due to tripped assert, see watcher log for more details");
+    log_warning(error_msg.c_str());
+    DumpWaypoints(core, mbox_data, true);
+    DumpRingBuffer(core, mbox_data, true);
+    const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
+    LogRunningKernels(core, launch_msg);
+    set_watcher_exception_message(error_msg);
+    TT_THROW("Watcher detected tripped assert and stopped device.");
 }
 
 void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& core_str, const mailboxes_t* mbox_data) {
