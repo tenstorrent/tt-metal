@@ -52,6 +52,27 @@ CircularBuffer::CircularBuffer(
     this->set_global_circular_buffer(global_circular_buffer);
 }
 
+CircularBuffer::CircularBuffer(const CBDescriptor& descriptor) :
+    id_(reinterpret_cast<uintptr_t>(this)),
+    core_ranges_(descriptor.core_ranges),
+    config_(descriptor),
+    locally_allocated_address_(std::nullopt) {
+    this->validate_set_config_attributes();
+    if (descriptor.global_circular_buffer) {
+        TT_FATAL(
+            !config_.globally_allocated_address().has_value(),
+            "Connot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
+        TT_FATAL(
+            !this->config_.remote_buffer_indices().empty(),
+            "Remote buffer indices should be specified when using a GlobalCircularBuffer");
+        this->set_global_circular_buffer(*descriptor.global_circular_buffer);
+    } else {
+        if (globally_allocated()) {
+            globally_allocated_address_ = config_.globally_allocated_address().value();
+        }
+    }
+}
+
 void CircularBuffer::validate_set_config_attributes() {
     for (uint8_t buffer_index = 0; buffer_index < NUM_CIRCULAR_BUFFERS; buffer_index++) {
         std::optional<DataFormat> data_format_spec = this->config_.data_formats().at(buffer_index);
