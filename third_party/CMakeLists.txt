@@ -3,6 +3,7 @@
 # their own .clang-tidy within themselves and still not be clean against it <cough>flatbuffers</cough>
 set(CMAKE_C_CLANG_TIDY "")
 set(CMAKE_CXX_CLANG_TIDY "")
+set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
 ############################################################################################################################
 # Boost
@@ -40,10 +41,18 @@ ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
 
 add_library(span INTERFACE)
-target_link_libraries(span INTERFACE Boost::core)
+target_link_libraries(
+    span
+    INTERFACE
+        "$<BUILD_INTERFACE:Boost::core>" # FIXME: this is a hack so we do not need to package up Boost
+)
 
 add_library(small_vector INTERFACE)
-target_link_libraries(small_vector INTERFACE Boost::container)
+target_link_libraries(
+    small_vector
+    INTERFACE
+        "$<BUILD_INTERFACE:Boost::container>" # FIXME: this is a hack so we do not need to package up Boost
+)
 
 ############################################################################################################################
 # yaml-cpp
@@ -87,14 +96,25 @@ CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.1.1)
 if(reflect_ADDED)
     add_library(reflect INTERFACE)
     add_library(Reflect::Reflect ALIAS reflect)
-    target_include_directories(reflect SYSTEM INTERFACE ${reflect_SOURCE_DIR})
+    target_include_directories(reflect SYSTEM INTERFACE "$<BUILD_INTERFACE:${reflect_SOURCE_DIR}>")
+
+    target_sources(
+        reflect
+        INTERFACE
+            FILE_SET api
+            TYPE HEADERS
+            BASE_DIRS ${reflect_SOURCE_DIR}
+            FILES ${reflect_SOURCE_DIR}/reflect
+    )
 endif()
 
 ############################################################################################################################
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7)
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME magic-enum-dev)
+CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7 OPTIONS "MAGIC_ENUM_OPT_INSTALL TRUE")
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
 ############################################################################################################################
 # fmt : https://github.com/fmtlib/fmt
@@ -127,13 +147,16 @@ CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OP
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME json-dev)
 CPMAddPackage(
     NAME nlohmann_json
     GITHUB_REPOSITORY nlohmann/json
     GIT_TAG v3.11.3
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "JSON_Install ON"
 )
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
 ############################################################################################################################
 # xtensor : https://github.com/xtensor-stack/xtensor
