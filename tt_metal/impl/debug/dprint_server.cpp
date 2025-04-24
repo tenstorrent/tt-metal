@@ -61,16 +61,16 @@ using namespace tt;
 
 namespace {
 
-static string logfile_path = "generated/dprint/";
+string logfile_path = "generated/dprint/";
 
-static inline float bfloat16_to_float(uint16_t bfloat_val) {
+inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
     float f;
     std::memcpy(&f, &uint32_data, sizeof(f));
     return f;
 }
 
-static string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
+string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
         switch (risc_id) {
             case DPRINT_RISCV_INDEX_ER: return abbreviated ? "ER" : "ERISC";
@@ -92,7 +92,7 @@ static string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = fa
     return fmt::format("UNKNOWN_RISC_ID({})", risc_id);
 }
 
-static void AssertSize(uint8_t sz, uint8_t expected_sz) {
+void AssertSize(uint8_t sz, uint8_t expected_sz) {
     TT_ASSERT(
         sz == expected_sz,
         "DPrint token size ({}) did not match expected ({}), potential data corruption in the DPrint buffer.",
@@ -262,17 +262,17 @@ private:
     char most_recent_setw = 0;
 };
 
-static void ResetStream(ostringstream* stream) {
+void ResetStream(ostringstream* stream) {
     stream->str("");
     stream->clear();
 }  // ResetStream
 
-static bool StreamEndsWithNewlineChar(const ostringstream* stream) {
+bool StreamEndsWithNewlineChar(const ostringstream* stream) {
     const string stream_str = stream->str();
     return !stream_str.empty() && stream_str.back() == '\n';
 }  // StreamEndsWithNewlineChar
 
-static void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
+void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
     TileSliceHostDev<0> ts_copy;  // Make a copy since ptr might not be properly aligned
     std::memcpy(&ts_copy, ptr, sizeof(TileSliceHostDev<0>));
     TileSliceHostDev<0>* ts = &ts_copy;
@@ -391,7 +391,7 @@ static void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
 // Create a float from a given bit pattern, given the number of bits for the exponent and mantissa.
 // Assumes the following order of bits in the input data:
 //   [sign bit][mantissa bits][exponent bits]
-static float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
+float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
     int sign = (data >> (exp_bit_count + mantissa_bit_count)) & 0x1;
     const int exp_mask = (1 << (exp_bit_count)) - 1;
     int exp_bias = (1 << (exp_bit_count - 1)) - 1;
@@ -407,7 +407,7 @@ static float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint3
 }
 
 // Prints a given datum in the array, given the data_format
-static void PrintTensixRegisterData(ostringstream* stream, int setwidth, uint32_t datum, uint16_t data_format) {
+void PrintTensixRegisterData(ostringstream* stream, int setwidth, uint32_t datum, uint16_t data_format) {
     switch (data_format) {
         case static_cast<std::uint8_t>(tt::DataFormat::Float16):
         case static_cast<std::uint8_t>(tt::DataFormat::Bfp8):
@@ -444,7 +444,7 @@ static void PrintTensixRegisterData(ostringstream* stream, int setwidth, uint32_
 // Prints a typed uint32 array given the number of elements including the type.
 // If force_element_type is set to a valid type, it is assumed that the type is not included in the
 // data array, and the type is forced to be the given type.
-static void PrintTypedUint32Array(
+void PrintTypedUint32Array(
     ostringstream* stream,
     int setwidth,
     uint32_t raw_element_count,

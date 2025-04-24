@@ -52,7 +52,7 @@ using std::string;
 namespace {  // Helper functions
 
 // Helper function to get string rep of riscv type
-static const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
+const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
     switch (type) {
         case DebugBrisc: return "brisc";
         case DebugNCrisc: return "ncrisc";
@@ -68,7 +68,7 @@ static const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
 }
 
 // Helper function to get stack size by riscv core type
-static uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) {
+uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) {
     auto stack_size = MetalContext::instance().hal().get_stack_size(type);
     if (stack_size == 0xdeadbeef) {
         TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
@@ -77,7 +77,7 @@ static uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) 
 }
 
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
-static CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtual_coord) {
+CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtual_coord) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
         return CoreType::WORKER;
     } else if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_coord, device_id)) {
@@ -94,7 +94,7 @@ static CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord
 }
 
 // Helper function to convert noc coord -> virtual coord. TODO: Remove this once we fix code types.
-static CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord) {
+CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoord coord) {
     auto grid_size = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).grid_size;
     if (coord.x >= grid_size.x || coord.y >= grid_size.y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
@@ -112,7 +112,7 @@ static CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, 
 }
 
 // Helper function to get string rep of noc target.
-static string get_noc_target_str(
+string get_noc_target_str(
     chip_id_t device_id, CoreDescriptor& core, int noc, const debug_sanitize_noc_addr_msg_t* san) {
     auto get_core_and_mem_type = [](chip_id_t device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
@@ -584,6 +584,10 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
         case DebugSanitizeNocMixedVirtualandPhysical:
             error_msg = get_noc_target_str(device_id, core, noc, san);
             error_msg += " (mixing virtual and virtual coordinates in Mcast).";
+            break;
+        case DebugSanitizeInlineWriteDramUnsupported:
+            error_msg = get_noc_target_str(device_id, core, noc, san);
+            error_msg += " (inline dw writes do not support DRAM destination addresses).";
             break;
         case DebugSanitizeNocAddrMailbox:
             error_msg = get_noc_target_str(device_id, core, noc, san);
