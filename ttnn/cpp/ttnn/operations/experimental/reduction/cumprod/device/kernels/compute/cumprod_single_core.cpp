@@ -8,11 +8,9 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-#define APPROX false
-#include "compute_kernel_api/add_int32_sfpu.h"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+
 #include "compute_kernel_api/common.h"
-#include "debug/dprint_tensix.h"
-#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -37,9 +35,9 @@ void MAIN {
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_one);
         copy_tile(cb_one, first_tile, TILE_DEST);
-        // dprint_tensix_dest_reg(TILE_DEST);
         tile_regs_commit();
 
+        pack_reconfig_data_format(cb_intermed);
         tile_regs_wait();
         cb_reserve_back(cb_intermed, 1);
         pack_tile(TILE_DEST, cb_intermed);
@@ -47,6 +45,7 @@ void MAIN {
         tile_regs_release();
 
         for (unsigned j = 0; j < tiles_per_row; j++) {
+            reconfig_data_format(cb_in, cb_intermed);
             cb_wait_front(cb_in, 1);
             // copy_tile_to_dst_init_short(cb_in);
             // copy_tile(cb_in, first_tile, TILE_DEST);
@@ -55,10 +54,10 @@ void MAIN {
             // copy_tile_to_dst_init_short(cb_intermed);
             // copy_tile(cb_intermed, first_tile, TILE_ACC);
 
-            tile_regs_acquire();  // acquire 8 tile registers
+            tile_regs_acquire();
 
             mul_tiles_init(cb_in, cb_intermed);
-            mul_tiles(cb_in, cb_intermed, 0, 0, TILE_DEST);
+            mul_tiles_bcast_rows(cb_in, cb_intermed, 0, 0, TILE_DEST);
 
             tile_regs_commit();
 
@@ -68,10 +67,12 @@ void MAIN {
             tile_regs_wait();
 
             cb_reserve_back(cb_out, 1);
+            pack_reconfig_data_format(cb_out);
             pack_tile(TILE_DEST, cb_out);
             cb_push_back(cb_out, 1);
 
             cb_reserve_back(cb_intermed, 1);
+            pack_reconfig_data_format(cb_intermed);
             pack_tile(TILE_DEST, cb_intermed);
             cb_push_back(cb_intermed, 1);
 

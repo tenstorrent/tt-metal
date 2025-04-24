@@ -34,9 +34,10 @@ void kernel_main() {
 
     const int32_t ACC_START_VALUE_F32{caster.u};
     constexpr int16_t ACC_START_VALUE_F16{0x380};  // 1.0f for bfloat16
-    constexpr int32_t ACC_START_VALUE_I32{1};
-    constexpr int16_t ACC_START_VALUE_I16{1};
-    constexpr int8_t ACC_START_VALUE_I8{1};
+    // TODO(jbbieniekTT): the below ones will work only if applied LLK is preconfigured appropriately for those.
+    constexpr int32_t ACC_START_VALUE_I32{0x1};
+    constexpr int16_t ACC_START_VALUE_I16{0x1};
+    constexpr int8_t ACC_START_VALUE_I8{0x1};
 
     uint32_t bytes_per_element = 4;
 
@@ -48,9 +49,7 @@ void kernel_main() {
         case DataFormat::UInt16: bytes_per_element = 2; break;
         case DataFormat::Int32:
         case DataFormat::UInt32: bytes_per_element = 4; break;
-        default:  // TODO(jbbieniekTT): ?
-            bytes_per_element = 4;
-            break;
+        default: bytes_per_element = 4; break;
     }
 
     uint32_t tile_card = ublock_size_bytes / bytes_per_element;

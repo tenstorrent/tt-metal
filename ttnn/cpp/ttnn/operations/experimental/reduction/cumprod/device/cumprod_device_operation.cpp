@@ -22,11 +22,6 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
     const auto& dim{attributes.dim};
 
     if (optional_out.has_value()) {
-        // TT_FATAL(
-        //     input_dtype != DataType::INVALID,
-        //     "The dtype requested in the dtype= kwarg is incorrect: {}",
-        //     magic_enum::enum_name(input_dtype));
-
         // TODO(jbbieniekTT): in this case, automatic conversion should be performed as per Torch's policy
         // TT_FATAL(
         //     input_tensor.get_dtype() == optional_out->get_dtype(),
@@ -48,6 +43,7 @@ void CumprodDeviceOperation::validate_on_program_cache_miss(
 
         out_dtype = optional_out->get_dtype();
     } else {
+        // TODO(jbbieniekTT): in this case, automatic conversion should be performed as per Torch's policy
         // TT_FATAL(
         //     attributes.dtype == input_tensor.get_dtype(),
         //     "The input tensor's dtype doesn't match the dtype provided in the argument.\n"
@@ -142,6 +138,7 @@ hash::hash_t CumprodDeviceOperation::compute_program_hash(
         select_program_factory(args, tensor_args).index(),
         tensor_args.input_tensor.dtype(),
         tensor_args.input_tensor.get_padded_shape(),
+        tensor_args.input_tensor.get_logical_shape(),
         std::get<DeviceStorage>(tensor_args.input_tensor.storage()).memory_config(),
         tensor_args.input_tensor.get_padded_shape().volume(),
         tensor_args.optional_out.has_value() ? tensor_args.optional_out->dtype() : DataType::INVALID,

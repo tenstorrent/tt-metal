@@ -14,6 +14,7 @@
 #include <ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp>
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 
 #include "tt-metalium/assert.hpp"
 #include "cumprod.hpp"
@@ -39,7 +40,10 @@ Tensor CumprodOperation::invoke(
     //    adjusted_input_tensor = converted_tensor;
     // }
 
-    if (tensor_rank == 0 || adjusted_input_tensor.get_logical_volume() == 0) {  // empty input tensor => nothing to do
+    constexpr uint32_t FOUR_DIMENSIONS{4};
+    constexpr uint32_t FIRST_DIMENSION{0};
+
+    if (tensor_rank == 0 || adjusted_input_tensor.get_logical_volume() == 0) {
         return adjusted_input_tensor;
     }
 
@@ -49,11 +53,11 @@ Tensor CumprodOperation::invoke(
         cum_axis += tensor_rank;
     }
 
-    if (tensor_rank - cum_axis < 4) {
+    if (tensor_rank - cum_axis < FOUR_DIMENSIONS) {
         int initial_tensor_rank = tensor_rank;
-        if (initial_tensor_rank < 4) {
+        if (initial_tensor_rank < FOUR_DIMENSIONS) {
             ttnn::SmallVector<uint32_t> new_dims = {};
-            for (int i{initial_tensor_rank}; i < 4; ++i) {
+            for (int i{initial_tensor_rank}; i < FOUR_DIMENSIONS; ++i) {
                 new_dims.push_back(1);
             }
             new_dims.insert(new_dims.end(), input_shape.cbegin(), input_shape.cend());
@@ -61,44 +65,33 @@ Tensor CumprodOperation::invoke(
 
             adjusted_input_tensor = ttnn::reshape(adjusted_input_tensor, new_shape);
 
-            if (optional_out.has_value()) {
-                // optional_out = ttnn::reshape(optional_out.value(), new_shape);
-            }
-
-            tensor_rank = 4;
-            cum_axis += (4 - initial_tensor_rank);  // update dim parameter to target updated axis
+            // Update params
+            tensor_rank = FOUR_DIMENSIONS;
+            cum_axis += (FOUR_DIMENSIONS - initial_tensor_rank);
         }
 
         // Create permutation that just swaps dim with the first dim
         ttnn::SmallVector<int64_t> permutation(tensor_rank);
-        std::iota(permutation.begin(), permutation.end(), 0);
-        permutation[0] = cum_axis;
-        permutation[cum_axis] = 0;
+        std::iota(permutation.begin(), permutation.end(), FIRST_DIMENSION);
+        permutation[FIRST_DIMENSION] = cum_axis;
+        permutation[cum_axis] = FIRST_DIMENSION;
 
         Tensor permuted_tensor =
             ttnn::permute(adjusted_input_tensor, permutation, adjusted_input_tensor.memory_config());
 
-        if (optional_out.has_value()) {
-            //     optional_out = ttnn::permute(optional_out.value(), permutation, optional_out->memory_config());
-        }
+        permuted_tensor = ttnn::fill_implicit_tile_padding(permuted_tensor, 0.0f, permuted_tensor.memory_config());
 
         Tensor output_tensor = ttnn::prim::cumprod(
             permuted_tensor,
-            0,
+            FIRST_DIMENSION,
             dtype,
             std::nullopt,
             memory_config.has_value() ? memory_config.value() : permuted_tensor.memory_config(),
             queue_id);
 
         output_tensor = ttnn::permute(output_tensor, permutation, output_tensor.memory_config());
-        // TODO(jbbieniekTT): what about the optional out? (trying to handle it right now, not sure if correctly)
-        if (optional_out.has_value()) {
-            //     optional_out = ttnn::permute(optional_out.value(), permutation,
-            //     optional_out.value().memory_config());
-            // ttnn::copy(output_tensor, *optional_out);
-        }
 
-        if (initial_tensor_rank < 4) {
+        if (initial_tensor_rank < FOUR_DIMENSIONS) {
             output_tensor = ttnn::reshape(output_tensor, input_shape);
         }
 

@@ -36,7 +36,8 @@ void kernel_main() {
 
     const int32_t ACC_START_VALUE_F32{caster.u};
     constexpr int32_t ACC_START_VALUE_F16{0x3F80};
-    constexpr int32_t ACC_START_VALUE_I32{0x1};  // TODO(jbbieniekTT): get it right
+    // TODO(jbbieniekTT): the below ones will work only if applied LLK is preconfigured appropriately for those.
+    constexpr int32_t ACC_START_VALUE_I32{0x1};
     constexpr int32_t ACC_START_VALUE_I16{0x1};
     constexpr int32_t ACC_START_VALUE_I8{0x1};
 
