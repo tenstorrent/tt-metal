@@ -28,10 +28,10 @@ struct address_map {
 
     // Sizes
     static constexpr std::int32_t APP_FIRMWARE_SIZE = 32 * 1024;
-#if defined(ROUTING_FW_ENABLED)
-    static constexpr std::int32_t ROUTING_FW_RESERVED_SIZE = 28 * 1024;
-#else
+#if defined(ROUTING_FW_DISABLED)
     static constexpr std::int32_t ROUTING_FW_RESERVED_SIZE = 0;
+#else
+    static constexpr std::int32_t ROUTING_FW_RESERVED_SIZE = 28 * 1024;
 #endif
     //  Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS +
     //  NUM_L1_BANKS)
@@ -58,8 +58,8 @@ struct address_map {
 
     // ERISC UNRESERVED space starting at ROUTING_FW_RESERVED_BASE on systems without routing FW
     // MAX is always MAX_L1_LOADING_ADDR
-    // NOTE: ERISC_L1_UNRESERVED_BASE resolves to ROUTING_DISABLED_ERISC_L1_UNRESERVED_BASE when not compiled with
-    // ROUTING_FW_ENABLED
+    // NOTE: ERISC_L1_UNRESERVED_BASE resolves to ROUTING_DISABLED_ERISC_L1_UNRESERVED_BASE when compiled with
+    // ROUTING_FW_DISABLED
     static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = ROUTING_FW_RESERVED_BASE + ROUTING_FW_RESERVED_SIZE;
     static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_L1_LOADING_ADDR - ERISC_L1_UNRESERVED_BASE;
     static constexpr std::int32_t ROUTING_DISABLED_ERISC_L1_UNRESERVED_BASE = ROUTING_FW_RESERVED_BASE;
