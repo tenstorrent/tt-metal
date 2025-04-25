@@ -104,7 +104,7 @@ struct AllToAllAsync {
     const uint32_t ring_index;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
-    const GlobalSemaphore semaphore;
+    const std::vector<GlobalSemaphore> semaphores;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
     AllToAllAsync(
@@ -117,7 +117,7 @@ struct AllToAllAsync {
         uint32_t ring_index,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
-        GlobalSemaphore semaphore,
+        std::vector<GlobalSemaphore> semaphores,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) :
         forward_device(forward_device),
         backward_device(backward_device),
@@ -128,7 +128,7 @@ struct AllToAllAsync {
         ring_index(ring_index),
         output_mem_config(output_mem_config),
         topology(topology),
-        semaphore(semaphore),
+        semaphores(semaphores),
         sub_device_id(sub_device_id) {}
 
     // Add attributes method for reflection
@@ -143,7 +143,7 @@ struct AllToAllAsync {
         attrs.emplace_back("ring_index", ring_index);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore", semaphore);
+        attrs.emplace_back("semaphores", semaphores);
 
         return attrs;
     }
@@ -207,16 +207,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
 // Add declaration for the AllToAll program function
 tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     const Tensor& input_tensor,
+    Tensor& persistent_intermediate_buffer,
+    Tensor& persistent_output_buffer,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
     const uint32_t in_dim,
     const uint32_t out_dim,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
-    const GlobalSemaphore& semaphore,
+    const std::vector<GlobalSemaphore>& semaphores,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
 namespace operations {
@@ -268,9 +269,11 @@ std::vector<Tensor> all_gather_async(
 // Add declaration for all_to_all_async
 Tensor all_to_all_async(
     const Tensor& input_tensor,
+    Tensor& persistent_intermediate_buffer,
+    Tensor& persistent_output_buffer,
     const int32_t in_dim,
     const int32_t out_dim,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphores,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,

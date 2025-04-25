@@ -45,37 +45,33 @@ void kernel_main() {
     uint32_t input_shard_col_tiles = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_row_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_col_offset = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t receiver_ring_id_start = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t receiver_ring_id_end = get_arg_val<uint32_t>(arg_idx++);
 
     // print every compile and runtime arg in uint32_t
-    DPRINT << "ct args: \n";
-    DPRINT << "my_ring_id: " << (uint32_t)my_ring_id << "\n";
-    DPRINT << "buffer0_type: " << (uint32_t)buffer0_type << "\n";
-    DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << "\n";
-    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
+    // DPRINT << "ct args: \n";
+    // DPRINT << "my_ring_id: " << (uint32_t)my_ring_id << "\n";
+    // DPRINT << "buffer0_type: " << (uint32_t)buffer0_type << "\n";
+    // DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
+    // DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << "\n";
+    // DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
 
-    DPRINT << "rt args: \n";
-    DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    DPRINT << "in_row_tiles: " << (uint32_t)in_row_tiles << "\n";
-    DPRINT << "in_col_tiles: " << (uint32_t)in_col_tiles << "\n";
-    DPRINT << "input_row_device_stride: " << (uint32_t)input_row_device_stride << "\n";
-    DPRINT << "input_col_device_stride: " << (uint32_t)input_col_device_stride << "\n";
-    DPRINT << "input_shard_row_tiles: " << (uint32_t)input_shard_row_tiles << "\n";
-    DPRINT << "input_shard_col_tiles: " << (uint32_t)input_shard_col_tiles << "\n";
-    DPRINT << "out_row_offset: " << (uint32_t)out_row_offset << "\n";
-    DPRINT << "out_col_offset: " << (uint32_t)out_col_offset << "\n";
-    DPRINT << "receiver_ring_id_start: " << (uint32_t)receiver_ring_id_start << "\n";
-    DPRINT << "receiver_ring_id_end: " << (uint32_t)receiver_ring_id_end << "\n";
+    // DPRINT << "rt args: \n";
+    // DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
+    // DPRINT << "in_row_tiles: " << (uint32_t)in_row_tiles << "\n";
+    // DPRINT << "in_col_tiles: " << (uint32_t)in_col_tiles << "\n";
+    // DPRINT << "input_row_device_stride: " << (uint32_t)input_row_device_stride << "\n";
+    // DPRINT << "input_col_device_stride: " << (uint32_t)input_col_device_stride << "\n";
+    // DPRINT << "input_shard_row_tiles: " << (uint32_t)input_shard_row_tiles << "\n";
+    // DPRINT << "input_shard_col_tiles: " << (uint32_t)input_shard_col_tiles << "\n";
+    // DPRINT << "out_row_offset: " << (uint32_t)out_row_offset << "\n";
+    // DPRINT << "out_col_offset: " << (uint32_t)out_col_offset << "\n";
 
     // interleaved addrgen
     constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
     auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
         .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
 
-    DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
+    // DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
+    // DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
 
     bool cur_is_forward = num_targets_forward_direction > num_targets_backward_direction;
     uint32_t forward_hops = 1;
@@ -98,7 +94,7 @@ void kernel_main() {
             backward_hops++;
         }
 
-        DPRINT << "dst_ring_id: " << (uint32_t)dst_ring_id << "\n";
+        // DPRINT << "dst_ring_id: " << (uint32_t)dst_ring_id << "\n";
         uint32_t shard_row_start_id = dst_ring_id * input_row_device_stride;
         uint32_t shard_col_start_id = dst_ring_id * input_col_device_stride;
         uint32_t shard_row_end_id = shard_row_start_id + input_shard_row_tiles;
@@ -128,7 +124,7 @@ void kernel_main() {
 
     // LOCAL COPY
     dst_ring_id = my_ring_id;
-    DPRINT << "dst_ring_id: " << (uint32_t)dst_ring_id << "\n";
+    // DPRINT << "dst_ring_id: " << (uint32_t)dst_ring_id << "\n";
     uint32_t shard_row_start_id = dst_ring_id * input_row_device_stride;
     uint32_t shard_col_start_id = dst_ring_id * input_col_device_stride;
     uint32_t shard_row_end_id = shard_row_start_id + input_shard_row_tiles;
@@ -154,5 +150,5 @@ void kernel_main() {
             cb_push_back(cb0_id, packet_size_in_pages);
         }
     }
-    DPRINT << "DONE \n";
+    // DPRINT << "DONE \n";
 }

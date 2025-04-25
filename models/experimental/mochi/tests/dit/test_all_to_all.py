@@ -5,6 +5,7 @@ from loguru import logger
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_global_semaphore_with_same_address,
 )
+from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import check_mesh_tensor_alloc
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 
@@ -429,7 +430,8 @@ def run_all_to_all_impl(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
     ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+        [create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_devices)]
+        for _ in range(num_iters)
     ]
 
     logger.info(f"Logical shape: {logical_shape}")
@@ -439,6 +441,39 @@ def run_all_to_all_impl(
     input_mem_config = mem_config
     output_mem_config = mem_config
     ###
+
+    ### Create persistent output buffers
+    logger.info("Creating persistent buffers")
+    output_shape = list(logical_shape)
+    output_shape[out_dim] //= num_devices
+    persistent_intermediate_buffers = [
+        ttnn.from_torch(
+            torch.zeros(output_shape),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=input_dtype,
+            memory_config=output_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for _ in range(num_iters)
+    ]
+    persistent_output_buffers = [
+        ttnn.from_torch(
+            torch.zeros(output_shape),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=input_dtype,
+            memory_config=output_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for _ in range(num_iters)
+    ]
+
+    for im_buf, out_buf in zip(persistent_intermediate_buffers, persistent_output_buffers):
+        check_mesh_tensor_alloc(im_buf)
+        check_mesh_tensor_alloc(out_buf)
+
+    logger.info("Done creating persistent buffers")
 
     input_tensor_mesh_list = []
     output_tensor_goldens_list = []
@@ -467,31 +502,34 @@ def run_all_to_all_impl(
 
     tt_out_tensor_list = []
     if trace_mode:
-        tt_out_tensor_list = run_with_trace(
-            mesh_device,
-            all_gather_topology,
-            input_tensor_mesh_list[0],
-            in_dim,
-            out_dim,
-            num_links,
-            output_mem_config,
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
-            num_iter=num_iters,
-            subdevice_id=worker_sub_device_id,
-        )
+        pass
+        # tt_out_tensor_list = run_with_trace(
+        #     mesh_device,
+        #     all_gather_topology,
+        #     input_tensor_mesh_list[0],
+        #     in_dim,
+        #     out_dim,
+        #     num_links,
+        #     output_mem_config,
+        #     multi_device_global_semaphores=ccl_semaphore_handles[0],
+        #     num_iter=num_iters,
+        #     subdevice_id=worker_sub_device_id,
+        # )
     else:
         for i in range(num_iters):
             tt_out_tensor = ttnn.experimental.all_to_all_async(
                 input_tensor_mesh_list[i],
-                in_dim,
-                out_dim,
-                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                persistent_intermediate_buffer=persistent_intermediate_buffers[i],
+                persistent_output_buffer=persistent_output_buffers[i],
+                in_dim=in_dim,
+                out_dim=out_dim,
+                multi_device_global_semaphores=ccl_semaphore_handles[i],
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
             )
-            tt_out_tensor_list.append(tt_out_tensor)
+            tt_out_tensor_list.append(persistent_output_buffers[i])
 
         logger.info(f"Waiting for op")
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)

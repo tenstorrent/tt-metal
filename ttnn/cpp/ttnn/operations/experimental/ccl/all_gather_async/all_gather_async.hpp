@@ -58,9 +58,11 @@ struct ExecuteAllGatherAsync {
 struct ExecuteAllToAllAsync {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
+        ttnn::Tensor& persistent_intermediate_buffer,
+        ttnn::Tensor& persistent_output_buffer,
         const int32_t in_dim,
         const int32_t out_dim,
-        const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+        const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphores,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
