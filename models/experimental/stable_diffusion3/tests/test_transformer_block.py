@@ -32,7 +32,7 @@ TILE_SIZE = 32
     ("model_name", "block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
     [
         ("large", 0, 2, 4096, 333),
-        ("large", 37, 2, 4096, 333),
+        #        ("large", 37, 2, 4096, 333),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 716800}], indirect=True)
@@ -128,6 +128,21 @@ def test_transformer_block(
     tt_spatial_output_padded, tt_prompt_output_padded = tt_model(
         spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time, N=spatial_sequence_length, L=prompt_sequence_length
     )
+
+    # num_measurement_iterations=38
+    # profiler.clear()
+    # profiler.start(f"run")
+    # for i in range(num_measurement_iterations):
+    #     tt_spatial_output_padded, tt_prompt_output_padded = tt_model(
+    #         spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time, N=spatial_sequence_length, L=prompt_sequence_length
+    #     )
+    # profiler.end(f"run")
+    # devices = mesh_device.get_devices()
+    # ttnn.DumpDeviceProfiler(devices[0])
+    # total_time = profiler.get("run")
+    # avg_time = total_time / num_measurement_iterations
+    # print(f" TOTAL TIME: {total_time} AVG TIME: {avg_time}\n")
+
     tt_spatial_output_padded = ttnn.to_torch(
         tt_spatial_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
     )

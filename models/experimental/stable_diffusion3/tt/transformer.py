@@ -43,7 +43,10 @@ class TtSD3Transformer2DModelParameters:
     ) -> TtSD3Transformer2DModelParameters:
         return cls(
             pos_embed=TtPatchEmbedParameters.from_torch(
-                substate(state, "pos_embed"), device=device, out_channels=embedding_dim
+                substate(state, "pos_embed"),
+                device=device,
+                hidden_dim_padding=hidden_dim_padding,
+                out_channels=embedding_dim,
             ),
             time_text_embed=TtCombinedTimestepTextProjEmbeddingsParameters.from_torch(
                 substate(state, "time_text_embed"), dtype=dtype, device=device
@@ -128,9 +131,6 @@ class TtSD3Transformer2DModel:
         L: int,
     ) -> ttnn.Tensor:
         spatial = self._pos_embed(spatial)
-        # to avoid OOM inside the first transformer block
-        spatial = ttnn.to_memory_config(spatial, ttnn.DRAM_MEMORY_CONFIG)
-
         time_embed = self._time_text_embed(timestep=timestep, pooled_projection=pooled_projection)
         prompt = self._context_embedder(prompt)
         time_embed = time_embed.reshape([time_embed.shape[0], 1, 1, time_embed.shape[1]])
