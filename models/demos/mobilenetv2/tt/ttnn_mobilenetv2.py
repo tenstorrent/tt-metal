@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.mobilenetv2.tt.common import TtMobileNetV2Conv2D, TtInvertedResidual
+from models.demos.mobilenetv2.tt.common import TtMobileNetV2Conv2D, TtInvertedResidual
 
 
 class TtMobileNetV2:
