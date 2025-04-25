@@ -375,6 +375,11 @@ void setShift(int device_id, int64_t shift, double scale, std::tuple<double, dou
         return;
     }
     log_info("Device sync data for device: {}, delay: {} ns, freq scale: {}", device_id, shift, scale);
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
+        log_warning(
+            "Note that tracy device data mid-run push is enabled, this means device-device sync is a not as accurate. "
+            "Please do not use tracy mid-run push for sensitive device-device event analysis");
+    }
     if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
         tt_metal_device_profiler_map.at(device_id).shift = shift;
         tt_metal_device_profiler_map.at(device_id).freqScale = scale;
@@ -903,7 +908,7 @@ void DumpDeviceProfileResults(
             } else {
                 InitDeviceProfiler(device);
             }
-            if (state == ProfilerDumpState::FORCE_PUSH_TO_TRACY) {
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
                 tt_metal_device_profiler_map.at(device_id).pushTracyDeviceResults();
             }
         }
