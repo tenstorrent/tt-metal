@@ -13,6 +13,7 @@
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_types.hpp"
 #include "tt-metalium/command_queue.hpp"
+#include "tt-metalium/constants.hpp"
 #include "tt-metalium/data_types.hpp"
 #include "tt-metalium/device.hpp"
 #include "tt-metalium/host_api.hpp"
@@ -38,10 +39,6 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_dtype = input_tensor.dtype();
     const auto& output_dtype = output_tensor.dtype();
-
-    constexpr CoreCoord core{0, 0};
-    constexpr uint32_t TILE_SIZE = 1024;
-
     const auto& tensor_shape = input_tensor.get_padded_shape();
     const uint32_t tensor_rank = tensor_shape.rank();
     int32_t dim = operation_attributes.dim;
@@ -50,14 +47,16 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         dim += tensor_rank;
     }
 
+    constexpr CoreCoord core{0, 0};
+
     TT_FATAL(input_dtype == output_dtype, "In-device type conversion not supported yet");
 
     TT_FATAL(
         output_dtype == DataType::FLOAT32 || output_dtype == DataType::INT32 || output_dtype == DataType::UINT32 ||
             output_dtype == DataType::BFLOAT16,
-        "Only float32 and int32 data type supported for now");
+        "Only float32, bfloat16, uint32 and int32 data type supported for now");
 
-    TT_FATAL(output_tensor.get_layout() == Layout::TILE, "Only supported layout is TILE");
+    TT_FATAL(output_tensor.get_layout() == Layout::TILE, "Only supported tensor layout is TILE");
 
     TT_FATAL(input_tensor.get_padded_shape().rank() >= 3, "Device operation only support 3D tensor and above");
 
@@ -72,18 +71,15 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     TT_FATAL(dim + 2 < tensor_rank, "cumsum on x and y axes not supported (dim = {}, rank = {})", dim, tensor_rank);
 
     // Buffer setup
-    const uint32_t single_tile_size = output_tensor.element_size() * TILE_SIZE;
-
-    uint32_t src_bank_id = 0;
-    uint32_t dst_bank_id = 0;
+    const uint32_t single_tile_size = output_tensor.element_size() * tt::constants::TILE_HW;
 
     constexpr uint32_t cb_in_index = CBIndex::c_0;
     constexpr uint32_t cb_out_index = CBIndex::c_1;
     constexpr uint32_t cb_zero_index = CBIndex::c_16;
     constexpr uint32_t cb_intermed_index = CBIndex::c_24;
 
+    // Device operation does not handle on-the-fly type conversion yet and we ensured that input_dtype == ouptut_dtype
     DataFormat in_df = datatype_to_dataformat_converter(output_dtype);
-
     DataFormat out_df = in_df;
 
     CircularBufferConfig cb_in_config =
@@ -120,6 +116,7 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     std::map<std::string, std::string> defines_kernel_args = {};
 
     if (is_integer_format(out_df)) {
+        // Used to switch to add_tile_int32() instead of add_tiles()
         defines_kernel_args["CUMSUM_USE_INT32"] = "1";
     }
 
@@ -135,28 +132,26 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
             .defines = defines_kernel_args});
 
     // Parameters setup
-    const auto& input_shape = input_tensor.get_padded_shape();
-    const uint32_t input_dim = input_shape.rank();
-
-    uint32_t num_tiles = output_tensor.volume() / TILE_SIZE;
-    const uint32_t xy_volume = input_shape[input_dim - 1] * input_shape[input_dim - 2];  // W * H
-    const uint32_t num_tiles_per_row = input_shape[dim];      // each row contains N independent tiles
+    uint32_t num_tiles = output_tensor.volume() / tt::constants::TILE_HW;
+    const uint32_t xy_volume = tensor_shape[tensor_rank - 1] * tensor_shape[tensor_rank - 2];  // W * H
+    const uint32_t num_tiles_per_row = tensor_shape[dim];     // each row contains N independent tiles
     const uint32_t num_rows = num_tiles / num_tiles_per_row;  // total number of rows in tensor
-    const uint32_t HtWt = xy_volume / TILE_SIZE;              // padded shape => xy_volume is multiple of tile_size
+    const uint32_t HtWt = xy_volume / tt::constants::TILE_HW;  // padded shape => xy_volume is multiple of tile_size
 
     // Depending on tensor rank and dim parameter, we may have to iterative on several tensor axis, with varying offset
     // To solve this problem (and generalize the approach), we can compute two offsets: for dimensions > dim and for
-    // dimensions < dim We thus two parameters PHi (product High) and PLo (product Low): PHi is the number of iterations
-    // on 'high dims', it is the product of all axes length for dimensions > `dim` (excluding x and y axes) PLo is the
-    // number of iterations on 'low dims', it is the product of all axes length for dimensions < `dim`
-    uint32_t PHi = 1;
-    uint32_t PLo = 1;
+    // dimensions < dim We thus two parameters product_high_dims (product High) and product_low_dims (product Low):
+    // product_high_dims is the number of iterations on 'high dims', it is the product of all axes length for dimensions
+    // > `dim` (excluding x and y axes) product_low_dims is the number of iterations on 'low dims', it is the product of
+    // all axes length for dimensions < `dim`
+    uint32_t product_high_dims = 1;
+    uint32_t product_low_dims = 1;
 
     for (int i = dim + 1; i + 2 < tensor_rank; i++) {
-        PHi *= tensor_shape[i];
+        product_high_dims *= tensor_shape[i];
     }
     for (int i = 0; i < dim; i++) {
-        PLo *= tensor_shape[i];
+        product_low_dims *= tensor_shape[i];
     }
 
     SetRuntimeArgs(
@@ -165,10 +160,9 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         core,
         {
             input_tensor.buffer()->address(),
-            num_rows,
             num_tiles_per_row,
-            PHi,
-            PLo,
+            product_high_dims,
+            product_low_dims,
             HtWt,
         });
 
@@ -178,10 +172,9 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         core,
         {
             output_tensor.buffer()->address(),
-            num_rows,
             num_tiles_per_row,
-            PHi,
-            PLo,
+            product_high_dims,
+            product_low_dims,
             HtWt,
         });
 
@@ -190,7 +183,7 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
         cumsum_compute_handle_id,
         core,
         {
-            PHi * PLo * HtWt,
+            product_high_dims * product_low_dims * HtWt,
             num_tiles_per_row,
         });
 
