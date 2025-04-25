@@ -237,7 +237,7 @@ enum debug_assert_tripped_enum {
 };
 
 // XXXX TODO(PGK): why why why do we not have this standardized
-typedef enum debug_sanitize_which_riscv {
+enum riscv_id_t {
     DebugBrisc = 0,
     DebugNCrisc = 1,
     DebugTrisc0 = 2,
@@ -247,14 +247,9 @@ typedef enum debug_sanitize_which_riscv {
     DebugIErisc = 6,
     DebugSlaveIErisc = 7,
     DebugNumUniqueRiscs
-} riscv_id_t;
+};
 
-typedef enum debug_transaction_type {
-    TransactionRead = 0,
-    TransactionWrite = 1,
-    TransactionAtomic = 2,
-    TransactionNumTypes
-} debug_transaction_type_t;
+enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
     volatile uint8_t flags[DebugNumUniqueRiscs];
