@@ -636,7 +636,7 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_op(input_tensor, scalar)
+    output_tensor = ttnn_op(input_tensor, scalar, use_legacy=True)
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden_tensor = golden_function(in_data, scalar)
 
