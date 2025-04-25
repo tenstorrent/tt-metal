@@ -5,7 +5,9 @@
 import ttnn
 import torch
 
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import check_mesh_tensor_alloc
+from models.demos.llama3_subdevices.tt.llama_common import (
+    check_mesh_tensor_alloc,
+)
 
 
 class TT_CCL:

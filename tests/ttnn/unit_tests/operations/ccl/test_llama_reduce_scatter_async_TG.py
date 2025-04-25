@@ -18,9 +18,11 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     FF1_CRS,
     FF1_CRS_RS_OUT,
     NORM_CRS,
-    check_mesh_tensor_alloc,
 )
 from tracy import signpost
+from models.demos.llama3_subdevices.tt.llama_common import (
+    check_mesh_tensor_alloc,
+)
 
 PACKET_WORKER_CRS = ttnn.CoreRangeSet(
     [
