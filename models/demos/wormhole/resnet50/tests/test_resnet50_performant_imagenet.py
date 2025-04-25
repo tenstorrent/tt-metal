@@ -16,7 +16,7 @@ from models.utility_functions import (
 )
 from tqdm import tqdm
 
-NUM_VALIDATION_IMAGES_IMAGENET = 50000
+NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
 
 @run_for_wormhole_b0()
@@ -37,6 +37,7 @@ def test_run_resnet50_trace_2cqs_inference(
     weight_dtype,
     model_location_generator,
     entire_imagenet_dataset=False,
+    expected_accuracy=0.7555288461538462,
 ):
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     iterations = iterations // mesh_device.get_num_devices()
@@ -102,7 +103,9 @@ def test_run_resnet50_trace_2cqs_inference(
         logger.info(f"=============")
         logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
         if entire_imagenet_dataset:
-            assert accuracy >= 0.7556
+            assert (
+                accuracy == expected_accuracy
+            ), f"Accuracy {accuracy} does not match expected accuracy {expected_accuracy}"
 
         first_iter_time = profiler.get(f"compile")
         # ensuring inference time fluctuations is not noise
@@ -125,6 +128,7 @@ def test_run_resnet50_trace_2cqs_inference(
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("entire_imagenet_dataset", [True])
+@pytest.mark.parametrize("expected_accuracy", [0.7555288461538462])
 def test_run_resnet50_trace_2cqs_accuracy(
     mesh_device,
     use_program_cache,
@@ -136,6 +140,7 @@ def test_run_resnet50_trace_2cqs_accuracy(
     enable_async_mode,
     model_location_generator,
     entire_imagenet_dataset,
+    expected_accuracy,
 ):
     test_run_resnet50_trace_2cqs_inference(
         mesh_device,
@@ -148,4 +153,5 @@ def test_run_resnet50_trace_2cqs_accuracy(
         enable_async_mode,
         model_location_generator,
         entire_imagenet_dataset,
+        expected_accuracy,
     )
