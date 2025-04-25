@@ -1167,55 +1167,8 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
                 edm_builder1.connect_to_downstream_edm(edm_builder2);
                 edm_builder2.connect_to_downstream_edm(edm_builder1);
 
-                bool enable_core_placement_opt = false;
                 if (is_galaxy) {
-                    if (topology == Topology::Ring) {
-                        enable_core_placement_opt = (num_links > 3) && (edm_builder1.my_noc_y != edm_builder2.my_noc_y);
-                    } else {
-                        enable_core_placement_opt = (num_links > 2) && (edm_builder1.my_noc_y != edm_builder2.my_noc_y);
-                    }
-                }
-                log_debug(
-                    tt::LogTest,
-                    "device {} edm_builder1 {} {} is connecting to edm_builder2 {} {} on channel1 {} and channel2 {}, "
-                    "num links {}",
-                    edm_builder1.my_chip_id,
-                    edm_builder1.my_noc_x,
-                    edm_builder1.my_noc_y,
-                    edm_builder2.my_noc_x,
-                    edm_builder2.my_noc_y,
-                    eth_chan_dir1,
-                    eth_chan_dir2,
-                    num_links);
-
-                if (enable_core_placement_opt) {
-                    if (edm_builder1.my_noc_x < edm_builder2.my_noc_x) {
-                        for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                            edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 0;
-                            edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 1;
-                        }
-                        for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                            edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
-                            edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
-                        }
-                        for (uint32_t i = 0; i < edm_builder1.config.num_sender_channels; i++) {
-                            edm_builder1.config.sender_channel_ack_noc_ids[i] = 1;
-                            edm_builder2.config.sender_channel_ack_noc_ids[i] = 0;
-                        }
-                    } else if (edm_builder1.my_noc_x > edm_builder2.my_noc_x) {
-                        for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                            edm_builder1.config.receiver_channel_forwarding_noc_ids[i] = 1;
-                            edm_builder2.config.receiver_channel_forwarding_noc_ids[i] = 0;
-                        }
-                        for (uint32_t i = 0; i < edm_builder1.config.num_receiver_channels; i++) {
-                            edm_builder1.config.receiver_channel_local_write_noc_ids[i] = 1;
-                            edm_builder2.config.receiver_channel_local_write_noc_ids[i] = 1;
-                        }
-                        for (uint32_t i = 0; i < edm_builder1.config.num_sender_channels; i++) {
-                            edm_builder1.config.sender_channel_ack_noc_ids[i] = 0;
-                            edm_builder2.config.sender_channel_ack_noc_ids[i] = 1;
-                        }
-                    }
+                    get_optimal_noc_for_edm(edm_builder1, edm_builder2, num_links, topology);
                 }
 
                 eth_chans_dir1_it++;
