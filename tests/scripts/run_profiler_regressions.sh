@@ -6,6 +6,15 @@ source scripts/tools_setup_common.sh
 
 set -eo pipefail
 
+run_mid_run_tracy_push() {
+    echo "Smoke test, checking tracy mid-run device data push for hangs"
+    remove_default_log_locations
+    mkdir -p $PROFILER_ARTIFACTS_DIR
+    python -m tracy -v -r -p --sync-host-device --push-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
+    runDate=$(ls $PROFILER_OUTPUT_DIR/)
+    cat $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv
+}
+
 run_async_test() {
     #Some tests here do not skip grayskull
     if [ "$ARCH_NAME" == "wormhole_b0" ]; then
@@ -120,6 +129,8 @@ run_profiling_test() {
     run_async_ccl_T3000_test
 
     run_async_tracing_T3000_test
+
+    run_mid_run_tracy_push
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py
 
