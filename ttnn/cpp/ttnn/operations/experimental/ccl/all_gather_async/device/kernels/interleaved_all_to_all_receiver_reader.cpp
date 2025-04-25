@@ -50,9 +50,32 @@ void kernel_main() {
         .bank_base_address = intermediate_buffer_addr, .page_size = page_size, .data_format = get_dataformat(cb_id)};
 
     if (my_ring_id == remote_device_ring_id) {
-        // TODO: do local copy on this core
         // Follows same logic as sender reader for local copy.
-        return;
+        uint32_t shard_row_start_id = my_ring_id * input_row_device_stride;
+        uint32_t shard_col_start_id = my_ring_id * input_col_device_stride;
+        uint32_t shard_row_end_id = shard_row_start_id + input_shard_row_tiles;
+        uint32_t shard_col_end_id = shard_col_start_id + input_shard_col_tiles;
+
+        for (uint32_t row_tile_id = shard_row_start_id; row_tile_id < shard_row_end_id; row_tile_id++) {
+            for (uint32_t col_tile_id = shard_col_start_id; col_tile_id < shard_col_end_id;
+                 col_tile_id += num_pages_per_packet) {
+                uint32_t tile_id = row_tile_id * in_col_tiles + col_tile_id;
+                // DPRINT << "tile_id: " << tile_id << "\n";
+                cb_reserve_back(cb_id, num_pages_per_packet);
+                const uint32_t l1_write_addr_base = get_write_ptr(cb_id);
+                uint32_t l1_write_addr = l1_write_addr_base;
+
+                uint32_t num_pages_to_read = std::min(shard_col_end_id - col_tile_id, num_pages_per_packet);
+                for (uint32_t j = 0; j < num_pages_to_read; j++) {
+                    noc_async_read_tile(tile_id, input_tensor_addrgen, l1_write_addr);
+                    l1_write_addr += page_size;
+                    tile_id++;
+                }
+
+                noc_async_read_barrier();
+                cb_push_back(cb_id, num_pages_per_packet);
+            }
+        }
     } else {
         // Copy from intermediate buffer to output buffer
         // Compute where remote sender dumped data into intermediate buffer.
@@ -73,7 +96,7 @@ void kernel_main() {
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t col_tile = out_col_id + j;
                     uint32_t tile_id = out_row_id * out_col_tiles + col_tile;
-                    // uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+
                     noc_async_read_tile(tile_id, intermediate_tensor_addrgen, l1_write_addr);
                     l1_write_addr += page_size;
                 }

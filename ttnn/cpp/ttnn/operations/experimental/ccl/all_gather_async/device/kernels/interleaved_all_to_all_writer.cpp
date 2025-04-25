@@ -239,28 +239,6 @@ void kernel_main() {
         }
     }
 
-    // LOCAL COPY
-    for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
-        for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += packet_size_in_pages) {
-            // DPRINT << "tile_id: " << tile_id << "\n";
-            cb_wait_front(cb0_id, packet_size_in_pages);
-            size_t l1_read_addr = get_read_ptr(cb0_id);
-            uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, packet_size_in_pages);
-
-            constexpr uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
-            constexpr uint32_t payload_size_bytes = contig_pages_advanced * tensor0_page_size;
-            for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                uint32_t col_tile = out_col_id + j;
-                uint32_t tile_id = out_row_id * out_col_tiles + col_tile;
-                noc_async_write_tile(tile_id, output_tensor_addrgen, l1_read_addr);
-
-                l1_read_addr += payload_size_bytes;
-            }
-            noc_async_writes_flushed();
-            cb_pop_front(cb0_id, packet_size_in_pages);
-        }
-    }
-
     // // 3. wait for mcast output ready semaphore
     // if (wait_output_semaphore) {
     //     DPRINT << "waiting for waitval " << (uint32_t)wait_sem_value << "\n";

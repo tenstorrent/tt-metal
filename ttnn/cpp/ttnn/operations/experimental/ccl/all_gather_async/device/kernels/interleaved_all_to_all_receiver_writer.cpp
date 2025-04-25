@@ -44,9 +44,28 @@ void kernel_main() {
         .bank_base_address = output_buffer_addr, .page_size = page_size, .data_format = get_dataformat(cb_id)};
 
     if (my_ring_id == remote_device_ring_id) {
-        // TODO: do local copy on this core
         // Follows same logic as sender reader for local copy.
-        return;
+        for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
+            for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += num_pages_per_packet) {
+                // DPRINT << "tile_id: " << tile_id << "\n";
+                cb_wait_front(cb_id, num_pages_per_packet);
+                size_t l1_read_addr = get_read_ptr(cb_id);
+                uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, num_pages_per_packet);
+
+                constexpr uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
+                constexpr uint32_t payload_size_bytes = contig_pages_advanced * page_size;
+                for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
+                    uint32_t col_tile = out_col_id + j;
+                    uint32_t tile_id = out_row_id * out_col_tiles + col_tile;
+                    noc_async_write_tile(tile_id, output_tensor_addrgen, l1_read_addr);
+
+                    l1_read_addr += payload_size_bytes;
+                }
+                noc_async_writes_flushed();
+                cb_pop_front(cb_id, num_pages_per_packet);
+            }
+        }
+
     } else {
         // Copy from intermediate buffer to output buffer
         // Compute where remote sender dumped data into intermediate buffer.
