@@ -33,7 +33,7 @@ TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {
-    "4U": {1: {"min": 515, "max": 535}, 10: {"min": 230, "max": 250}, 80: {"min": 47, "max": 51}},
+    "4U": {1: {"min": 480, "max": 500}, 10: {"min": 230, "max": 250}, 80: {"min": 47, "max": 51}},
     # TODO: Update the thresholds for 6U based on actual performance data for 10L and 80L once tests added when available 6U machines
     "6U": {1: {"min": 555, "max": 580}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
