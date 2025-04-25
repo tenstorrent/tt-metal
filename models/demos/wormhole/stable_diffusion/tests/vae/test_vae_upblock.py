@@ -12,7 +12,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     UPBLOCK_RESNET_NORM_NUM_BLOCKS,
-    UPBLOCK_RESNET_CONV_IN_CHANNEL_SPLIT_FACTORS,
+    UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_upblock import UpDecoderBlock
@@ -22,7 +22,7 @@ from models.utility_functions import skip_for_blackhole
 @skip_for_blackhole("Blackhole PCC bad until GN issues fixed (#20760)")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "input_channels, input_height, input_width, out_channels, output_height, output_width, resnet_norm_blocks, resnet_conv_in_channel_split_factors, upsample_conv_channel_split_factors, block_id, pcc",
+    "input_channels, input_height, input_width, out_channels, output_height, output_width, resnet_norm_blocks, resnet_conv_in_channel_split_factors, upsample_conv_channel_split_factors, block_id",
     [
         (
             512,
@@ -32,10 +32,9 @@ from models.utility_functions import skip_for_blackhole
             128,
             128,
             UPBLOCK_RESNET_NORM_NUM_BLOCKS[0],
-            UPBLOCK_RESNET_CONV_IN_CHANNEL_SPLIT_FACTORS[0],
+            UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS[0],
             UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS[0],
             0,
-            0.99,
         ),
         (
             512,
@@ -45,10 +44,9 @@ from models.utility_functions import skip_for_blackhole
             256,
             256,
             UPBLOCK_RESNET_NORM_NUM_BLOCKS[1],
-            UPBLOCK_RESNET_CONV_IN_CHANNEL_SPLIT_FACTORS[1],
+            UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS[1],
             UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS[1],
             1,
-            0.98,  # can we get to 0.99 PCC?
         ),
         (
             512,
@@ -58,10 +56,9 @@ from models.utility_functions import skip_for_blackhole
             512,
             512,
             UPBLOCK_RESNET_NORM_NUM_BLOCKS[2],
-            UPBLOCK_RESNET_CONV_IN_CHANNEL_SPLIT_FACTORS[2],
+            UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS[2],
             UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS[2],
             2,
-            0.99,
         ),
         (
             256,
@@ -71,10 +68,9 @@ from models.utility_functions import skip_for_blackhole
             512,
             512,
             UPBLOCK_RESNET_NORM_NUM_BLOCKS[3],
-            UPBLOCK_RESNET_CONV_IN_CHANNEL_SPLIT_FACTORS[3],
+            UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS[3],
             UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS[3],
             3,
-            0.99,
         ),
     ],
 )
@@ -90,7 +86,6 @@ def test_vae_upblock(
     resnet_conv_in_channel_split_factors,
     upsample_conv_channel_split_factors,
     block_id,
-    pcc,
     use_program_cache,
 ):
     torch.manual_seed(0)
@@ -133,4 +128,4 @@ def test_vae_upblock(
     ttnn_output = ttnn.permute(ttnn_output, [0, 3, 1, 2])
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output, ttnn_output, pcc)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
