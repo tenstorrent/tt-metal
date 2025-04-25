@@ -80,15 +80,15 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
                     receiver_eth = receiver & 0xFF
 
                 if metadata["zone_name"] == main_test_body_string:
-                    run_id = metadata["run_id"]
+                    run_host_id = metadata["run_host_id"]
                     if metadata["type"] == "ZONE_START":
-                        starts[run_id] = ts
+                        starts[run_host_id] = ts
                     if metadata["type"] == "ZONE_END":
-                        ends[run_id] = ts
+                        ends[run_host_id] = ts
 
                         if arch == "wormhole_b0":
                             link_stat_row = df.loc[
-                                (df["Iteration"] == run_id)
+                                (df["Iteration"] == run_host_id)
                                 & (df["Sender Device ID"] == sender_chip)
                                 & (df["Sender Eth"] == sender_eth)
                             ]
@@ -107,7 +107,7 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
                                 r_total_uncorr = row["R Total Uncorr"]
                                 r_pcs_retrains = row["R Retrain by PCS"]
                                 r_crc_retrains = row["R Retrain by CRC"]
-                            link_stats[run_id] = [
+                            link_stats[run_host_id] = [
                                 s_retrain_count,
                                 s_crc_errs,
                                 s_pcs_faults,
@@ -124,7 +124,7 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
                                 r_crc_retrains,
                             ]
                         else:
-                            link_stats[run_id] = []
+                            link_stats[run_host_id] = []
 
             assert sender_chip != None
 

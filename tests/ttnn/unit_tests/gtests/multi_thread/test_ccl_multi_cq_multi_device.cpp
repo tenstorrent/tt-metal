@@ -69,7 +69,6 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_async(true);
     mesh_device->enable_program_cache();
 
     auto view = mesh_device->get_view();
@@ -216,7 +215,6 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_async(true);
     mesh_device->enable_program_cache();
 
     auto view = mesh_device->get_view();

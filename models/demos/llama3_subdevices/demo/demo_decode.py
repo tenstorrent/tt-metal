@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 515, "max": 535}, 10: {"min": 230, "max": 250}, 80: {"min": 47, "max": 51}}
+TSU_THRESHOLDS = {1: {"min": 470, "max": 490}, 10: {"min": 195, "max": 215}, 80: {"min": 45, "max": 49}}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -684,8 +684,6 @@ def test_llama_demo(
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
-
-    mesh_device.enable_async(True)
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(

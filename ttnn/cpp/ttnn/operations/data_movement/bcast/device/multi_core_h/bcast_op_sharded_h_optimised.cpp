@@ -50,10 +50,10 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
     uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
-    uint32_t shard_size_in_bytes = shard_spec.numel() * a.element_size();
 
-    uint32_t num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / TILE_HW;  // ceil value
-    TT_FATAL(input_tile_size <= shard_size_in_bytes, "Input tile size should be less than shard size");
+    uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tt::constants::TILE_WIDTH);
+    uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tt::constants::TILE_HEIGHT);
+    uint32_t num_tile_per_core = ntiles_along_width * ntiles_along_height;
 
     uint32_t Wt, Ht;
     if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
