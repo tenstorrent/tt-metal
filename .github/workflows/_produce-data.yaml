@@ -107,6 +107,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
+          sleep 60
           echo "[Info] Workflow run attempt"
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
           gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
