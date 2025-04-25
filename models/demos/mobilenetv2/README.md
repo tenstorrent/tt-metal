@@ -15,7 +15,7 @@ The MobileNetV2 model is a convolutional neural network (CNN) architecture desig
 The MobileNetV2 model has been pre-trained on the ImageNet dataset and can be used for various tasks such as image classification, object detection, and semantic segmentation. It has achieved state-of-the-art performance on several benchmarks 1 for mobile and embedded vision applications.
 
 ## Details
-The entry point to mobilenetv2 model is MobileNetV2 in `models/experimental/mobilenetv2/tt/ttnn_monilenetv2.py`.
+The entry point to mobilenetv2 model is MobileNetV2 in `models/demos/mobilenetv2/tt/ttnn_monilenetv2.py`.
 
 Use the following command to run the model :
 `pytest tests/ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py`
@@ -23,17 +23,20 @@ Use the following command to run the model :
 Note : The model supports a batch size of 8 for a resolution of 224. If you prefer to use a different batch size, it is recommended to modify the batch_size accordingly in the test file.
 
 Use the following command to run the e2e perf(11 FPS):
-`pytest models/experimental/mobilenetv2/tests/test_perf_mobilenetv2.py::test_mobilenetv2`
+`pytest models/demos/mobilenetv2/tests/test_perf_mobilenetv2.py::test_mobilenetv2`
 
 Use the following command to run the e2e perf with trace(430 FPS):
-`pytest models/experimental/mobilenetv2/tests/test_e2e_performant.py`
+`pytest models/demos/mobilenetv2/tests/test_e2e_performant.py`
+
+Use the following command to run the device perf :
+`pytest models/demos/mobilenetv2/tests/test_perf_mobilenetv2.py::test_perf_device_bare_metal_mobilenetv2`
 
 Use the following command to run the mobilenetv2 demo:
-`pytest -k "pretrained_weight_true" models/experimental/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo`
+`pytest -k "pretrained_weight_true" models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo`
 
 Note: This demo receives inputs from Imagenet dataset.
 
-If you wish to run the model with a desired input, use the following command by providing the image path in the method "test_mobilenetv2_demo": `pytest models/experimental/mobilenetv2/demo/demo.py::test_mobilenetv2_demo`
+If you wish to run the model with a desired input, use the following command by providing the image path in the method "test_mobilenetv2_demo": `pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_demo`
 
 #### Note:
 The post-processing is performed using PyTorch. and also that the first time the Imagenet demo is run, you need to login to huggingface using your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`

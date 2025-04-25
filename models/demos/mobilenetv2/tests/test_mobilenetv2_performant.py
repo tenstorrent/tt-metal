@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.experimental.mobilenetv2.tests.mobilenetv2_performant import (
+from models.demos.mobilenetv2.tests.mobilenetv2_performant import (
     run_mobilenetv2_inference,
     run_mobilenetv2_trace_2cqs_inference,
     run_mobilenetv2_trace_inference,

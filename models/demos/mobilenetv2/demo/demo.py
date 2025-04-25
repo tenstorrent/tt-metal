@@ -9,10 +9,10 @@ import ttnn
 from loguru import logger
 from PIL import Image
 from torchvision import transforms
-from models.experimental.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-from models.experimental.mobilenetv2.tt import ttnn_mobilenetv2
-from models.experimental.mobilenetv2.demo.demo_utils import get_data_loader, get_batch
-from models.experimental.mobilenetv2.tt.model_preprocessing import create_mobilenetv2_model_parameters
+from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
+from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
+from models.demos.mobilenetv2.demo.demo_utils import get_data_loader, get_batch
+from models.demos.mobilenetv2.tt.model_preprocessing import create_mobilenetv2_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -26,9 +26,9 @@ def mobilenetv2_imagenet_demo(
     res,
     use_pretrained_weight,
 ):
-    weights_path = "models/experimental/mobilenetv2/mobilenet_v2-b0353104.pth"
+    weights_path = "models/demos/mobilenetv2/mobilenet_v2-b0353104.pth"
     if not os.path.exists(weights_path):
-        os.system("bash models/experimental/mobilenetv2/weights_download.sh")
+        os.system("bash models/demos/mobilenetv2/weights_download.sh")
 
     torch_model = Mobilenetv2()
     if use_pretrained_weight:
@@ -116,9 +116,9 @@ def test_mobilenetv2_imagenet_demo(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_mobilenetv2_demo(device, reset_seeds, batch_size=8):
-    weights_path = "models/experimental/functional_mobilenetv2/mobilenet_v2-b0353104.pth"
+    weights_path = "models/demos/functional_mobilenetv2/mobilenet_v2-b0353104.pth"
     if not os.path.exists(weights_path):
-        os.system("bash models/experimental/functional_mobilenetv2/weights_download.sh")
+        os.system("bash models/demos/functional_mobilenetv2/weights_download.sh")
 
     state_dict = torch.load(weights_path)
     ds_state_dict = {k: v for k, v in state_dict.items()}
