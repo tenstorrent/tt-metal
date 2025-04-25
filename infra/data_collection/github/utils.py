@@ -243,8 +243,11 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
     # In order of preference
     if detected_config:
         if not detected_arch:
-            raise Exception(f"There must be an arch detected for config {detected_config}")
-        card_type = f"{detected_config}-{detected_arch}"
+            # This will occur for jobs where runs-on: has a config-* label but doesn't have an arch-* or card-specific label
+            logger.warning(f"No arch label found for config {detected_config} in job label, unable to infer card type")
+            card_type = None
+        else:
+            card_type = f"{detected_config}-{detected_arch}"
     elif single_cards_overlap:
         logger.info(f"Detected overlap in single cards: {single_cards_overlap}")
         card_type = list(single_cards_overlap)[0]
