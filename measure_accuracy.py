@@ -352,6 +352,34 @@ def main(args):
         "tanhshrink",
     ]
 
+    highres_operations = set(
+        [
+            "exp",
+            "exp_approx",
+            "log",
+            "log10",
+            "log2",
+            "log1p",
+            "tanh",
+            "cosh",
+            "sinh",
+            "tan",
+            "cos",
+            "sin",
+            "silu",
+            "gelu",
+            "logit",
+            "swish",
+            "mish",
+            "elu",
+            "selu",
+            "softplus",
+            "softsign",
+            "tanhshrink",
+            "sqrt",
+            "rsqrt",
+        ]
+    )
     success_count = 0
     successfull_operations = []
     failed_operations = []
@@ -367,6 +395,16 @@ def main(args):
         except Exception as e:
             print(f"{RED}Could not run operation {operation}: {e}{RESET}")
             failed_operations += [operation]
+
+    print(f"Now measuring high-resolution operations")
+    for operation in highres_operations:
+        try:
+            measure_op_accuracy(operation, "bfloat16", dest_dir, samples=128)
+            success_count += 1
+            successfull_operations += [f"{operation}[highres]"]
+        except Exception as e:
+            print(f"{RED}Could not run operation {operation}: {e}{RESET}")
+            failed_operations += [f"{operation}[highres]"]
 
     print(f"Sucessfully ran {success_count} / {len(all_operations)} operations")
     print(f"{GREEN}SUCCESS: {successfull_operations}{RESET}")
