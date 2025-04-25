@@ -170,7 +170,6 @@ from ttnn.types import (
     TILE_LAYOUT,
     StorageType,
     DEVICE_STORAGE_TYPE,
-    MULTI_DEVICE_STORAGE_TYPE,
     CoreGrid,
     CoreRange,
     Shape,
