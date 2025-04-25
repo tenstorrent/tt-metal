@@ -1,0 +1,20 @@
+name: 'Analyze Workflow Data'
+description: 'Analyzes cached workflow run data and generates a report'
+
+inputs:
+  cache-path:
+    description: 'Path to the cached workflow data file'
+    required: true
+  GITHUB_TOKEN:
+    description: 'GitHub token for API access'
+    required: true
+  workflow_name:
+    description: 'Exact workflow name to match'
+    required: false
+  name_prefix:
+    description: 'Workflow name prefix to match'
+    required: false
+
+runs:
+  using: 'node20'
+  main: 'analyze-workflow-data.js'
