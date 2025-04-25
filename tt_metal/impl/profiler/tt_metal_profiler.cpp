@@ -377,7 +377,7 @@ void setShift(int device_id, int64_t shift, double scale, std::tuple<double, dou
     log_info("Device sync data for device: {}, delay: {} ns, freq scale: {}", device_id, shift, scale);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
         log_warning(
-            "Note that tracy device data mid-run push is enabled, this means device-device sync is a not as accurate. "
+            "Note that tracy mid-run push is enabled. This means device-device sync is not as accurate. "
             "Please do not use tracy mid-run push for sensitive device-device event analysis.");
     }
     if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
@@ -553,7 +553,15 @@ void setSyncInfo(
     }
 }
 
-void syncAllDevices(chip_id_t first_connected_device_id) {
+void syncAllDevices(chip_id_t host_connected_device) {
+    // Check if profiler on host connected device is initilized
+    if (tt_metal_device_profiler_map.find(host_connected_device) == tt_metal_device_profiler_map.end()) {
+        return;
+    }
+
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_sync_enabled()) {
+        return;
+    }
     // Update deviceDeviceTimePair
     for (const auto& sender : deviceDeviceTimePair) {
         for (const auto& receiver : sender.second) {
@@ -615,19 +623,22 @@ void syncAllDevices(chip_id_t first_connected_device_id) {
     // Find any sync info from root device
     // Currently, sync info only exists for SYNC_CORE
     std::tuple<double, double, double> root_sync_info;
-    for (auto& [core, info] : tt_metal_device_profiler_map.at(first_connected_device_id).device_core_sync_info) {
+    for (auto& [core, info] : tt_metal_device_profiler_map.at(host_connected_device).device_core_sync_info) {
         root_sync_info = info;
         break;
     }
 
     // Propagate sync info with DFS through sync tree
     sync_set_devices.clear();
-    setSyncInfo(first_connected_device_id, (std::pair<double, int64_t>){1.0, 0}, root_sync_info, deviceDeviceSyncInfo);
+    setSyncInfo(host_connected_device, (std::pair<double, int64_t>){1.0, 0}, root_sync_info, deviceDeviceSyncInfo);
 }
 
 void ProfilerSync(ProfilerSyncState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_sync_enabled()) {
+        return;
+    }
     if (!getDeviceProfilerState()) {
         return;
     }
@@ -679,12 +690,18 @@ void ProfilerSync(ProfilerSyncState state) {
                 }
             }
         }
-        syncAllDevices(first_connected_device_id);
+        // If at least one sender reciever pair has been found
+        if (first_connected_device_id != -1) {
+            syncAllDevices(first_connected_device_id);
+        }
     }
 
     if (state == ProfilerSyncState::CLOSE_DEVICE and do_sync_on_close) {
         do_sync_on_close = false;
-        syncAllDevices(first_connected_device_id);
+        // If at least one sender reciever pair has been found
+        if (first_connected_device_id != -1) {
+            syncAllDevices(first_connected_device_id);
+        }
     }
 #endif
 }

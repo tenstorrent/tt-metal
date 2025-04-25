@@ -7,6 +7,7 @@ source scripts/tools_setup_common.sh
 set -eo pipefail
 
 run_mid_run_tracy_push() {
+    echo "Smoke test, checking tracy mid-run device data push for hangs"
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
     python -m tracy -v -r -p --sync-host-device --push-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
