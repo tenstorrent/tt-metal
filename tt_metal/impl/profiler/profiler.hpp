@@ -94,6 +94,12 @@ private:
     // Holding current data collected for dispatch command queue zones
     DisptachMetaData current_dispatch_meta_data;
 
+    // (cpu time, device time, frequency) for sync propagated from root device
+    std::tuple<double, double, double> device_sync_info;
+
+    // Per-core sync info used to make tracy context
+    std::map<CoreCoord, std::tuple<double, double, double>> core_sync_info;
+
     // 32bit FNV-1a hashing
     uint32_t hash32CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261));
 
@@ -170,11 +176,11 @@ private:
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log);
 
-    // Push device results to tracy
-    void pushTracyDeviceResults();
-
     // Track the smallest timestamp dumped to file
     void firstTimestamp(uint64_t timestamp);
+
+    // Get tracy context for the core
+    void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
 
 public:
     DeviceProfiler(const bool new_logs);
@@ -221,6 +227,12 @@ public:
         const std::vector<CoreCoord>& worker_cores,
         ProfilerDumpState state = ProfilerDumpState::NORMAL,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
+
+    // Push device results to tracy
+    void pushTracyDeviceResults();
+
+    // Update sync info for this device
+    void setSyncInfo(std::tuple<double, double, double> sync_info);
 };
 
 distributed::AnyBuffer get_control_buffer_view(
