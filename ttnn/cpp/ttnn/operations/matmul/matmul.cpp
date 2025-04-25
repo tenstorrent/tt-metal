@@ -72,16 +72,7 @@ Tensor handle_zero_volume_matmul(
 
     // Apply bias if provided
     if (bias.has_value()) {
-        output_tensor = ttnn::add(
-            /* lhs=*/output_tensor,
-            /* rhs=*/bias.value(),
-            /* output_dtype=*/std::nullopt,
-            /* memory_config=*/memory_config,
-            /* output=*/std::nullopt,
-            /* post_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
-            /* lhs_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
-            /* rhs_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
-            /* use_legacy=*/false);
+        output_tensor = ttnn::add(output_tensor, bias.value(), std::nullopt, memory_config);
     }
 
     return output_tensor;
@@ -164,16 +155,7 @@ ttnn::Tensor bound_matmul(
     }
 
     if (post_process_bias) {
-        output_tensor = ttnn::add(
-            /* lhs=*/output_tensor,
-            /* rhs=*/bias.value(),
-            /* output_dtype=*/std::nullopt,
-            /* memory_config=*/parameters.output_mem_config,
-            /* output=*/std::nullopt,
-            /* post_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
-            /* lhs_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
-            /* rhs_activations=*/ttnn::SmallVector<unary::UnaryWithParam>(),
-            /* use_legacy=*/false);
+        output_tensor = ttnn::add(output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
     }
 
     if (parameters.user_fused_activation.has_value() && !has_user_grid) {
