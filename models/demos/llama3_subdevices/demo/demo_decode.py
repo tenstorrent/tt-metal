@@ -32,7 +32,11 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 TSU_PERF_DROP_LIMIT_COUNT = 20
 
 # Constants for TSU thresholds based on the number of layers
-TSU_THRESHOLDS = {1: {"min": 470, "max": 490}, 10: {"min": 195, "max": 215}, 80: {"min": 45, "max": 49}}
+TSU_THRESHOLDS = {
+    "4U": {1: {"min": 515, "max": 535}, 10: {"min": 230, "max": 250}, 80: {"min": 47, "max": 51}},
+    # TODO: Update the thresholds for 6U based on actual performance data for 10L and 80L once tests added when available 6U machines
+    "6U": {1: {"min": 555, "max": 580}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+}
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -113,6 +117,7 @@ def run_llama3_demo(
     stress_test,
     start_pos,
     enable_prefetcher_performance_mode=True,
+    galaxy_type="4U",
 ):
     # Creat batch output file
     benchmark_data = BenchmarkData()
@@ -414,7 +419,7 @@ def run_llama3_demo(
     profiler.start(f"inference_decode", iteration=iteration)
 
     # Determine TSU threshold based on layer count
-    tsu_thresholds = TSU_THRESHOLDS.get(layers)
+    tsu_thresholds = TSU_THRESHOLDS[galaxy_type].get(layers)
 
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
     tsu_failures = 0
@@ -685,6 +690,9 @@ def test_llama_demo(
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
+    # Add param for 6U for tsu target range
+    galaxy_type = "6U" if bool(os.getenv("RUN_ON_6U")) else "4U"
+
     mesh_device.enable_async(True)
 
     if paged_attention:
@@ -716,4 +724,5 @@ def test_llama_demo(
         stress_test=stress_test,
         start_pos=start_pos,
         enable_prefetcher_performance_mode=enable_pf_perf_mode,
+        galaxy_type=galaxy_type,
     )
