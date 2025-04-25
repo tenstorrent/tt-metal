@@ -9,15 +9,6 @@ namespace roles {
 
 RemoteOptimizer::RemoteOptimizer(ttml::serialization::NamedParameters parameters) :
     OptimizerBase(std::move(parameters)) {
-    for (const auto& [name, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad()) {
-            m_theta.emplace(
-                name,
-                ttml::autograd::create_tensor(
-                    ttml::core::zeros_like(tensor_ptr->get_value(ttml::autograd::PreferredPrecision::FULL)),
-                    /* requires_grad */ false));
-        }
-    }
 }
 
 void RemoteOptimizer::zero_grad() {
@@ -33,13 +24,11 @@ void RemoteOptimizer::step() {
 
 ttml::serialization::StateDict RemoteOptimizer::get_state_dict() const {
     ttml::serialization::StateDict dict;
-    dict["theta"] = m_theta;
     dict["steps"] = m_steps;
     return dict;
 }
 
 void RemoteOptimizer::set_state_dict(const ttml::serialization::StateDict& dict) {
-    m_theta = std::get<ttml::serialization::NamedParameters>(dict.at("theta"));
     m_steps = ttml::serialization::get_value_type<size_t>(dict, "steps");
 }
 

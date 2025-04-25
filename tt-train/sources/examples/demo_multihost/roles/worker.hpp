@@ -36,7 +36,6 @@ public:
 
 private:
     size_t m_steps{0};
-    ttml::serialization::NamedParameters m_theta;
 };
 class Worker {
 public:
