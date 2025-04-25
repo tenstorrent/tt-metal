@@ -35,6 +35,7 @@
 #include "llrt/hal.hpp"
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
+#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
 #include <umd/device/cluster.h>
 #include <umd/device/hugepage.h>
@@ -1294,7 +1295,14 @@ void Cluster::initialize_control_plane() {
         case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::GALAXY: mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::GALAXY:
+            if (tt::tt_fabric::get_fabric_type(this->fabric_config_, this->cluster_type_) ==
+                tt::tt_fabric::FabricType::TORUS_2D) {
+                mesh_graph_descriptor = "quanta_galaxy_torus_2d_graph_descriptor.yaml";
+            } else {
+                mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml";
+            }
+            break;
         case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
         case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
