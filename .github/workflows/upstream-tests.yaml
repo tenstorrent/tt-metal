@@ -45,7 +45,6 @@ jobs:
       # - build-artifact-profiler
       - get-image-tags
     # Could use smaller one, but use TT-hosted one as we may need to inject llama weights. We'll see
-    runs-on: tt-beta-ubuntu-2204-large
     permissions:
       packages: write
       contents: read
@@ -68,6 +67,11 @@ jobs:
             # TODO - Need to update these from above build-artifacts
             build-artifact-name: TTMetal_build_any_profiler
             wheel-artifact-name: eager-dist-ubuntu-22.04-any-profiler
+        # TODO: run on only one, just doing this to bypass queues on CIv2 so I can iterate faster
+        runner:
+          - tt-beta-ubuntu-2204-large
+          - ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: Download artifacts from metal
