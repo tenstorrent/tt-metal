@@ -636,7 +636,7 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
         }
         case DebugAssertNCriscNOCReadsFlushedTripped: {
             const string error_msg = fmt::format(
-                "Watcher detected an inter-kernel data race on core {} RISC {} due to kernel completing with pending "
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
                 "NOC transactions (missing NOC reads flushed barrier). Current kernel: {}.",
                 core_str,
                 get_riscv_name(core.coord, assert_status->which),
@@ -646,7 +646,7 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
         }
         case DebugAssertNCriscNOCNonpostedWritesSentTripped: {
             const string error_msg = fmt::format(
-                "Watcher detected an inter-kernel data race on core {} RISC {} due to kernel completing with pending "
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
                 "NOC transactions (missing NOC non-posted writes sent barrier). Current kernel: {}.",
                 core_str,
                 get_riscv_name(core.coord, assert_status->which),
@@ -656,7 +656,7 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
         }
         case DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped: {
             const string error_msg = fmt::format(
-                "Watcher detected an inter-kernel data race on core {} RISC {} due to kernel completing with pending "
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
                 "NOC transactions (missing NOC non-posted atomics flushed barrier). Current kernel: {}.",
                 core_str,
                 get_riscv_name(core.coord, assert_status->which),
@@ -666,7 +666,7 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
         }
         case DebugAssertNCriscNOCPostedWritesSentTripped: {
             const string error_msg = fmt::format(
-                "Watcher detected an inter-kernel data race on core {} RISC {} due to kernel completing with pending "
+                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
                 "NOC transactions (missing NOC posted writes sent barrier). Current kernel: {}.",
                 core_str,
                 get_riscv_name(core.coord, assert_status->which),
