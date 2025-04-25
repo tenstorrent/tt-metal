@@ -1070,6 +1070,9 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
         return nullptr;
     }
 
+    const bool is_galaxy =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::GALAXY;
+
     uint32_t corner_chip_connections = 0;
     constexpr uint32_t corner_chip_id = 0;
     for (const auto& direction : routing_directions) {
@@ -1154,6 +1157,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
 
             // since tunneling cores are not guaraneteed to be reserved on the same routing plane, iterate through
             // the ordered eth channels in both directions
+            uint32_t num_links = std::min(eth_chans_dir1.size(), eth_chans_dir2.size());
             while (eth_chans_dir1_it != eth_chans_dir1.end() && eth_chans_dir2_it != eth_chans_dir2.end()) {
                 auto eth_chan_dir1 = *eth_chans_dir1_it;
                 auto eth_chan_dir2 = *eth_chans_dir2_it;
@@ -1162,6 +1166,10 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
                 edm_builder1.connect_to_downstream_edm(edm_builder2);
                 edm_builder2.connect_to_downstream_edm(edm_builder1);
+
+                if (is_galaxy) {
+                    get_optimal_noc_for_edm(edm_builder1, edm_builder2, num_links, topology);
+                }
 
                 eth_chans_dir1_it++;
                 eth_chans_dir2_it++;
