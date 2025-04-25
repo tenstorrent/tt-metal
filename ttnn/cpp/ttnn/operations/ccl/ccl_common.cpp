@@ -104,7 +104,7 @@ SenderRecieverConfig get_device_sender_receiver_config(
     return config;
 }
 
-SenderRecieverConfig get_device_sender_receiver_config(
+SenderRecieverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord,
     const distributed::MeshDevice* mesh_device,
     uint32_t cluster_axis,

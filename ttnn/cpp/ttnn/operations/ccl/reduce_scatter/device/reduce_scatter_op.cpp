@@ -58,7 +58,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatter::create_program_at(
                                                            : input_tensors.at(0).device();
     ccl::SenderRecieverConfig config =
         this->cluster_axis.has_value()
-            ? ccl::get_device_sender_receiver_config(mesh_coord, mesh_device, *cluster_axis, ring_size)
+            ? ccl::get_device_sender_receiver_config_in_ring(mesh_coord, mesh_device, *cluster_axis, ring_size)
             : ccl::get_device_sender_receiver_config(target_device, this->devices, topology);
 
     return ccl::reduce_scatter_detail::reduce_scatter_with_workers(

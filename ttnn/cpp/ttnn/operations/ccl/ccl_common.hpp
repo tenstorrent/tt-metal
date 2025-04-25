@@ -49,7 +49,7 @@ struct SenderRecieverConfig {
 SenderRecieverConfig get_device_sender_receiver_config(
     const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
 
-SenderRecieverConfig get_device_sender_receiver_config(
+SenderRecieverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
