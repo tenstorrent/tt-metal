@@ -378,7 +378,7 @@ void setShift(int device_id, int64_t shift, double scale, std::tuple<double, dou
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
         log_warning(
             "Note that tracy device data mid-run push is enabled, this means device-device sync is a not as accurate. "
-            "Please do not use tracy mid-run push for sensitive device-device event analysis");
+            "Please do not use tracy mid-run push for sensitive device-device event analysis.");
     }
     if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
         tt_metal_device_profiler_map.at(device_id).shift = shift;
@@ -684,7 +684,6 @@ void ProfilerSync(ProfilerSyncState state) {
 
     if (state == ProfilerSyncState::CLOSE_DEVICE and do_sync_on_close) {
         do_sync_on_close = false;
-        syncDeviceHost(tt::DevicePool::instance().get_active_device(first_connected_device_id), SYNC_CORE, false);
         syncAllDevices(first_connected_device_id);
     }
 #endif
