@@ -15,8 +15,8 @@ namespace tt_metal {
 
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
 struct ReadL1DataDescriptor {
-    void* dst;
-    uint32_t size_bytes;
+    void* dst = nullptr;
+    uint32_t size_bytes = 0;
 };
 
 uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type);

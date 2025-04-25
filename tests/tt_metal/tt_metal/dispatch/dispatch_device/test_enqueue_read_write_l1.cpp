@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 
 TEST_F(CommandQueueSingleCardFixture, TestBasicReadWriteL1) {
     const uint32_t num_elements = 1000;
-    const std::vector<uint32_t>& src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
+    const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     const CoreCoord logical_core = {0, 0};
     const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
@@ -36,7 +36,7 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicReadWriteL1) {
 
 TEST_F(CommandQueueSingleCardFixture, TestBasicReadL1) {
     const uint32_t num_elements = 1000;
-    const std::vector<uint32_t>& src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
+    const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     const CoreCoord logical_core = {0, 0};
     const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
@@ -58,7 +58,7 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicReadL1) {
 
 TEST_F(CommandQueueSingleCardFixture, TestBasicWriteL1) {
     const uint32_t num_elements = 1000;
-    const std::vector<uint32_t>& src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
+    const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     const CoreCoord logical_core = {0, 0};
     const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
@@ -71,7 +71,7 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicWriteL1) {
 
         Finish(device->command_queue());
 
-        const std::vector<uint32_t>& dst_data =
+        const std::vector<uint32_t> dst_data =
             tt::llrt::read_hex_vec_from_core(device->id(), virtual_core, address, num_elements * sizeof(uint32_t));
 
         EXPECT_EQ(src_data, dst_data);
@@ -80,7 +80,7 @@ TEST_F(CommandQueueSingleCardFixture, TestBasicWriteL1) {
 
 TEST_F(CommandQueueSingleCardFixture, TestInvalidReadWriteAddressL1) {
     const uint32_t num_elements = 1010;
-    const std::vector<uint32_t>& src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
+    const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     const CoreCoord logical_core = {0, 0};
     const DeviceAddr l1_end_address =
@@ -108,7 +108,7 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteMultipleTensixCoresL1) {
     const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t num_elements = 1000;
-    const std::vector<uint32_t>& src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
+    const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
     for (IDevice* device : this->devices_) {
         for (uint32_t core_x = 0; core_x < device->compute_with_storage_grid_size().x; ++core_x) {
@@ -144,7 +144,7 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteZeroElementsL1) {
     const CoreCoord logical_core = {0, 0};
     const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    const std::vector<uint32_t>& src_data = {};
+    const std::vector<uint32_t> src_data = {};
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
@@ -166,7 +166,7 @@ TEST_F(CommandQueueSingleCardFixture, TestReadWriteEntireL1) {
     const uint32_t size = MetalContext::instance().hal().get_dev_size(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t num_elements = size / sizeof(uint32_t);
-    const std::vector<uint32_t>& src_data = generate_arange_vector(size);
+    const std::vector<uint32_t> src_data = generate_arange_vector(size);
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);

@@ -397,8 +397,8 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
 }
 
 void DeviceProfiler::logPacketData(
-    std::ofstream & log_file_ofs,
-    nlohmann::ordered_json & noc_trace_json_log,
+    std::ofstream& log_file_ofs,
+    nlohmann::ordered_json& noc_trace_json_log,
     uint32_t run_host_id,
     const std::string& opname,
     chip_id_t device_id,
@@ -560,7 +560,7 @@ void DeviceProfiler::logPacketData(
 }
 
 void DeviceProfiler::logPacketDataToCSV(
-    std::ofstream & log_file_ofs,
+    std::ofstream& log_file_ofs,
     chip_id_t device_id,
     int core_x,
     int core_y,
@@ -596,11 +596,11 @@ void DeviceProfiler::logPacketDataToCSV(
                         source_line,
                         source_file,
                         metaDataStr)
-                    << std::endl;
+                 << std::endl;
 }
 
 void DeviceProfiler::logNocTracePacketDataToJson(
-    nlohmann::ordered_json & noc_trace_json_log,
+    nlohmann::ordered_json& noc_trace_json_log,
     chip_id_t device_id,
     int core_x,
     int core_y,
@@ -618,8 +618,8 @@ void DeviceProfiler::logNocTracePacketDataToJson(
         if ((risc_name == "NCRISC" || risc_name == "BRISC") &&
             (zone_name.starts_with("TRUE-KERNEL-END") || zone_name.ends_with("-KERNEL"))) {
             tracy::TTDeviceEventPhase zone_phase = (packet_type == kernel_profiler::ZONE_END)
-                                                        ? tracy::TTDeviceEventPhase::end
-                                                        : tracy::TTDeviceEventPhase::begin;
+                                                       ? tracy::TTDeviceEventPhase::end
+                                                       : tracy::TTDeviceEventPhase::begin;
             noc_trace_json_log.push_back(nlohmann::ordered_json{
                 {"run_host_id", run_host_id},
                 {"op_name", opname},
@@ -672,19 +672,16 @@ void DeviceProfiler::logNocTracePacketDataToJson(
 }
 
 void DeviceProfiler::emitCSVHeader(
-    std::ofstream & log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const {
+    std::ofstream& log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const {
     log_file_ofs << "ARCH: " << get_string_lowercase(device_architecture)
-                    << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
-    log_file_ofs
-        << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, "
-            "run host ID,  zone name, type, source line, source file, meta data"
-        << std::endl;
+                 << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
+    log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, "
+                    "run host ID,  zone name, type, source line, source file, meta data"
+                 << std::endl;
 }
 
 void DeviceProfiler::serializeJsonNocTraces(
-    const nlohmann::ordered_json& noc_trace_json_log,
-    const std::filesystem::path& output_dir,
-    chip_id_t device_id) {
+    const nlohmann::ordered_json& noc_trace_json_log, const std::filesystem::path& output_dir, chip_id_t device_id) {
     // create output directory if it does not exist
     std::filesystem::create_directories(output_dir);
     if (!std::filesystem::is_directory(output_dir)) {
