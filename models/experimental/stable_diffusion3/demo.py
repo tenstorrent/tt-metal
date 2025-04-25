@@ -33,7 +33,7 @@ from .tt import TtStableDiffusion3Pipeline
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192, "trace_region_size": 15210496}], indirect=True)
-# @pytest.mark.usefixtures("use_program_cache")
+@pytest.mark.usefixtures("use_program_cache")
 def test_sd3(
     *, mesh_device: ttnn.MeshDevice, model_name, image_w, image_h, guidance_scale, num_inference_steps
 ) -> None:  # , prompt_sequence_length, spatial_sequence_length,) -> None:
