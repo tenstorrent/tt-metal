@@ -21,10 +21,52 @@ random.seed(0)
 DIM_SIZES = [32, 1, 0]
 
 
+def get_bias_shapes(shape_a, shape_b):
+    """
+    Generate different valid shapes for bias to test broadcasting.
+    Works as an iterator, yielding one bias shape at a time.
+    """
+    rank_a, rank_b = len(shape_a), len(shape_b)
+    # Generate all valid bias shapes based on input ranks
+    if rank_a == 2 and rank_b == 2:  # Matrix-matrix: (m, k) x (k, n) -> (m, n)
+        m, k = shape_a
+        n = shape_b[-1]
+        yield (n,)  # Standard case
+        yield (1, n)  # Broadcast first dimension
+        yield (m, n)  # Full shape
+        yield (1,)  # Broadcast all dimensions
+    elif rank_a == 1 and rank_b == 2:  # Vector-matrix: (k) x (k, n) -> (n)
+        n = shape_b[-1]
+        yield (n,)  # Standard case
+        yield (1,)  # Broadcast all dimensions
+    elif rank_a == 1 and rank_b == 1:  # Vector-vector: (k) x (k) -> scalar
+        yield tuple()  # Broadcast all dimensions
+        pass  # No bias for vector-vector
+    elif rank_a == 3 and rank_b == 2:  # Rank 3: (b, m, k) x (k, n) -> (b, m, n)
+        b, m, k = shape_a
+        n = shape_b[-1]
+        # For rank 3, bias must be broadcastable to (b, m, n)
+        yield (n,)  # Standard case
+        yield (1, n)  # Broadcast first dimension
+        yield (1,)  # Broadcast all dimensions
+    elif rank_a == 4 and rank_b == 2:  # Rank 4: (b, c, m, k) x (k, n) -> (b, c, m, n)
+        b, c, m, k = shape_a
+        n = shape_b[-1]
+        yield (n,)  # Standard case
+        yield (1, n)  # Broadcast first dimension
+        yield (1, 1, n)  # Broadcast batch and channel dimensions
+        yield (1, 1, 1, n)  # Broadcast all dimensions
+        yield (1, 1, m, n)  # Broadcast batch and channel dimensions
+        yield (1, c, 1, n)  # Broadcast batch and middle dimensions
+        yield (b, 1, 1, n)  # Broadcast channel and middle dimensions
+        yield (b, c, m, n)  # Full shape
+        yield (1,)  # Broadcast all dimensions
+
+
 def get_linear_shapes(rank_a, rank_b):
     """
-    Generate different valid shapes for testing broadcasting.
-    For each tensor rank, return a list of valid shapes.
+    Generate different valid shapes for linear operation.
+    For each tensor rank, return a tuple of (shape_a, shape_b, bias_shape).
     """
     for shape_a in itertools.product(DIM_SIZES, repeat=rank_a):
         # For shape_b, we need to ensure the inner dimension matches shape_a's last dimension
@@ -40,75 +82,43 @@ def get_linear_shapes(rank_a, rank_b):
             # First yield without bias
             yield (shape_a, shape_b, None)
 
-            # Generate all valid bias shapes based on input ranks
-            if rank_a == 2 and rank_b == 2:  # Matrix-matrix: (m, k) x (k, n) -> (m, n)
-                m, k = shape_a
-                n = shape_b[-1]
-                yield (shape_a, shape_b, (n,))  # Standard case
-                yield (shape_a, shape_b, (1, n))  # Broadcast first dimension
-                yield (shape_a, shape_b, (m, n))  # Full shape
-                yield (shape_a, shape_b, (1,))  # Broadcast all dimensions
-            elif rank_a == 1 and rank_b == 2:  # Vector-matrix: (k) x (k, n) -> (n)
-                n = shape_b[-1]
-                yield (shape_a, shape_b, (n,))  # Standard case
-                yield (shape_a, shape_b, (1,))  # Broadcast all dimensions
-            elif rank_a == 1 and rank_b == 1:  # Vector-vector: (k) x (k) -> scalar
-                yield (shape_a, shape_b, tuple())  # Broadcast all dimensions
-                pass  # No bias for vector-vector
-            elif rank_a == 3 and rank_b == 2:  # Rank 3: (b, m, k) x (k, n) -> (b, m, n)
-                b, m, k = shape_a
-                n = shape_b[-1]
-                # For rank 3, bias must be broadcastable to (b, m, n)
-                yield (shape_a, shape_b, (n,))  # Standard case
-                yield (shape_a, shape_b, (1, n))  # Broadcast first dimension
-                yield (shape_a, shape_b, (1,))  # Broadcast all dimensions
-            elif rank_a == 4 and rank_b == 2:  # Rank 4: (b, c, m, k) x (k, n) -> (b, c, m, n)
-                b, c, m, k = shape_a
-                n = shape_b[-1]
-                yield (shape_a, shape_b, (n,))  # Standard case
-                yield (shape_a, shape_b, (1, n))  # Broadcast first dimension
-                yield (shape_a, shape_b, (1, 1, n))  # Broadcast batch and channel dimensions
-                yield (shape_a, shape_b, (1, 1, 1, n))  # Broadcast all dimensions
-                yield (shape_a, shape_b, (1, 1, m, n))  # Broadcast batch and channel dimensions
-                yield (shape_a, shape_b, (1, c, 1, n))  # Broadcast batch and middle dimensions
-                yield (shape_a, shape_b, (b, 1, 1, n))  # Broadcast channel and middle dimensions
-                yield (shape_a, shape_b, (b, c, m, n))  # Full shape
-                yield (shape_a, shape_b, (1,))  # Broadcast all dimensions
+            # TODO: Enable after GH issue 16599 is resolved
+            # Then yield with bias
+            # for bias_shape in get_bias_shapes(shape_a, shape_b):
+            #     yield (shape_a, shape_b, bias_shape)
 
+
+general = {
+    "transpose_a": [False],
+    "transpose_b": [False],
+}
 
 # Create parameter combinations for different test scenarios
 parameters = {
     # Matrix-matrix multiplication: (m, k) x (k, n) -> (m, n)
     "matrix_matrix": {
         "shapes": get_linear_shapes(2, 2),
-        "transpose_a": [False],
-        "transpose_b": [False],
     },
     # Vector-matrix: (k) x (k, n) -> (n)
     "vector_matrix": {
         "shapes": get_linear_shapes(1, 2),
-        "transpose_a": [False],
-        "transpose_b": [False],
     },
     # Vector-vector: (k) x (k) -> scalar
     "vector_vector": {
         "shapes": get_linear_shapes(1, 1),
-        "transpose_a": [False],
-        "transpose_b": [False],
     },
     # Rank 3 tensor: (b, m, k) x (k, n) -> (b, m, n)
     "rank3_matrix": {
         "shapes": get_linear_shapes(3, 2),
-        "transpose_a": [False],
-        "transpose_b": [False],
     },
     # Rank 4 tensor: (b, c, m, k) x (k, n) -> (b, c, m, n)
     "rank4_matrix": {
         "shapes": get_linear_shapes(4, 2),
-        "transpose_a": [False],
-        "transpose_b": [False],
     },
 }
+
+for p in parameters.values():
+    p.update(general)
 
 
 def run_linear(device, shapes, transpose_a, transpose_b) -> tuple:
