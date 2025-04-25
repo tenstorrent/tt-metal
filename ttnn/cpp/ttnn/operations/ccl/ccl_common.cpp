@@ -79,31 +79,62 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
     return workload_with_callbacks;
 }
 
-std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
-    const IDevice* target_device, const std::vector<IDevice*>& devices, const ttnn::ccl::Topology& topology) {
+SenderRecieverConfig get_device_sender_receiver_config(
+    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology) {
     uint32_t num_devices = devices.size();
     bool is_linear = topology == ttnn::ccl::Topology::Linear;
-    uint32_t device_index = 0;  // Initialize device index
+    SenderRecieverConfig config;
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices.at(i) == target_device) {
-            device_index = i;
+            config.device_index = i;
             bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
             bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;
 
-            std::optional<chip_id_t> receiver_device_id =
-                is_last_chip_in_clockwise_direction ? std::nullopt
-                                                    : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
+            config.receiver_device_id = is_last_chip_in_clockwise_direction
+                                            ? std::nullopt
+                                            : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
 
-            std::optional<chip_id_t> sender_device_id =
+            config.sender_device_id =
                 is_last_chip_in_counter_clockwise_direction
                     ? std::nullopt
                     : std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
-
-            return {device_index, sender_device_id, receiver_device_id};
         }
     }
 
-    return {device_index, std::nullopt, std::nullopt};  // Return null if the device is not found
+    return config;
+}
+
+SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+    const MeshCoordinate& mesh_coord,
+    const distributed::MeshDevice* mesh_device,
+    uint32_t cluster_axis,
+    int ring_size) {
+    SenderRecieverConfig config;
+    const auto& mesh_view = mesh_device->get_view();
+    TT_FATAL(
+        mesh_view.is_mesh_2d(),
+        "CLL operation invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+    const auto view_index = (cluster_axis == 0) ? mesh_coord[1] : mesh_coord[0];
+    config.device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
+
+    auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+        auto new_row = mesh_coord[0];
+        auto new_col = mesh_coord[1];
+        if (cluster_axis == 0) {
+            new_row = line_index % ring_size;
+        } else {
+            new_col = line_index % ring_size;
+        }
+        return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
+    };
+
+    bool is_last_chip_in_clockwise_direction = config.device_index == (ring_size - 1);
+    bool is_last_chip_in_counter_clockwise_direction = config.device_index == 0;
+    config.receiver_device_id =
+        is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(config.device_index + 1);
+    config.sender_device_id =
+        is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(config.device_index + ring_size - 1);
+    return config;
 }
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
