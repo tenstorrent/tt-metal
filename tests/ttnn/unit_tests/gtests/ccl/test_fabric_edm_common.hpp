@@ -2959,19 +2959,28 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
 void RunRingDeadlockStabilityTestWithPersistentFabric(
     size_t num_mcasts,
     size_t num_links,
+    size_t num_devices,
     size_t num_op_invocations,
     bool has_forward_connection,
     bool has_backward_connection,
     size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    if (num_devices != 8) {
-        log_info("This test can only be run on T3000 devices");
-        return;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
-        return;
+
+    auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+    switch (cluster_type) {
+        case ClusterType::T3K:
+            if (num_devices != 8) {
+                log_info(tt::LogTest, "This test can only be run 8 chips on T3000 devices");
+                return;
+            }
+            break;
+        case ClusterType::GALAXY:
+            if (num_devices != 4 && num_devices != 8) {
+                log_info(tt::LogTest, "This test can only be run on 4 or 8 chips on Galaxy devices");
+                return;
+            }
+            break;
+        default: log_info(tt::LogTest, "This test can only be run on T3000 or Galaxy devices"); return;
     }
 
     using namespace ttnn::ccl;
@@ -2994,15 +3003,37 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     Fabric1DRingDeviceInitFixture test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
-    std::vector<IDevice*> devices_ = {
-        view.get_device(MeshCoordinate(0, 0)),
-        view.get_device(MeshCoordinate(0, 1)),
-        view.get_device(MeshCoordinate(0, 2)),
-        view.get_device(MeshCoordinate(0, 3)),
-        view.get_device(MeshCoordinate(1, 3)),
-        view.get_device(MeshCoordinate(1, 2)),
-        view.get_device(MeshCoordinate(1, 1)),
-        view.get_device(MeshCoordinate(1, 0))};
+    std::vector<IDevice*> devices_;
+
+    if (cluster_type == ClusterType::GALAXY) {
+        if (num_devices == 4) {
+            devices_ = {
+                view.get_device(MeshCoordinate(0, 0)),
+                view.get_device(MeshCoordinate(0, 1)),
+                view.get_device(MeshCoordinate(0, 2)),
+                view.get_device(MeshCoordinate(0, 3))};
+        } else if (num_devices == 8) {
+            devices_ = {
+                view.get_device(MeshCoordinate(0, 0)),
+                view.get_device(MeshCoordinate(1, 0)),
+                view.get_device(MeshCoordinate(2, 0)),
+                view.get_device(MeshCoordinate(3, 0)),
+                view.get_device(MeshCoordinate(4, 0)),
+                view.get_device(MeshCoordinate(5, 0)),
+                view.get_device(MeshCoordinate(6, 0)),
+                view.get_device(MeshCoordinate(7, 0))};
+        }
+    } else {
+        devices_ = {
+            view.get_device(MeshCoordinate(0, 0)),
+            view.get_device(MeshCoordinate(0, 1)),
+            view.get_device(MeshCoordinate(0, 2)),
+            view.get_device(MeshCoordinate(0, 3)),
+            view.get_device(MeshCoordinate(1, 3)),
+            view.get_device(MeshCoordinate(1, 2)),
+            view.get_device(MeshCoordinate(1, 1)),
+            view.get_device(MeshCoordinate(1, 0))};
+    }
 
     std::vector<IDevice*> devices;
     devices.reserve(line_size);

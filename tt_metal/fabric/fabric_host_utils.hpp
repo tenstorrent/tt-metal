@@ -13,10 +13,12 @@
 
 namespace tt::tt_fabric {
 
-bool is_1d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config);
-bool is_2d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config);
+bool is_1d_fabric_config(tt::tt_metal::FabricConfig fabric_config);
+bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config);
 
-Topology get_1d_topology(const tt::tt_metal::FabricConfig& fabric_config);
+Topology get_1d_topology(tt::tt_metal::FabricConfig fabric_config);
+
+FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::ClusterType cluster_type);
 
 std::vector<chan_id_t> get_ordered_fabric_eth_chans(chip_id_t chip_id, const std::set<chan_id_t>& eth_chans);
 
