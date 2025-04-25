@@ -43,8 +43,6 @@ def test_image_transformer_inference(
     dtype = ttnn.bfloat16
     pcc_required = 0.86
 
-    mesh_device.enable_async(True)
-
     model_args = ModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 

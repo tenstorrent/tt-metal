@@ -22,12 +22,10 @@ from models.experimental.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrac
     "batch_size",
     ((1),),
 )
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 def test_run_yolov8x_trace_2cqs_inference(
     device,
     use_program_cache,
     batch_size,
-    enable_async_mode,
     model_location_generator,
 ):
     yolov8x_trace_2cq = Yolov8xTrace2CQ()

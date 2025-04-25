@@ -80,7 +80,6 @@ auto capture_op_trace(Op op, IDevice* device, Args&&... args) {
 template <typename TraceID>
 uint64_t execute_time_and_release_trace(TraceID trace_id, IDevice* device) {
     try {
-        device->synchronize();
         uint64_t duration = 0;
         for (int i = 0; i < NUM_TRACE_EXECUTIONS; ++i) {
             auto start = std::chrono::high_resolution_clock::now();

@@ -405,19 +405,6 @@ def use_program_cache(request):
 
 
 @pytest.fixture(scope="function")
-def enable_async_mode(request):
-    devices = get_devices(request)
-    if not devices:
-        logger.warning("No device fixture found to apply async mode to: ASYNC MODE DISABLED")
-
-    for dev in devices:
-        dev.enable_async(request.param)
-    yield request.param
-    for dev in devices:
-        dev.enable_async(False)
-
-
-@pytest.fixture(scope="function")
 def tracy_profile():
     from tracy import Profiler
 

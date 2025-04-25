@@ -127,7 +127,6 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
 
 TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
     IDevice* device = this->devices_[0];
-    device->enable_async(true);
     // Populate these in first loop and verify that deallocation worked - addresses should be identical across loops
     std::size_t input_a_addr = 0;
     std::size_t input_b_addr = 0;
@@ -177,14 +176,12 @@ TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
             EXPECT_EQ(bfloat16(buf[j]), bfloat16(static_cast<float>(i - 2 * i * i)));
         }
     }
-    device->enable_async(false);
 }
 
 Tensor tensor_identity_copy_function(const Tensor& tensor) { return tensor; }
 
 TEST_F(DispatchFixture, TestAsyncRefCountManager) {
     IDevice* device = this->devices_[0];
-    device->enable_async(true);
 
     log_info(LogTest, "Testing Device tensor copy assignment");
     for (int i = 0; i < 5; i++) {
@@ -261,7 +258,6 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
 #endif
     EXPECT_EQ(get_device_buffer_address(tensor_to_self_assign), tensor_to_self_assign_address);
     auto barrier_tensor = tensor_to_self_assign.cpu();
-    device->enable_async(false);
 }
 
 TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {

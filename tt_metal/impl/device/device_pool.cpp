@@ -765,7 +765,6 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
             if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and dev->is_mmio_capable()) {
                 continue;
             }
-            dev->synchronize();  // Synchronize worker queue
             Synchronize(dev);    // Synchronize device
         }
     }
