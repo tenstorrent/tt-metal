@@ -274,7 +274,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
-    auto mesh_device = input_tensor.mesh_device();
+
+    IDevice* mesh_device = input_tensor.mesh_device();
+    if (!mesh_device) {
+        mesh_device = input_tensor.device();
+    }
+
     const bool enable_async_output_tensor = false;
     const bool enable_persistent_fabric_mode = true;
 
