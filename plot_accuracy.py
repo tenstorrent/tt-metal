@@ -25,6 +25,7 @@ def plot_accuracy_op(data, dest, opname, op_dtype, plot_override_fun=None, plot_
     data["max_rel_error"] *= 100
     data["mean_rel_error"] *= 100
 
+    print(f"plot_accuracy_op: {opname} {op_dtype} {plot_mean}")
     # data = data[(data["base_x"] == 1.0) | (data["base_x"] == 2.0) ]
     # print(f"DATA = \n{data}")
 
@@ -43,15 +44,16 @@ def plot_accuracy_op(data, dest, opname, op_dtype, plot_override_fun=None, plot_
 
     fig, ax = plt.subplots(figsize=(25, 15))
 
-    data_max = data_mlt[data_mlt["type"] == "max"]
-    data_mean = data_mlt[data_mlt["type"] == "mean"]
+    data_max = data_mlt[data_mlt["type"] == "max"].copy()
+    data_mean = data_mlt[data_mlt["type"] == "mean"].copy()
 
-    data_max["operation"] = data_max["operation"] + " (max)"
-    data_mean["operation"] = data_mean["operation"] + " (mean)"
+    data_max["operation"] += " (max)"
+    data_mean["operation"] += " (mean)"
 
     plt.axhline(y=0, color="k", linewidth=2)
 
-    color_palette = sns.color_palette()
+    ncolors = len(data_max["operation"].unique())  # Not necessary, but remove warning
+    color_palette = sns.color_palette("deep", ncolors)
     sns.lineplot(data=data_max, x="base_x", y="val", hue="operation", ax=ax, palette=color_palette)
 
     if plot_mean:
@@ -88,6 +90,7 @@ def plot_accuracy_op(data, dest, opname, op_dtype, plot_override_fun=None, plot_
         custom_ticks += [int(10**i) for i in range(3, int(min(10, math.log10(ymax))) + 1)]
 
     ax.xaxis.set_major_locator(ticker.SymmetricalLogLocator(linthresh=1, base=10))
+    ax.set_ylim(0, ymax)
 
     ax.set_title(f"Relative error of ttnn.{opname} against torch implementation\n[{op_dtype}]")
 
@@ -116,7 +119,7 @@ def plot_accuracy_op(data, dest, opname, op_dtype, plot_override_fun=None, plot_
 
     plt.legend(ncol=2)
 
-    plt.savefig(f"{dest}.svg", bbox_inches="tight", pad_inches=0.0)
+    # plt.savefig(f"{dest}.svg", bbox_inches="tight", pad_inches=0.0)
     plt.savefig(f"{dest}.png", bbox_inches="tight", pad_inches=0.0)
 
     plt.close()
@@ -178,11 +181,35 @@ class PlotExp:
         pass
 
     def override_accuracy_zoom(self, ax):
+        ax.axvline(x=math.e, color="k", linestyle="--")
+        ax.set_xscale("symlog", base=2)
+        # custom_ticks = [-10, -2, -1,1, 2, 10]
+        # ax.set_xticks(custom_ticks)
+        # ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
+
         pass
 
     def override_values(self, ax):
         ax.set_xlim(-4.0, 8.0)
         ax.set_ylim(-1, math.exp(8.05))
+        pass
+
+
+class PlotTanh:
+    def override_accuracy(self, ax):
+        pass
+
+    def override_accuracy_zoom(self, ax):
+        ax.set_xlim(-10, 10.0)
+        ax.set_ylim(0, 100)
+
+        custom_ticks = [-10, -2, -1, 0, 1, 2, 10]
+        ax.set_xticks(custom_ticks)
+        ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
+
+        pass
+
+    def override_values(self, ax):
         pass
 
 
@@ -213,6 +240,10 @@ class PlotLog:
 
     def override_accuracy_zoom(self, ax):
         ax.set_xlim(1e-1, 100)
+        ax.set_ylim(
+            0,
+        )
+
         ax.set_xscale("log", base=10)
 
         custom_yticks = [0, 0.5, 1, 5, 10, 50, 100, 500]
@@ -234,6 +265,21 @@ class PlotLog:
         pass
 
 
+class PlotLog1p:
+    def override_accuracy(self, ax):
+        ax.set_xlim(
+            -1,
+        )
+        pass
+
+    def override_accuracy_zoom(self, ax):
+        ax.set_xlim(-1, 100)
+        ax.set_ylim(0, 100)
+
+    def override_values(self, ax):
+        pass
+
+
 class PlotSiLU:
     def override_accuracy(self, ax):
         ax.set_xlim(-128, 32)
@@ -250,6 +296,43 @@ class PlotSiLU:
         ax.set_ylim(-1.0, 4.0)
         ax.axvline(x=-5.0, color="k", linestyle="--", label="x=-5", linewidth=3)
         plt.text(-5 + 0.2, 3, "x=-5", fontsize=40)
+        pass
+
+
+class PlotLogit:
+    def override_accuracy(self, ax):
+        ax.set_xlim(-0.1, 1)
+        ax.set_xscale("linear")
+
+        custom_ticks = [0, 0.1, 0.5, 1]
+        ax.set_xticks(custom_ticks)
+        ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
+
+    def override_accuracy_zoom(self, ax):
+        self.override_accuracy(ax)
+        ax.set_ylim(0, 500)
+
+        pass
+
+    def override_values(self, ax):
+        ax.set_xlim(-0.1, 1)
+        pass
+
+
+class PlotMish:
+    def override_accuracy(self, ax):
+        pass
+
+    def override_accuracy_zoom(self, ax):
+        ax.set_xlim(-10, 10)
+        ax.set_ylim(0, 500)
+        ax.set_xscale("symlog", base=2)
+
+        custom_ticks = [-8, -4, -2, -1, 0, 1, 2, 4, 8]
+        ax.set_xticks(custom_ticks)
+        ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
+
+    def override_values(self, ax):
         pass
 
 
@@ -304,23 +387,41 @@ class PlotTan:
         pass
 
 
+class PlotSqrt:
+    def override_accuracy(self, ax):
+        ax.set_xlim(0, 100)
+        ax.set_ylim(0, 100)
+
+    def override_accuracy_zoom(self, ax):
+        self.override_accuracy(ax)
+        ax.set_xscale("symlog", base=2)
+
+        ax.set_xlim(0, 100)
+        custom_ticks = [0, 1, 2, 4, 8, 16, 32, 64]
+        ax.set_xticks(custom_ticks)
+        ax.set_xticklabels([f"{x:g}" for x in custom_ticks])
+
+    def override_values(self, ax):
+        pass
+
+
 all_override_plot_funs = {
     # Exponential functions
     "exp": PlotExp(),
-    "tanh": PlotExp(),  # reuse exp settings
+    "tanh": PlotTanh(),  # reuse exp settings
     "cosh": PlotExp(),  # reuse exp settings
-    "sinh": PlotExp(),  # reuse exp settings
+    "sinh": PlotMish(),  # reuse exp settings
     # Logarithmic functions
     "log": PlotLog(math.e),
     "log10": PlotLog(10),
     "log2": PlotLog(2),
-    "log1p": PlotLog(math.e),
+    "log1p": PlotLog1p(),
     # Activation functions
     "silu": PlotSiLU(),  # reuse silu settings
-    "logit": PlotSiLU(),  # reuse silu settings
+    "logit": PlotLogit(),  # reuse silu settings
     "gelu": PlotSiLU(),  # reuse silu settings
     "swish": PlotSiLU(),  # reuse silu settings
-    "mish": PlotSiLU(),  # reuse silu settings
+    "mish": PlotMish(),  # reuse silu settings
     "elu": PlotSiLU(),  # reuse silu settings
     "selu": PlotSiLU(),  # reuse silu settings
     "softplus": PlotSiLU(),  # reuse silu settings
@@ -331,7 +432,7 @@ all_override_plot_funs = {
     "sin": PlotCos(is_sin=True),
     "cos": PlotCos(),
     # Miscellaneous functions
-    "sqrt": None,
+    "sqrt": PlotSqrt(),
     "rsqrt": None,
     "rsqrt_approx": None,
     "digamma": None,
@@ -343,14 +444,14 @@ all_override_plot_funs = {
 def plot_all_ops(accuracy_dir, ops_list, dest_dir, highres=False):
     # This is not great because we have to define each parameter manually,
     # but this works for now.
-
+    print(f"plot_all_ops: {ops_list}")
     # Store all operations results in dictionary
     # This is inefficient but is more convenient for concatenating
     # results such as 'exp' and 'exp_approx'
     all_op_data = {}
 
     # Aggregate data
-    for op, dtype, samples in ops_list:
+    for op, dtype, group_size in ops_list:
 
         def should_regenerate(input_csv, output_file):
             script_path = __file__
@@ -374,47 +475,52 @@ def plot_all_ops(accuracy_dir, ops_list, dest_dir, highres=False):
             # - Script is newer than outputs
             return output_mtime == 0 or input_mtime > output_mtime or script_mtime > output_mtime
 
-        input_csv = f"{accuracy_dir}/{op}-{dtype}-[{samples}].csv"
-        output_file = f"{dest_dir}/{op}-{dtype}-[{samples}].pdf"
+        input_csv = f"{accuracy_dir}/{op}-{dtype}-[{group_size}].csv"
+        output_file = f"{dest_dir}/{op}-{dtype}-[{group_size}].pdf"
 
         if should_regenerate(input_csv, output_file):
             data = load_csv(input_csv)
 
-            all_op_data[(op, dtype, samples)] = data
+            all_op_data[(op, dtype, group_size)] = data
 
     # Concatenate exp and exp_approx (semi-generic)
     # (write both into all_op_data[exp] and remove all_op_data[exp_approx])
     for opkey in list(all_op_data.keys()):
-        op, dtype, samples = opkey
+        op, dtype, group_size = opkey
+
         if op == "exp_approx":
             exp_approx_data = all_op_data[opkey]
 
             exp_data = None
-            if ("exp", dtype, samples) in all_op_data:
-                exp_data = all_op_data[("exp", dtype, samples)]
+            if ("exp", dtype, group_size) in all_op_data:
+                exp_data = all_op_data[("exp", dtype, group_size)]
 
-            all_op_data[("exp", dtype, samples)] = pd.concat([exp_data, exp_approx_data])
+            all_op_data[("exp", dtype, group_size)] = pd.concat([exp_data, exp_approx_data])
             del all_op_data[opkey]
 
     # Plot operations
-    for op, dtype, samples in all_op_data.keys():
-        print(f"Plotting {op} {dtype} {samples}\r")
-        data = all_op_data[(op, dtype, samples)]
+    for op, dtype, group_size in all_op_data.keys():
+        print(f"Plotting {op} {dtype} {group_size}\r")
+        data = all_op_data[(op, dtype, group_size)]
 
-        print(f"Plotting {op} {dtype} {samples}", end="\r")
+        print(f"Plotting {op} {dtype} {group_size}", end="\r")
 
         # Each operation may have specific properties
         # To highlight these, custom functions have been defined
         override_plot_fun = None
         dest_file = f"{dest_dir}/{op}-{dtype}"
 
+        plot_mean = True
+        if highres:
+            dest_file += "-zoom"
+            plot_mean = False
+
         if all_override_plot_funs[op] is not None:
             override_plot_fun = all_override_plot_funs[op].override_accuracy
             if highres:
                 override_plot_fun = all_override_plot_funs[op].override_accuracy_zoom
-                dest_file += "-zoom"
 
-        plot_accuracy_op(data, dest_file, op, dtype, override_plot_fun, plot_mean=False)
+        plot_accuracy_op(data, dest_file, op, dtype, override_plot_fun, plot_mean=plot_mean)
 
 
 def main():
@@ -437,52 +543,58 @@ def main():
     )
 
     all_operations = [
-        ("exp", "bfloat16", 4),
-        ("exp_approx", "bfloat16", 4),
-        ("log", "bfloat16", 4),
-        ("tanh", "bfloat16", 4),
-        ("cosh", "bfloat16", 4),
-        ("sinh", "bfloat16", 4),
-        ("log10", "bfloat16", 4),
-        ("log2", "bfloat16", 4),
-        ("log1p", "bfloat16", 4),
-        ("silu", "bfloat16", 4),
-        ("gelu", "bfloat16", 4),
-        ("logit", "bfloat16", 4),
-        ("swish", "bfloat16", 4),
-        ("mish", "bfloat16", 4),
-        ("elu", "bfloat16", 4),
-        ("selu", "bfloat16", 4),
-        ("softplus", "bfloat16", 4),
-        ("softsign", "bfloat16", 4),
-        ("tan", "bfloat16", 4),
-        ("atan", "bfloat16", 4),
-        ("sin", "bfloat16", 4),
-        ("cos", "bfloat16", 4),
-        ("sqrt", "bfloat16", 4),
-        ("rsqrt", "bfloat16", 4),
-        ("rsqrt_approx", "bfloat16", 4),
-        ("digamma", "bfloat16", 4),
-        ("lgamma", "bfloat16", 4),
-        ("tanhshrink", "bfloat16", 4),
+        # ("exp", "bfloat16", 32),
+        # ("exp_approx", "bfloat16", 32),
+        # ("log", "bfloat16", 32),
+        # ("tanh", "bfloat16", 32),
+        # ("cosh", "bfloat16", 32),
+        ("sinh", "bfloat16", 32),
+        # ("log10", "bfloat16", 32),
+        # ("log2", "bfloat16", 32),
+        # ("log1p", "bfloat16", 32),
+        # ("silu", "bfloat16", 32),
+        # ("gelu", "bfloat16", 32),
+        # ("logit", "bfloat16", 32),
+        # ("swish", "bfloat16", 32),
+        ("mish", "bfloat16", 32),
+        # ("elu", "bfloat16", 32),
+        # ("selu", "bfloat16", 32),
+        # ("softplus", "bfloat16", 32),
+        # ("softsign", "bfloat16", 32),
+        # ("tan", "bfloat16", 32),
+        # ("atan", "bfloat16", 32),
+        # ("sin", "bfloat16", 32),
+        # ("cos", "bfloat16", 32),
+        # ("sqrt", "bfloat16", 32),
+        # ("rsqrt", "bfloat16", 32),
+        # ("rsqrt_approx", "bfloat16", 32),
+        # ("digamma", "bfloat16", 32),
+        # ("lgamma", "bfloat16", 32),
+        # ("tanhshrink", "bfloat16", 32),
     ]
 
     highres_operations = [
-        ("exp", "bfloat16", 128),
-        ("exp_approx", "bfloat16", 128),
-        ("log", "bfloat16", 128),
-        ("log10", "bfloat16", 128),
-        ("log2", "bfloat16", 128),
-        ("log1p", "bfloat16", 128),
-        ("tan", "bfloat16", 128),
-        ("cos", "bfloat16", 128),
-        ("sin", "bfloat16", 128),
-        ("silu", "bfloat16", 128),
-        ("gelu", "bfloat16", 128),
-        ("logit", "bfloat16", 128),
-        ("swish", "bfloat16", 128),
-        ("mish", "bfloat16", 128),
-        ("elu", "bfloat16", 128),
+        # ("exp", "bfloat16", 1),
+        # ("exp_approx", "bfloat16", 1),
+        # ("tanh", "bfloat16", 1),
+        # ("cosh", "bfloat16", 1),
+        ("sinh", "bfloat16", 1),
+        # ("log", "bfloat16", 1),
+        # ("log10", "bfloat16", 1),
+        # ("log2", "bfloat16", 1),
+        # ("log1p", "bfloat16", 1),
+        # ("tan", "bfloat16", 1),
+        # ("cos", "bfloat16", 1),
+        # ("sin", "bfloat16", 1),
+        # ("silu", "bfloat16", 1),
+        # ("gelu", "bfloat16", 1),
+        # ("logit", "bfloat16", 1),
+        # ("swish", "bfloat16", 1),
+        ("mish", "bfloat16", 1),
+        # ("elu", "bfloat16", 1),
+        # ("sqrt", "bfloat16", 1),
+        # ("rsqrt_approx", "bfloat16", 1),
+        # ("rsqrt", "bfloat16", 1),
     ]
 
     accuracy_dir = "accuracy_results"
