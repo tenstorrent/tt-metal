@@ -8,6 +8,7 @@
 #include <numeric>
 
 #include <tt-metalium/constants.hpp>
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
@@ -39,8 +40,17 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
     std::vector<Tensor>& output_tensors,
     const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program);
 
-std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
-    const IDevice* target_device, const std::vector<IDevice*>& devices, const ttnn::ccl::Topology& topology);
+struct SenderRecieverConfig {
+    uint32_t device_index = 0;
+    std::optional<chip_id_t> sender_device_id;
+    std::optional<chip_id_t> receiver_device_id;
+};
+
+SenderRecieverConfig get_device_sender_receiver_config(
+    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
+
+SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+    const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,

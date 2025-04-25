@@ -249,8 +249,16 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         /*layout=*/std::nullopt,
         *device);
     uint32_t tensor_to_self_assign_address = get_device_buffer_address(tensor_to_self_assign);
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wself-assign-overloaded"
+#pragma clang diagnostic ignored "-Wself-move"
+#endif
     tensor_to_self_assign = tensor_to_self_assign;
     tensor_to_self_assign = std::move(tensor_to_self_assign);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
     EXPECT_EQ(get_device_buffer_address(tensor_to_self_assign), tensor_to_self_assign_address);
     auto barrier_tensor = tensor_to_self_assign.cpu();
     device->enable_async(false);

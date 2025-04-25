@@ -82,7 +82,7 @@ struct LegacyShape {
     }
 };
 
-static constexpr uint64_t SENTINEL_VALUE = std::numeric_limits<uint64_t>::max();
+constexpr uint64_t SENTINEL_VALUE = std::numeric_limits<uint64_t>::max();
 
 void safe_fread(void* buffer, size_t size, size_t count, FILE* file) {
     if (fread(buffer, size, count, file) != count) {

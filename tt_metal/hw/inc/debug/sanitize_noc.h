@@ -16,6 +16,7 @@
 
 // NOC logging enabled independently of watcher, need to include it here because it hooks into DEBUG_SANITIZE_NOC_*
 #include "noc_logging.h"
+#include "debug/dprint.h"
 
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
@@ -423,6 +424,24 @@ void debug_sanitize_noc_and_worker_addr(
     }
 }
 
+void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
+    uint8_t x = (uint8_t)NOC_UNICAST_ADDR_X(addr);
+    uint8_t y = (uint8_t)NOC_UNICAST_ADDR_Y(addr);
+    bool is_virtual_coord = true;
+    AddressableCoreType core_type = get_core_type(noc_id, x, y, is_virtual_coord);
+    if (core_type == AddressableCoreType::DRAM) {
+        debug_sanitize_post_noc_addr_and_hang(
+            noc_id,
+            addr,
+            0,
+            len,
+            DEBUG_SANITIZE_NOC_UNICAST,
+            DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET,
+            DebugSanitizeInlineWriteDramUnsupported);
+    }
+}
+
 // TODO: Clean these up with #7453
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_FROM_STATE(noc_id)                                                     \
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(                                                                           \
@@ -496,6 +515,7 @@ void debug_sanitize_noc_and_worker_addr(
         worker_a,                                                                                                   \
         NOC_CMD_BUF_READ_REG(noc_id, write_cmd_buf, NOC_AT_LEN_BE));
 #define DEBUG_INSERT_DELAY(transaction_type) debug_insert_delay(transaction_type)
+#define DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id, addr, l) debug_throw_on_dram_addr(noc_id, addr, l)
 
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
@@ -533,5 +553,6 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc_id)
 #define DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_id, cmd_buf)
 #define DEBUG_INSERT_DELAY(transaction_type)
+#define DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id, addr, l) LOG_LEN(l)
 
 #endif  // WATCHER_ENABLED

@@ -848,9 +848,8 @@ def test_multi_core_matmul_1d_gs(
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2_grid")], indirect=True)
 def test_matmul_1d_ring_llama_perf(
-    mesh_device,
+    device,
     in0_dtype,
     in1_dtype,
     output_dtype,
@@ -868,7 +867,6 @@ def test_matmul_1d_ring_llama_perf(
     use_program_cache,
     function_level_defaults,
 ):
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):

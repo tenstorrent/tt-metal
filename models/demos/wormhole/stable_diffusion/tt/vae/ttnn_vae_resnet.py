@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_conv_block import ConvBlock
+from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import GROUPNORM_EPSILON, GROUPNORM_GROUPS
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_utils import prepare_group_norm
 
 
@@ -19,8 +19,8 @@ class ResnetBlock:
         out_channels,
         norm1_num_blocks=1,
         norm2_num_blocks=1,
-        conv1_in_channel_split_factor=1,
-        conv2_in_channel_split_factor=1,
+        conv1_channel_split_factors=(1, 1),
+        conv2_channel_split_factors=(1, 1),
     ):
         self.device = device
         self.in_channels = in_channels
@@ -50,7 +50,8 @@ class ResnetBlock:
             input_height,
             input_width,
             out_channels,
-            conv1_in_channel_split_factor,
+            conv1_channel_split_factors[0],
+            conv1_channel_split_factors[1],
         )
 
         # groupnorm 2
@@ -76,7 +77,8 @@ class ResnetBlock:
             input_height,
             input_width,
             out_channels,
-            conv2_in_channel_split_factor,
+            conv2_channel_split_factors[0],
+            conv2_channel_split_factors[1],
         )
 
         # conv shortcut
@@ -89,13 +91,14 @@ class ResnetBlock:
                 input_height,
                 input_width,
                 out_channels,
-                conv1_in_channel_split_factor,
+                conv1_channel_split_factors[0],
+                conv1_channel_split_factors[1],
                 kernel_size=1,
                 padding=0,
             )
             self.has_conv_shortcut = True
 
-    def __call__(self, input_tensor, groups=32, eps=1e-5):
+    def __call__(self, input_tensor):
         hidden_states = input_tensor
 
         # prepare groupnorm 1
@@ -106,13 +109,13 @@ class ResnetBlock:
 
         hidden_states = ttnn.group_norm(
             hidden_states,
-            num_groups=groups,
+            num_groups=GROUPNORM_GROUPS,
             input_mask=self.norm1_input_mask,
             weight=self.norm1_weights,
             bias=self.norm1_bias,
-            epsilon=eps,
+            epsilon=GROUPNORM_EPSILON,
             core_grid=self.norm1_grid_core,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             inplace=False,
             num_out_blocks=self.norm1_num_blocks,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -122,18 +125,15 @@ class ResnetBlock:
 
         hidden_states = self.conv1(hidden_states)
 
-        # prepare groupnorm 2
-        hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
-
         hidden_states = ttnn.group_norm(
             hidden_states,
-            num_groups=groups,
+            num_groups=GROUPNORM_GROUPS,
             input_mask=self.norm2_input_mask,
             weight=self.norm2_weights,
             bias=self.norm2_bias,
-            epsilon=eps,
+            epsilon=GROUPNORM_EPSILON,
             core_grid=self.norm2_grid_core,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             inplace=False,
             num_out_blocks=self.norm2_num_blocks,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

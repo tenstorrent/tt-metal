@@ -15,17 +15,17 @@
 
 namespace tt::tt_fabric {
 
-bool is_1d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config) {
+bool is_1d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
     return fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D ||
            fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING;
 }
 
-bool is_2d_fabric_config(const tt::tt_metal::FabricConfig& fabric_config) {
+bool is_2d_fabric_config(tt::tt_metal::FabricConfig fabric_config) {
     return fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D ||
            fabric_config == tt::tt_metal::FabricConfig::FABRIC_2D_PUSH;
 }
 
-Topology get_1d_topology(const tt::tt_metal::FabricConfig& fabric_config) {
+Topology get_1d_topology(tt::tt_metal::FabricConfig fabric_config) {
     switch (fabric_config) {
         case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
@@ -36,6 +36,13 @@ Topology get_1d_topology(const tt::tt_metal::FabricConfig& fabric_config) {
             TT_THROW("Unsupported fabric config for 1D: {}", magic_enum::enum_name(fabric_config));
     }
     return tt::tt_fabric::Topology::Linear;
+}
+
+FabricType get_fabric_type(tt::tt_metal::FabricConfig fabric_config, tt::ClusterType cluster_type) {
+    if (cluster_type == tt::ClusterType::GALAXY && fabric_config == tt::tt_metal::FabricConfig::FABRIC_1D_RING) {
+        return FabricType::TORUS_2D;
+    }
+    return FabricType::MESH;
 }
 
 std::vector<chan_id_t> get_ordered_fabric_eth_chans(chip_id_t chip_id, const std::set<chan_id_t>& eth_chans) {
