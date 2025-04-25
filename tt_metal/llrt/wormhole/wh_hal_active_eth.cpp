@@ -91,7 +91,10 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         };
         processor_classes[processor_class_idx] = processor_types;
     }
-
+    constexpr uint32_t mailbox_size =
+        sizeof(mailboxes_t) - sizeof(profiler_msg_t::buffer) +
+        sizeof(profiler_msg_t::buffer) / PROFILER_RISC_COUNT * static_cast<uint8_t>(EthProcessorTypes::COUNT);
+    static_assert(mailbox_size <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,

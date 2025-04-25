@@ -94,7 +94,11 @@ HalCoreInfoType create_active_eth_mem_map() {
         };
         processor_classes[processor_class_idx] = processor_types;
     }
-
+    // TODO: Review if this should  be 2 (the number of eth processors)
+    // Hardcode to 1 to keep size as before
+    constexpr uint32_t mailbox_size =
+        sizeof(mailboxes_t) - sizeof(profiler_msg_t::buffer) + sizeof(profiler_msg_t::buffer) / PROFILER_RISC_COUNT * 1;
+    static_assert(mailbox_size <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,

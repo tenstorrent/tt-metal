@@ -40,6 +40,8 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
 
+    static_assert(MaxProcessorsPerCoreType <= PROFILER_RISC_COUNT);
+
     HalCoreInfoType tensix_mem_map = wormhole::create_tensix_mem_map();
     this->core_info_.push_back(tensix_mem_map);
 
