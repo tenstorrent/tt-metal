@@ -306,23 +306,44 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
             - out_row_start
             - out_col_start
     */
-    uint32_t input_row_device_stride = 0;
-    uint32_t input_col_device_stride = 0;
-    uint32_t out_row_start = 0;
-    uint32_t out_col_start = 0;
-    uint32_t input_shard_row_tiles = in_row_tiles;
-    uint32_t input_shard_col_tiles = in_col_tiles;
-    if (in_dim == 2) {
-        // out_dim == 3
-        input_col_device_stride = in_col_tiles / ring_size;
-        out_row_start = ring_index * in_row_tiles;
-        input_shard_col_tiles = input_col_device_stride;
-    } else if (in_dim == 3) {
-        // out_dim == 2
-        input_row_device_stride = in_row_tiles / ring_size;
-        out_col_start = ring_index * in_col_tiles;
-        input_shard_row_tiles = input_row_device_stride;
-    }
+    auto calculate_strides_and_offsets =
+        [](uint32_t in_row_tiles, uint32_t in_col_tiles, uint32_t ring_size, uint32_t ring_index, uint32_t in_dim) {
+            uint32_t input_row_device_stride = 0;
+            uint32_t input_col_device_stride = 0;
+            uint32_t out_row_start = 0;
+            uint32_t out_col_start = 0;
+            uint32_t input_shard_row_tiles = in_row_tiles;
+            uint32_t input_shard_col_tiles = in_col_tiles;
+
+            if (in_dim == 2) {
+                // out_dim == 3
+                input_col_device_stride = in_col_tiles / ring_size;
+                out_row_start = ring_index * in_row_tiles;
+                input_shard_col_tiles = input_col_device_stride;
+            } else if (in_dim == 3) {
+                // out_dim == 2
+                input_row_device_stride = in_row_tiles / ring_size;
+                out_col_start = ring_index * in_col_tiles;
+                input_shard_row_tiles = input_row_device_stride;
+            }
+
+            return std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(
+                input_row_device_stride,
+                input_col_device_stride,
+                out_row_start,
+                out_col_start,
+                input_shard_row_tiles,
+                input_shard_col_tiles);
+        };
+
+    auto
+        [input_row_device_stride,
+         input_col_device_stride,
+         out_row_start,
+         out_col_start,
+         input_shard_row_tiles,
+         input_shard_col_tiles] =
+            calculate_strides_and_offsets(in_row_tiles, in_col_tiles, ring_size, ring_index, in_dim);
 
     // Kernel Runtime Args
 
@@ -368,6 +389,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         std::vector<uint32_t> writer_rt_args = {
+            persistent_intermediate_buffer.buffer()->address(),
             persistent_output_buffer.buffer()->address(),
             out_row_tiles,
             out_col_tiles,
@@ -405,43 +427,53 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
 
         for (uint32_t i = 0; i < receiver_worker_cores.size(); i++) {
             const auto core = receiver_worker_cores[i];
+            // Compute strides and offsets for receiver, as if we are device at ring_index i.
+            // This lets receiver mimic sender logic.
+            auto
+                [receiver_input_row_device_stride,
+                 receiver_input_col_device_stride,
+                 receiver_out_row_start,
+                 receiver_out_col_start,
+                 receiver_input_shard_row_tiles,
+                 receiver_input_shard_col_tiles] =
+                    calculate_strides_and_offsets(in_row_tiles, in_col_tiles, ring_size, i, in_dim);
+
             // Set receiver runtime args
-            std::vector<uint32_t> receiver_writer_rt_args = {
-                persistent_output_buffer.buffer()->address(),
-                in_row_tiles,
-                in_col_tiles,
-                input_row_device_stride,
-                input_col_device_stride,
-                input_shard_row_tiles,
-                input_shard_col_tiles,
-                out_row_start,
-                out_col_start,
-                out_row_tiles,
-                out_col_tiles,
-                num_pages_per_packet,
-                i  // Receiver of device at ring_index i
-
-            };
-            tt::tt_metal::SetRuntimeArgs(program, receiver_writer_kernel_id, {core}, receiver_writer_rt_args);
-
             std::vector<uint32_t> receiver_reader_rt_args = {
                 persistent_intermediate_buffer.buffer()->address(),
                 input_tensor.buffer()->address(),
                 semaphore.address(),  // Global semaphore for sender i
                 in_row_tiles,
                 in_col_tiles,
-                input_row_device_stride,
-                input_col_device_stride,
-                input_shard_row_tiles,
-                input_shard_col_tiles,
-                out_row_start,
-                out_col_start,
+                receiver_input_row_device_stride,
+                receiver_input_col_device_stride,
+                receiver_input_shard_row_tiles,
+                receiver_input_shard_col_tiles,
+                receiver_out_row_start,
+                receiver_out_col_start,
                 out_row_tiles,
                 out_col_tiles,
                 num_pages_per_packet,
                 i  // Receiver of device at ring_index i
             };
             tt::tt_metal::SetRuntimeArgs(program, receiver_reader_kernel_id, {core}, receiver_reader_rt_args);
+
+            std::vector<uint32_t> receiver_writer_rt_args = {
+                persistent_output_buffer.buffer()->address(),
+                in_row_tiles,
+                in_col_tiles,
+                receiver_input_row_device_stride,
+                receiver_input_col_device_stride,
+                receiver_input_shard_row_tiles,
+                receiver_input_shard_col_tiles,
+                receiver_out_row_start,
+                receiver_out_col_start,
+                out_row_tiles,
+                out_col_tiles,
+                num_pages_per_packet,
+                i  // Receiver of device at ring_index i
+            };
+            tt::tt_metal::SetRuntimeArgs(program, receiver_writer_kernel_id, {core}, receiver_writer_rt_args);
         }
     }
 
@@ -460,7 +492,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
-            const auto& output = output_tensors[0];
+            const auto& persistent_intermediate_buffer = output_tensors[0];
+            const auto& persistent_output_buffer = output_tensors[1];
 
             auto semaphore = static_cast<const ttnn::AllToAllAsync*>(operation)->semaphore;
 
@@ -477,17 +510,19 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_runtime_args[0] = persistent_intermediate_buffer.buffer()->address();
+                worker_writer_sender_runtime_args[1] = persistent_output_buffer.buffer()->address();
                 worker_writer_sender_runtime_args[global_semaphore_args_idx] = semaphore.address();
             }
             // receiver
             for (uint32_t i = 0; i < receiver_worker_cores.size(); i++) {
                 const auto core = receiver_worker_cores[i];
                 auto& receiver_writer_runtime_args = receiver_writer_runtime_args_by_core[core.x][core.y];
-                receiver_writer_runtime_args[0] = output.buffer()->address();
+                receiver_writer_runtime_args[0] = persistent_output_buffer.buffer()->address();
                 auto& receiver_reader_runtime_args = receiver_reader_runtime_args_by_core[core.x][core.y];
-                receiver_reader_runtime_args[0] = input.buffer()->address();
-                receiver_reader_runtime_args[1] = semaphore.address();
+                receiver_reader_runtime_args[0] = persistent_intermediate_buffer.buffer()->address();
+                receiver_reader_runtime_args[1] = input.buffer()->address();
+                receiver_reader_runtime_args[2] = semaphore.address();
             }
         };
 

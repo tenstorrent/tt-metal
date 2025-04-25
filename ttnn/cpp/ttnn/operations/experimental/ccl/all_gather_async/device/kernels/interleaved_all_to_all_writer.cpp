@@ -48,7 +48,8 @@ void kernel_main() {
 
     size_t arg_idx = 0;
     // Load the input tensor spec
-    address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
+    address_t intermediate_buffer_addr = get_arg_val<address_t>(arg_idx++);
+    address_t output_buffer_addr = get_arg_val<address_t>(arg_idx++);
     uint32_t out_row_tiles = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_col_tiles = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_row_start = get_arg_val<uint32_t>(arg_idx++);
@@ -121,8 +122,12 @@ void kernel_main() {
 
     // interleaved addrgen
     constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    auto intermediate_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
+        .bank_base_address = intermediate_buffer_addr,
+        .page_size = tensor0_page_size,
+        .data_format = get_dataformat(cb0_id)};
+    auto output_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
+        .bank_base_address = output_buffer_addr, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
 
     DPRINT << "fabric_connection.is_logically_connected(): " << (uint32_t)fabric_connection.is_logically_connected()
            << "\n";
@@ -161,6 +166,9 @@ void kernel_main() {
         }
 
         DPRINT << "from device " << (uint32_t)my_ring_id << " to device " << (uint32_t)dst_ring_id << "\n";
+        // TODO: Why do I pass a list of receiver cores if each device only needs to know about its own receiver core?
+        const uint32_t receiver_core_x = receiver_cores_x[my_ring_id];
+        const uint32_t receiver_core_y = receiver_cores_y[my_ring_id];
 
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += packet_size_in_pages) {
@@ -173,7 +181,8 @@ void kernel_main() {
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t col_tile = out_col_id + j;
                     uint32_t tile_id = out_row_id * out_col_tiles + col_tile;
-                    uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                    uint64_t noc0_dest_noc_addr =
+                        get_noc_addr(tile_id, intermediate_tensor_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                     if (cur_is_forward) {
                         pkt_hdr_forward->to_noc_unicast_write(
@@ -203,9 +212,9 @@ void kernel_main() {
             }
         }
 
-        // Unicast semaphore increment to receiver device
+        // Unicast semaphore increment to receiver core of receiver device
         uint64_t output_semaphore_noc_addr_in_pkt =
-            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, global_semaphore_addr, 0);
+            safe_get_noc_addr(receiver_core_x, receiver_core_y, global_semaphore_addr, 0);
         auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
         pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             output_semaphore_noc_addr_in_pkt,
@@ -243,7 +252,7 @@ void kernel_main() {
             for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                 uint32_t col_tile = out_col_id + j;
                 uint32_t tile_id = out_row_id * out_col_tiles + col_tile;
-                noc_async_write_tile(tile_id, tensor0_addrgen, l1_read_addr);
+                noc_async_write_tile(tile_id, output_tensor_addrgen, l1_read_addr);
 
                 l1_read_addr += payload_size_bytes;
             }
@@ -252,19 +261,19 @@ void kernel_main() {
         }
     }
 
-    // 3. wait for mcast output ready semaphore
-    if (wait_output_semaphore) {
-        DPRINT << "waiting for waitval " << (uint32_t)wait_sem_value << "\n";
-        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr) < wait_sem_value);
+    // // 3. wait for mcast output ready semaphore
+    // if (wait_output_semaphore) {
+    //     DPRINT << "waiting for waitval " << (uint32_t)wait_sem_value << "\n";
+    //     while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr) < wait_sem_value);
 
-        DPRINT << "waitval done\n";
-    }
+    //     DPRINT << "waitval done\n";
+    // }
 
-    // 4. global semaphore reset
-    if (reset_global_semaphore) {
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr) = 0;
-        DPRINT << "reset done\n";
-    }
+    // // 4. global semaphore reset
+    // if (reset_global_semaphore) {
+    //     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr) = 0;
+    //     DPRINT << "reset done\n";
+    // }
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close();
