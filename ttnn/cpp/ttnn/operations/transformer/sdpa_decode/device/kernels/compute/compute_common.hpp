@@ -346,6 +346,7 @@ ALWI void cb_matmul_blocks(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     reconfig_data_format(in1_cb, in0_cb);
+    cb_wait_front(in0_cb, M * K);
     cb_wait_front(in1_cb, K * N);
 
     uint32_t output_num_tiles = M * N;
