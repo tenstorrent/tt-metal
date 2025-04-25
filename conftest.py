@@ -54,14 +54,15 @@ def is_single_card_n300(device):
     return num_pcie == 1 and num_devices == 2 and device.arch().name == "WORMHOLE_B0"
 
 
+# TODO: Remove this when TG clusters are deprecated.
 def is_6u():
     import ttnn
 
     num_pcie = ttnn.GetNumPCIeDevices()
     num_devices = ttnn.GetNumAvailableDevices()
-    TG_NUM_PCIE_DEVICES = 32
-    TG_NUM_DEVICES = 32
-    return num_pcie == TG_NUM_PCIE_DEVICES and num_devices == TG_NUM_DEVICES
+    NUM_PCIE_DEVICES = 32
+    NUM_DEVICES = 32
+    return num_pcie == NUM_PCIE_DEVICES and num_devices == NUM_DEVICES
 
 
 # TODO: Remove this when TG clusters are deprecated.
