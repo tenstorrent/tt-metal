@@ -554,20 +554,20 @@ def get_device_data_generate_report(
             coreOpToOps = {}
             opToOps = []
             for core in allCores:
-                coreSeries = deviceData["devices"][device]["cores"][core]["riscs"]["TENSIX"]["analysis"]["op2op"][
-                    "series"
-                ]
-                for op2op in coreSeries:
-                    if op2op["end_iter_mark"][1] != op2op["start_iter_mark"][1]:
-                        startMarker, endMarker = op2op["duration_type"]
-                        op2opID = (startMarker["run_host_id"], endMarker["run_host_id"])
-                        op2opDuration = op2op["duration_cycles"]
-                        op2opStart = op2op["start_cycle"]
-                        opToOps.append((op2opStart, op2opID, op2opDuration, core))
-                        if core in coreOpToOps:
-                            coreOpToOps[core].append((op2opStart, op2opID, op2opDuration, core))
-                        else:
-                            coreOpToOps[core] = deque([(op2opStart, op2opID, op2opDuration, core)])
+                deviceDataDict = deviceData["devices"][device]["cores"][core]["riscs"]["TENSIX"]
+                if "analysis" in deviceDataDict:
+                    coreSeries = deviceDataDict["analysis"]["op2op"]["series"]
+                    for op2op in coreSeries:
+                        if op2op["end_iter_mark"][1] != op2op["start_iter_mark"][1]:
+                            startMarker, endMarker = op2op["duration_type"]
+                            op2opID = (startMarker["run_host_id"], endMarker["run_host_id"])
+                            op2opDuration = op2op["duration_cycles"]
+                            op2opStart = op2op["start_cycle"]
+                            opToOps.append((op2opStart, op2opID, op2opDuration, core))
+                            if core in coreOpToOps:
+                                coreOpToOps[core].append((op2opStart, op2opID, op2opDuration, core))
+                            else:
+                                coreOpToOps[core] = deque([(op2opStart, op2opID, op2opDuration, core)])
             opToOps.sort()
 
             pickedOps = set()
