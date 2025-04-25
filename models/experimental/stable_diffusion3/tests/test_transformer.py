@@ -31,6 +31,7 @@ TILE_SIZE = 32
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192, "trace_region_size": 15157248}], indirect=True)
+@pytest.mark.usefixtures("use_program_cache")
 def test_transformer(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -95,37 +96,13 @@ def test_transformer(
             timestep=timestep,
         )
 
-    ## Pre-processing for the ttnn.fold
-    spatial = torch.permute(spatial, (0, 2, 3, 1))  # BCYX -> BYXC
-    batch_size, img_h, img_w, img_c = spatial.shape  # permuted input NHWC
-    patch_size = 2
-    spatial = spatial.reshape(batch_size, img_h, img_w // patch_size, patch_size, img_c)
-    spatial = spatial.reshape(batch_size, img_h, img_w // patch_size, patch_size * img_c)
-    N, H, W, C = spatial.shape
-    shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 7),
-            ),
-        }
-    )
-    n_cores = 64
-    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
-
     tt_spatial = ttnn.from_torch(
-        spatial,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        spatial.permute([0, 2, 3, 1]),  # BCYX -> BYXC
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            shard_spec,
-        ),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn_dtype,
     )
-
     tt_prompt = ttnn.from_torch(
         prompt,
         device=mesh_device,
@@ -155,7 +132,25 @@ def test_transformer(
         N=spatial_sequence_length,
         L=prompt_sequence_length,
     )
+    # num_measurement_iterations=1
+    # profiler.clear()
+    # profiler.start(f"run")
+    # for i in range(num_measurement_iterations):
+    #     tt_output = tt_model(
+    #         spatial=tt_spatial,
+    #         prompt=tt_prompt,
+    #         pooled_projection=tt_pooled_projection,
+    #         timestep=tt_timestep,
+    #         N=spatial_sequence_length,
+    #         L=prompt_sequence_length,
+    #     )
+    # profiler.end(f"run")
+    # devices = mesh_device.get_devices()
+    # ttnn.DumpDeviceProfiler(devices[0])
+    # total_time = profiler.get("run")
+    # avg_time = total_time / num_measurement_iterations
+    # print(f" TOTAL TIME: {total_time} AVG TIME: {avg_time}\n")
 
     torch_output = torch.unsqueeze(torch_output, 1)
     print(f"tt_output shape {tt_output.shape} torch_output {torch_output.shape}")
-    assert_quality(torch_output, tt_output, pcc=0.994, mse=0.06, shard_dim=0, num_devices=mesh_device.get_num_devices())
+    assert_quality(torch_output, tt_output, pcc=0.997, mse=0.06, shard_dim=0, num_devices=mesh_device.get_num_devices())
