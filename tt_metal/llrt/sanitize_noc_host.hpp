@@ -17,11 +17,8 @@ namespace tt {
 #define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 #define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= b) && ((a) + (l) <= e))
 
-#define DEBUG_VALID_ACTIVE_ETH_ADDR(a, l)                                                                      \
-    ((((a) >= HAL_MEM_ACTIVE_ETH_BASE) && ((a) + (l) <= HAL_MEM_ACTIVE_ETH_BASE + HAL_MEM_ACTIVE_ETH_SIZE)) || \
-     (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
-#define DEBUG_VALID_IDLE_ETH_ADDR(a, l)                                                                  \
-    ((((a) >= HAL_MEM_IDLE_ETH_BASE) && ((a) + (l) <= HAL_MEM_IDLE_ETH_BASE + HAL_MEM_IDLE_ETH_SIZE)) || \
+#define DEBUG_VALID_ETH_ADDR(a, l)                                                        \
+    ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE)) || \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
 static bool coord_found_p(const std::vector<tt::umd::CoreCoord>& coords, CoreCoord core) {
@@ -77,8 +74,7 @@ static void watcher_sanitize_host_noc(
     const char* what,
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
-    const std::unordered_set<CoreCoord>& virtual_active_eth_cores,
-    const std::unordered_set<CoreCoord>& virtual_inactive_eth_cores,
+    const std::unordered_set<CoreCoord>& virtual_eth_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -92,15 +88,10 @@ static void watcher_sanitize_host_noc(
             print_stack_trace();
             TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
         }
-    } else if (coord_found_p(virtual_active_eth_cores, core)) {
-        if (!DEBUG_VALID_ACTIVE_ETH_ADDR(addr, lbytes)) {
+    } else if (coord_found_p(virtual_eth_cores, core)) {
+        if (!DEBUG_VALID_ETH_ADDR(addr, lbytes)) {
             print_stack_trace();
-            TT_THROW("Host watcher: bad {} active eth address {}", what, noc_address(core, addr, lbytes));
-        }
-    } else if (coord_found_p(virtual_inactive_eth_cores, core)) {
-        if (!DEBUG_VALID_IDLE_ETH_ADDR(addr, lbytes)) {
-            print_stack_trace();
-            TT_THROW("Host watcher: bad {} idle eth address {}", what, noc_address(core, addr, lbytes));
+            TT_THROW("Host watcher: bad {} eth address {}", what, noc_address(core, addr, lbytes));
         }
     } else if (coord_found_p(virtual_worker_cores, core)) {
         if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
@@ -117,25 +108,21 @@ static void watcher_sanitize_host_noc(
 void watcher_sanitize_host_noc_read(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
-    const std::unordered_set<CoreCoord>& virtual_active_eth_cores,
-    const std::unordered_set<CoreCoord>& virtual_inactive_eth_cores,
+    const std::unordered_set<CoreCoord>& virtual_eth_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
-    watcher_sanitize_host_noc(
-        "read", soc_d, virtual_worker_cores, virtual_active_eth_cores, virtual_inactive_eth_cores, core, addr, lbytes);
+    watcher_sanitize_host_noc("read", soc_d, virtual_worker_cores, virtual_eth_cores, core, addr, lbytes);
 }
 
 void watcher_sanitize_host_noc_write(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
-    const std::unordered_set<CoreCoord>& virtual_active_eth_cores,
-    const std::unordered_set<CoreCoord>& virtual_inactive_eth_cores,
+    const std::unordered_set<CoreCoord>& virtual_eth_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
-    watcher_sanitize_host_noc(
-        "write", soc_d, virtual_worker_cores, virtual_active_eth_cores, virtual_inactive_eth_cores, core, addr, lbytes);
+    watcher_sanitize_host_noc("write", soc_d, virtual_worker_cores, virtual_eth_cores, core, addr, lbytes);
 }
 
 }  // namespace tt

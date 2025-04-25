@@ -341,8 +341,6 @@ private:
 
     void initialize_ethernet_sockets();
 
-    void initialize_active_idle_ethernet_cores();
-
     // Disable ethernet cores that retrain
     // This should be removed when we handle retraining or dropped links in control plane properly
     void disable_ethernet_cores_with_retrain();
@@ -378,8 +376,6 @@ private:
     std::unordered_map<tt_cxy_pair, tt_cxy_pair> virtual_to_umd_coord_mapping_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_eth_cores_;
-    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_active_eth_cores_;
-    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_inactive_eth_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
     // Flag to tell whether we are on a TG type of system.
