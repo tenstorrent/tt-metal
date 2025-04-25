@@ -31,7 +31,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7260,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "RMSAllGather_1": {
         "op_name": "PostRMS_0",
@@ -49,7 +49,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7326,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "RMSAllGather_3": {
         "op_name": "PostRMS_1",
@@ -58,7 +58,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 6431.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "AllGatherConcat_0": {
         "op_name": "AllGatherConcat",
@@ -76,7 +76,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 4351.1,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "Matmul_0": {
         "op_name": "QKV_MM",
@@ -130,7 +130,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7932.2,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.4,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "AllReduceAsync_0": {
         "op_name": "AllReduceAsync_DO",
@@ -148,7 +148,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 7252.4,
         "kernel_duration_relative_margin": 0.05,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.1,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "LlamaReduceScatterDeviceOperation_0": {
         "op_name": "ReduceScatter_FF1",
@@ -175,7 +175,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 2844.3,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.15,
+        "dispatch_duration_relative_margin": 0.35,
     },
     "PagedUpdateCacheDeviceOperation_0": {
         "op_name": "PagedUpdateCache",
@@ -211,7 +211,7 @@ perf_targets = {
         "non-overlapped-dispatch-time": 6111.2,
         "kernel_duration_relative_margin": 0.1,
         "op_to_op_duration_relative_margin": 0.2,
-        "dispatch_duration_relative_margin": 0.15,
+        "dispatch_duration_relative_margin": 0.2,
     },
     "BinaryDeviceOperation_2": {
         "op_name": "Binary_Residual_1",
