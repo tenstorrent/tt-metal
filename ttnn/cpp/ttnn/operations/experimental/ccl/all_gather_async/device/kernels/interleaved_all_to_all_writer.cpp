@@ -37,6 +37,9 @@ constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targe
 
 constexpr uint32_t wait_sem_value = (ring_size - 1);
 
+constexpr uint32_t N_DRAM_BANKS = 12;
+constexpr uint32_t NUM_SENDERS = ring_size - 1;
+
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
  * dispatch implementations depending on those invocation parameters.
@@ -170,19 +173,31 @@ void kernel_main() {
         const uint32_t receiver_core_x = receiver_cores_x[my_ring_id];
         const uint32_t receiver_core_y = receiver_cores_y[my_ring_id];
 
+        const uint32_t my_relative_ring_id = (my_ring_id < dst_ring_id) ? my_ring_id : my_ring_id - 1;
+        uint32_t packet_id = 0;
+        /*
+        global_id = relative_id + tile_count * N_SENDERS
+        first_id = (global_id % 12) + 24 * (global_id / 12)
+        second_id = first_id + 12
+        */
+
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
             for (uint32_t out_col_id = out_col_start; out_col_id < out_col_end; out_col_id += packet_size_in_pages) {
                 cb_wait_front(cb0_id, packet_size_in_pages);
                 size_t l1_read_addr = get_read_ptr(cb0_id);
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, packet_size_in_pages);
 
-                constexpr uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
+                constexpr uint32_t contig_pages_advanced = 2;  // TODO: CT arg
+
                 constexpr uint32_t payload_size_bytes = contig_pages_advanced * tensor0_page_size;
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                    uint32_t col_tile = out_col_id + j;
-                    uint32_t tile_id = out_row_id * out_col_tiles + col_tile;
+                    // Calculate the tile id of the first tile in the pair to send. Guaranteed to be in the same bank.
+                    uint32_t global_id = my_relative_ring_id + packet_id * NUM_SENDERS;
+                    uint32_t first_id = (global_id % N_DRAM_BANKS) + 2 * N_DRAM_BANKS * (global_id / N_DRAM_BANKS);
+                    DPRINT << "Writing tile pair (" << first_id << ", " << (first_id + 12) << ")" << ENDL();
+
                     uint64_t noc0_dest_noc_addr =
-                        get_noc_addr(tile_id, intermediate_tensor_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                        get_noc_addr(first_id, intermediate_tensor_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                     if (cur_is_forward) {
                         pkt_hdr_forward->to_noc_unicast_write(
@@ -206,6 +221,7 @@ void kernel_main() {
 
                     // Advance local read address
                     l1_read_addr += payload_size_bytes;
+                    packet_id++;
                 }
 
                 cb_pop_front(cb0_id, packet_size_in_pages);

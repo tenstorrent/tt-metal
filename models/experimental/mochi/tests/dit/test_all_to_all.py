@@ -584,7 +584,7 @@ def run_all_to_all_impl(
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
-@pytest.mark.parametrize("num_iters, do_check", [(2, True), (6, False)], ids=["check", "perf"])
+@pytest.mark.parametrize("num_iters, do_check", [(2, True), (6, False), (3, True)], ids=["check", "perf", "stress"])
 @pytest.mark.parametrize("enable_async", [True])
 def test_all_to_all(
     t3k_mesh_device,

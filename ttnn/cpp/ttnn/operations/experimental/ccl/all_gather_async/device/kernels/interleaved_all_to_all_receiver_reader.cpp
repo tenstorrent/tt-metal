@@ -19,6 +19,10 @@ constexpr uint32_t num_chunks_per_shard = get_compile_time_arg_val(5);
 constexpr uint32_t page_size = get_compile_time_arg_val(6);
 constexpr uint32_t cb_id = get_compile_time_arg_val(7);
 
+// TODO: CT args
+constexpr uint32_t N_DRAM_BANKS = 12;
+constexpr uint32_t NUM_SENDERS = ring_size - 1;
+
 constexpr uint32_t wait_sem_value = 1;
 
 void kernel_main() {
@@ -83,6 +87,10 @@ void kernel_main() {
 
         // Wait for semaphore increment from sender. For now, wait until sender is fully done.
         // TODO: Add chunking granularity.
+        const uint32_t sender_relative_ring_id =
+            (remote_device_ring_id < my_ring_id) ? remote_device_ring_id : remote_device_ring_id - 1;
+        uint32_t packet_id = 0;
+
         while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr) < wait_sem_value);
 
         for (uint32_t out_row_id = out_row_start; out_row_id < out_row_end; out_row_id++) {
@@ -91,14 +99,17 @@ void kernel_main() {
                 size_t l1_write_addr = get_write_ptr(cb_id);
                 uint32_t num_pages_to_read = std::min(out_col_end - out_col_id, num_pages_per_packet);
 
-                constexpr uint32_t contig_pages_advanced = 1;  // always 1 for interleaved
-                // constexpr uint32_t payload_size_bytes = contig_pages_advanced * tensor0_page_size;
+                constexpr uint32_t contig_pages_advanced = 2;  // TODO: CT arg
+                constexpr uint32_t payload_size_bytes = contig_pages_advanced * page_size;
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
-                    uint32_t col_tile = out_col_id + j;
-                    uint32_t tile_id = out_row_id * out_col_tiles + col_tile;
+                    uint32_t global_id = sender_relative_ring_id + packet_id * NUM_SENDERS;
+                    uint32_t first_id = (global_id % N_DRAM_BANKS) + 2 * N_DRAM_BANKS * (global_id / N_DRAM_BANKS);
+                    uint64_t packet_addr =
+                        get_noc_addr(first_id, intermediate_tensor_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
-                    noc_async_read_tile(tile_id, intermediate_tensor_addrgen, l1_write_addr);
-                    l1_write_addr += page_size;
+                    noc_async_read(packet_addr, l1_write_addr, payload_size_bytes);
+                    l1_write_addr += payload_size_bytes;
+                    packet_id++;
                 }
                 noc_async_read_barrier();
 
