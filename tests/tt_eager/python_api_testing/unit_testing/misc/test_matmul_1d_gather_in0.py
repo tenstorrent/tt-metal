@@ -486,6 +486,7 @@ def test_multi_core_matmul_1d_in1_dram_wh(
         num_iters,
         hop_grid=hop_grid,
         in1_is_dram_interleaved=in1_is_dram_interleaved,
+        in1_is_in_dram=True,
     )
 
 

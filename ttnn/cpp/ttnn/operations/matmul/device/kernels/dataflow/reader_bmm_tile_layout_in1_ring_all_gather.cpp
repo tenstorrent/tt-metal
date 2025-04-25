@@ -75,12 +75,18 @@ void kernel_main() {
     const InterleavedAddrGenFast<in1_is_dram_interleaved, in1_tile_hw> s1 = {
         .bank_base_address = in1_tensor_addr, .page_size = in1_single_tile_size_bytes, .data_format = in1_data_format};
 
-    const uint32_t in1_shard_width_offset_bytes = in1_shard_width_in_dram * in1_single_tile_size_bytes;
-    const uint32_t in1_dram_shard_block_size_bytes = in1_shard_width_offset_bytes * in1_block_height_in_tiles;
-    const uint32_t dram_read_offset_bytes = dram_read_offset * in1_block_width_in_tiles * in1_single_tile_size_bytes;
+    uint32_t in1_shard_width_offset_bytes = 0;
+    uint32_t in1_dram_shard_block_size_bytes = 0;
+    uint32_t dram_read_offset_bytes = 0;
     uint32_t l1_write_addr_in1;
     uint32_t l1_read_addr_in1 = 0;
     uint32_t in1_base_addr = 0;
+
+    if constexpr (in1_is_dram_sharded) {
+        in1_shard_width_offset_bytes = in1_shard_width_in_dram * in1_single_tile_size_bytes;
+        in1_dram_shard_block_size_bytes = in1_shard_width_offset_bytes * in1_block_height_in_tiles;
+        dram_read_offset_bytes = dram_read_offset * in1_block_width_in_tiles * in1_single_tile_size_bytes;
+    }
 
     for (uint32_t b = 0; b < batch; ++b) {
         cb_reserve_back(sync_cb2, 1);
