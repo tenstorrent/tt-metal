@@ -173,7 +173,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     buffer_type: ttnn.BufferType,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_spec: ttnn.ShardSpec = None,
     output_shard_spec: ttnn.ShardSpec = None,
     num_all_gather_instances: int = 1,
@@ -190,8 +189,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 ):
     if use_persistent_output and not use_all_gather_async:
         pytest.skip("Persistent output tensor requires all-gather-async")
-
-    mesh_device.enable_async(enable_async)
 
     input_shape_per_chip = list(per_chip_output_shape)
     input_shape_per_chip[dim] //= num_devices_per_line
@@ -403,7 +400,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_line_all_gather_on_TG_rows_post_commit(
@@ -417,7 +413,6 @@ def test_line_all_gather_on_TG_rows_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
@@ -435,7 +430,6 @@ def test_line_all_gather_on_TG_rows_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=1,
@@ -466,7 +460,6 @@ def test_line_all_gather_on_TG_rows_post_commit(
         ttnn.BufferType.DRAM,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -481,7 +474,6 @@ def test_line_all_gather_on_TG_cols_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
@@ -499,7 +491,6 @@ def test_line_all_gather_on_TG_cols_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=0,

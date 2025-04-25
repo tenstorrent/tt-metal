@@ -194,7 +194,7 @@ def test_Llama_perf_host(
     )
 
     check_mesh_device(mesh_device, model_config)
-    mesh_device.enable_async(True)
+
     mesh_device.enable_program_cache()
 
     run_test_LlamaModel_end_to_end(

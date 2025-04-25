@@ -133,8 +133,6 @@ def test_tt_model_acc(
 
     dtype = ttnn.bfloat8_b
 
-    mesh_device.enable_async(True)
-
     json_config_file = request.config.getoption("--decoder_config_file")
     if json_config_file:
         optimizations = parse_decoder_json(json_config_file)

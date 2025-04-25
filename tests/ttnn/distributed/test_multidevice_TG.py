@@ -1431,8 +1431,7 @@ def test_line_all_gather_column_major(mesh_device):
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("cluster_axis", (1,))
 @pytest.mark.parametrize("dim", (0,))
-@pytest.mark.parametrize("async_mode", (False, True))
-def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: int, async_mode: bool):
+def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: int):
     """
     Test the line-all-gather operation on a 8x4 mesh.
     Data Pattern for initial sharding [TILE_SIZE*mesh_device_ROWS, TILE_SIZE*mesh_device_COLS]:
@@ -1448,8 +1447,6 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
     - Every device along the column contains the whole column tensor stacked on `dim` dimension
     - Every device will have the shape: [4, 1, 32, 32]
     """
-    if async_mode:
-        mesh_device.enable_async(True)
 
     (rows, cols), tile_size = mesh_device.shape, 32
     full_tensor = torch.zeros((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)

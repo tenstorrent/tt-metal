@@ -64,8 +64,6 @@ def test_conv2d_inference(
     gated = True
     pcc_required = 0.9999
 
-    mesh_device.enable_async(True)
-
     model_args = ModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 

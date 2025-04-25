@@ -84,7 +84,6 @@ def test_llama_model_inference(
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(True)
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True
     dummy_weights = True

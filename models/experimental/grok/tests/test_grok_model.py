@@ -41,7 +41,6 @@ from models.experimental.grok.reference.configuration_grok1 import Grok1Config
     (1, 2, 10),
 )
 def test_grok_model_inference(t3k_mesh_device, use_program_cache, reset_seeds, iterations, n_layers, validation_type):
-    t3k_mesh_device.enable_async(True)
     pcc = 0.97
     dtype = ttnn.bfloat8_b
 

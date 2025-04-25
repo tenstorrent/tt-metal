@@ -119,7 +119,6 @@ parameters = {
         "mem_config": [
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ],
-        "enable_async": [True],
         "num_iters": [1],
         "tile": [(32, 32)],
     },
@@ -133,7 +132,6 @@ parameters = {
         "mem_config": [
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ],
-        "enable_async": [True],
         "num_iters": [1],
         "tile": [(32, 32)],
     },
@@ -179,7 +177,6 @@ def run(
     input_dtype,
     layout,
     mem_config,
-    enable_async,
     num_iters,
     tile,
     *,
@@ -187,11 +184,6 @@ def run(
 ) -> list:
     all_devices = device
 
-    for device in all_devices:
-        device.enable_async(enable_async)
-
-    if enable_async:
-        logger.info(f"Using Async Mode for All Gather Op Dispatch")
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
 

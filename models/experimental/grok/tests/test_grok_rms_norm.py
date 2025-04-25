@@ -25,7 +25,6 @@ from models.utility_functions import (
 
 def test_grok_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
-    t3k_mesh_device.enable_async(True)
 
     model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
@@ -73,7 +72,6 @@ def test_grok_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds
 
 
 def test_grok_rms_norm_sharded_inference(t3k_mesh_device, use_program_cache, reset_seeds):
-    t3k_mesh_device.enable_async(True)
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=os.getenv("CI") == "true")

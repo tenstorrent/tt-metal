@@ -514,11 +514,15 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const {
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
-void MeshDevice::enable_async(bool enable) {}
+void MeshDevice::enable_program_cache() {
+    log_info(tt::LogMetal, "Enabling program cache on MeshDevice {}", this->id());
+    program_cache_->enable();
+}
 
-void MeshDevice::enable_program_cache() { program_cache_->enable(); }
-
-void MeshDevice::disable_and_clear_program_cache() { program_cache_->clear(); }
+void MeshDevice::disable_and_clear_program_cache() {
+    log_info(tt::LogMetal, "Disabling and clearing program cache on MeshDevice {}", this->id());
+    program_cache_->clear();
+}
 
 size_t MeshDevice::num_program_cache_entries() { return program_cache_->num_entries(); }
 
@@ -720,13 +724,8 @@ void MeshDevice::replay_trace(
     for (auto& device : scoped_devices_->root_devices()) {
         device->replay_trace(cq_id, tid, block_on_device, false /* block_on_worker_thread */);
     }
-    // If blocking, wait until worker threads have completed
-    if (block_on_worker_thread) {
-        for (auto& device : scoped_devices_->root_devices()) {
-            device->synchronize();
-        }
-    }
 }
+
 void MeshDevice::release_trace(const uint32_t tid) {
     for (auto& device : scoped_devices_->root_devices()) {
         device->release_trace(tid);
@@ -841,11 +840,7 @@ void MeshDevice::init_fabric() {
     TT_THROW("init_fabric_program() is not supported on MeshDevice - use individual devices instead");
     reference_device()->init_fabric();
 }
-void MeshDevice::synchronize() {
-    // Nothing to synchronize, as all work is executed by MeshDevice is synchronous.
-}
-WorkExecutorMode MeshDevice::get_worker_mode() { return WorkExecutorMode::SYNCHRONOUS; }
-bool MeshDevice::is_worker_queue_empty() const { return true; }
+
 void MeshDevice::push_work(std::function<void()> work, bool /*blocking*/) {
     // Execute inline synchronously.
     // Using a lock to provide the same call serialization guarantee as an async single device scheduling.
@@ -937,9 +932,6 @@ MeshSubDeviceManagerId MeshDevice::mesh_create_sub_device_manager(
             sub_device_manager_id = device->create_sub_device_manager(sub_devices, local_l1_size);
         });
     }
-    for (auto* device : devices) {
-        device->synchronize();
-    }
     return mesh_sub_device_manager_id;
 }
 
@@ -954,9 +946,6 @@ std::tuple<MeshSubDeviceManagerId, SubDeviceId> MeshDevice::mesh_create_sub_devi
         device->push_work([device, sub_devices, local_l1_size, &sub_device_manager_id, &fabric_sub_device_id]() {
             std::tie(sub_device_manager_id, fabric_sub_device_id) = device->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
         });
-    }
-    for (auto* device : devices){
-        device->synchronize();
     }
     return {mesh_sub_device_manager_id, fabric_sub_device_id};
 }

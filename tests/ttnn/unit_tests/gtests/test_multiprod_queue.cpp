@@ -44,8 +44,6 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
     IDevice* device = this->device_;
-    // Enable async engine and set queue setting to lock_based
-    device->enable_async(true);
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
     const MemoryConfig mem_cfg = MemoryConfig{
@@ -96,8 +94,6 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     // Writer cannot update location until reader has picked up data.
     // Use write_event to stall reader and read_event to stall writer.
     auto device = this->device_;
-    // Enable async engine and set queue setting to lock_based
-    device->enable_async(true);
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
     const MemoryConfig mem_cfg = MemoryConfig{

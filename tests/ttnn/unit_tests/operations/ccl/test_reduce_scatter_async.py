@@ -101,7 +101,6 @@ def run_reduce_scatter_test(
     input_shard_shape=None,
     shard_grid=None,
     tensor_mem_layout=None,
-    enable_async=True,
     topology=ttnn.Topology.Ring,
     trace_mode=False,
 ):
@@ -143,10 +142,6 @@ def run_reduce_scatter_test(
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
-
-    mesh_device.enable_async(enable_async)
-    if enable_async:
-        logger.info(f"Using Async Mode for Reduce Scatter Op Dispatch")
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -330,7 +325,6 @@ def run_reduce_scatter_test(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 27648, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
@@ -348,7 +342,6 @@ def test_line_reduce_scatter_async_post_commit(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     trace_mode,
     num_iters=16,
 ):
@@ -365,7 +358,6 @@ def test_line_reduce_scatter_async_post_commit(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
         topology=ttnn.Topology.Linear,
         trace_mode=trace_mode,
     )
@@ -397,7 +389,6 @@ def test_line_reduce_scatter_async_post_commit(
         ttnn.BufferType.L1,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
@@ -414,7 +405,6 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
@@ -434,7 +424,6 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=0,
@@ -464,7 +453,6 @@ def test_line_reduce_scatter_async_on_T3K_cols_post_commit(
         ttnn.BufferType.L1,
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [2])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
@@ -481,7 +469,6 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
@@ -501,7 +488,6 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
         cluster_axis=1,
@@ -586,7 +572,6 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     ),
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("replication_factor", [1])
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -606,7 +591,6 @@ def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_po
     tensor_mem_layout,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
     trace_mode=False,
@@ -633,7 +617,6 @@ def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_po
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         input_shard_spec=input_shard_spec,
         num_reduce_scatter_instances=replication_factor,

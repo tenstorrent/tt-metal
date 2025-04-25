@@ -74,7 +74,6 @@ def run_all_reduce_impl(
     loopback_size=1,
     num_iters=1,
     warmup_iters=0,
-    enable_async=False,
     trace_mode=False,
     validate_all=True,
     profiler=BenchmarkProfiler(),
@@ -86,11 +85,6 @@ def run_all_reduce_impl(
 
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
-    # Use Async mode based on test input config
-    mesh_device.enable_async(enable_async)
-
-    if enable_async:
-        logger.info(f"Using Async Mode for All Reduce Op Dispatch")
 
     ##################################
     ##### Set up fabric stuff
@@ -349,7 +343,6 @@ def run_all_reduce_impl(
         (1000, 100),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
@@ -381,7 +374,6 @@ def test_all_reduce(
     output_core_range_set,
     num_iters,
     warmup_iters,
-    enable_async,
     trace_mode,
     use_program_cache,
     function_level_defaults,
@@ -405,7 +397,6 @@ def test_all_reduce(
         output_core_range_set,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
-        enable_async=enable_async,
         trace_mode=trace_mode,
         validate_all=False,
         profiler=profiler,
@@ -442,7 +433,6 @@ def test_all_reduce(
         (100, 10),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
@@ -474,7 +464,6 @@ def test_all_reduce_loopback(
     output_core_range_set,
     num_iters,
     warmup_iters,
-    enable_async,
     trace_mode,
     use_program_cache,
     function_level_defaults,
@@ -495,7 +484,6 @@ def test_all_reduce_loopback(
         loopback_size=4,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
-        enable_async=enable_async,
         trace_mode=trace_mode,
         validate_all=False,
     )

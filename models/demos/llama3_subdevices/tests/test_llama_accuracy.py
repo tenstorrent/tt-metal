@@ -129,8 +129,6 @@ def test_tt_model_acc(
 
     dtype = ttnn.bfloat8_b
 
-    mesh_device.enable_async(True)
-
     # Load model args and tokenizer
     model_args = TtModelArgs(
         mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len, instruct=True

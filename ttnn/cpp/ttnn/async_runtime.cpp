@@ -57,18 +57,10 @@ void read_buffer(
                 tt::tt_metal::memcpy(worker->command_queue(*cq_id), dst_for_device.get(), shard, region, blocking);
             });
         }
-        if (blocking) {
-            for (auto worker : src.get_workers()) {
-                worker->synchronize();
-            }
-        }
     }
 }
 
 void queue_synchronize(CommandQueue& cq) {
-    // Ensure that all work pushed to async engine has been passed
-    // off to device CQ
-    cq.device()->synchronize();
     // Wait for device CQ to finish
     Finish(cq);
 }

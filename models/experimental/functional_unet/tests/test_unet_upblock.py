@@ -82,7 +82,6 @@ def test_unet_upblock(
         ("upblock4", 16, 528, 80, 16),
     ],
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_unet_upblock_multi_device(
     batch,
@@ -94,7 +93,6 @@ def test_unet_upblock_multi_device(
     residual_channels,
     mesh_device,
     reset_seeds,
-    enable_async_mode,
 ):
     if not is_n300_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300")

@@ -19,14 +19,12 @@ NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
     "shape", [(1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 32, 32), (1, 1, 256, 256), (1, 3, 512, 512), (1, 3, 128, 128)]
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("enable_multi_cq", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 60000, "num_command_queues": 2}], indirect=True)
-def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_multi_cq):
+def test_multi_device_single_trace(mesh_device, shape, enable_multi_cq):
     if mesh_device.get_num_devices() < 32:
         pytest.skip("Test is only valid on Galaxy")
     # Trace requires program cache to be enabled
-    mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
@@ -108,24 +106,20 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
     # Release trace buffer once workload is complete
     ttnn.release_trace(mesh_device, tid)
 
-    mesh_device.enable_async(False)
-
 
 @pytest.mark.parametrize(
     "shape",
     [(1, 1, 256, 256), (1, 1, 512, 512), (1, 1, 32, 32), (1, 3, 32, 32)],
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("enable_multi_cq", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000, "num_command_queues": 2}], indirect=True)
-def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi_cq):
+def test_multi_device_multi_trace(mesh_device, shape, enable_multi_cq):
     torch.manual_seed(0)
     if mesh_device.get_num_devices() < 32:
         pytest.skip("Test is only valid on Galaxy")
 
     # Trace requires program cache to be enabled
-    mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
@@ -274,5 +268,3 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi
     ttnn.release_trace(mesh_device, tid)
     ttnn.release_trace(mesh_device, tid_1)
     ttnn.release_trace(mesh_device, tid_2)
-
-    mesh_device.enable_async(False)

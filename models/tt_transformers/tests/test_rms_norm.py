@@ -47,8 +47,6 @@ def test_rms_norm_inference(
 ):
     dtype = ttnn.bfloat16
 
-    mesh_device.enable_async(True)
-
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
 
     model_args.n_layers = 1

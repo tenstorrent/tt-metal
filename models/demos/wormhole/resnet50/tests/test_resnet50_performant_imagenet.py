@@ -24,7 +24,6 @@ from models.utility_functions import (
     "batch_size_per_device, iterations, act_dtype, weight_dtype",
     ((16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
 )
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 def test_run_resnet50_trace_2cqs_inference(
     mesh_device,
     use_program_cache,
@@ -33,7 +32,6 @@ def test_run_resnet50_trace_2cqs_inference(
     imagenet_label_dict,
     act_dtype,
     weight_dtype,
-    enable_async_mode,
     model_location_generator,
 ):
     batch_size = batch_size_per_device * mesh_device.get_num_devices()

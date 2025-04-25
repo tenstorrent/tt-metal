@@ -95,9 +95,6 @@ MultiDeviceGlobalSemaphore create_global_semaphore_with_same_address(
                 }
             });
         }
-        for (auto device : devices) {
-            device->synchronize();
-        }
     }
 
     return multi_device_global_semaphore;

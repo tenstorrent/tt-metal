@@ -152,7 +152,6 @@ def test_multimodal_demo_text(
     tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
 
     mesh_device.enable_program_cache()
-    mesh_device.enable_async(True)
 
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group

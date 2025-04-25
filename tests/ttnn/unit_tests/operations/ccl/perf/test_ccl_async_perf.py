@@ -40,7 +40,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import 
     ],
 )
 @pytest.mark.parametrize("num_iters", [20])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 1824800}], indirect=True)
 def test_all_gather_async_t3000(
     t3k_mesh_device,
@@ -54,7 +53,6 @@ def test_all_gather_async_t3000(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
 ):
     output_shape[dim] *= num_devices
     run_all_gather_impl(
@@ -69,7 +67,6 @@ def test_all_gather_async_t3000(
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
-        enable_async=enable_async,
         rand_tensor=True,
         mem_config=mem_config,
         trace_mode=True,
@@ -102,7 +99,6 @@ def test_all_gather_async_t3000(
     ],
 )
 @pytest.mark.parametrize("replication_factor", [4])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 1824800}], indirect=True)
 def test_all_gather_async_tg(
@@ -116,7 +112,6 @@ def test_all_gather_async_tg(
     buffer_type,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters=1,
 ):
@@ -134,7 +129,6 @@ def test_all_gather_async_tg(
         buffer_type,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=0,
@@ -169,7 +163,6 @@ def test_all_gather_async_tg(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 1824800}], indirect=True)
 def test_reduce_scatter_async_t3000(
@@ -184,7 +177,6 @@ def test_reduce_scatter_async_t3000(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     trace_mode,
     num_iters=20,
 ):
@@ -201,7 +193,6 @@ def test_reduce_scatter_async_t3000(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
         topology=ttnn.Topology.Linear,
         trace_mode=trace_mode,
     )

@@ -62,10 +62,7 @@ PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "enable_async, num_loops",
-    ((True, 20), (False, 1)),
-)
+@pytest.mark.parametrize("num_loops", [20])
 def test_falcon_causal_lm(
     mesh_device,
     use_program_cache,
@@ -77,11 +74,8 @@ def test_falcon_causal_lm(
     num_layers,
     expected_pcc,
     model_config_str,
-    enable_async,
     num_loops,
 ):
-    mesh_device.enable_async(enable_async)
-
     torch.manual_seed(0)
     batch = device_batch_size * mesh_device.get_num_devices()
     if llm_mode == "decode":
@@ -246,8 +240,6 @@ def test_falcon_causal_lm(
 
     logger.info("Falcon CausalLM Passed!")
 
-    mesh_device.enable_async(False)
-
 
 @pytest.mark.parametrize(
     "llm_mode, device_batch_size, seq_len, kv_cache_len",
@@ -276,10 +268,7 @@ def test_falcon_causal_lm(
     ids=["falcon_7b"],
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
-@pytest.mark.parametrize(
-    "enable_async, num_loops",
-    ((True, 50), (False, 50)),
-)
+@pytest.mark.parametrize("num_loops", [50])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 4829184}], indirect=True)
 def test_t3k_falcon_causal_lm_with_trace(
     t3k_mesh_device,
@@ -292,10 +281,8 @@ def test_t3k_falcon_causal_lm_with_trace(
     num_layers,
     expected_pcc,
     model_config_str,
-    enable_async,
     num_loops,
 ):
-    t3k_mesh_device.enable_async(enable_async)
     t3k_mesh_device.enable_program_cache()
 
     torch.manual_seed(0)
@@ -505,5 +492,3 @@ def test_t3k_falcon_causal_lm_with_trace(
         logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
 
     logger.info("Falcon CausalLM Passed!")
-
-    t3k_mesh_device.enable_async(False)

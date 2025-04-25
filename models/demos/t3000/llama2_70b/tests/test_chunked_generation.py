@@ -158,7 +158,6 @@ def test_chunked_prefill_single_user(
 
     # Check device compatibility
     check_mesh_device(t3k_mesh_device, model_config)
-    t3k_mesh_device.enable_async(True)
 
     # Create args
     model_args = ModelArgs(
@@ -325,7 +324,6 @@ def test_batch_prefill(t3k_mesh_device, llama_version, num_layers, max_batch_siz
 
     # Check device compatibility
     check_mesh_device(t3k_mesh_device, model_config)
-    t3k_mesh_device.enable_async(True)
 
     # Create args
     model_args = ModelArgs(
