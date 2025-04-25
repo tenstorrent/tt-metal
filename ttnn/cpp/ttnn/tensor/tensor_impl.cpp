@@ -1346,7 +1346,8 @@ Tensor pad(
         // Process all coordinates except for the last dimension (it's copied with mempcy)
         ttnn::SmallVector<size_t> coords(rank - 1, 0);
 
-        while (true) {
+        bool processed_all_coords = false;
+        while (!processed_all_coords) {
             // Calculate offset for a given coordinate for input and output. Again, last dimension is ignored
             size_t input_idx = 0;
             size_t output_idx = 0;
@@ -1365,19 +1366,17 @@ Tensor pad(
                 input_buffer.begin() + input_idx,
                 input_padded_shape[rank - 1] * sizeof(T));
 
-            // Increment coordinates (from right to left)
-            int dim = rank - 2;
-            for (; dim >= 0; --dim) {
+            // Increment coordinates (from right to left), ignore last dimension
+            processed_all_coords = true;
+            for (int dim = rank - 2; dim >= 0; --dim) {
                 coords[dim]++;
+                // There are still coordinates to process in dim dimension
                 if (coords[dim] < input_padded_shape[dim]) {
+                    processed_all_coords = false;
                     break;
                 }
+                // This dim's coordinate overflowed, reset it and try to increment the next one
                 coords[dim] = 0;
-            }
-
-            // Exit condition: all dimensions were processed
-            if (dim < 0) {
-                break;
             }
         }
 
