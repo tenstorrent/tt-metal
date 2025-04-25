@@ -68,52 +68,25 @@ class TtEulerDiscreteScheduler(nn.Module):
         sigmas = (((1 - self.alphas_cumprod) / self.alphas_cumprod) ** 0.5).flip(0)
         self.sigmas = torch.cat([sigmas, torch.zeros(1)])
         self.is_scale_input_called = False
-        self._step_index = None
-        self._begin_index = None
+        self.step_index = None
+        self.begin_index = None
 
     @property
     def init_noise_sigma(self):
         """
         standard deviation of the initial noise distribution.
         """
-        max_sigma = max(self.sigmas) if isinstance(self.sigmas, list) else self.sigmas.max()
-        if self.timestep_spacing in ["linspace", "trailing"]:
-            return max_sigma
-
+        max_sigma = self.sigmas.max()
+        assert (
+            self.timestep_spacing == "leading"
+        ), "timestep_spacing {self.timestep_spacing} is not supported in this version"
         return (max_sigma**2 + 1) ** 0.5
-
-    @property
-    def step_index(self):
-        """
-        The index counter for current timestep. It will increase 1 after each scheduler step.
-        """
-        return self._step_index
-
-    @property
-    def begin_index(self):
-        """
-        The index for the first timestep. It should be set from pipeline with `set_begin_index` method.
-        """
-        return self._begin_index
-
-    def set_begin_index(self, begin_index: int = 0):
-        """
-        Sets the begin index for the scheduler. This function should be run from pipeline before the inference.
-
-        Args:
-            begin_index (`int`):
-                The begin index for the scheduler.
-        """
-        self._begin_index = begin_index
 
     def scale_model_input(self, sample: torch.Tensor, timestep: Union[float, torch.Tensor]) -> torch.Tensor:
         """
         Ensures interchangeability with schedulers that need to scale the denoising model input depending on the
         current timestep. Scales the denoising model input by `(sigma**2 + 1) ** 0.5` to match the Euler algorithm.
         """
-        if self.step_index is None:
-            self._init_step_index(timestep)
-
         sigma = self.sigmas[self.step_index]
         sample = sample / ((sigma**2 + 1) ** 0.5)
 
@@ -158,31 +131,10 @@ class TtEulerDiscreteScheduler(nn.Module):
         assert self.timestep_type == "discrete"
         self.timesteps = torch.from_numpy(timesteps.astype(np.float32)).to(device=device)
 
-        self._step_index = None
-        self._begin_index = None
+        self.begin_index = 0
+        self.step_index = self.begin_index
+
         self.sigmas = sigmas
-
-    def index_for_timestep(self, timestep, schedule_timesteps=None):
-        if schedule_timesteps is None:
-            schedule_timesteps = self.timesteps
-
-        indices = (schedule_timesteps == timestep).nonzero()
-
-        # The sigma index that is taken for the **very** first `step`
-        # is always the second index (or the last index if there is only 1)
-        # This way we can ensure we don't accidentally skip a sigma in
-        # case we start in the middle of the denoising schedule (e.g. for image-to-image)
-        pos = 1 if len(indices) > 1 else 0
-
-        return indices[pos].item()
-
-    def _init_step_index(self, timestep):
-        if self.begin_index is None:
-            if isinstance(timestep, torch.Tensor):
-                timestep = timestep.to(self.timesteps.device)
-            self._step_index = self.index_for_timestep(timestep)
-        else:
-            self._step_index = self._begin_index
 
     def step(
         self,
@@ -246,6 +198,6 @@ class TtEulerDiscreteScheduler(nn.Module):
         prev_sample = prev_sample.to(model_output.dtype)
 
         # upon completion increase step index by one
-        self._step_index += 1
+        self.step_index += 1
 
         return (prev_sample, pred_original_sample)
