@@ -17,6 +17,8 @@ from ..tt.utils import assert_quality, to_torch
 if TYPE_CHECKING:
     from ..reference.patch_embedding import PatchEmbed
 
+TILE_SIZE = 32
+
 
 @pytest.mark.parametrize(
     "mesh_device",
@@ -51,11 +53,21 @@ def test_patch_embedding(
     else:
         embedding_dim = 2432
 
+    num_devices = mesh_device.get_num_devices()
+    pad_embedding_dim = False
+    if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
+        pad_embedding_dim = True
+        hidden_dim_padding = (
+            ((embedding_dim // num_devices // TILE_SIZE) + 1) * TILE_SIZE
+        ) * num_devices - embedding_dim
+    else:
+        hidden_dim_padding = 0
+
     torch_model: PatchEmbed = parent_torch_model.pos_embed
     torch_model.eval()
 
     parameters = TtPatchEmbedParameters.from_torch(
-        torch_model.state_dict(), device=mesh_device, out_channels=embedding_dim
+        torch_model.state_dict(), device=mesh_device, hidden_dim_padding=hidden_dim_padding, out_channels=embedding_dim
     )
     tt_model = TtPatchEmbed(parameters, mesh_device=mesh_device)
 
@@ -63,45 +75,12 @@ def test_patch_embedding(
 
     torch_output = torch_model(torch_input_tensor)
 
-    """
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor.permute([0, 2, 3, 1]),  # BCYX -> BYXC
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         layout=ttnn.TILE_LAYOUT,
         dtype=dtype,
-    )
-    """
-
-    ## Pre-processing for the ttnn.fold
-    torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))  # BCYX -> BYXC
-    batch_size, img_h, img_w, img_c = torch_input_tensor.shape  # permuted input NHWC
-    patch_size = 2
-    torch_input_tensor = torch_input_tensor.reshape(batch_size, img_h, img_w // patch_size, patch_size, img_c)
-    torch_input_tensor = torch_input_tensor.reshape(batch_size, img_h, img_w // patch_size, patch_size * img_c)
-    N, H, W, C = torch_input_tensor.shape
-    shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 7),
-            ),
-        }
-    )
-    n_cores = 64
-    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
-
-    tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            shard_spec,
-        ),
     )
 
     tt_output = tt_model(tt_input_tensor)

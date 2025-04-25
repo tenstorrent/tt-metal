@@ -6,13 +6,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import torch
 import ttnn
-from models.utility_functions import (
-    nearest_32,
-)
 
 
 @dataclass
@@ -28,15 +24,10 @@ class TtConv2dParameters:
         state: dict[str, torch.Tensor],
         *,
         dtype: ttnn.DataType | None = None,
+        hidden_dim_padding: int,
         out_channels: int,
         device,
     ) -> TtConv2dParameters:
-        ## for torch.unfold
-        # weight = state["weight"].flatten(1, 3)
-        # assert (weight.shape[-1] % 32) == 0
-        # weight = weight.permute(1, 0).reshape(1, 1, -1, out_channels)
-        # print("w_mod", weight.shape)
-        ## for ttnn.fold
         weight = state["weight"]
         out_channels, in_c, kh, kw = weight.shape
         weight = torch.permute(weight, (2, 3, 1, 0))
@@ -48,28 +39,9 @@ class TtConv2dParameters:
             bias = None
 
         if os.environ["FAKE_DEVICE"] == "T3K":
-            hidden_dim = 2432
-            hidden_dim_pad = 128
-            hidden_dim_new = 2560
-            weight_h, weight_w = weight.shape
-            weight_w_mult = weight_w // hidden_dim
-            if weight_w % hidden_dim == 0:
-                if weight_w_mult == 1:
-                    weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
-                elif weight_w_mult > 1:
-                    weight = weight.reshape(weight_h, weight_w_mult, hidden_dim)
-                    weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
-                    weight = weight.reshape(weight_h, weight_w_mult * hidden_dim_new)
+            weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_padding), mode="constant", value=0)
             if not bias == None:
-                bias_w = bias.shape[-1]
-                bias_w_mult = bias_w // hidden_dim
-                if bias_w % hidden_dim == 0:
-                    if bias_w_mult == 1:
-                        bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_pad), mode="constant", value=0)
-                    elif bias_w_mult > 1:
-                        bias = bias.reshape(bias_w_mult, hidden_dim)
-                        bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_pad), mode="constant", value=0)
-                        bias = bias.reshape(bias_w_mult * hidden_dim_new)
+                bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_padding), mode="constant", value=0)
 
         return cls(
             weight=ttnn.as_tensor(
@@ -117,22 +89,19 @@ class TtConv2d:
         patch_size = 2
         stride_h = patch_size
         stride_w = 1
-        unfolded_permuted_x = ttnn.fold(x, stride_h, stride_w)
-        unfolded_permuted_x = ttnn.to_layout(unfolded_permuted_x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        patches_h = img_h // patch_size
+        patches_w = img_w // patch_size
 
-        ttnn.deallocate(x)
-
+        x = ttnn.reshape(x, (batch_size, patches_h, patch_size, patches_w, patch_size, img_c))
+        x = ttnn.permute(x, (0, 1, 3, 2, 4, 5))
+        x = ttnn.reshape(x, (batch_size, patches_h * patches_w, patch_size * patch_size * img_c))
         out = ttnn.linear(
-            unfolded_permuted_x,
+            x,
             self._weight,
             bias=self._bias,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
         )
-        ttnn.deallocate(unfolded_permuted_x)
-        seq_len = out.shape[-2] // batch_size
-        out = ttnn.reshape(out, (batch_size, seq_len, -1))
-
+        out = ttnn.reshape(out, (batch_size, patches_h, patches_w, -1))
         return out
