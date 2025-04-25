@@ -31,7 +31,7 @@ struct address_map {
 #if defined(ROUTING_FW_ENABLED)
     static constexpr std::int32_t ROUTING_FW_RESERVED_SIZE = 28 * 1024;
 #else
-    static constexpr std::int32_t ROUTING_FW_RESERVED_SIZE = 28 * 1024;  // TODO: set to 0
+    static constexpr std::int32_t ROUTING_FW_RESERVED_SIZE = 0;
 #endif
     //  Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS +
     //  NUM_L1_BANKS)

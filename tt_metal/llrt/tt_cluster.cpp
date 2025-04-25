@@ -149,7 +149,7 @@ bool Cluster::is_base_routing_fw_enabled(ClusterType cluster_type) {
         cluster_type == ClusterType::TG) {
         return true;
     } else {
-        return true;
+        return false;
     }
 }
 
