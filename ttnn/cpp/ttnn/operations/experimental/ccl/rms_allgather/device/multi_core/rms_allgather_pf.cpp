@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     tt::DataFormat residual_data_format = in_data_format;
     if (b)
     {
-        tt::DataFormat residual_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().get_dtype());
+        residual_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.value().get_dtype());
     }
     if (output.get_layout() == Layout::TILE) {
         output_page_size = output.tensor_spec().tile().get_tile_size(out_data_format);
@@ -186,6 +186,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
     tt::log_debug("in_data_format: {}", in_data_format);
+    tt::log_debug("res_data_format: {}", residual_data_format);
     tt::log_debug("out_data_format: {}", out_data_format);
     tt::log_debug("cb_data_format: {}", cb_data_format);
     tt::log_debug("gamma_cb_data_format: {}", gamma_cb_data_format);
@@ -257,10 +258,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         num_distributed_devices = post_all_gather_stats_block_tiles;
     }
 
-    uint32_t in0_CB_tiles = in0_block_tiles;
-    uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
+    uint32_t in0_CB_size = in0_block_tiles * in_single_tile_size;
     // block size for in1 (tensor b)
-    uint32_t in1_CB_size = in0_CB_tiles * residual_single_tile_size;
+    uint32_t in1_CB_size = in0_block_tiles * residual_single_tile_size;
     // in2 - scaler
     uint32_t in2_CB_size = bfloat16_tile_size;
     // in3 - eps
@@ -1173,7 +1173,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             writer_mcast_receiver_args.insert(
                 writer_mcast_receiver_args.end(), all_gather_rts.begin(), all_gather_rts.end());
             writer_mcast_receiver_args.at(0) = writer_mcast_receiver_args.size();
-            // printf("Reader size is %u\n",writer_mcast_receiver_args.at(0));
             std::vector<uint32_t> writer_mcast_post_receiver_args;
             writer_mcast_post_receiver_args.push_back(packed_cinv_value);
             writer_mcast_post_receiver_args.push_back(e.u);

@@ -299,7 +299,7 @@ def run_rms_fuse_impl(
     fused_add,
     num_iters=1,
     enable_async=False,
-    input_dtype=ttnn.bfloat16,
+    input_dtype=ttnn.bfloat8_b,
     residual_dtype=ttnn.bfloat16,
     layout=ttnn.TILE_LAYOUT,
     topology=ttnn.Topology.Linear,
