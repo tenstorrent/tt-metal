@@ -44,7 +44,8 @@ jobs:
       # - build-artifact
       # - build-artifact-profiler
       - get-image-tags
-    runs-on: ubuntu-latest
+    # Could use smaller one, but use TT-hosted one as we may need to inject llama weights. We'll see
+    runs-on: tt-beta-ubuntu-2204-large
     permissions:
       packages: write
       contents: read
