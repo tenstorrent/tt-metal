@@ -413,13 +413,13 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
     for (uint32_t i = 0; i < std::min(max_num_links, clothest_pairs.size()); i++) {
         for (uint32_t j = 0; j < 2; j++) {
-            auto& core = clothest_pairs[i][j];
+            Direction dir = static_cast<Direction>(j);
+            auto& core = clothest_pairs[i][dir];
             if ((core.x == -1 && core.y == -1) || !local_device->is_active_ethernet_core(core, true)) {
                 continue;
             }
-            auto& edm_builders = *edm_builders_maps[j];
-            edm_builders.clear();
-            auto& device = j == 0 ? forward_device : backward_device;
+            auto& edm_builders = *edm_builders_maps[dir];
+            auto& device = dir == FORWARD ? forward_device : backward_device;
             if (!device.has_value()) {
                 continue;
             }
