@@ -308,6 +308,122 @@ def measure_op_accuracy(operation_name, target_dtype, dest_dir, samples=None):
     print(f"Duration = {elapsed_s}s, {elapsed_ms/repeats} ms/iteration")
 
 
+def measure_op_accuracy_bf16(operation_name, dest_dir, group_size=None):
+    # Use bfloat16 parameters
+    parameters = datatypes_parameters["bfloat16"]
+
+    # Ensure group_size is a power of 2
+    if group_size is not None and (group_size & (group_size - 1)) != 0:
+        raise ValueError(f"Number of samples ({group_size}) must be a power of 2")
+
+    # Create 2^9 x 2^7 tensor (2^16 elements total)
+    TENSOR_WIDTH = 2**7
+    TENSOR_HEIGHT = 2**9
+    size = [TENSOR_HEIGHT, TENSOR_WIDTH]
+
+    SIGN_BITS = parameters["sign_bits"]  # should be 1
+    EXPONENT_BITS = parameters["exponent_bits"]
+    MANTISSA_BITS = parameters["mantissa_bits"]
+
+    NUMPY_TYPE = parameters["numpy_type"]
+    NUMPY_INT_TYPE = parameters["numpy_int_type"]
+    TORCH_TYPE = parameters["torch_type"]
+    TORCH_INT_TYPE = parameters["torch_int_type"]
+    TTNN_TYPE = parameters["ttnn_type"]
+
+    # Group by exponent if group_size is not specified
+    sub_batches = 2**9 if group_size is None else 2**16 // group_size
+
+    # Create input tensors
+    input_np = np.arange(0, 2**16, dtype=NUMPY_INT_TYPE)  # All possible bfloat16 values
+    torch_value = torch.from_numpy(input_np).reshape(size)
+    torch_input_bf16 = torch_value.view(TORCH_TYPE)  # reinterpret data as bfloat16
+
+    torch_output_ref = torch.zeros(size, dtype=TORCH_TYPE)
+    ttnn_output = ttnn.zeros(size, dtype=TTNN_TYPE, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Get the operations to test
+    (torch_unary_op, ttnn_unary_op, python_unary_op) = operations_dict[operation_name]
+
+    # Initialize arrays for measurements
+    x_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
+    y_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
+    yref_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
+    max_abs_error_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
+    max_rel_error_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
+    mean_rel_error_array = np.zeros([sub_batches], dtype=NUMPY_TYPE)
+
+    start_time = time.time()
+
+    # Launch TTNN operation
+    def launch_ttnn_op(torch_tensor, ttnn_unary, ttnn_output):
+        ttnn_value = ttnn.from_torch(torch_tensor, device=device, dtype=TTNN_TYPE, layout=ttnn.TILE_LAYOUT)
+        ttnn_output = ttnn_unary(ttnn_value, output_tensor=ttnn_output)
+        return ttnn.to_torch(ttnn_output)
+
+    # Run reference and actual operations
+    torch_output_ref = torch_unary_op(torch_input_bf16, out=torch_output_ref)
+    actual_torch_output = launch_ttnn_op(torch_input_bf16, ttnn_unary_op, ttnn_output)
+
+    # Flatten tensors for analysis
+    np_flat_input = torch_input_bf16.to(torch.float32).flatten().numpy()
+    np_flat_output = actual_torch_output.to(torch.float32).flatten().numpy()
+    np_flat_ref = torch_output_ref.to(torch.float32).flatten().numpy()
+
+    # Process each sub-batch
+    for j in range(0, sub_batches):
+        chunk_size = TENSOR_WIDTH * TENSOR_HEIGHT // sub_batches
+        (beg_index, end_index) = (j * chunk_size, (j + 1) * chunk_size)
+
+        # Get sub-range
+        np_sub_input = np_flat_input[beg_index:end_index]
+        np_sub_output = np_flat_output[beg_index:end_index]
+        np_sub_ref = np_flat_ref[beg_index:end_index]
+
+        # Calculate errors
+        np_diff = np.abs(np_sub_ref - np_sub_output)
+        np_sub_ref_abs = np.abs(np_sub_ref)
+
+        # Handle edge cases
+        finite_mask = np.isfinite(np_diff) & np.isfinite(np_sub_ref_abs)
+        if np.any(finite_mask):
+            max_abs_error = np.max(np_diff[finite_mask])
+            max_rel_error = np.max(np_diff[finite_mask] / np_sub_ref_abs[finite_mask])
+            mean_rel_error = np.mean(np_diff[finite_mask] / np_sub_ref_abs[finite_mask])
+        else:
+            max_abs_error = np.max(np_diff)
+            max_rel_error = np.max(np_diff / np_sub_ref_abs)
+            mean_rel_error = np.mean(np_diff / np_sub_ref_abs)
+
+        # Store results
+        x_array[j] = np_sub_input[0].item()
+        y_array[j] = np_sub_output[0].item()
+        yref_array[j] = np_sub_ref[0].item()
+        max_abs_error_array[j] = max_abs_error.item()
+        max_rel_error_array[j] = max_rel_error.item()
+        mean_rel_error_array[j] = mean_rel_error.item()
+
+    # Create and save DataFrame
+    accuracy_df = pd.DataFrame(
+        {
+            "base_x": x_array,
+            "base_y": y_array,
+            "base_yref": yref_array,
+            "max_abs_error": max_abs_error_array,
+            "max_rel_error": max_rel_error_array,
+            "mean_rel_error": mean_rel_error_array,
+        }
+    )
+    accuracy_df["operation"] = operation_name
+    accuracy_df["dtype"] = "bfloat16"
+
+    accuracy_df.to_csv(f"{dest_dir}/{operation_name}-bfloat16-[{group_size}].csv", na_rep="NaN", index_label="index")
+
+    end_time = time.time()
+    elapsed_s = end_time - start_time
+    print(f"{operation_name} [bfloat16] Duration = {elapsed_s}s")
+
+
 def main(args):
     dest_dir = "accuracy_results"
     if not os.path.exists(dest_dir):
@@ -319,6 +435,7 @@ def main(args):
     # TODO: Log warnings into file
     np.seterr(divide="ignore")
     np.seterr(invalid="ignore")
+    np.seterr(over="ignore")
 
     # Unused: atan2, logaddexp, logaddexp2
     all_operations = [
@@ -387,9 +504,13 @@ def main(args):
     GREEN = "\033[92m"
     RESET = "\033[0m"
 
+    cnt = 0
+    total_operation_cnt = len(all_operations) + len(highres_operations)
     for operation in all_operations:
+        cnt += 1
+        print(f"Running operation {operation}  #{cnt} / {total_operation_cnt}", end="\r")
         try:
-            measure_op_accuracy(operation, "bfloat16", dest_dir, samples=4)
+            measure_op_accuracy_bf16(operation, dest_dir, group_size=32)
             success_count += 1
             successfull_operations += [operation]
         except Exception as e:
@@ -398,8 +519,10 @@ def main(args):
 
     print(f"Now measuring high-resolution operations")
     for operation in highres_operations:
+        cnt += 1
+        print(f"Running operation {operation} [highres] #{cnt}/{total_operation_cnt}", end="\r")
         try:
-            measure_op_accuracy(operation, "bfloat16", dest_dir, samples=128)
+            measure_op_accuracy_bf16(operation, dest_dir, group_size=1)
             success_count += 1
             successfull_operations += [f"{operation}[highres]"]
         except Exception as e:
