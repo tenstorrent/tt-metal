@@ -624,5 +624,4 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc == 1
+    assert torch.equal(golden_tensor, output_tensor)

@@ -132,7 +132,7 @@ inline void calculate_comp_unary_int(int scalar) {
             v_if(v >= 0) {
                 v_if(v != scalar) { val = 1; }
                 v_endif;
-            }
+            }  // negative comparison not working as expected in WH hence alternate implementation
             v_else {
                 v_if(s < 0) {
                     vInt xor_val = reinterpret<vInt>(sfpi::abs(reinterpret<vFloat>(v))) ^ -s;
