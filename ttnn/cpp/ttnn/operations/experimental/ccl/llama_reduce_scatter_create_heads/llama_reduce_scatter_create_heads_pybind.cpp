@@ -59,7 +59,10 @@ void py_bind_llama_rs_create_heads(py::module& module) {
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const uint32_t num_links,
+               const uint32_t num_heads,
+               const uint32_t num_kv_heads,
                const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
                QueueId queue_id) {
                 return self(
                     queue_id,
@@ -71,7 +74,10 @@ void py_bind_llama_rs_create_heads(py::module& module) {
                     cluster_axis,
                     mesh_device,
                     num_links,
-                    memory_config);
+                    num_heads,
+                    num_kv_heads,
+                    memory_config,
+                    qkv_memory_config);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("intermediate_packet_buffer").noconvert(),
@@ -82,7 +88,10 @@ void py_bind_llama_rs_create_heads(py::module& module) {
             py::arg("mesh_device"),
             py::kw_only(),
             py::arg("num_links") = 1,
+            py::arg("num_heads"),
+            py::arg("num_kv_heads"),
             py::arg("memory_config") = std::nullopt,
+            py::arg("qkv_memory_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
         });
 }

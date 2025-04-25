@@ -209,7 +209,6 @@ void kernel_main() {
         uint32_t accumulator_l1_addresses[num_pages_per_packet];
         uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
         auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
-        DPRINT << "bp 1" << ENDL();
         uint32_t num_packets = num_pages_per_packet;
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
             uint32_t rem = linear_output_page_start_idx + i;
@@ -229,11 +228,9 @@ void kernel_main() {
         cb_wait_front(accumulator_cb_id, num_pages_per_packet);
 
         // Process all tiles
-        DPRINT << "bp 2" << ENDL();
         for (uint32_t tile = 0; tile < num_packets; tile++) {
-            DPRINT << "bp 3, tile: " << tile << ENDL();
             noc_async_write(accumulator_l1_addresses[tile], noc_addresses[tile], page_size_bytes);
-            print_bf16_pages(accumulator_l1_addresses[tile], page_size_bytes / 2, 1);
+            // print_bf16_pages(accumulator_l1_addresses[tile], page_size_bytes / 2, 1);
         }
         noc_async_write_barrier();
         cb_pop_front(accumulator_cb_id, num_pages_per_packet);

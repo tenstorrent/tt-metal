@@ -206,7 +206,8 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
         // DPRINT << "DPRINT all pages before reduction" << ENDL();
-        print_bf16_pages(get_read_ptr(fabric_receiver_cb_id), page_size_bytes / 2, num_pages_per_packet * num_devices);
+        // print_bf16_pages(get_read_ptr(fabric_receiver_cb_id), page_size_bytes / 2, num_pages_per_packet *
+        // num_devices);
     }
     noc_semaphore_set((uint32_t*)local_semaphore_address, INVALID);
     noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);

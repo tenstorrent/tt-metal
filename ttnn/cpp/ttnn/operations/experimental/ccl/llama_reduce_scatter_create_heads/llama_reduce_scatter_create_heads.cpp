@@ -25,7 +25,10 @@ ttnn::Tensor ExecuteLlamaReduceScatterCreateHeads::invoke(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    const uint32_t num_heads,
+    const uint32_t num_kv_heads,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::MemoryConfig>& qkv_memory_config) {
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
     uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
