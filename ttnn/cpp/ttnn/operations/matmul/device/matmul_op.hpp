@@ -21,6 +21,20 @@ namespace matmul {
 
 using ttnn::operations::unary::UnaryWithParam;
 
+/**
+ * @brief Computes the output shape of a matmul operation given two input tensors
+ *
+ * Determines the output shape based on the broadcasting rules for matrix multiplication:
+ * - For 2D tensors: [m, k] @ [k, n] -> [m, n]
+ * - For tensors with batch dimensions, the batch dimensions are broadcast
+ * - For vector-matrix multiplication (rank 1 @ rank 2), the result is a vector
+ *
+ * @param input_tensor_a First input tensor
+ * @param input_tensor_b Second input tensor
+ * @return Shape of the resulting tensor after matmul
+ */
+ttnn::Shape compute_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b);
+
 /*
  * GENERAL MATMUL AND BMM
  */

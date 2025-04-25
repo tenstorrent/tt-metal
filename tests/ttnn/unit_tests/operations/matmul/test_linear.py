@@ -6,7 +6,9 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from loguru import logger
+
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.utility_functions import torch_random, is_wormhole_b0, skip_for_grayskull
 
 
@@ -411,3 +413,97 @@ def test_resnet50_linear(device, use_program_cache):
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    "shape_a,shape_b,shape_bias",
+    [
+        # Vector-vector: (k) x (k) -> scalar
+        ((32,), (32,), None),  # No bias for scalar output
+        ((1,), (1,), tuple()),
+        # Vector-matrix: (k) x (k, n) -> (n)
+        ((32,), (32, 32), (32,)),  # Standard bias shape
+        ((32,), (32, 32), (1,)),  # Broadcast bias
+        ((1,), (1, 32), None),
+        ((1,), (1, 32), (1,)),
+        # Matrix-vector: (m, k) x (k) -> (m)
+        ((32, 32), (32,), (32,)),  # Standard bias shape
+        ((32, 32), (32,), (1,)),  # Broadcast bias
+        # GH Issue #16599
+        pytest.param((32, 1, 32), (32, 32), (1, 32), marks=pytest.mark.xfail),  # 4D tensors with no bias
+        ((32, 2, 32), (32, 32), (1, 32)),  # 4D tensors with no bias
+    ],
+)
+def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
+    """
+    Test the compatibility of the torch and ttnn linear for the given operation and different
+    tensor shapes.
+    Checks for the exactness of shape, values, and dtype of the output tensors.
+    """
+    # Create random tensors with appropriate dimensions
+    torch_a = torch.randn(*shape_a, dtype=torch.bfloat16)
+    torch_b = torch.randn(*shape_b, dtype=torch.bfloat16)
+
+    # For torch.linear, weight matrix is expected to be (out_features, in_features)
+    # but internally it's transposed during the operation
+    torch_weight = torch_b
+    if len(shape_b) >= 2:
+        torch_weight = torch.transpose(torch_weight, -1, -2)
+
+    # Create bias tensor if shape_bias is not empty
+    torch_bias = None
+    ttnn_bias = None
+    if shape_bias is not None:
+        torch_bias = torch.randn(*shape_bias, dtype=torch.bfloat16) if shape_bias != tuple() else torch.randn(())
+        ttnn_bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Create ttnn tensors
+    ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Handle exceptions in torch
+    torch_errored = False
+    torch_error_msg = ""
+    try:
+        torch_result = torch.nn.functional.linear(torch_a, torch_weight, torch_bias)
+    except Exception as e:
+        torch_errored = True
+        torch_error_msg = str(e)
+
+    # Run ttnn linear with the same operations
+    ttnn_errored = False
+    ttnn_error_msg = ""
+    try:
+        ttnn_result = ttnn.linear(ttnn_a, ttnn_b, bias=ttnn_bias)
+    except Exception as e:
+        ttnn_errored = True
+        ttnn_error_msg = str(e)
+
+    # Compare error behavior
+    if torch_errored != ttnn_errored:
+        return (
+            False,
+            f"mismatch in errors raised: torch: {torch_errored} ({torch_error_msg}), ttnn: {ttnn_errored} ({ttnn_error_msg})",
+        )
+
+    # Skip the rest of the test if an exception was raised in both
+    if torch_errored:
+        logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
+        return (True, "")
+
+    # Convert ttnn result to torch for comparison
+    ttnn_result_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
+
+    # Check shape compatibility
+    if ttnn_result_torch.shape != torch_result.shape:
+        assert False, f"mismatch in shape: torch: {torch_result.shape}, ttnn: {ttnn_result_torch.shape}"
+
+    # Check values with PCC
+    assert_with_pcc(torch_result, ttnn_result_torch, 0.99)
+
+    # Allow some tolerance for numeric differences
+    atol = rtol = 0.1
+
+    assert torch.allclose(torch_result, ttnn_result_torch, atol=atol, rtol=rtol, equal_nan=True), (
+        f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result_torch}",
+    )
