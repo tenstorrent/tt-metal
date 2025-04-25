@@ -108,25 +108,23 @@ INSTANTIATE_TEST_SUITE_P(
 
 class MemorySmokeTest : public TTNNFixtureWithTraceEnabledDevice {
 public:
-    static const ttnn::TensorSpec dram_spec;
-    static const ttnn::TensorSpec l1_spec;
+    const ttnn::TensorSpec dram_spec = ttnn::TensorSpec(
+        ttnn::Shape({64, 1024}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::DRAM_MEMORY_CONFIG));
+    ;
+    const ttnn::TensorSpec l1_spec = ttnn::TensorSpec(
+        ttnn::Shape({64, 1024}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    ;
 };
 // Test various combinations of getOpRuntime and getOpConstraints to make sure there are no segfaults due to incorrect
 // memory handling
-
-const ttnn::TensorSpec MemorySmokeTest::dram_spec = ttnn::TensorSpec(
-    ttnn::Shape({64, 1024}),
-    tt::tt_metal::TensorLayout(
-        tt::tt_metal::DataType::BFLOAT16,
-        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-        ttnn::DRAM_MEMORY_CONFIG));
-
-const ttnn::TensorSpec MemorySmokeTest::l1_spec = ttnn::TensorSpec(
-    ttnn::Shape({64, 1024}),
-    tt::tt_metal::TensorLayout(
-        tt::tt_metal::DataType::BFLOAT16,
-        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-        ttnn::L1_MEMORY_CONFIG));
 
 TEST_F(MemorySmokeTest, Reshape1) {
     auto constraints_query = ttnn::graph::query_op_constraints(
