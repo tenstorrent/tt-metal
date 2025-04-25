@@ -3,15 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Optional, Tuple, Union
+import ttnn
 import torch
 import torch.nn as nn
 import numpy as np
 from loguru import logger
+import ttnn.device
 
 
 class TtEulerDiscreteScheduler(nn.Module):
     def __init__(
         self,
+        device: ttnn.device.Device,
         num_train_timesteps: int = 1000,
         beta_start: float = 0.0001,
         beta_end: float = 0.02,
@@ -70,29 +73,26 @@ class TtEulerDiscreteScheduler(nn.Module):
         self.is_scale_input_called = False
         self.step_index = None
         self.begin_index = None
+        self.device = device
 
-    @property
-    def init_noise_sigma(self):
-        """
-        standard deviation of the initial noise distribution.
-        """
-        max_sigma = self.sigmas.max()
-        assert (
-            self.timestep_spacing == "leading"
-        ), "timestep_spacing {self.timestep_spacing} is not supported in this version"
-        return (max_sigma**2 + 1) ** 0.5
+        self.update_device_tensor("sigmas")
 
-    def scale_model_input(self, sample: torch.Tensor, timestep: Union[float, torch.Tensor]) -> torch.Tensor:
-        """
-        Ensures interchangeability with schedulers that need to scale the denoising model input depending on the
-        current timestep. Scales the denoising model input by `(sigma**2 + 1) ** 0.5` to match the Euler algorithm.
-        """
-        sigma = self.sigmas[self.step_index]
-        sample = sample / ((sigma**2 + 1) ** 0.5)
+    def update_device_tensor(self, tensor_name):
+        val = getattr(self, tensor_name)
+        setattr(
+            self,
+            "tt_" + tensor_name,
+            ttnn.to_memory_config(
+                ttnn.from_torch(
+                    val,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                ).to(device=self.device),
+                ttnn.L1_MEMORY_CONFIG,
+            ),
+        )
 
-        self.is_scale_input_called = True
-        return sample
-
+    # pipeline_stable_diffusion_xl.py __call__() step #4
     def set_timesteps(
         self,
         num_inference_steps: int = None,
@@ -135,12 +135,49 @@ class TtEulerDiscreteScheduler(nn.Module):
         self.step_index = self.begin_index
 
         self.sigmas = sigmas
+        self.variance_normalization_factor = (sigmas**2 + 1) ** 0.5
 
+        self.update_device_tensor("sigmas")
+        self.update_device_tensor("timesteps")
+        self.update_device_tensor("variance_normalization_factor")
+
+    # pipeline_stable_diffusion_xl.py prepare_latents() step # 5
+    @property
+    def init_noise_sigma(self):
+        """
+        standard deviation of the initial noise distribution.
+        """
+        max_sigma = self.sigmas.max()
+        assert (
+            self.timestep_spacing == "leading"
+        ), "timestep_spacing {self.timestep_spacing} is not supported in this version"
+        return (max_sigma**2 + 1) ** 0.5
+
+        # no need to do this in ttnn
+        # max_sigma = ttnn.max(self.tt_sigmas, dim=0, keepdim=False)
+        # return ttnn.sqrt((ttnn.pow(max_sigma,2) + 1))
+
+    # pipeline_stable_diffusion_xl.py __call__() step #9
+    def scale_model_input(
+        self, sample: ttnn._ttnn.tensor.Tensor, timestep: Union[float, ttnn._ttnn.tensor.Tensor]
+    ) -> ttnn._ttnn.tensor.Tensor:
+        """
+        Ensures interchangeability with schedulers that need to scale the denoising model input depending on the
+        current timestep. Scales the denoising model input by `(sigma**2 + 1) ** 0.5` to match the Euler algorithm.
+        """
+        # timestep is not used in this implementation, step_index is already initialized at set_timesteps()
+        sigma_normalization_factor = self.variance_normalization_factor[self.step_index]
+        sample = sample / sigma_normalization_factor
+
+        self.is_scale_input_called = True
+        return sample
+
+    # pipeline_stable_diffusion_xl.py __call__() step #9
     def step(
         self,
-        model_output: torch.Tensor,
+        model_output: ttnn._ttnn.tensor.Tensor,
         timestep: Union[float, torch.Tensor],
-        sample: torch.Tensor,
+        sample: ttnn._ttnn.tensor.Tensor,
         s_churn: float = 0.0,
         s_tmin: float = 0.0,
         s_tmax: float = float("inf"),
@@ -172,30 +209,32 @@ class TtEulerDiscreteScheduler(nn.Module):
         assert generator is None, "generator is not supported in this version"
         assert return_dict == False, "return_dict==true is not supported in this version"
 
+        # this is a potential accuracy pitfall
         # Upcast to avoid precision issues when computing prev_sample
-        sample = sample.to(torch.float32)
+        # sample = sample.to(torch.float32)
 
+        # leaving gamma calculus just in case we hit it
         sigma = self.sigmas[self.step_index]
-
         gamma = min(s_churn / (len(self.sigmas) - 1), 2**0.5 - 1) if s_tmin <= sigma <= s_tmax else 0.0
         assert gamma == 0, "gamma > 0 is not supported in this version"
-        sigma_hat = sigma
+        tt_sigma = self.tt_sigmas[self.step_index]
+        sigma_hat = tt_sigma
 
         # 1. compute predicted original sample (x_0) from sigma-scaled predicted noise
         # NOTE: "original_sample" should not be an expected prediction_type but is left in for
         # backwards compatibility
         assert self.prediction_type == "epsilon"
-        pred_original_sample = sample - sigma_hat * model_output
+        pred_original_sample = sample - model_output * sigma_hat
 
         # 2. Convert to an ODE derivative
-        derivative = (sample - pred_original_sample) / sigma_hat
+        derivative = (sample - pred_original_sample) * ttnn.reciprocal(sigma_hat)
 
-        dt = self.sigmas[self.step_index + 1] - sigma_hat
+        dt = self.tt_sigmas[self.step_index + 1] - sigma_hat
 
         prev_sample = sample + derivative * dt
 
         # Cast sample back to model compatible dtype
-        prev_sample = prev_sample.to(model_output.dtype)
+        # prev_sample = prev_sample.to(model_output.dtype)
 
         # upon completion increase step index by one
         self.step_index += 1
