@@ -67,7 +67,7 @@ class TT_CCL:
 
     def get_all_gather_concat_inter_buffer(self):
         intermediate_core_range_set = ttnn.CoreRangeSet(
-            {
+            [
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 4)),
                 ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
                 ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
@@ -86,7 +86,7 @@ class TT_CCL:
                 ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
                 ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
                 ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
-            }
+            ]
         )
         intermediate_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -102,7 +102,7 @@ class TT_CCL:
         tt_intermediate_tensor = ttnn.from_torch(
             intermediate_tensor,
             device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=intermediate_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=[8, 4]),

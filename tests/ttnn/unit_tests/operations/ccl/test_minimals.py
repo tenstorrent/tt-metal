@@ -485,7 +485,7 @@ def test_rms_fuse(
             4,
             [1, 32, 32, 128],
             1,
-            ttnn.TILE_LAYOUT,
+            ttnn.ROW_MAJOR_LAYOUT,
             (32, 128),
             ttnn.CoreRangeSet(
                 {
