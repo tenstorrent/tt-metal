@@ -11,10 +11,10 @@ from loguru import logger
 from ultralytics import YOLO
 from datetime import datetime
 from models.utility_functions import disable_persistent_kernel_cache
-from models.experimental.yolov8x.reference import yolov8x
-from models.experimental.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel
-from models.experimental.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
-from models.experimental.yolov8x.demo.demo_utils import LoadImages, preprocess, postprocess
+from models.demos.yolov8x.reference import yolov8x
+from models.demos.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel
+from models.demos.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
+from models.demos.yolov8x.demo.demo_utils import LoadImages, preprocess, postprocess
 
 
 def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
@@ -55,8 +55,8 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
 @pytest.mark.parametrize(
     "source, model_type",
     [
-        ("models/experimental/yolov8x/demo/images/bus.jpg", "torch_model"),
-        ("models/experimental/yolov8x/demo/images/bus.jpg", "tt_model"),
+        ("models/demos/yolov8x/demo/images/bus.jpg", "torch_model"),
+        ("models/demos/yolov8x/demo/images/bus.jpg", "tt_model"),
     ],
 )
 @pytest.mark.parametrize(
@@ -80,7 +80,7 @@ def test_demo(device, source, model_type, res, use_weights_from_ultralytics):
         model = TtYolov8xModel(device=device, parameters=parameters)
         logger.info("Inferencing using ttnn Model")
 
-    save_dir = "models/experimental/yolov8x/demo/runs"
+    save_dir = "models/demos/yolov8x/demo/runs"
 
     dataset = LoadImages(path=source)
 
