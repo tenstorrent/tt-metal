@@ -90,8 +90,8 @@ Tensor ProdOperation::invoke(
     }
     TT_FATAL(
         size && dim >= -size && dim <= size - 1,
-        "Dimension for prod is out of range (expected to be in range of [-{}, {}]",
-        size,
+        "Dimension for prod is out of range (expected to be in range of [{}, {}]",
+        -size,
         size - 1);
 
     // update the dim because we unsqueezed input to 4d
