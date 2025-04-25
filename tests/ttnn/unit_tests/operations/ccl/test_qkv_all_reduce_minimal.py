@@ -16,10 +16,15 @@ from tracy import signpost
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
-    PREFETCHER_NOC1_GRID,
     round_up,
 )
+from models.demos.llama3_subdevices.tt.model_config import (
+    PREFETCHER_NOC1_GRID,
+)
 from models.demos.llama3_subdevices.tt.model_config import set_tg_attention_config
+from models.demos.llama3_subdevices.tt.llama_common import (
+    check_mesh_tensor_alloc,
+)
 
 LINEAR_TOPOLOGY = True
 if LINEAR_TOPOLOGY:
@@ -38,18 +43,6 @@ RING_CRS = ttnn.CoreRangeSet(
         for x, y in PREFETCHER_NOC1_GRID
     ]
 )
-
-
-def check_mesh_tensor_alloc(tensor):
-    device_tensors = ttnn.get_device_tensors(tensor)
-    buffer_addr = device_tensors[0].buffer_address()
-
-    if len(device_tensors) > 1:
-        for i in range(1, len(device_tensors)):
-            addr = device_tensors[i].buffer_address()
-            if not addr == buffer_addr:
-                return False
-    return True
 
 
 def run_all_reduce_qkv_heads_fuse_perf_impl(

@@ -18,6 +18,10 @@ import math
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from tracy import signpost
 
+from models.demos.llama3_subdevices.tt.model_config import (
+    PREFETCHER_NOC1_GRID,
+)
+
 
 random.seed(10)
 
@@ -90,34 +94,6 @@ PREFETCHER_GRID = [
     (2, 5),
     (2, 7),
     (2, 11),
-]
-
-# logical coords
-PREFETCHER_NOC1_GRID = [
-    (6, 6),
-    (6, 7),
-    (6, 9),
-    (6, 0),
-    (6, 1),
-    (6, 2),
-    (6, 4),
-    (6, 5),
-    (5, 5),
-    (5, 6),
-    (5, 7),
-    (5, 9),
-    (5, 0),
-    (5, 1),
-    (5, 2),
-    (5, 4),
-    (1, 4),
-    (1, 5),
-    (1, 9),
-    (1, 0),
-    (2, 0),
-    (2, 4),
-    (2, 5),
-    (2, 9),
 ]
 
 LM_HEAD_32_GRID = list(
