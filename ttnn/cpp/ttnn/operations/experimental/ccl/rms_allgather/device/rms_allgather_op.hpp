@@ -17,11 +17,9 @@
 
 namespace ttnn::operations::fused::normalization {
 
-tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     const Tensor& a,
-    const std::optional<const Tensor>& b,      // residual
-    const std::optional<const Tensor>& gamma,  // weight
-    const std::optional<const Tensor>& stats,  // stats
+    const std::optional<const Tensor>& b,  // residual
     Tensor& output,
     float eps,
     CoreCoord compute_grid_size,
@@ -60,6 +58,7 @@ struct RMSAllGather {
     const DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     const ttnn::ccl::Topology topology;
+    const bool is_pre;
     const uint32_t num_links;
     const uint32_t ring_size;
     const GlobalSemaphore semaphore;
@@ -88,6 +87,7 @@ struct RMSAllGather {
         const DeviceComputeKernelConfig compute_kernel_config,
         std::optional<DataType> dtype,
         ::ttnn::ccl::Topology topology,
+        const bool is_pre,
         const uint32_t num_links,
         const uint32_t ring_size,
         GlobalSemaphore semaphore,
@@ -99,6 +99,7 @@ struct RMSAllGather {
         compute_kernel_config(compute_kernel_config),
         dtype(dtype),
         topology(topology),
+        is_pre(is_pre),
         num_links(num_links),
         ring_size(ring_size),
         semaphore(semaphore),
@@ -112,6 +113,7 @@ struct RMSAllGather {
         attrs.emplace_back("program_config", program_config);
         attrs.emplace_back("compute_kernel_config", compute_kernel_config);
         attrs.emplace_back("dtype", dtype);
+        attrs.emplace_back("is_pre", is_pre);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
@@ -124,18 +126,5 @@ struct RMSAllGather {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };
-
-RMSAllGather create_rms_struct(
-    const Tensor& input_tensor,
-    const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::vector<IDevice*>& devices,
-    const ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    float epsilon,
-    const ttnn::operations::normalization::LayerNormProgramConfig program_config,
-    const DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<DataType> dtype);
 
 }  // namespace ttnn::operations::fused::normalization
