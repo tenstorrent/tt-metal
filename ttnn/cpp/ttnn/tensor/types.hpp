@@ -68,11 +68,13 @@ bool is_floating_point(DataType dtype);
 
 bool is_block_float(DataType dtype);
 
+// Enums are explicitly enumerated due to serialization dependency
+// TODO: #16067 - This shouldn't be needed. Serialize this enum to flatbuffer.
 enum class StorageType {
-    OWNED,
-    DEVICE,
-    BORROWED,           // for storing torch/numpy/etc tensors
-    MULTI_DEVICE_HOST,  // host storage for multi-device context
+    OWNED = 0,
+    DEVICE = 1,
+    BORROWED = 2,           // for storing torch/numpy/etc tensors
+    MULTI_DEVICE_HOST = 4,  // host storage for multi-device context
 };
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
