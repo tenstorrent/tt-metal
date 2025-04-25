@@ -15,6 +15,7 @@ class TT_CCL:
         model_args,
         worker_sub_device_id,
         mode="decode",
+        allocate_prefill_buffers=True,
     ):
         self.mode = mode
         all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
@@ -50,15 +51,21 @@ class TT_CCL:
         self.gather_idx = [0, 0]
         self.buffer_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
-
+        self.persistent_buffers = {}
+        self.all_gather_buffers = {}
         if mode == "decode":
             self.persistent_buffers = self.get_persistent_buffers()
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
         if mode == "prefill":
             self.support_seqlens = [8192, 4096, 1024, 2048, 128]
-            self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
-            self.all_gather_buffers = self.get_prefill_all_gather_buffers()
+            if allocate_prefill_buffers:
+                self.persistent_buffers = self.get_prefill_reduce_scatter_buffers()
+                self.all_gather_buffers = self.get_prefill_all_gather_buffers()
+            else:
+                for seqlen in self.support_seqlens:
+                    self.persistent_buffers[seqlen] = {}
+                    self.all_gather_buffers[seqlen] = {}
 
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
