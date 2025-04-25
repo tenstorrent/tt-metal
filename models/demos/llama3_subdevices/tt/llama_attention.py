@@ -375,9 +375,12 @@ class TtLlamaAttention(LightweightModule):
         #     attn_output_gathered, self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1])
         # )
         # ttnn.deallocate(attn_output_gathered)
-
-        attn_output_cat = self.tt_ccl.all_gather_concat(
+        attn_output_1G4D_sharded_rm = ttnn.untilize(
             attn_output_1G4D_sharded,
+        )
+        ttnn.deallocate(attn_output_1G4D_sharded)
+        attn_output_cat = self.tt_ccl.all_gather_concat(
+            attn_output_1G4D_sharded_rm,
             dim=1,
             cluster_axis=1,
             num_links=3,
