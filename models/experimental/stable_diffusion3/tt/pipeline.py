@@ -394,43 +394,6 @@ class TtStableDiffusion3Pipeline:
         spatial_sequence_length: int,
     ) -> None:
         latent_model_input = ttnn.concat([latents, latents]) if do_classifier_free_guidance else latents
-
-        ########
-        ## Pre-processing for the ttnn.fold
-        batch_size, img_h, img_w, img_c = latent_model_input.shape  # permuted input NHWC
-        patch_size = 2
-        latent_model_input = ttnn.reshape(
-            latent_model_input, (batch_size, img_h, img_w // patch_size, patch_size, img_c)
-        )
-        latent_model_input = ttnn.reshape(
-            latent_model_input, (batch_size, img_h, img_w // patch_size, patch_size * img_c)
-        )
-        N, H, W, C = latent_model_input.shape
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 7),
-                ),
-            }
-        )
-        n_cores = 64
-        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
-
-        latent_model_input = ttnn.to_layout(latent_model_input, ttnn.ROW_MAJOR_LAYOUT)
-        latent_model_input = ttnn.to_memory_config(
-            latent_model_input,
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                shard_spec,
-            ),
-            dtype=ttnn.bfloat16,
-        )
-
-        ########
-
-        # timestep = ttnn.repeat(timestep, ttnn.Shape([latent_model_batch_size, 1]))
         timestep = ttnn.to_layout(timestep, ttnn.TILE_LAYOUT)
 
         noise_pred = self._tt_transformer(
