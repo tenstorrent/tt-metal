@@ -212,7 +212,6 @@ class TtMobileNetV2:
             (model_params["fused_conv_34_weight"], model_params["fused_conv_34_bias"]),
             device,
             batchsize,
-            reshard_if_not_optimal=True,
             width_shard=True,
         )
         self.l1_weight = model_params["classifier_1_weight"]

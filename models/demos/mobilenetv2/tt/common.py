@@ -67,7 +67,7 @@ class TtMobileNetV2Conv2D:
             enable_subblock_padding=False,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
-            reshard_if_not_optimal=self.reshard_if_not_optimal,
+            reshard_if_not_optimal=True,
         )
 
         if self.act_block_h:
@@ -139,7 +139,6 @@ class TtInvertedResidual:
                 (model_params[f"fused_conv_{id * 3 - id}_weight"], model_params[f"fused_conv_{id * 3 - id}_bias"]),
                 device,
                 batchsize,
-                reshard_if_not_optimal=True if id > 6 else False,
                 block_shard=False if id == 6 and (11 < id <= 16) else self.block_shard,
             )
 
@@ -150,14 +149,12 @@ class TtInvertedResidual:
             batchsize,
             groups=hidden_dim,
             block_shard=self.block_shard,
-            reshard_if_not_optimal=True if id >= 6 else False,
         )
         self.conv3 = TtMobileNetV2Conv2D(
             [1, 1, 0, out_channels],
             (model_params[f"conv_{id}_weight"], model_params[f"conv_{id}_bias"]),
             device,
             batchsize,
-            reshard_if_not_optimal=True if id >= 6 else False,
             block_shard=False if (10 <= id <= 16) else self.block_shard,
         )
 
