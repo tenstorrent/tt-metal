@@ -417,7 +417,6 @@ static Tensor conv_depthwise_weight_bcast_helper(
                     }
                 }
             }
-            log_info("Weights Shape = {}", output_weight_shape);
             auto output_tensor = Tensor(
                 std::move(tt::tt_metal::OwnedStorage{std::move(output_buffer)}),
                 output_weight_shape,
