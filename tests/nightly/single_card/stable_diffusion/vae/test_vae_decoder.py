@@ -1,1 +1,0 @@
-../../../../../models/demos/wormhole/stable_diffusion/tests/vae/test_vae_decoder.py
