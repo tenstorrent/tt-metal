@@ -682,6 +682,7 @@ def test_llama_demo(
     is_ci_env,
     reset_seeds,
     request,
+    is_tg_cluster,
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
@@ -691,7 +692,7 @@ def test_llama_demo(
         pytest.skip("TG only supports batch 1 and 32")
 
     # Add param for 6U for tsu target range
-    galaxy_type = "6U" if bool(os.getenv("RUN_ON_6U")) else "4U"
+    galaxy_type = "4U" if is_tg_cluster else "6U"
 
     mesh_device.enable_async(True)
 
