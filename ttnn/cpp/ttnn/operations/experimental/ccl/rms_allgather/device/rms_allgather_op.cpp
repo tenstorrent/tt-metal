@@ -78,10 +78,7 @@ void RMSAllGather::validate(
         TT_FATAL(stats.value().is_sharded(), "Stats must be sharded");
         TT_FATAL(stats.value().get_layout() == Layout::TILE, "Only tile layout is supported for stats");
         TT_FATAL(stats.value().get_dtype() == DataType::BFLOAT16, "Only bfloat16 is supported for stats");
-        TT_FATAL(
-            stats.value().storage_type() == StorageType::DEVICE ||
-                stats.value().storage_type() == StorageType::MULTI_DEVICE,
-            "Operands to layernorm need to be on device!");
+        TT_FATAL(stats.value().storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
         TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(
             stats.value().get_padded_shape()[-1] % input_width == 0,
