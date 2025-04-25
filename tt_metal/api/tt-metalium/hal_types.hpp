@@ -41,7 +41,6 @@ enum class HalL1MemAddrType : uint8_t {
     APP_ROUTING_INFO,
     RETRAIN_COUNT,
     FABRIC_ROUTER_CONFIG,
-    ROUTING_DISABLED_ERISC_L1_UNRESERVED,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
