@@ -27,24 +27,22 @@ class TtPatchEmbedParameters:
         state: dict[str, torch.Tensor],
         *,
         device: ttnn.Device,
+        hidden_dim_padding: int,
         out_channels: int,
     ) -> TtPatchEmbedParameters:
         pos_embed_param = state["pos_embed"]
         if os.environ["FAKE_DEVICE"] == "T3K":
-            hidden_dim = 2432
-            hidden_dim_pad = 128
-            hidden_dim_new = 2560
-            pos_embed_w = pos_embed_param.shape[-1]
-            pos_embed_w_mult = pos_embed_w // hidden_dim
-            if pos_embed_w % hidden_dim == 0:
-                if pos_embed_w_mult == 1:
-                    pos_embed_param = torch.nn.functional.pad(
-                        pos_embed_param, pad=(0, hidden_dim_pad), mode="constant", value=0
-                    )
+            pos_embed_param = torch.nn.functional.pad(
+                pos_embed_param, pad=(0, hidden_dim_padding), mode="constant", value=0
+            )
 
         return cls(
             proj=TtConv2dParameters.from_torch(
-                substate(state, "proj"), dtype=ttnn.bfloat16, out_channels=out_channels, device=device
+                substate(state, "proj"),
+                dtype=ttnn.bfloat16,
+                hidden_dim_padding=hidden_dim_padding,
+                out_channels=out_channels,
+                device=device,
             ),
             pos_embed=from_torch_fast(
                 pos_embed_param, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, shard_dim=None
@@ -72,10 +70,10 @@ class TtPatchEmbed:
     def __call__(self, latent: ttnn.Tensor) -> ttnn.Tensor:
         batch_size_, in_height, in_width, c_ = latent.shape
         out_height = in_height // self._patch_size
-        out_width = in_width
+        out_width = in_width // self._patch_size
 
         latent = self._proj(latent)
-        latent = ttnn.squeeze(latent, 0)
+        latent = ttnn.reshape(latent, (batch_size_, out_height * out_width, -1))
         pos_embed = self._cropped_pos_embed(out_height, out_width)
         return latent + pos_embed
 
