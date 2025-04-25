@@ -359,7 +359,7 @@ void HWCommandQueue::enqueue_write_to_core_l1(
 
     while (size_bytes > 0) {
         const uint32_t size_bytes_to_write =
-            std::min(size_bytes, calculate_max_data_size_bytes(this->get_dispatch_core_type()));
+            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(this->get_dispatch_core_type()));
 
         device_dispatch::L1WriteDispatchParams dispatch_params{
             virtual_core,

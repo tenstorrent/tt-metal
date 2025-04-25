@@ -10,7 +10,7 @@
 namespace tt {
 namespace tt_metal {
 
-uint32_t calculate_max_data_size_bytes(const CoreType& dispatch_core_type) {
+uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type) {
     return tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() -
            (tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST) *
             2);  // * 2 to account for issue
@@ -20,12 +20,12 @@ namespace device_dispatch {
 
 void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_params) {
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
-    DeviceCommandCalculator calculator;
-    calculator.add_dispatch_write_linear<true, true>(dispatch_params.size_bytes);
 
+    DeviceCommandCalculator calculator;
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
         calculator.add_dispatch_wait();
     }
+    calculator.add_dispatch_write_linear<true, true>(dispatch_params.size_bytes);
 
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
@@ -42,13 +42,12 @@ void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_param
             dispatch_params.expected_num_workers_completed[offset_index]);
     }
 
-    command_sequence.add_dispatch_write_linear(
+    command_sequence.add_dispatch_write_linear<true, true>(
         0,
         dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, dispatch_params.virtual_core),
         dispatch_params.address,
-        dispatch_params.size_bytes);
-
-    command_sequence.add_data((uint8_t*)dispatch_params.src, dispatch_params.size_bytes, dispatch_params.size_bytes);
+        dispatch_params.size_bytes,
+        (uint8_t*)dispatch_params.src);
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
     sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
@@ -58,10 +57,10 @@ void issue_l1_write_command_sequence(const L1WriteDispatchParams& dispatch_param
 void issue_l1_read_command_sequence(const L1ReadDispatchParams& dispatch_params) {
     const uint32_t num_worker_counters = dispatch_params.sub_device_ids.size();
     DeviceCommandCalculator calculator;
-    for (uint32_t i = 0; i < num_worker_counters; ++i) {
+    for (uint32_t i = 0; i < num_worker_counters - 1; ++i) {
         calculator.add_dispatch_wait();
     }
-    calculator.add_prefetch_stall();
+    calculator.add_dispatch_wait_with_prefetch_stall();
     calculator.add_dispatch_write_linear_host();
     calculator.add_prefetch_relay_linear();
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
