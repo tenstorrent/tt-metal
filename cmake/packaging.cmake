@@ -34,7 +34,7 @@ set(CPACK_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
 )
 
 set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS TRUE)
-set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS FALSE) # FIXME(afuller): enable this
 # jit-build is cross compiling; shlibdeps does not find dependencies on the host; it should be self-contained anyway.
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
 
