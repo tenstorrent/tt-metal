@@ -70,12 +70,7 @@ jobs:
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
             build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-        # TODO: run on only one, just doing this to bypass queues on CIv2 so I can iterate faster
-        runner:
-          # Could use smaller one, but use TT-hosted one as we may need to inject llama weights. We'll see
-          - tt-beta-ubuntu-2204-large
-          - ubuntu-latest
-    runs-on: ${{ matrix.runner }}
+    runs-on: tt-beta-ubuntu-2204-large
     steps:
       - uses: actions/checkout@v4
       - name: Download artifacts from metal
