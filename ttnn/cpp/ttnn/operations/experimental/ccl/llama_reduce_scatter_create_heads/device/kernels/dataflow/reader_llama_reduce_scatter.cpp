@@ -6,8 +6,19 @@
 #include "dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-#include "tt_metal/hw/inc/debug/dprint_pages.h"
+
 // #include <unistd.h>
+
+inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
+    for (uint32_t page = 0; page < npages; ++page) {
+        DPRINT << start + page << ": **************************************************************" << ENDL();
+        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
 
 template <uint8_t noc_ind = noc_index>
 FORCE_INLINE std::uint64_t static_noc_multicast_addr(
@@ -149,8 +160,8 @@ void kernel_main() {
 
                 cb_reserve_back(fabric_sender_cb_id, num_pages_reserve_push);
                 noc_async_read(shard_noc_addr, sender_read_addr, transfer_size);
-                DPRINT << "shard_noc_addr: " << shard_noc_addr << " print_bf16_pages: " << ENDL();
-                // tt::data_movement::common::print_bf16_pages(sender_read_addr, page_size_bytes, read_size);
+                // DPRINT << "shard_noc_addr: " << shard_noc_addr << " print_bf16_pages: " << ENDL();
+                // tt::data_movement::common::print_bf16_pages(sender_read_addr, page_size_bytes/2, read_size);
 
                 if (num_pages_reserve_push >= curr_packet_num_pages) {
                     noc_async_read_barrier();
@@ -164,14 +175,17 @@ void kernel_main() {
             }
         }
     } else if (worker_core) {
+        DPRINT << "worker_core reader" << ENDL();
         // Calculate base addresses once
         const uint32_t base_input_tensor_addr = get_read_ptr(input_tensor_cb_id);
         const uint32_t base_receiver_l1_addresses = get_read_ptr(fabric_receiver_cb_id) + chip_id_offset;
 
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
             const uint32_t rem = linear_input_packet_start_idx + i;
-            const uint32_t linear_input_core_idcs = rem / tiles_per_core_width;
-            const uint32_t linear_input_tile_offsets = rem % tiles_per_core_width;
+            // const uint32_t linear_input_core_idcs = rem / tiles_per_core_width;
+            // const uint32_t linear_input_tile_offsets = rem % tiles_per_core_width;
+            const uint32_t linear_input_core_idcs = rem % 20;
+            const uint32_t linear_input_tile_offsets = rem / 20;
 
             if (linear_input_core_idcs >= input_tensor_cores) {
                 break;
@@ -191,6 +205,8 @@ void kernel_main() {
 
         noc_async_read_barrier();
         cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
+        // DPRINT << "DPRINT all pages before reduction" << ENDL();
+        print_bf16_pages(get_read_ptr(fabric_receiver_cb_id), page_size_bytes / 2, num_pages_per_packet * num_devices);
     }
     noc_semaphore_set((uint32_t*)local_semaphore_address, INVALID);
     noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);

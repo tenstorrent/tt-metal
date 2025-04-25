@@ -600,7 +600,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         num_packet_worker_cores};
 
     auto writer_defines = reader_defines;
-    bool skip_write_back = output_cores == packet_worker_cores and num_blocks_per_packet == 1;
+    // bool skip_write_back = output_cores == packet_worker_cores and num_blocks_per_packet == 1;
+    bool skip_write_back = false;
     if (skip_write_back) {
         writer_defines["SKIP_WRITE_BACK"] = "1";
     }

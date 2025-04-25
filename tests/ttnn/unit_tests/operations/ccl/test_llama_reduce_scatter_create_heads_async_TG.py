@@ -269,6 +269,7 @@ def run_reduce_scatter_test(
             )
             tt_out_tensor_list.append(tt_out_tensor)
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            print(tt_out_tensor)
 
     mesh_device.reset_sub_device_stall_group()
     # breakpoint()
