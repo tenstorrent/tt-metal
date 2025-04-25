@@ -106,23 +106,29 @@ INSTANTIATE_TEST_SUITE_P(
         BinaryOpTraceRuntime::m_interleaved_1_3_1024_1024_tiled,
         BinaryOpTraceRuntime::m_interleaved_1_3_1024_1024_tiled)));
 
-class ReshapeOp : public TTNNFixtureWithTraceEnabledDevice {};
+class MemorySmokeTest : public TTNNFixtureWithTraceEnabledDevice {
+public:
+    static const ttnn::TensorSpec dram_spec;
+    static const ttnn::TensorSpec l1_spec;
+};
+// Test various combinations of getOpRuntime and getOpConstraints to make sure there are no segfaults due to incorrect
+// memory handling
 
-TEST_F(ReshapeOp, Reshape1) {
-    auto dram_spec = ttnn::TensorSpec(
-        ttnn::Shape({64, 1024}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
+const ttnn::TensorSpec MemorySmokeTest::dram_spec = ttnn::TensorSpec(
+    ttnn::Shape({64, 1024}),
+    tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::BFLOAT16,
+        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+        ttnn::DRAM_MEMORY_CONFIG));
 
-    auto l1_spec = ttnn::TensorSpec(
-        ttnn::Shape({64, 1024}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::L1_MEMORY_CONFIG));
+const ttnn::TensorSpec MemorySmokeTest::l1_spec = ttnn::TensorSpec(
+    ttnn::Shape({64, 1024}),
+    tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::BFLOAT16,
+        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+        ttnn::L1_MEMORY_CONFIG));
 
+TEST_F(MemorySmokeTest, Reshape1) {
     auto constraints_query = ttnn::graph::query_op_constraints(
         ttnn::reshape, device_, dram_spec, ttnn::Shape({64 * 4, 1024 / 4}), dram_spec.memory_config());
     EXPECT_EQ(constraints_query.status, ttnn::graph::ExecutionStatus::Success);
@@ -130,25 +136,9 @@ TEST_F(ReshapeOp, Reshape1) {
     constraints_query = ttnn::graph::query_op_constraints(
         ttnn::reshape, device_, dram_spec, ttnn::Shape({64 * 4, 1024 / 4}), l1_spec.memory_config());
     EXPECT_EQ(constraints_query.status, ttnn::graph::ExecutionStatus::Success);
-
-    // okay!
 }
 
-TEST_F(ReshapeOp, Reshape2) {
-    auto dram_spec = ttnn::TensorSpec(
-        ttnn::Shape({64, 1024}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
-
-    auto l1_spec = ttnn::TensorSpec(
-        ttnn::Shape({64, 1024}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::L1_MEMORY_CONFIG));
-
+TEST_F(MemorySmokeTest, Reshape2) {
     auto query = ttnn::graph::query_op_runtime(
         ttnn::reshape, device_, dram_spec, ttnn::Shape({64 * 4, 1024 / 4}), dram_spec.memory_config());
     EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
@@ -158,18 +148,9 @@ TEST_F(ReshapeOp, Reshape2) {
         ttnn::reshape, device_, dram_spec, ttnn::Shape({64 * 4, 1024 / 4}), l1_spec.memory_config());
     EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
     tt::log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
-
-    // okay!
 }
 
-TEST_F(ReshapeOp, Reshape3) {
-    auto dram_spec = ttnn::TensorSpec(
-        ttnn::Shape({64, 1024}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
-
+TEST_F(MemorySmokeTest, Reshape3) {
     auto constraints_query = ttnn::graph::query_op_constraints(
         ttnn::reshape, device_, dram_spec, ttnn::Shape({64 * 4, 1024 / 4}), dram_spec.memory_config());
     EXPECT_EQ(constraints_query.status, ttnn::graph::ExecutionStatus::Success);
@@ -178,25 +159,9 @@ TEST_F(ReshapeOp, Reshape3) {
         ttnn::reshape, device_, dram_spec, ttnn::Shape({64 * 4, 1024 / 4}), dram_spec.memory_config());
     EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
     tt::log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
-
-    // okay!
 }
 
-TEST_F(ReshapeOp, Reshape4) {
-    auto dram_spec = ttnn::TensorSpec(
-        ttnn::Shape({64, 1024}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
-
-    auto l1_spec = ttnn::TensorSpec(
-        ttnn::Shape({64, 1024}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::L1_MEMORY_CONFIG));
-
+TEST_F(MemorySmokeTest, Reshape4) {
     auto constraints_query = ttnn::graph::query_op_constraints(
         ttnn::reshape, device_, dram_spec, ttnn::Shape({64 * 4, 1024 / 4}), l1_spec.memory_config());
     EXPECT_EQ(constraints_query.status, ttnn::graph::ExecutionStatus::Success);
@@ -205,25 +170,9 @@ TEST_F(ReshapeOp, Reshape4) {
         ttnn::reshape, device_, dram_spec, ttnn::Shape({64 * 4, 1024 / 4}), l1_spec.memory_config());
     EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
     tt::log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
-
-    // okay!
 }
 
-TEST_F(ReshapeOp, Reshape5) {
-    auto dram_spec = ttnn::TensorSpec(
-        ttnn::Shape({64, 1024}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
-
-    auto l1_spec = ttnn::TensorSpec(
-        ttnn::Shape({64, 1024}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::L1_MEMORY_CONFIG));
-
+TEST_F(MemorySmokeTest, Reshape5) {
     auto constraints_query = ttnn::graph::query_op_constraints(
         ttnn::reshape, device_, dram_spec, ttnn::Shape({64 * 4, 1024 / 4}), dram_spec.memory_config());
     EXPECT_EQ(constraints_query.status, ttnn::graph::ExecutionStatus::Success);
@@ -236,7 +185,5 @@ TEST_F(ReshapeOp, Reshape5) {
     constraints_query = ttnn::graph::query_op_constraints(
         ttnn::reshape, device_, dram_spec, ttnn::Shape({64 * 4, 1024 / 4}), l1_spec.memory_config());
     EXPECT_EQ(constraints_query.status, ttnn::graph::ExecutionStatus::Success);
-
-    // segfaults!!!
 }
 }  // namespace ttnn::operations::binary::test
