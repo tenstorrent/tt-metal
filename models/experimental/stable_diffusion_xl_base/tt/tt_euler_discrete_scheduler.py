@@ -75,22 +75,24 @@ class TtEulerDiscreteScheduler(nn.Module):
         self.begin_index = None
         self.device = device
 
-        self.update_device_tensor("sigmas")
+        # self.update_device_tensor("sigmas")
 
     def update_device_tensor(self, tensor_name):
-        val = getattr(self, tensor_name)
-        setattr(
-            self,
-            "tt_" + tensor_name,
-            ttnn.to_memory_config(
-                ttnn.from_torch(
-                    val,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                ).to(device=self.device),
-                ttnn.L1_MEMORY_CONFIG,
-            ),
-        )
+        array = getattr(self, tensor_name)
+        setattr(self, "tt_" + tensor_name, [])
+        tt_array = getattr(self, "tt_" + tensor_name)
+
+        for val in array:
+            tt_array.append(
+                ttnn.to_memory_config(
+                    ttnn.from_torch(
+                        val,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    ).to(device=self.device),
+                    ttnn.L1_MEMORY_CONFIG,
+                ),
+            )
 
     # pipeline_stable_diffusion_xl.py __call__() step #4
     def set_timesteps(
@@ -218,7 +220,7 @@ class TtEulerDiscreteScheduler(nn.Module):
         gamma = min(s_churn / (len(self.sigmas) - 1), 2**0.5 - 1) if s_tmin <= sigma <= s_tmax else 0.0
         assert gamma == 0, "gamma > 0 is not supported in this version"
         tt_sigma = self.tt_sigmas[self.step_index]
-        sigma_hat = tt_sigma
+        sigma_hat = ttnn.to_layout(tt_sigma, layout=ttnn.TILE_LAYOUT)
 
         # 1. compute predicted original sample (x_0) from sigma-scaled predicted noise
         # NOTE: "original_sample" should not be an expected prediction_type but is left in for
@@ -229,7 +231,7 @@ class TtEulerDiscreteScheduler(nn.Module):
         # 2. Convert to an ODE derivative
         derivative = (sample - pred_original_sample) * ttnn.reciprocal(sigma_hat)
 
-        dt = self.tt_sigmas[self.step_index + 1] - sigma_hat
+        dt = ttnn.to_layout(self.tt_sigmas[self.step_index + 1], layout=ttnn.TILE_LAYOUT) - sigma_hat
 
         prev_sample = sample + derivative * dt
 
