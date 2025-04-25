@@ -76,6 +76,7 @@ enum SfpuType {
     topk_merge,
     topk_rebuild,
     unary_ne,
+    unary_eq,
     unary_gt,
     unary_lt,
     unary_max,
