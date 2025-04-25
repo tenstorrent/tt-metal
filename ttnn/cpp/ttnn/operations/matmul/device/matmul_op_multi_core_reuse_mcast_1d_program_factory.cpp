@@ -1831,15 +1831,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t in1_block_width_num_pages = (per_core_N_size_bytes + in1_block_page_size - 1) / in1_block_page_size;
     uint32_t in1_shard_width_in_dram = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
 
-    tt::log_info("per_core_N {}", per_core_N);
-    tt::log_info(
-        "in1_block_page_size {}, in1_block_page_size_last {} , in1_block_width_num_pages {}, in1_shard_width_in_dram "
-        "{}",
-        in1_block_page_size,
-        in1_block_page_size_last,
-        in1_block_width_num_pages,
-        in1_shard_width_in_dram);
-
     /* in2 */
     uint32_t in2_single_tile_size = in0_single_tile_size;
     uint32_t in2_CB_tiles = (ring_size - 1) * in0_CB_tiles;  // All shards except local
@@ -2198,8 +2189,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
             mm_in1_args.push_back((std::uint32_t)bank_id);
             mm_in1_args.push_back((std::uint32_t)vc);
             mm_in1_args.push_back((std::uint32_t)dram_read_offset);
-
-            tt::log_info("core {} bank_id {} vc {}", core, bank_id, vc);
         }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
 

@@ -336,17 +336,8 @@ def run_multi_core_matmul_1d(
         ),
     )
 
-    # in0 = torch.randn(in0_shape)
-    # in1 = torch.randn(in1_shape)
     in0 = torch.randn(in0_shape)
     in1 = torch.randn(in1_shape)
-    # increment_pattern = torch.arange(16384) // 704
-    # increment_pattern = increment_pattern.view(1, 1, 1, 16384)
-    # increment_pattern = increment_pattern.expand(1, 1, 2048, 16384)
-    # in1 = in1 + increment_pattern
-    # torch.set_printoptions(threshold=1000000)
-    # print(in1)
-    # torch.set_printoptions(threshold=10000)
 
     in0_t = ttnn.from_torch(
         in0,
@@ -410,17 +401,8 @@ def run_multi_core_matmul_1d(
         act_fnc = torch.nn.functional.silu if activation == ttnn.UnaryOpType.SILU else torch.nn.functional.relu
         pt_out = act_fnc(pt_out)
 
-    # print(pt_out.shape)
-    # for i in range(32):
-    #     # passing, output = comp_pcc(pt_out[0][0][i][:], tt_out[0][0][i][:], pcc_threshold)
-    #     passing, output = comp_pcc(pt_out[0][0][i][:N_per_shard], tt_out[0][0][i][:N_per_shard], pcc_threshold)
-    #     logger.info(output)
-
     passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
     logger.info(output)
-    # torch.set_printoptions(threshold=1000000)
-    # print(pt_out[0][0][0][:N_per_shard])
-    # print(tt_out[0][0][0][:N_per_shard])
 
     assert passing
 
@@ -1014,9 +996,8 @@ def test_matmul_1d_ring_llama_perf(
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-@pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1_grid")], indirect=True)
 def test_matmul_1d_ring_llama_lm_head(
-    mesh_device,
+    device,
     in0_dtype,
     in1_dtype,
     output_dtype,
@@ -1035,7 +1016,6 @@ def test_matmul_1d_ring_llama_lm_head(
     use_program_cache,
     function_level_defaults,
 ):
-    device = mesh_device.get_device(mesh_device.get_device_ids()[0])
     # Only run these tests on unharvested TG
     device_grid = (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
