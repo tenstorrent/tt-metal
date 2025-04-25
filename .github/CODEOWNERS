@@ -21,7 +21,6 @@ conftest.py @tenstorrent/metalium-developers-infra
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra
-tests/scripts/run_pre_post_commit_regressions_multi_device.sh @aliuTT @tt-aho @TT-BrianLiu @tenstorrent/metalium-developers-infra
 
 # TT-STL
 tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
@@ -30,11 +29,9 @@ tt_stl/**/CMakeLists.txt @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @smina
 # metal - base
 tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt @jbaumanTT
 tt_metal/**/CMakeLists.txt @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt @jbaumanTT @tenstorrent/metalium-developers-infra
-tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap @cfjchu @omilyutin-tt @jbaumanTT
 tt_metal/impl/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT
 tt_metal/impl/**/CMakeLists.txt @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT @tenstorrent/metalium-developers-infra
 tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT
-tt_metal/impl/device/**/CMakeLists.txt @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT @tenstorrent/metalium-developers-infra
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
 # Metalium - public API
@@ -44,7 +41,6 @@ tt_metal/api/ @tenstorrent/metalium-api-owners
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-developers-infra
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
-tests/tt_metal/microbenchmarks/ethernet/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-developers-infra
 
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
@@ -82,7 +78,6 @@ tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
 
 # Metalium - flatbuffer schemas
 tt_metal/impl/flatbuffer/ @kmabeeTT @nsmithtt @omilyutin-tt
-tt_metal/impl/flatbuffer/**/CMakeLists.txt @kmabeeTT @nsmithtt @omilyutin-tt @tenstorrent/metalium-developers-infra
 
 # TTNN
 ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @cfjchu @TT-BrianLiu @omilyutin-tt
