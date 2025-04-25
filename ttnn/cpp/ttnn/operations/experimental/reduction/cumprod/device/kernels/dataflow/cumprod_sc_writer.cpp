@@ -4,12 +4,7 @@
 
 #include "dataflow_api.h"
 
-FORCE_INLINE unsigned get_tile_id(
-    uint32_t i0, uint32_t i1, uint32_t j, uint32_t tiles_per_row, uint32_t PLo, uint32_t PHi, uint32_t HtWt) {
-    uint32_t base_tileid = i0 * (tiles_per_row * PHi * HtWt) + i1;
-    uint32_t tileid = base_tileid + j * PHi * HtWt;
-    return tileid;
-}
+#include "../cumprod_common.hpp"
 
 void kernel_main() {
     uint32_t output_dram_base_addr = get_arg_val<uint32_t>(0);
@@ -26,18 +21,6 @@ void kernel_main() {
 
     const auto& input_dataformat = get_dataformat(cb_in);
     const auto& output_data_format = get_dataformat(cb_in);
-
-    constexpr union {
-        float f;
-        int32_t u;
-    } caster{.f = 1.0f};
-
-    const int32_t ACC_START_VALUE_F32{caster.u};
-    constexpr int16_t ACC_START_VALUE_F16{0x380};  // 1.0f for bfloat16
-    // TODO(jbbieniekTT): the below ones will work only if applied LLK is preconfigured appropriately for those.
-    constexpr int32_t ACC_START_VALUE_I32{0x1};
-    constexpr int16_t ACC_START_VALUE_I16{0x1};
-    constexpr int8_t ACC_START_VALUE_I8{0x1};
 
     uint32_t bytes_per_element = 4;
 
@@ -58,17 +41,17 @@ void kernel_main() {
     InterleavedAddrGenFast<true> dram_output_addrg = {
         .bank_base_address = output_dram_base_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
-    for (unsigned i0 = 0; i0 < PLo; i0++) {
-        for (unsigned i1 = 0; i1 < PHi * HtWt; i1++) {
-            for (unsigned j = 0; j < tiles_per_row; j++) {
+    for (uint32_t i0 = 0; i0 < PLo; i0++) {
+        for (uint32_t i1 = 0; i1 < PHi * HtWt; i1++) {
+            for (uint32_t j = 0; j < tiles_per_row; j++) {
                 uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, PLo, PHi, HtWt);
 
-                cb_wait_front(cb_in, 1);
+                cb_wait_front(cb_in, ONE_TILE);
 
                 noc_async_write_tile(tileid, dram_output_addrg, input_sram_addr);
                 noc_async_write_barrier();
 
-                cb_pop_front(cb_in, 1);
+                cb_pop_front(cb_in, ONE_TILE);
             }
         }
     }

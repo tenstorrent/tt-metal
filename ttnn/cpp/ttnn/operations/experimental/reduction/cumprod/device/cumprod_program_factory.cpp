@@ -14,31 +14,33 @@
 
 namespace ttnn::operations::experimental::reduction {
 
-uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::calc_plo(
+uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::mul_lower_ranks(
     const Shape& input_shape, const int32_t& dim) {
-    uint32_t PLo{1};
+    uint32_t PLow{1};
     for (int32_t i{dim - 1}; i >= 0; --i) {
-        PLo *= input_shape[i];
+        PLow *= input_shape[i];
     }
 
-    return PLo;
+    return PLow;
 }
 
-uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::calc_phi(
+uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::mul_higher_ranks(
     const Shape& input_shape, const int32_t& dim) {
-    uint32_t PHi{1};
+    uint32_t PHigh{1};
     for (int32_t i{dim + 1}; i < input_shape.rank() - 2; ++i) {
-        PHi *= input_shape[i];
+        PHigh *= input_shape[i];
     }
 
-    return PHi;
+    return PHigh;
 }
 
 uint32_t CumprodDeviceOperation::SingleCoreCumprodProgramFactory::calc_htwt(const Shape& input_shape) {
     switch (input_shape.rank()) {
         case 0: return 0;
         case 1: return input_shape[0] / tt::constants::TILE_WIDTH;
-        default: return input_shape[input_shape.rank() - 1] * input_shape[input_shape.rank() - 2] / 1024;
+        default:
+            return (input_shape[input_shape.rank() - 1] / tt::constants::TILE_WIDTH) *
+                   (input_shape[input_shape.rank() - 2] / tt::constants::TILE_HEIGHT);
     }
 }
 
@@ -48,9 +50,7 @@ CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
-    using namespace tt::constants;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::detail;
 
     const auto& input_tensor{tensor_args.input_tensor};
     auto& output_tensor{tensor_return_value};
@@ -75,12 +75,12 @@ CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.get_dtype())};
     const bool fp32_dest_acc_en{
-        (dst_cb_data_format == tt::DataFormat::Float32) || (dst_cb_data_format == tt::DataFormat::Int32) ||
-        (dst_cb_data_format == tt::DataFormat::UInt32)};
+        (dst_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Int32) ||
+        (dst_cb_data_format == DataFormat::UInt32)};
     const uint32_t height_tiles{input_shape[2] / constants::TILE_HEIGHT};
     const uint32_t width_tiles{input_shape[3] / constants::TILE_WIDTH};
 
-    const uint32_t input_rank{tensor_args.input_tensor.get_padded_shape().rank()};
+    const uint32_t input_rank{input_tensor.get_padded_shape().rank()};
     const int32_t dim{
         (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
 
@@ -89,11 +89,11 @@ CumprodDeviceOperation::SingleCoreCumprodProgramFactory::create(
         .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = false, .math_approx_mode = false, .compile_args = {}};
     const WriterDataMovementConfig writer_config{};
 
-    const uint32_t tiles_per_row{tensor_args.input_tensor.get_padded_shape()[dim]};
-    const uint32_t num_rows{tensor_args.input_tensor.volume() / 1024 / tiles_per_row};
-    const uint32_t PHi{calc_phi(tensor_args.input_tensor.get_padded_shape(), dim)};
-    const uint32_t PLo{calc_plo(tensor_args.input_tensor.get_padded_shape(), dim)};
-    const uint32_t HtWt{calc_htwt(tensor_args.input_tensor.get_padded_shape())};
+    const uint32_t tiles_per_row{input_tensor.get_padded_shape()[dim]};
+    const uint32_t num_rows{input_tensor.volume() / tt::constants::TILE_HW / tiles_per_row};
+    const uint32_t PHi{mul_higher_ranks(input_tensor.get_padded_shape(), dim)};
+    const uint32_t PLo{mul_lower_ranks(input_tensor.get_padded_shape(), dim)};
+    const uint32_t HtWt{calc_htwt(input_tensor.get_padded_shape())};
 
     auto cumprod_reader_kernel_id{create_kernel(
         program,

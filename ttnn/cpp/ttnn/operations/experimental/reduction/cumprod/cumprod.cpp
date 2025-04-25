@@ -34,12 +34,6 @@ Tensor CumprodOperation::invoke(
     Tensor adjusted_input_tensor = input_tensor;
     const auto& input_dtype = input_tensor.dtype();
 
-    // TODO(jbbieniekTT): enable once ttnn::to_dtype works for tensors on device storage
-    // if (dtype.has_value() && input_dtype != dtype.value()) {
-    //    auto converted_tensor = ttnn::to_dtype(input_tensor, DataType::BFLOAT16);
-    //    adjusted_input_tensor = converted_tensor;
-    // }
-
     constexpr uint32_t FOUR_DIMENSIONS{4};
     constexpr uint32_t FIRST_DIMENSION{0};
 

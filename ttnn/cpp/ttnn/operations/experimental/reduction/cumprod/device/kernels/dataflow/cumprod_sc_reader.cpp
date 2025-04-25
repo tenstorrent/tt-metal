@@ -4,14 +4,9 @@
 
 #include "dataflow_api.h"
 
-namespace {
+#include "../cumprod_common.hpp"
 
-FORCE_INLINE unsigned get_tile_id(
-    uint32_t i0, uint32_t i1, uint32_t j, uint32_t tiles_per_row, uint32_t PLo, uint32_t PHi, uint32_t HtWt) {
-    uint32_t base_tileid = i0 * (tiles_per_row * PHi * HtWt) + i1;
-    uint32_t tileid = base_tileid + j * PHi * HtWt;
-    return tileid;
-}
+namespace {
 
 constexpr union {
     float f;
@@ -29,9 +24,9 @@ void kernel_main() {
     uint32_t HtWt = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t cb_out = tt::CBIndex::c_0;
-    constexpr uint32_t cb_one = tt::CBIndex::c_16;
+    constexpr uint32_t cb_one = tt::CBIndex::c_2;
 
-    cb_reserve_back(cb_one, 1);
+    cb_reserve_back(cb_one, ONE_TILE);
     uint32_t data_one_addr = get_write_ptr(cb_one);
 
     const int32_t ACC_START_VALUE_F32{caster.u};
@@ -78,7 +73,7 @@ void kernel_main() {
             scaler = ACC_START_VALUE_I32;
             bytes_per_element = 4;
             break;
-        default:  // ?
+        default:
             scaler = 1;
             bytes_per_element = 4;
             break;
@@ -93,18 +88,18 @@ void kernel_main() {
 
     cb_push_back(cb_one, 1);
 
-    for (unsigned i0 = 0; i0 < PLo; i0++) {
-        for (unsigned i1 = 0; i1 < PHi * HtWt; i1++) {
-            for (unsigned j = 0; j < tiles_per_row; j++) {
+    for (uint32_t i0 = 0; i0 < PLo; i0++) {
+        for (uint32_t i1 = 0; i1 < PHi * HtWt; i1++) {
+            for (uint32_t j = 0; j < tiles_per_row; j++) {
                 uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, PLo, PHi, HtWt);
 
-                cb_reserve_back(cb_out, 1);
+                cb_reserve_back(cb_out, ONE_TILE);
 
                 uint32_t data_sram_addr = get_write_ptr(cb_out);
                 noc_async_read_tile(tileid, dram_input_addrg, data_sram_addr);
                 noc_async_read_barrier();
 
-                cb_push_back(cb_out, 1);
+                cb_push_back(cb_out, ONE_TILE);
             }
         }
     }

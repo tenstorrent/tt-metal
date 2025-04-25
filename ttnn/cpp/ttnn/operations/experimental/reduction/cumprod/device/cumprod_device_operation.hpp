@@ -35,8 +35,12 @@ struct CumprodDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct SingleCoreCumprodProgramFactory {
-        static constexpr uint32_t CB_NUM_TILES{2};
-        enum class CumprodCB : std::underlying_type_t<tt::CBIndex> { SRC = 0, DST = 1, ONE = 16, ACC = 24 };
+        enum class CumprodCB : std::underlying_type_t<tt::CBIndex> {
+            SRC = tt::CBIndex::c_0,
+            DST = tt::CBIndex::c_1,
+            ONE = tt::CBIndex::c_2,
+            ACC = tt::CBIndex::c_3
+        };
 
         static constexpr std::array<const char*, 3> KERNEL_PATHS{
             "ttnn/cpp/ttnn/operations/experimental/reduction/cumprod/device/kernels/dataflow/cumprod_sc_reader.cpp",
@@ -75,8 +79,8 @@ struct CumprodDeviceOperation {
             const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
             const std::vector<uint32_t>& runtime_args = {});
 
-        static uint32_t calc_phi(const Shape& input_shape, const int32_t& dim);
-        static uint32_t calc_plo(const Shape& input_shape, const int32_t& dim);
+        static uint32_t mul_lower_ranks(const Shape& input_shape, const int32_t& dim);
+        static uint32_t mul_higher_ranks(const Shape& input_shape, const int32_t& dim);
         static uint32_t calc_htwt(const Shape& input_shape);
     };
 

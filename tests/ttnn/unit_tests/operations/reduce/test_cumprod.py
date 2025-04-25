@@ -17,6 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     [
         [],
         [10],
+        [10000],
         [3, 3],
         [16, 16],
         [1, 0, 32, 32],
