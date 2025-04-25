@@ -82,6 +82,7 @@ enum class EthRouterMode : uint32_t {
 
 class Cluster {
 public:
+    // TODO: #21245: Remove these workaround APIs and instead refactor UMD component out of Cluster
     static ClusterType get_cluster_type_from_cluster_desc(
         const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc = nullptr);
     static bool is_base_routing_fw_enabled(ClusterType cluster_type);
