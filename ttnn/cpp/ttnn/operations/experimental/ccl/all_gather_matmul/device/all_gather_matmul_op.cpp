@@ -111,7 +111,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program_at
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     auto mesh_device = input_tensors[0].mesh_device();
-    auto [device_index, sender_device_id, receiver_device_id] = ::ttnn::ccl::get_device_index_and_sender_receiver_ids(
+    ttnn::ccl::SenderRecieverConfig config = ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord), this->devices, this->all_gather_struct.topology);
     chip_id_t target_device_id = mesh_device->get_device(mesh_coord)->id();
     // Return the AllGatherMatmul program with callbacks
@@ -126,12 +126,12 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program_at
         this->all_gather_struct.dim,
         this->all_gather_struct.num_links,
         this->all_gather_struct.ring_size,
-        device_index,
+        config.device_index,
         this->all_gather_struct.user_defined_num_workers,
         this->all_gather_struct.user_defined_num_buffers_per_channel,
         target_device_id,
-        receiver_device_id,
-        sender_device_id,
+        config.receiver_device_id,
+        config.sender_device_id,
         this->all_gather_struct.topology,
         this->all_gather_core_grid_offset,
 

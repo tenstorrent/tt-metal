@@ -44,9 +44,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduce::create_program_at(
     std::vector<Tensor>& output_tensors) const {
     auto target_device =
         input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
-    auto [device_index, sender_device_id, receiver_device_id] =
-        ccl::get_device_index_and_sender_receiver_ids(target_device, this->devices, topology);
-    chip_id_t target_device_id = target_device->id();
+    ttnn::ccl::SenderRecieverConfig config =
+        ttnn::ccl::get_device_sender_receiver_config(target_device, this->devices, this->topology);
 
     return ccl::reduce_scatter_detail::reduce_scatter_with_workers(
         input_tensors.at(0),
@@ -55,10 +54,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduce::create_program_at(
         0,
         this->num_links,
         this->ring_size,
-        device_index,
-        target_device_id,
-        receiver_device_id,
-        sender_device_id,
+        config.device_index,
+        target_device->id(),
+        config.receiver_device_id,
+        config.sender_device_id,
         this->topology,
         this->user_defined_num_workers,
         this->user_defined_num_buffers_per_channel);
