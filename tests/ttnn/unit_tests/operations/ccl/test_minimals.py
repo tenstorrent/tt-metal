@@ -364,7 +364,7 @@ def test_all_gather_only(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("use_new_version", [True])
-@pytest.mark.parametrize("num_iters, warmup_iters", [[20, 5]])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[100, 10]])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
@@ -485,7 +485,7 @@ def test_rms_fuse(
             4,
             [1, 32, 32, 128],
             1,
-            ttnn.TILE_LAYOUT,
+            ttnn.ROW_MAJOR_LAYOUT,
             (32, 128),
             ttnn.CoreRangeSet(
                 {

@@ -67,7 +67,7 @@ class TT_CCL:
 
     def get_all_gather_concat_inter_buffer(self):
         intermediate_core_range_set = ttnn.CoreRangeSet(
-            {
+            [
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 4)),
                 ttnn.CoreRange(ttnn.CoreCoord(6, 6), ttnn.CoreCoord(6, 6)),
                 ttnn.CoreRange(ttnn.CoreCoord(6, 7), ttnn.CoreCoord(6, 7)),
@@ -86,7 +86,7 @@ class TT_CCL:
                 ttnn.CoreRange(ttnn.CoreCoord(5, 2), ttnn.CoreCoord(5, 2)),
                 ttnn.CoreRange(ttnn.CoreCoord(5, 4), ttnn.CoreCoord(5, 4)),
                 ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
-            }
+            ]
         )
         intermediate_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -102,7 +102,7 @@ class TT_CCL:
         tt_intermediate_tensor = ttnn.from_torch(
             intermediate_tensor,
             device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=intermediate_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=[8, 4]),
@@ -742,8 +742,15 @@ def tt_sharded_distributed_rmsnorm(
     # Run distributed rmsnorm part 1
     cluster_axis = 1
     semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
+    grid_offset = ttnn.CoreCoord(1, 0)
     persistent_buffer = tt_ccl.all_gather_buffers.get("LAYERNORM", None)
-    tt_out = ttnn.fused_rms_1_1_32_8192(
+    tt_stats_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(32, 128),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_stats = ttnn.fused_rms_1_1_32_8192(
         inp,
         ln_sharded_progcfg,
         cluster_axis,
@@ -751,10 +758,21 @@ def tt_sharded_distributed_rmsnorm(
         semaphore,
         residual_input_tensor=res,
         num_links=1,
+        memory_config=tt_stats_sharded_config,
+        persistent_output_tensor=persistent_buffer,
+        is_pre=True,
+    )
+    tt_out = ttnn.fused_rms_1_1_32_8192(
+        inp,
+        ln_sharded_progcfg,
+        cluster_axis,
+        tt_ccl.mesh_device,
+        semaphore,
         epsilon=epsilon,
         weight=gamma,
-        stats=persistent_buffer,
+        stats=tt_stats,
         memory_config=output_mem_config,
+        is_pre=False,
     )
     tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     return tt_out, inp

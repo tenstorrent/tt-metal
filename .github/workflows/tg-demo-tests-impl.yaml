@@ -12,6 +12,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
   tg-demo-tests:
@@ -26,9 +30,9 @@ jobs:
     runs-on:
       - arch-wormhole_b0
       - config-tg
-      - in-service
       - bare-metal
       - pipeline-functional
+      - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image }}
       env:
