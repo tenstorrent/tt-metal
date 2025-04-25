@@ -430,8 +430,7 @@ def run_all_to_all_impl(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
     ccl_semaphore_handles = [
-        [create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_devices)]
-        for _ in range(num_iters)
+        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
 
     logger.info(f"Logical shape: {logical_shape}")
@@ -523,7 +522,7 @@ def run_all_to_all_impl(
                 persistent_output_buffer=persistent_output_buffers[i],
                 in_dim=in_dim,
                 out_dim=out_dim,
-                multi_device_global_semaphores=ccl_semaphore_handles[i],
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_gather_topology,

@@ -48,7 +48,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphores,
+    const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
@@ -379,15 +379,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
             reset_global_semaphore,
             drain_sync_core.x,
             drain_sync_core.y,
+            semaphore.address(),
         };
-        global_semaphore_args_idx = writer_rt_args.size();
-        for (const auto& sem : semaphores) {
-            writer_rt_args.push_back(sem.address());
-        }
+        global_semaphore_args_idx = writer_rt_args.size() - 1;
+
         writer_rt_args.insert(writer_rt_args.end(), receiver_cores_x.begin(), receiver_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), receiver_cores_y.begin(), receiver_cores_y.end());
 
-        log_info(tt::LogOp, "semaphore size: {}", semaphores.size());
         log_info(tt::LogOp, "writer_rt_args size: {}", writer_rt_args.size());
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {
@@ -429,7 +427,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
             std::vector<uint32_t> receiver_reader_rt_args = {
                 persistent_intermediate_buffer.buffer()->address(),
                 input_tensor.buffer()->address(),
-                semaphores.at(i).address(),  // Global semaphore for sender i
+                semaphore.address(),  // Global semaphore for sender i
                 in_row_tiles,
                 in_col_tiles,
                 input_row_device_stride,
@@ -452,7 +450,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
          worker_sender_writer_kernel_id,
          receiver_writer_kernel_id,
          receiver_reader_kernel_id,
-         semaphores,
+         semaphore,
          sender_worker_cores,
          global_semaphore_args_idx,
          receiver_worker_cores](
@@ -464,7 +462,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
 
-            auto semaphores = static_cast<const ttnn::AllToAllAsync*>(operation)->semaphores;
+            auto semaphore = static_cast<const ttnn::AllToAllAsync*>(operation)->semaphore;
 
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
 
@@ -480,9 +478,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                for (uint32_t i = 0; i < semaphores.size(); i++) {
-                    worker_writer_sender_runtime_args[global_semaphore_args_idx + i] = semaphores.at(i).address();
-                }
+                worker_writer_sender_runtime_args[global_semaphore_args_idx] = semaphore.address();
             }
             // receiver
             for (uint32_t i = 0; i < receiver_worker_cores.size(); i++) {
@@ -491,7 +487,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
                 receiver_writer_runtime_args[0] = output.buffer()->address();
                 auto& receiver_reader_runtime_args = receiver_reader_runtime_args_by_core[core.x][core.y];
                 receiver_reader_runtime_args[0] = input.buffer()->address();
-                receiver_reader_runtime_args[1] = semaphores.at(i).address();
+                receiver_reader_runtime_args[1] = semaphore.address();
             }
         };
 

@@ -59,8 +59,7 @@ void kernel_main() {
     bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    tt_l1_ptr uint32_t* global_semaphore_addrs = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
-    arg_idx += ring_size;
+    uint32_t global_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
     tt_l1_ptr uint32_t* receiver_cores_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += ring_size;
     tt_l1_ptr uint32_t* receiver_cores_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -206,7 +205,7 @@ void kernel_main() {
 
         // Unicast semaphore increment to receiver device
         uint64_t output_semaphore_noc_addr_in_pkt =
-            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, global_semaphore_addrs[dst_ring_id], 0);
+            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, global_semaphore_addr, 0);
         auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
         pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             output_semaphore_noc_addr_in_pkt,
@@ -256,14 +255,14 @@ void kernel_main() {
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
         DPRINT << "waiting for waitval " << (uint32_t)wait_sem_value << "\n";
-        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addrs[my_ring_id]) < wait_sem_value);
+        while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr) < wait_sem_value);
 
         DPRINT << "waitval done\n";
     }
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addrs[my_ring_id]) = 0;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr) = 0;
         DPRINT << "reset done\n";
     }
 

@@ -24,19 +24,19 @@ ttnn::AllToAllAsync create_all_to_all_async_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
-    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphores,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     uint32_t num_devices = devices.size();
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
-    std::vector<GlobalSemaphore> semaphores;
+    std::optional<GlobalSemaphore> semaphore = std::nullopt;
     uint32_t device_index = 0;
     for (uint32_t i = 0; i < num_devices; ++i) {
         // Each glogal semaphore should have the same address on each device.
         // This is getting the semaphore for each device.
-        semaphores.push_back(multi_device_global_semaphores.at(i).global_semaphores.at(i));
         if (devices.at(i) == input_tensor.device()) {
+            semaphore = multi_device_global_semaphore.global_semaphores.at(i);
             device_index = i;
             if (i != 0) {
                 backward_device = devices.at(i - 1);
@@ -61,7 +61,7 @@ ttnn::AllToAllAsync create_all_to_all_async_struct(
         device_index,
         memory_config.value_or(input_tensor.memory_config()),
         topology,
-        semaphores,
+        semaphore.value(),
         sub_device_id};
 }
 
@@ -141,10 +141,6 @@ void AllToAllAsync::validate_with_output_tensors(
     // }
 
     TT_FATAL(this->num_links == 1, "AllToAllAsync: num_links must be 1, but is {}", this->num_links);
-    TT_FATAL(
-        this->semaphores.size() == ring_size,
-        "AllToAllAsync: semaphores size must be equal to ring_size, but is {}",
-        this->semaphores.size());
 }
 
 std::vector<ttnn::TensorSpec> AllToAllAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -173,7 +169,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program(
         this->ring_size,
         this->ring_index,
         this->topology,
-        this->semaphores,
+        this->semaphore,
         this->sub_device_id);
 }
 
@@ -183,10 +179,7 @@ tt::tt_metal::operation::Hash AllToAllAsync::compute_program_hash(const std::vec
     auto input_memory_layout = input_tensor.get_layout();
     auto input_dtype = input_tensor.get_dtype();
     auto input_memory_config = input_tensor.memory_config();
-    std::vector<uint32_t> semaphore_addresses;
-    for (const auto& sem : this->semaphores) {
-        semaphore_addresses.push_back(sem.address());
-    }
+    uint32_t semaphore_address = this->semaphore.address();
 
     return tt::tt_metal::operation::hash_operation<AllToAllAsync>(
         this->in_dim,
@@ -200,7 +193,7 @@ tt::tt_metal::operation::Hash AllToAllAsync::compute_program_hash(const std::vec
         input_memory_layout,
         input_dtype,
         input_memory_config,
-        semaphore_addresses);
+        semaphore_address);
 }
 
 namespace operations {
@@ -214,7 +207,7 @@ Tensor all_to_all_async(
     Tensor& persistent_output_buffer,
     const int32_t in_dim,   // Changed from dim
     const int32_t out_dim,  // Added
-    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphores,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -258,7 +251,7 @@ Tensor all_to_all_async(
          memory_config,
          devices,
          ccl_topology,
-         multi_device_global_semaphores,
+         multi_device_global_semaphore,
          sub_device_id](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -274,7 +267,7 @@ Tensor all_to_all_async(
                     memory_config,
                     devices,
                     ccl_topology,
-                    multi_device_global_semaphores,
+                    multi_device_global_semaphore,
                     sub_device_id),
                 {input_tensor},
                 optional_input_tensors,
