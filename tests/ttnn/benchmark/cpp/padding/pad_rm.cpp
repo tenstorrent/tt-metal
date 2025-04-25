@@ -15,38 +15,33 @@
 #include <ttnn/tensor/host_buffer/functions.hpp>
 #include "small_vector.hpp"
 
-// static std::vector<float> input_data;
-
+namespace {
 template <typename T>
-std::vector<T> GenInputData(const ttnn::SmallVector<uint32_t>& shape) {
+ttnn::Tensor GenInputTensor(const ttnn::SmallVector<uint32_t>& shape) {
+    using namespace tt::tt_metal;
+    static std::mt19937 gen(42);  // fixed seed for reproducibility
+
     std::vector<T> input_data;
     // Get volume
-    uint32_t volume = 1;
+    size_t volume = 1;
     for (const auto& dim : shape) {
         volume *= dim;
     }
-    input_data.resize(volume);
-    std::mt19937 gen(42);  // fixed seed for reproducibility
+    input_data.reserve(volume);
     std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
-    for (auto& val : input_data) {
-        val = static_cast<T>(dist(gen));
+    for (size_t i = 0; i < volume; ++i) {
+        input_data.push_back(static_cast<T>(dist(gen)));
     }
-    return input_data;
+    auto input_buffer = owned_buffer::create<T>(std::move(input_data));
+    return Tensor(OwnedStorage{input_buffer}, ttnn::Shape(shape), DataType::BFLOAT16, Layout::ROW_MAJOR);
 }
+}  // namespace
 
 static void BM_pad_rm_2d_last_dim_right(benchmark::State& state) {
-    using namespace tt::tt_metal;
-    using T = bfloat16;
-
-    ttnn::SmallVector<uint32_t> input_shape = {8192, 8100};
+    auto input_tensor = GenInputTensor<bfloat16>({8192, 8100});
     ttnn::SmallVector<uint32_t> padded_shape = {8192, 8192};
     ttnn::SmallVector<uint32_t> tensor_start = {0, 0};
 
-    auto input_data = GenInputData<T>(input_shape);
-    auto input_buffer = owned_buffer::create<T>(std::move(input_data));
-
-    auto input_tensor =
-        Tensor(OwnedStorage{input_buffer}, ttnn::Shape(input_shape), DataType::BFLOAT16, Layout::ROW_MAJOR);
     for (auto _ : state) {
         auto out = input_tensor.pad(
             ttnn::Shape(padded_shape),
@@ -58,18 +53,10 @@ static void BM_pad_rm_2d_last_dim_right(benchmark::State& state) {
 }
 
 static void BM_pad_rm_2d_last_dim_left_right(benchmark::State& state) {
-    using namespace tt::tt_metal;
-    using T = bfloat16;
-
-    ttnn::SmallVector<uint32_t> input_shape = {8192, 8100};
+    auto input_tensor = GenInputTensor<bfloat16>({8192, 8100});
     ttnn::SmallVector<uint32_t> padded_shape = {8192, 8192};
     ttnn::SmallVector<uint32_t> tensor_start = {0, 92};
 
-    auto input_data = GenInputData<T>(input_shape);
-    auto input_buffer = owned_buffer::create<T>(std::move(input_data));
-
-    auto input_tensor =
-        Tensor(OwnedStorage{input_buffer}, ttnn::Shape(input_shape), DataType::BFLOAT16, Layout::ROW_MAJOR);
     for (auto _ : state) {
         auto out = input_tensor.pad(
             ttnn::Shape(padded_shape),
@@ -81,18 +68,10 @@ static void BM_pad_rm_2d_last_dim_left_right(benchmark::State& state) {
 }
 
 static void BM_pad_rm_4d_last_dim_left_right(benchmark::State& state) {
-    using namespace tt::tt_metal;
-    using T = bfloat16;
-
-    ttnn::SmallVector<uint32_t> input_shape = {16, 20, 512, 500};
+    auto input_tensor = GenInputTensor<bfloat16>({16, 20, 512, 500});
     ttnn::SmallVector<uint32_t> padded_shape = {16, 20 + 12, 512 + 30, 500 + 30};
     ttnn::SmallVector<uint32_t> tensor_start = {0, 1, 3, 4};
 
-    auto input_data = GenInputData<T>(input_shape);
-    auto input_buffer = owned_buffer::create<T>(std::move(input_data));
-
-    auto input_tensor =
-        Tensor(OwnedStorage{input_buffer}, ttnn::Shape(input_shape), DataType::BFLOAT16, Layout::ROW_MAJOR);
     for (auto _ : state) {
         auto out = input_tensor.pad(
             ttnn::Shape(padded_shape),
@@ -103,9 +82,29 @@ static void BM_pad_rm_4d_last_dim_left_right(benchmark::State& state) {
     }
 }
 
+static void BM_pad_rm_2d_scaling(benchmark::State& state) {
+    int N = state.range(0);
+    int N_padded = N + 2 * 100;
+
+    auto input_tensor = GenInputTensor<bfloat16>({8192, N});
+    ttnn::SmallVector<uint32_t> padded_shape = {8192, N_padded};
+    ttnn::SmallVector<uint32_t> tensor_start = {0, 100};
+
+    for (auto _ : state) {
+        auto out = input_tensor.pad(
+            ttnn::Shape(padded_shape),
+            ttnn::Shape(tensor_start),
+            0.0f);  // Pad the tensor to the same shape as input_tensor
+        benchmark::DoNotOptimize(out);
+        benchmark::ClobberMemory();
+    }
+    state.SetComplexityN(N_padded);
+}
+
 BENCHMARK(BM_pad_rm_2d_last_dim_right)->Unit(benchmark::kMillisecond)->MinTime(5.0);
 BENCHMARK(BM_pad_rm_2d_last_dim_left_right)->Unit(benchmark::kMillisecond)->MinTime(5.0);
 BENCHMARK(BM_pad_rm_4d_last_dim_left_right)->Unit(benchmark::kMillisecond)->MinTime(5.0);
+BENCHMARK(BM_pad_rm_2d_scaling)->Unit(benchmark::kMillisecond)->RangeMultiplier(2)->Range(128, 8192)->Complexity();
 
 int main(int argc, char** argv) {
     ::benchmark::Initialize(&argc, argv);
