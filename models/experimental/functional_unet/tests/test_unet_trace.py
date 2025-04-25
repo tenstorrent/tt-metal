@@ -214,7 +214,6 @@ def test_unet_trace_2cq(
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
@@ -225,7 +224,7 @@ def test_unet_trace_2cq(
     ((1, 4, 128),),
 )
 def test_unet_trace_2cq_multi_device(
-    batch: int, groups: int, iterations: int, mesh_device, use_program_cache, reset_seeds, enable_async_mode
+    batch: int, groups: int, iterations: int, mesh_device, use_program_cache, reset_seeds
 ):
     if not is_n300_with_eth_dispatch_cores(mesh_device) and not is_t3k_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300 or T3000")
@@ -470,7 +469,6 @@ def test_unet_trace_2cq_same_io(
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
-@pytest.mark.parametrize("enable_async_mode", (True, False), indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
@@ -485,7 +483,6 @@ def test_unet_trace_2cq_same_io_multi_device(
     groups: int,
     iterations: int,
     mesh_device,
-    enable_async_mode,
     use_program_cache,
     reset_seeds,
 ):

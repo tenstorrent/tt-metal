@@ -309,7 +309,6 @@ def test_demo_text(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [32]:
         pytest.skip("Llama TG only supports batch-32")
 
-    mesh_device.enable_async(True)
     enable_trace = True  # Use tracing for better perf
     prefill_enable_trace = repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file

@@ -140,32 +140,6 @@ void insert_buffer_and_shape_for_device(
         tensor_to_modify.tensor_attributes->storage);
 }
 
-Tensor copy_borrowed_tensor_in_async_mode(IDevice* worker, const Tensor& tensor) {
-    // When using async mode, tensors with borrowed storage cannot be passed to workers.
-    // They need to be copied to owned storage before being passed to the worker.
-    ZoneScopedN("ConvertBorrowedToOwned");
-    // Tensor has workers (on device) or runtime mode is synchronous or tensor has multiple buffers.
-    // No need to check for borrowed storage.
-    if (worker->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS) {
-        return tensor;
-    }
-
-    if (tensor.storage_type() == StorageType::BORROWED) {
-        ZoneScopedN("CopyBorrowedStorage");
-        auto borrowed_buffer = std::get<BorrowedStorage>(tensor.get_storage()).buffer;
-        Tensor owned_tensor;
-        std::visit(
-            [&owned_tensor, &tensor](auto&& buffer) {
-                using BorrowedStorageType = std::vector<std::decay_t<decltype(*(buffer.begin()))>>;
-                auto owned_buf = owned_buffer::create(BorrowedStorageType(buffer.begin(), buffer.end()));
-                owned_tensor = Tensor(OwnedStorage{owned_buf}, tensor.get_tensor_spec());
-            },
-            borrowed_buffer);
-        return owned_tensor;
-    }
-    return tensor;
-}
-
 ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {
     const auto num_shards_height = tt::div_up(shape.height(), shard_shape.height());
     const auto last_shard_height =

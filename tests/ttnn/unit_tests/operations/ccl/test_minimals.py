@@ -87,7 +87,6 @@ def run_all_gather_impl(
     input_shard_grid,
     all_gather_topology,
     num_iters=1,
-    enable_async=False,
     trace_mode=False,
     output_shard_shape=None,
     output_shard_grid=None,
@@ -95,11 +94,6 @@ def run_all_gather_impl(
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
-    # Use Async mode based on test input config
-    mesh_device.enable_async(enable_async)
-
-    if enable_async:
-        logger.info(f"Using Async Mode for All Gather Op Dispatch")
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -299,7 +293,6 @@ def run_all_gather_impl(
     ],
 )
 @pytest.mark.parametrize("num_iters", [8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_only(
     t3k_mesh_device,
@@ -312,7 +305,6 @@ def test_all_gather_only(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_shape,
     input_shard_grid,
     output_shard_shape,
@@ -333,7 +325,6 @@ def test_all_gather_only(
         input_shard_grid,
         all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
-        enable_async=enable_async,
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
@@ -365,7 +356,6 @@ def test_all_gather_only(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("use_new_version", [True])
 @pytest.mark.parametrize("num_iters, warmup_iters", [[100, 10]])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
@@ -387,7 +377,6 @@ def test_tg_trace_rms_fuse(
     warmup_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_grid,
     output_shard_grid,
     trace_mode,
@@ -405,7 +394,6 @@ def test_tg_trace_rms_fuse(
         output_shard_grid,
         ttnn.Topology.Linear,
         num_iters=num_iters,
-        enable_async=enable_async,
         warmup_iters=warmup_iters,
         profiler=profiler,
         use_new_version=use_new_version,
@@ -442,7 +430,6 @@ def test_tg_trace_rms_fuse(
 )
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_iters", [20])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -457,7 +444,6 @@ def test_rms_fuse(
     num_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_grid,
     output_shard_grid,
 ):
@@ -472,7 +458,6 @@ def test_rms_fuse(
         output_shard_grid,
         ttnn.Topology.Linear,
         num_iters=num_iters,
-        enable_async=enable_async,
     )
 
 
@@ -535,7 +520,6 @@ def test_rms_fuse(
     ],
 )
 @pytest.mark.parametrize("num_iters, warmup_iters", [[75, 5]])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
@@ -561,7 +545,6 @@ def test_concat_fuse(
     warmup_iters,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     input_shard_shape,
     input_shard_grid,
     output_shard_shape,
@@ -585,7 +568,6 @@ def test_concat_fuse(
         all_gather_topology=ttnn.Topology.Linear,
         warmup_iters=warmup_iters,
         num_iters=num_iters,
-        enable_async=enable_async,
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,

@@ -26,7 +26,6 @@ from models.utility_functions import is_wormhole_b0
         "decode_2048_l1_sharded",
     ],
 )
-@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)  # Option to run Falcon in Async mode
 @pytest.mark.parametrize("mesh_device", (1,), indirect=True)
 def test_perplexity(
     llm_mode,
@@ -37,7 +36,6 @@ def test_perplexity(
     expected_ppl,
     expected_top1,
     expected_top5,
-    enable_async_mode,
     model_location_generator,
     get_tt_cache_path,
     mesh_device,

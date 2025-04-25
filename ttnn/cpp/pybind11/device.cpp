@@ -194,7 +194,6 @@ void device_module(py::module& m_device) {
                 "num_program_cache_entries",
                 &IDevice::num_program_cache_entries,
                 "Number of entries in the program cache for this device")
-            .def("enable_async", &IDevice::enable_async)
             .def(
                 "create_sub_device_manager",
                 [](IDevice* device,
@@ -657,13 +656,7 @@ void device_module(py::module& m_device) {
     m_device.def(
         "synchronize_device",
         [](IDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            // Send finish command to issue queue through worker thread
-            // Worker thread will stall until the device is flushed.
-            device->push_work([device, cq_id, &sub_device_ids]() mutable {
-                Synchronize(device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
-            });
-            // Main thread stalls until worker is complete (full device and worker queue flush).
-            device->synchronize();
+            Synchronize(device, cq_id.has_value() ? std::make_optional(**cq_id) : std::nullopt, sub_device_ids);
         },
         synchronize_device_doc.data(),
         py::arg("device"),

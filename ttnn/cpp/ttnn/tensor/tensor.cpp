@@ -935,34 +935,30 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
     // Top level wrapper to copy a host tensor to a preallocated device tensor
     TT_ASSERT(device_tensor.workers.size(), "Workers must be specified for device_tensor in write_tensor");
 
-    Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(device_tensor.workers.at(0), host_tensor);
     TT_FATAL(
-        async_safe_tensor.storage_type() == StorageType::BORROWED or
-            async_safe_tensor.storage_type() == StorageType::OWNED or
-            async_safe_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
+        host_tensor.storage_type() == StorageType::BORROWED or host_tensor.storage_type() == StorageType::OWNED or
+            host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST,
         "write_tensor only supports host_tensor to device_tensor data transfer");
 
     auto& device_storage = std::get<DeviceStorage>(device_tensor.get_storage());
     if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
-        tensor_impl::copy_to_mesh_tensor_wrapper(async_safe_tensor, device_tensor, cq_id);
+        tensor_impl::copy_to_mesh_tensor_wrapper(host_tensor, device_tensor, cq_id);
         return;
     }
 
     for (int worker_index = 0; worker_index < device_tensor.workers.size(); ++worker_index) {
         auto& worker = device_tensor.workers[worker_index];
-        worker->push_work([cq_id, worker, worker_index, async_safe_tensor, device_tensor]() mutable {
+        worker->push_work([cq_id, worker, worker_index, host_tensor, device_tensor]() mutable {
             TT_FATAL(
                 device_tensor.storage_type() == StorageType::DEVICE,
                 "write_tensor only supports host_tensor to device_tensor data transfer");
-            TT_FATAL(async_safe_tensor.get_logical_shape() == device_tensor.get_logical_shape(), "Error");
-            TT_FATAL(async_safe_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
+            TT_FATAL(host_tensor.get_logical_shape() == device_tensor.get_logical_shape(), "Error");
+            TT_FATAL(host_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
             TT_FATAL(
-                async_safe_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(),
-                "Error");
+                host_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(), "Error");
             std::visit(
                 tt::stl::overloaded{
-                    [worker, worker_index, cq_id, &async_safe_tensor, &device_tensor](
-                        const DeviceStorage& device_storage) {
+                    [worker, worker_index, cq_id, &host_tensor, &device_tensor](const DeviceStorage& device_storage) {
                         // Copying from host to a single device.
                         void* host_data = std::visit(
                             tt::stl::overloaded{
@@ -983,7 +979,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                                 },
                                 [](auto&&) -> void* { TT_THROW("Unreachable"); },
                             },
-                            async_safe_tensor.get_storage());
+                            host_tensor.get_storage());
                         if (auto mesh_device = device_tensor.mesh_device()) {
                             tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
                         } else {
@@ -1015,14 +1011,5 @@ Tensor set_tensor_id(const Tensor& tensor) {
     output.tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
     return output;
 };
-
-bool validate_worker_modes(const std::vector<IDevice*>& workers) {
-    bool worker_modes_match = true;
-    auto first_worker_mode = workers.at(0)->get_worker_mode();
-    for (auto worker : workers) {
-        worker_modes_match &= (worker->get_worker_mode() == first_worker_mode);
-    }
-    return worker_modes_match;
-}
 
 }  // namespace tt::tt_metal

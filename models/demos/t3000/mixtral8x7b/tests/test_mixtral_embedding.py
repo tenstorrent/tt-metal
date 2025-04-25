@@ -24,8 +24,6 @@ class Emb(torch.nn.Module):
 
 
 def test_mixtral_embedding(device, use_program_cache, reset_seeds):
-    device.enable_async(True)
-
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(device)

@@ -278,8 +278,6 @@ def test_mixtral_perplexity(
         llm_mode == "decode"
     ), "Only decode mode is supported for now"  # TODO Add prefill support when it reaches main
 
-    t3k_mesh_device.enable_async(True)
-
     # Adjust the batch size based on the max prefill length
     if max_seq_len >= 16 * 1024:
         batch_size = 8

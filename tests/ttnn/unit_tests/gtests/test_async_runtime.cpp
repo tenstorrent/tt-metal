@@ -72,8 +72,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     const bfloat16* golden_output = std::get<owned_buffer::Buffer<bfloat16>>(
                                         std::get<MultiDeviceHostStorage>(np_out_host.get_storage()).buffers.at(0))
                                         .begin();
-    // Enable Asynchronous Execution and test ttnn runtime APIs
-    device_->enable_async(true);
     // Events for host - device synchronization
     // Running sum-reduce with preallocated output
     // Preallocate Input and Output Tensors on Device
@@ -107,7 +105,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
 }
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
-    device_->enable_async(true);
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
@@ -164,7 +161,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     // Test functionality for the buffer destructor, which will call deallocate asynchronously
     // We must ensure that the deallocate step, which can run after the buffer has been destroyed
     // does not rely on stale buffer state, after the buffer has been destroyed on host
-    device_->enable_async(true);
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
@@ -180,7 +176,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     TensorSpec tensor_spec(shape, tensor_layout);
     for (int loop = 0; loop < 100000; loop++) {
         auto input_buffer_dummy = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device_, tensor_spec);
-        device_->synchronize();
     }
 }
 }  // namespace

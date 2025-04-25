@@ -88,7 +88,7 @@ def test_model_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(True)
+
     test_id = request.node.callspec.id
     mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False

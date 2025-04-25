@@ -76,8 +76,6 @@ def test_llama_attention_inference(
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    mesh_device.enable_async(True)
-
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
     model_args.use_prefetcher = False

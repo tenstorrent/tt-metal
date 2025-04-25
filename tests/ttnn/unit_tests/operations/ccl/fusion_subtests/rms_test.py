@@ -28,7 +28,6 @@ def run_rms_trace(
     output_shard_grid,
     all_gather_topology,
     num_iters=1,
-    enable_async=True,
     input_dtype=ttnn.bfloat8_b,
     layout=ttnn.TILE_LAYOUT,
     topology=ttnn.Topology.Linear,
@@ -38,7 +37,6 @@ def run_rms_trace(
     profiler=BenchmarkProfiler(),
 ):
     ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))})
-    mesh_device.enable_async(enable_async)
     worker_sub_device = ttnn.SubDevice(
         [
             ccl_sub_device_crs,
@@ -316,14 +314,12 @@ def run_rms_fuse_impl(
     output_shard_grid,
     all_gather_topology,
     num_iters=1,
-    enable_async=False,
     input_dtype=ttnn.bfloat8_b,
     layout=ttnn.TILE_LAYOUT,
     topology=ttnn.Topology.Linear,
     epsilon=1e-05,
 ):
     ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))})
-    mesh_device.enable_async(enable_async)
     worker_sub_device = ttnn.SubDevice(
         [
             ccl_sub_device_crs,

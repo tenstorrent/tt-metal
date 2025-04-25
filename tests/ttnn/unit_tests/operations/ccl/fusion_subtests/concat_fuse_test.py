@@ -123,7 +123,6 @@ def run_concat_fuse_impl(
     input_shard_grid,
     all_gather_topology,
     num_iters=1,
-    enable_async=False,
     trace_mode=False,
     output_shard_shape=None,
     output_shard_grid=None,
@@ -134,10 +133,6 @@ def run_concat_fuse_impl(
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
     # Use Async mode based on test input config
-    mesh_device.enable_async(enable_async)
-
-    if enable_async:
-        logger.info(f"Using Async Mode for All Gather Op Dispatch")
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(

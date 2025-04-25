@@ -89,7 +89,6 @@ def run_reduce_scatter_test(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async=True,
     num_iters=1,
     topology=ttnn.Topology.Ring,
     trace_mode=False,
@@ -106,10 +105,6 @@ def run_reduce_scatter_test(
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
-
-    mesh_device.enable_async(enable_async)
-    if enable_async:
-        logger.info(f"Using Async Mode for Reduce Scatter Op Dispatch")
 
     logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}, dim: {dim}")
 
@@ -227,7 +222,6 @@ def run_reduce_scatter_test(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 def test_ring_reduce_scatter_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -240,7 +234,6 @@ def test_ring_reduce_scatter_post_commit(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_test(
@@ -256,7 +249,6 @@ def test_ring_reduce_scatter_post_commit(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
     )
 
 
@@ -292,7 +284,6 @@ def test_ring_reduce_scatter_post_commit(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 def test_line_reduce_scatter_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -305,7 +296,6 @@ def test_line_reduce_scatter_post_commit(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_test(
@@ -321,7 +311,6 @@ def test_line_reduce_scatter_post_commit(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
         topology=ttnn.Topology.Linear,
     )
 
@@ -355,7 +344,6 @@ def test_line_reduce_scatter_post_commit(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 def test_line_reduce_scatter_post_commit_4chip(
     pcie_mesh_device,
     num_devices,
@@ -368,7 +356,6 @@ def test_line_reduce_scatter_post_commit_4chip(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_test(
@@ -384,7 +371,6 @@ def test_line_reduce_scatter_post_commit_4chip(
         use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
-        enable_async=enable_async,
         topology=ttnn.Topology.Linear,
     )
 
@@ -407,7 +393,6 @@ def run_reduce_scatter_sharded_test(
     in_shard_override=None,
     in_shard_grid_override=None,
     topology=ttnn.Topology.Ring,
-    enable_async=True,
     num_iters=1,
     n_worker=None,
     n_buffer=None,
@@ -421,8 +406,6 @@ def run_reduce_scatter_sharded_test(
     logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}, dim: {dim}")
 
     debug = False
-
-    t3k_mesh_device.enable_async(enable_async)
 
     # Generate input tensors
     if in_shard_grid_override is None:
@@ -577,7 +560,6 @@ def run_reduce_scatter_sharded_test(
     ),
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 def test_width_sharded_reduce_scatter_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -593,7 +575,6 @@ def test_width_sharded_reduce_scatter_post_commit(
     tensor_mem_layout,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_sharded_test(
@@ -611,7 +592,6 @@ def test_width_sharded_reduce_scatter_post_commit(
         tensor_mem_layout,
         use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
     )
 
@@ -662,7 +642,6 @@ def test_width_sharded_reduce_scatter_post_commit(
 )
 @pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 def test_width_sharded_reduce_scatter_post_commit_4chip(
     pcie_mesh_device,
     num_devices,
@@ -681,7 +660,6 @@ def test_width_sharded_reduce_scatter_post_commit_4chip(
     function_level_defaults,
     in_shard_override,
     in_shard_grid_override,
-    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_sharded_test(
@@ -702,7 +680,6 @@ def test_width_sharded_reduce_scatter_post_commit_4chip(
         in_shard_override=in_shard_override,
         in_shard_grid_override=in_shard_grid_override,
         topology=topology,
-        enable_async=enable_async,
         num_iters=num_iters,
     )
 
@@ -743,7 +720,6 @@ def test_width_sharded_reduce_scatter_post_commit_4chip(
     ),
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 def test_height_sharded_reduce_scatter_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -759,7 +735,6 @@ def test_height_sharded_reduce_scatter_post_commit(
     tensor_mem_layout,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_sharded_test(
@@ -777,7 +752,6 @@ def test_height_sharded_reduce_scatter_post_commit(
         tensor_mem_layout,
         use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
     )
 
@@ -817,7 +791,6 @@ def test_height_sharded_reduce_scatter_post_commit(
     ),
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
 def test_block_sharded_reduce_scatter_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -833,7 +806,6 @@ def test_block_sharded_reduce_scatter_post_commit(
     tensor_mem_layout,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     num_iters=1,
 ):
     run_reduce_scatter_sharded_test(
@@ -851,6 +823,5 @@ def test_block_sharded_reduce_scatter_post_commit(
         tensor_mem_layout,
         use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
     )

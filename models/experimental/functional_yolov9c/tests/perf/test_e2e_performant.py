@@ -20,7 +20,6 @@ from models.experimental.functional_yolov9c.runner.performant_runner import YOLO
     "batch_size, act_dtype, weight_dtype",
     ((1, ttnn.bfloat8_b, ttnn.bfloat8_b),),
 )
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize(
     "resolution",
     [
@@ -35,7 +34,6 @@ def test_e2e_performant(
     batch_size,
     act_dtype,
     weight_dtype,
-    enable_async_mode,
     model_location_generator,
     resolution,
 ):

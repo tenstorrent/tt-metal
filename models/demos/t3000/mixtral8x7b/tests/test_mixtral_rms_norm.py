@@ -17,8 +17,6 @@ from models.utility_functions import (
 
 
 def test_mixtral_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds):
-    t3k_mesh_device.enable_async(True)
-
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(t3k_mesh_device.get_device(0))

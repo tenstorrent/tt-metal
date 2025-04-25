@@ -17,8 +17,6 @@ from models.utility_functions import (
 
 
 def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_seeds):
-    t3k_mesh_device.enable_async(True)
-
     pcc = 0.99
     dtype = ttnn.bfloat8_b
     batch = 32

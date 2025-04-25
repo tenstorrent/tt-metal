@@ -158,7 +158,6 @@ def run_test_FalconAttention_inference(
 
 
 @pytest.mark.parametrize("mesh_device", (1, 2, 4, (8, 4)), indirect=True, ids=["1chip", "2chip", "4chip", "32chipTG"])
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
     (
@@ -185,7 +184,6 @@ def test_FalconAttention_inference(
     model_location_generator,
     get_tt_cache_path,
     mesh_device,
-    enable_async_mode,
 ):
     if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
         pytest.skip(f"prefill does not support L1_SHARDED")

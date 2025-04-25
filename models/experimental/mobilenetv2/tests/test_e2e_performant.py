@@ -20,12 +20,10 @@ from models.experimental.mobilenetv2.tests.mobilenetv2_e2e_performant import Mob
     "batch_size",
     ((1),),
 )
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 def test_run_mobilenetv2_trace_2cqs_inference(
     device,
     use_program_cache,
     batch_size,
-    enable_async_mode,
     model_location_generator,
 ):
     mobilenetv2_trace_2cq = MobileNetV2Trace2CQ()

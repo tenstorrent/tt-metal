@@ -199,8 +199,6 @@ def run(
     *,
     device,
 ):
-    device.enable_async(False)
-
     dims = slice_specs["dims"]
     dim = slice_specs["dim"]
     start = slice_specs["start"]

@@ -90,8 +90,6 @@ def test_model_inference(
         assert "performance" in test_id
         pcc = 0.869  # TODO Look on improving PCC
 
-    mesh_device.enable_async(True)
-
     # Use instruct weights instead of general weights
     instruct = True
 

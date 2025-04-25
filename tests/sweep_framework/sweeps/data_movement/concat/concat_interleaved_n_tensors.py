@@ -140,7 +140,6 @@ def run(
     device,
 ) -> list:
     torch_input_tensors = []
-    device.enable_async(False)
     for i in range(0, concat_specs[0]):
         torch_input_tensors.append(torch_random(concat_specs[3][i], -0.1, 0.1, dtype=torch.bfloat16))
 

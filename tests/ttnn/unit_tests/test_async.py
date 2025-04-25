@@ -14,8 +14,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("size", [64])
 def test_add_1D_tensor_and_scalar(device, scalar, size):
-    device.enable_async(True)
-
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((size,), dtype=torch.bfloat16)
@@ -32,8 +30,6 @@ def test_add_1D_tensor_and_scalar(device, scalar, size):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 def test_add_2D_tensors(device, h, w):
-    device.enable_async(True)
-
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)

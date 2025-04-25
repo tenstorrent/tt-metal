@@ -21,7 +21,6 @@ from models.utility_functions import run_for_wormhole_b0
     "batch_size, act_dtype, weight_dtype",
     ((1, ttnn.bfloat16, ttnn.bfloat16),),
 )
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize(
     "resolution",
     [
@@ -35,7 +34,6 @@ def test_e2e_performant(
     batch_size,
     act_dtype,
     weight_dtype,
-    enable_async_mode,
     model_location_generator,
     resolution,
 ):
