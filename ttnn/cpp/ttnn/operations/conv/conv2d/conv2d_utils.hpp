@@ -41,6 +41,16 @@ bool use_matmul_for_1x1_conv(
     uint32_t groups,
     const Conv2dConfig& conv_config);
 
+bool is_large_kernel_with_easy_matmul(
+    Layout input_tensor_layout,
+    uint32_t input_height,
+    uint32_t input_width,
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    const std::array<uint32_t, 4>& padding,
+    const std::array<uint32_t, 2>& dilation,
+    uint32_t groups);
+
 bool is_1d_conv(uint32_t kernel_width, uint32_t image_width);
 
 bool is_1d_deptwise_conv(
