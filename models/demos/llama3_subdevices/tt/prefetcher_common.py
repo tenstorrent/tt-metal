@@ -5,7 +5,10 @@ import ttnn
 import torch
 from loguru import logger
 from models.common.lightweightmodule import LightweightModule
-from tests.ttnn.unit_tests.operations.prefetcher_common import get_core_ranges
+
+from models.demos.llama3_subdevices.tt.model_config import (
+    get_core_ranges,
+)
 
 global_tt_tensor_address = None
 
