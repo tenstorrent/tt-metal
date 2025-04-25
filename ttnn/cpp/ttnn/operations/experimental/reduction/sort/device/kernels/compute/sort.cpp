@@ -85,6 +85,7 @@ void MAIN {
     constexpr bool stable =
         get_compile_time_arg_val(8);  // TODO: In the future change LLK to have the option or add additional step with
                                       // checking values and indexes after the sorting
+                                      // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
 
     constexpr uint32_t one_tile = 1;
 

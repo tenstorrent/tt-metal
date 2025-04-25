@@ -70,22 +70,7 @@ void bind_reduction_sort_operation(py::module& module) {
                std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                QueueId queue_id) -> std::vector<ttnn::Tensor> {
-                auto output_tensors =
-                    self(queue_id, input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
-
-                // Check if padding or dtype conversion changed buffer address
-                if (optional_output_tensors.has_value()) {
-                    if (std::get<0>(optional_output_tensors.value()).buffer() != output_tensors.at(0).buffer()) {
-                        std::get<0>(optional_output_tensors.value())
-                            .populate_buffers_and_metadata(output_tensors.at(0));
-                    }
-                    if (std::get<1>(optional_output_tensors.value()).buffer() != output_tensors.at(1).buffer()) {
-                        std::get<1>(optional_output_tensors.value())
-                            .populate_buffers_and_metadata(output_tensors.at(1));
-                    }
-                }
-
-                return output_tensors;
+                return self(queue_id, input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim") = -1,

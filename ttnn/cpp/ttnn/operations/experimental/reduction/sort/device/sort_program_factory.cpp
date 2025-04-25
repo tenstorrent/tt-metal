@@ -55,6 +55,25 @@ SortProgramFactory::cached_program_t SortProgramFactory::create(
     const uint32_t all_core_utilization_loop_residuum = Ht % total_number_of_cores;
 
     // Calculate core range
+    /**
+     * Calculates the core range based on the input tensor shape (Ht) and the total number of cores available
+     * in the device's compute grid. The core range determines which cores will be utilized for computation.
+     *
+     * The calculation works as follows:
+     * 1. If the height (Ht) of the input tensor is greater than or equal to the total number of cores,
+     *    all cores in the compute grid are utilized. The core range is set to cover the entire grid.
+     *
+     * 2. If Ht is smaller than the total number of cores:
+     *    - The number of rows (`core_grid_calculated_rows_number`) and columns (`core_grid_calculated_columns_number`)
+     *      required to cover Ht are calculated based on the grid dimensions.
+     *    - If both rows and columns are zero, only a single core is used.
+     *    - If only rows are zero, the core range is set to cover the required number of columns in the first row.
+     *    - Otherwise, the core range is set to cover the required rows, and if there are remaining columns,
+     *      an additional range is added to cover those columns in the next row.
+     *
+     * The resulting core range is represented as a `CoreRangeSet`, which may consist of one or more `CoreRange`
+     * objects depending on the configuration.
+     */
     CoreRangeSet core_range;
     if (Ht >= total_number_of_cores) {
         core_range = CoreRangeSet(
@@ -68,7 +87,7 @@ SortProgramFactory::cached_program_t SortProgramFactory::create(
         } else if (core_grid_calculated_rows_number == 0) {
             core_range = CoreRangeSet(CoreRange({0, 0}, {core_grid_calculated_columns_number - 1, 0}));
         } else {
-            CoreRangeSet core_range(
+            core_range = CoreRangeSet(
                 CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, core_grid_calculated_rows_number - 1}));
             if (core_grid_calculated_columns_number != 0) {
                 const CoreRange additional_range(

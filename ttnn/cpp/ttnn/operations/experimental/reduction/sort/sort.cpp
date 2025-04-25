@@ -203,8 +203,22 @@ std::vector<Tensor> ExecuteSort::invoke(
     auto sorted_tensors =
         ttnn::prim::sort(queue_id, padded_input_tensor, dim, descending, stable, memory_config_value, output_tensors);
 
-    return CMAKE_UNIQUE_NAMESPACE::post_sort_transform_tensor(
+    auto post_transform_output_tensors = CMAKE_UNIQUE_NAMESPACE::post_sort_transform_tensor(
         input_tensor, sorted_tensors, dim, is_dim_last_idx, original_lshape, memory_config_value);
+
+    // Check if padding or dtype conversion changed buffer address
+    if (optional_output_tensors.has_value()) {
+        if (std::get<0>(optional_output_tensors.value()).buffer() != output_tensors.at(0)->buffer()) {
+            std::get<0>(optional_output_tensors.value())
+                .populate_buffers_and_metadata(post_transform_output_tensors.at(0));
+        }
+        if (std::get<1>(optional_output_tensors.value()).buffer() != output_tensors.at(1)->buffer()) {
+            std::get<1>(optional_output_tensors.value())
+                .populate_buffers_and_metadata(post_transform_output_tensors.at(1));
+        }
+    }
+
+    return post_transform_output_tensors;
 }
 
 }  // namespace ttnn::operations::experimental::reduction::sort

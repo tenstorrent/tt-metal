@@ -37,6 +37,7 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     const auto l1_mem_size_bytes = device->l1_size_per_core();
 
     // NOTE: This will be updated when support for sorting a single row on multicore is implemented.
+    // Issue: https://github.com/tenstorrent/tt-metal/issues/21187
     TT_FATAL(
         row_memory_size_bytes < l1_mem_size_bytes,
         "Row memory size {} bytes exceeds L1 memory size {} bytes. "
