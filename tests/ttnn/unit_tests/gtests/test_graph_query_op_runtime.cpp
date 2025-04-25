@@ -114,14 +114,12 @@ public:
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::DRAM_MEMORY_CONFIG));
-    ;
     const ttnn::TensorSpec l1_spec = ttnn::TensorSpec(
         ttnn::Shape({64, 1024}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::L1_MEMORY_CONFIG));
-    ;
 };
 // Test various combinations of getOpRuntime and getOpConstraints to make sure there are no segfaults due to incorrect
 // memory handling
