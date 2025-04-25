@@ -10,6 +10,7 @@
 #include "datasets/generators.hpp"
 #include "models/linear_regression.hpp"
 #include "modules/linear_module.hpp"
+#include "optimizers/optimizer_base.hpp"
 
 namespace roles {
 using DatasetSample = std::pair<std::vector<float>, std::vector<float>>;
@@ -18,6 +19,25 @@ using DataLoader = ttml::datasets::DataLoader<
     ttml::datasets::InMemoryFloatVecDataset,
     std::function<BatchType(std::vector<DatasetSample>&& samples)>,
     BatchType>;
+
+class RemoteOptimizer : public ttml::optimizers::OptimizerBase {
+public:
+    explicit RemoteOptimizer(ttml::serialization::NamedParameters parameters);
+
+    void zero_grad() override;
+
+    void step() override;
+
+    [[nodiscard]] ttml::serialization::StateDict get_state_dict() const override;
+    void set_state_dict(const ttml::serialization::StateDict& dict) override;
+
+    [[nodiscard]] size_t get_steps() const override;
+    void set_steps(size_t steps) override;
+
+private:
+    size_t m_steps{0};
+    ttml::serialization::NamedParameters m_theta;
+};
 class Worker {
 public:
     Worker(DataLoader train_dataloader, std::shared_ptr<ttml::modules::LinearLayer> model);
@@ -33,4 +53,5 @@ private:
 
     int m_training_step = 0;
 };
+
 }  // namespace roles

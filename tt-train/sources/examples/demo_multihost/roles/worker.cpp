@@ -5,8 +5,52 @@
 #include "worker.hpp"
 
 #include "ops/losses.hpp"
-
 namespace roles {
+
+RemoteOptimizer::RemoteOptimizer(ttml::serialization::NamedParameters parameters) :
+    OptimizerBase(std::move(parameters)) {
+    for (const auto& [name, tensor_ptr] : m_parameters) {
+        if (tensor_ptr->get_requires_grad()) {
+            m_theta.emplace(
+                name,
+                ttml::autograd::create_tensor(
+                    ttml::core::zeros_like(tensor_ptr->get_value(ttml::autograd::PreferredPrecision::FULL)),
+                    /* requires_grad */ false));
+        }
+    }
+}
+
+void RemoteOptimizer::zero_grad() {
+    for (auto& [name, tensor_ptr] : m_parameters) {
+        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
+            tensor_ptr->set_grad(ttml::core::zeros_like(tensor_ptr->get_value()));
+        }
+    }
+}
+
+void RemoteOptimizer::step() {
+}
+
+ttml::serialization::StateDict RemoteOptimizer::get_state_dict() const {
+    ttml::serialization::StateDict dict;
+    dict["theta"] = m_theta;
+    dict["steps"] = m_steps;
+    return dict;
+}
+
+void RemoteOptimizer::set_state_dict(const ttml::serialization::StateDict& dict) {
+    m_theta = std::get<ttml::serialization::NamedParameters>(dict.at("theta"));
+    m_steps = ttml::serialization::get_value_type<size_t>(dict, "steps");
+}
+
+size_t RemoteOptimizer::get_steps() const {
+    return m_steps;
+}
+
+void RemoteOptimizer::set_steps(size_t steps) {
+    this->m_steps = steps;
+}
+
 Worker::Worker(DataLoader train_dataloader, std::shared_ptr<ttml::modules::LinearLayer> model) :
     m_train_dataloader(std::move(train_dataloader)), m_model(std::move(model)) {
 }
@@ -25,6 +69,7 @@ void Worker::training_step() {
 
 void Worker::send_gradients(int aggregator_rank) {
 }
+
 void receive_weights(int aggregator_rank) {
 }
 
