@@ -131,9 +131,18 @@ def deit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fa
     stride_h = patch_size
     stride_w = 1
 
+    """
     folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
     ttnn.deallocate(pixel_values)
     folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG)
+    """
+
+    pixel_values_interl = ttnn.to_memory_config(pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(pixel_values)
+    folded_pixel_values = ttnn.reshape(pixel_values_interl, (batch_size, patch_count, patch_size, patch_count, img_c))
+    folded_pixel_values = ttnn.permute(folded_pixel_values, (0, 1, 3, 2, 4))
+    folded_pixel_values = ttnn.reshape(folded_pixel_values, (batch_size, patch_count, patch_count, patch_size * img_c))
+
     # Convert back to interleaved or otherwise to_layout will fail
     folded_pixel_values = ttnn.to_layout(folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
