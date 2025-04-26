@@ -40,6 +40,7 @@ enum class HalL1MemAddrType : uint8_t {
     APP_SYNC_INFO,
     APP_ROUTING_INFO,
     RETRAIN_COUNT,
+    RETRAIN_FORCE,
     FABRIC_ROUTER_CONFIG,
     COUNT  // Keep this last so it always indicates number of enum options
 };
