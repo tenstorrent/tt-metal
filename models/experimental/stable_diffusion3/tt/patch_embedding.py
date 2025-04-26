@@ -45,7 +45,7 @@ class TtPatchEmbedParameters:
                 device=device,
             ),
             pos_embed=from_torch_fast(
-                pos_embed_param, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, shard_dim=None
+                pos_embed_param, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, shard_dim=-1
             ),
         )
 
