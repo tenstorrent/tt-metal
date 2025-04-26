@@ -10,6 +10,8 @@ from dataclasses import dataclass
 import torch
 import ttnn
 
+from .utils import from_torch_fast
+
 
 @dataclass
 class TtConv2dParameters:
@@ -44,22 +46,20 @@ class TtConv2dParameters:
                 bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_padding), mode="constant", value=0)
 
         return cls(
-            weight=ttnn.as_tensor(
+            weight=from_torch_fast(
                 weight,
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                shard_dim=-1,
             ),
             bias=(
-                ttnn.as_tensor(
+                from_torch_fast(
                     bias.reshape((1, 1, 1, -1)),
                     dtype=dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                    shard_dim=-1,
                 )
                 if "bias" in state
                 else None

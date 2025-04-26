@@ -52,7 +52,7 @@ class TtSD3Transformer2DModelParameters:
                 substate(state, "time_text_embed"), dtype=dtype, device=device
             ),
             context_embedder=TtLinearParameters.from_torch(
-                substate(state, "context_embedder"), dtype=dtype, device=device, shard_dim=None
+                substate(state, "context_embedder"), dtype=dtype, device=device, shard_dim=-1
             ),
             transformer_blocks=[
                 TtTransformerBlockParameters.from_torch(
@@ -134,17 +134,8 @@ class TtSD3Transformer2DModel:
         time_embed = self._time_text_embed(timestep=timestep, pooled_projection=pooled_projection)
         prompt = self._context_embedder(prompt)
         time_embed = time_embed.reshape([time_embed.shape[0], 1, 1, time_embed.shape[1]])
-
         spatial = ttnn.unsqueeze(spatial, 1)
         prompt = ttnn.unsqueeze(prompt, 1)
-
-        spatial = self._sharding(spatial)
-        prompt = self._sharding(prompt)
-        # num_devices = self.mesh_device.get_num_devices()
-        # spatial_slices = chunk_device_tensors(spatial, num_devices)
-        # prompt_slices = chunk_device_tensors(prompt, num_devices)
-        # spatial = ttnn.aggregate_as_tensor(spatial_slices[::-1])
-        # prompt = ttnn.aggregate_as_tensor(prompt_slices[::-1])
 
         for i, block in enumerate(self._transformer_blocks, start=1):
             spatial, prompt_out = block(
@@ -156,10 +147,6 @@ class TtSD3Transformer2DModel:
             )
             if prompt_out is not None:
                 prompt = prompt_out
-
-            if i % 6 == 0:
-                ttnn.DumpDeviceProfiler(spatial.device())
-
         spatial_time = self._time_embed_out(ttnn.silu(time_embed))
         [scale, shift] = chunk_time(spatial_time, 2)
         if self._distributed:
