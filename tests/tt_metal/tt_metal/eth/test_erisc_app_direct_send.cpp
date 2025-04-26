@@ -809,7 +809,7 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
     std::vector<uint32_t> num_bytes_per_send_test_vals = {
         16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
     for (const auto& num_bytes_per_send : num_bytes_per_send_test_vals) {
-        log_info(tt::LogTest, "Random eth send tests with {} bytes per packet", num_bytes_per_send);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Random eth send tests with {} bytes per packet", num_bytes_per_send);
         for (int i = 0; i < 10; i++) {
             auto it = connectivity.begin();
             std::advance(it, rand() % (connectivity.size()));

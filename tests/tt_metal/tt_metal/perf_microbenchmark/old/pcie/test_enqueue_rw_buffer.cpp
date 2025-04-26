@@ -74,11 +74,11 @@ int main(int argc, char** argv) {
         }
 
         // Device Setup
-        log_info(LogTest, "Running test using device ID {}", device_id);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running test using device ID {}", device_id);
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         CommandQueue& cq = device->command_queue();
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Measuring performance for buffer_type={}, size={} bytes, page_size={} bytes",
             buffer_type == 0 ? "DRAM" : "L1",
@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
 
             auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
             auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "EnqueueWriteBuffer to {}: {:.3f}ms, {:.3f}GB/s",
                 buffer_type == 0 ? "DRAM" : "L1",
@@ -131,7 +131,7 @@ int main(int argc, char** argv) {
 
             auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
             auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "EnqueueReadBuffer from {}: {:.3f}ms, {:.3f}GB/s",
                 buffer_type == 0 ? "DRAM" : "L1",
@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

@@ -65,7 +65,8 @@ protected:
             FAIL() << "Light Metal Binary is empty for test, unexpected.";
         }
         if (write_bin_to_disk_ && !this->trace_bin_path_.empty() && !binary.is_empty()) {
-            log_info(tt::LogTest, "Writing light metal binary {} bytes to {}", binary.size(), this->trace_bin_path_);
+            TT_LOG_INFO_WITH_CAT(
+                tt::LogTest, "Writing light metal binary {} bytes to {}", binary.size(), this->trace_bin_path_);
             binary.save_to_file(this->trace_bin_path_);
         }
 
@@ -92,7 +93,7 @@ protected:
         if (!success) {
             FAIL() << "Light Metal Binary failed to execute or encountered errors.";
         } else {
-            log_info(tt::LogMetalTrace, "Light Metal Binary executed successfully!");
+            TT_LOG_INFO_WITH_CAT(tt::LogMetalTrace, "Light Metal Binary executed successfully!");
         }
     }
 };

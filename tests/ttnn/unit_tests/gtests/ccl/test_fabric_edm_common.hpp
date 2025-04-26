@@ -226,7 +226,7 @@ template <typename CONTAINER_T>
 Correctness run_output_check(CONTAINER_T const& inputs, CONTAINER_T output_buffer) {
     constexpr bool debug_mode = true;
 
-    log_info(tt::LogTest, "Checking outputs");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Checking outputs");
     bool pass = true;
 
     std::size_t num_printed_mismatches = 0;
@@ -246,7 +246,7 @@ Correctness run_output_check(CONTAINER_T const& inputs, CONTAINER_T output_buffe
         log_error("... (remaining mismatches omitted)");
     }
 
-    log_info(tt::LogTest, "Output check: {}", pass ? "PASS" : "FAIL");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Output check: {}", pass ? "PASS" : "FAIL");
     return pass ? Correctness::Correct : Correctness::Incorrect;
 };
 
@@ -311,7 +311,7 @@ void run_programs(std::vector<Program>& programs, const std::vector<IDevice*>& d
         throw e;
     }
 
-    log_info(tt::LogTest, "Running...");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running...");
 
     std::vector<std::thread> threads;
     threads.reserve(num_programs);
@@ -606,7 +606,7 @@ bool RunLoopbackTest(
     }
     log_trace(tt::LogTest, "{} programs, {} devices", programs.size(), devices.size());
     run_programs(programs, devices);
-    log_info(tt::LogTest, "Reading back outputs");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Reading back outputs");
 
     bool pass = true;
     constexpr bool enable_check = true;
@@ -833,7 +833,7 @@ bool RunLocalTestWithMultiInputReaders(
     const bool fabric_enabled = test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK;
     tt_metal::IDevice* device = devices.at(0);
     for (size_t i = 0; i < devices.size(); i++) {
-        log_info(tt::LogTest, "Device[{}] ID: {}", i, devices.at(i)->id());
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Device[{}] ID: {}", i, devices.at(i)->id());
     }
     auto program_ptrs = std::vector<Program*>();
     program_ptrs.reserve(devices.size());
@@ -842,7 +842,7 @@ bool RunLocalTestWithMultiInputReaders(
     size_t output_tensor_dest_device_index = 0;
     if (fabric_enabled) {
         if (std::holds_alternative<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args)) {
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 tt::LogTest,
                 "Unicast command dest args. Distance in hops: {}",
                 std::get<ttnn::ccl::cmd::UnicastCommandDestArgs>(dest_args).distance_in_hops);
@@ -851,7 +851,7 @@ bool RunLocalTestWithMultiInputReaders(
             TT_ASSERT(output_tensor_dest_device_index != 0, "Output tensor destination device index must be non-zero");
             TT_ASSERT(test_mode == TwoInputReaderKernelWriteMode::FABRIC_UNICAST);
         } else if (std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args)) {
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 tt::LogTest,
                 "Multicast command dest args. Number of targets forward direction: {}",
                 std::get<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args).num_targets_forward_direction);
@@ -861,7 +861,7 @@ bool RunLocalTestWithMultiInputReaders(
             TT_ASSERT(test_mode == TwoInputReaderKernelWriteMode::FABRIC_MULTICAST);
         }
     } else {
-        log_info(tt::LogTest, "No fabric enabled");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "No fabric enabled");
         TT_ASSERT(
             std::holds_alternative<ttnn::ccl::cmd::DestTypeArgsNull>(dest_args), "Local command dest args expected");
     }
@@ -881,14 +881,14 @@ bool RunLocalTestWithMultiInputReaders(
     auto output_tensor0_device = output0_tensors.at(output_tensor_dest_device_index);
     auto output_tensor1_device = output1_tensors.at(output_tensor_dest_device_index);
 
-    log_info(tt::LogTest, "input_tensor0_device->address(): {}", input_tensor0_device.buffer()->address());
-    log_info(tt::LogTest, "input_tensor1_device->address(): {}", input_tensor1_device.buffer()->address());
-    log_info(
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "input_tensor0_device->address(): {}", input_tensor0_device.buffer()->address());
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "input_tensor1_device->address(): {}", input_tensor1_device.buffer()->address());
+    TT_LOG_INFO_WITH_CAT(
         tt::LogTest,
         "output_tensor0_device->address(): {} on device {}",
         output_tensor0_device.buffer()->address(),
         output_tensor_dest_device->id());
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         tt::LogTest,
         "output_tensor1_device->address(): {} on device {}",
         output_tensor1_device.buffer()->address(),
@@ -959,22 +959,22 @@ bool RunLocalTestWithMultiInputReaders(
         dest_args);
 
     if (!enable_persistent_fabric) {
-        log_info(tt::LogTest, "Building EDM kernels");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Building EDM kernels");
         line_fabric->build_kernels();
     }
 
-    log_info(tt::LogTest, "persistent_fabric: {}", enable_persistent_fabric);
-    log_info(tt::LogTest, "subdevice_managers.has_value(): {}", subdevice_managers.has_value());
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "persistent_fabric: {}", enable_persistent_fabric);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "subdevice_managers.has_value(): {}", subdevice_managers.has_value());
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
     run_programs(programs, enable_persistent_fabric ? std::vector<IDevice*>{devices[0]} : devices);
-    log_info(tt::LogTest, "Finished");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finished");
 
     bool pass = true;
     constexpr bool enable_check = true;
     if constexpr (enable_check) {
-        log_info(tt::LogTest, "Reading back outputs");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Reading back outputs");
         auto output0_cpu = output_tensor0_device.cpu(true, ttnn::DefaultQueueId);
         auto output1_cpu = output_tensor1_device.cpu(true, ttnn::DefaultQueueId);
 
@@ -996,16 +996,16 @@ bool RunLocalTestWithMultiInputReaders(
         TT_FATAL(input0_copyback_check_passed, "Input 0 copyback check failed");
         TT_FATAL(input1_copyback_check_passed, "Input 1 copyback check failed");
 
-        log_info(tt::LogTest, "Comparing outputs");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Comparing outputs");
         pass &= run_output_check(in0_tensor_data, out0_tensor_data) == Correctness::Correct;
         if (pass) {
-            log_info(tt::LogTest, "Output check passed for output 0");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Output check passed for output 0");
         } else {
             log_error(tt::LogTest, "Output check failed for output 0");
         }
         pass &= run_output_check(in1_tensor_data, out1_tensor_data) == Correctness::Correct;
         if (pass) {
-            log_info(tt::LogTest, "Output check passed for output 1");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Output check passed for output 1");
         } else {
             log_error(tt::LogTest, "Output check failed for output 1");
         }
@@ -1141,7 +1141,7 @@ bool RunLineFabricTest(
     ////////////////////////////////////////////////////////////////////////////
 
     run_programs(programs, devices);
-    log_info(tt::LogTest, "Reading back outputs");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Reading back outputs");
 
     bool pass = true;
     constexpr bool enable_check = true;
@@ -1166,7 +1166,7 @@ void persistent_fabric_teardown_sequence(
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     tt::tt_fabric::TerminationSignal termination_mode = tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE) {
-    log_info("Tearing down fabric");
+    TT_LOG_INFO("Tearing down fabric");
 
     // Wait for workers to finish
     auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
@@ -1195,7 +1195,7 @@ void setup_test_with_persistent_fabric(
     bool loopback_on_last_device = false,
     bool is_galaxy = false) {
     if (enable_persistent_fabric) {
-        log_info(tt::LogTest, "Enabling persistent fabric");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
         subdevice_managers = create_subdevices(devices);
         std::transform(
@@ -1226,7 +1226,7 @@ void setup_test_with_persistent_fabric(
         TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
         TT_FATAL(devices.size() == fabric_programs->size(), "Number of devices must match number of programs");
 
-        log_info(tt::LogTest, "Building EDM kernels");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Building EDM kernels");
         line_fabric->build_kernels();
         build_and_enqueue(devices, *fabric_programs);
     }
@@ -1248,11 +1248,11 @@ int TestLineFabricEntrypoint(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        TT_LOG_INFO("This test can only be run on T3000 devices");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        TT_LOG_INFO("Test must be run on WH");
         return 0;
     }
 
@@ -1334,11 +1334,11 @@ int TestLoopbackEntrypoint(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        TT_LOG_INFO("This test can only be run on T3000 devices");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        TT_LOG_INFO("Test must be run on WH");
         return 0;
     }
 
@@ -1368,7 +1368,7 @@ int TestLoopbackEntrypoint(
     std::optional<std::vector<Program>> fabric_programs;
     auto& sender_program = programs.at(0);
     if (enable_persistent_fabric) {
-        log_info(tt::LogTest, "Enabling persistent fabric");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(2);
         subdevice_managers = create_subdevices({device_0, device_1});
     }
@@ -1511,11 +1511,11 @@ bool TestMultiInputReaderKernel(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        TT_LOG_INFO("This test can only be run on T3000 devices");
         return true;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        TT_LOG_INFO("Test must be run on WH");
         return true;
     }
     Fabric1DFixture test_fixture;
@@ -1611,7 +1611,7 @@ bool TestMultiInputReaderKernel(
         persistent_fabric_teardown_sequence(
             devices, subdevice_managers, line_fabric.value(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
 
-        log_info(tt::LogTest, "Finished");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finished");
         for (auto d : devices) {
             tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
         }
@@ -1804,11 +1804,11 @@ bool RunPipelinedWorkersTest(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        TT_LOG_INFO("This test can only be run on T3000 devices");
         return true;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        TT_LOG_INFO("Test must be run on WH");
         return true;
     }
 
@@ -1867,7 +1867,7 @@ bool RunPipelinedWorkersTest(
     for (size_t i = 0; i < num_tensors; i++) {
         host_tensors[i].set_tensor_spec(tensor_specs[i]);
         device_tensors.push_back(host_tensors[i].to_device(device, mem_configs[i]));
-        log_info("Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
+        TT_LOG_INFO("Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
     TT_ASSERT(device_tensors.size() == num_tensors);
     TT_ASSERT(device_tensors.size() == host_tensors.size());
@@ -2004,14 +2004,14 @@ bool RunPipelinedWorkersTest(
                 }
                 reader_cmd_stream.push_back(ttnn::ccl::cmd::uops::read_tensor_slice_to_cb(
                     per_stage_worker_reader_tensor_slices[stage][worker][slice_actual], cb_index));
-                log_info(tt::LogTest, "Worker {} reading/writing slice {}", worker, slice_actual);
+                TT_LOG_INFO_WITH_CAT(tt::LogTest, "Worker {} reading/writing slice {}", worker, slice_actual);
 
                 // writer
                 writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_write_cb_to_tensor_slice(
                     per_stage_worker_writer_tensor_slices[stage][worker][slice_actual], cb_index));
                 if (not last_stage) {
                     for (auto next_worker_xy : next_worker_cores.value()) {
-                        log_info(
+                        TT_LOG_INFO_WITH_CAT(
                             tt::LogTest,
                             "Stage {} Worker {} noc seminc to core (logical) x={},y={}",
                             stage,
@@ -2060,7 +2060,7 @@ bool RunPipelinedWorkersTest(
     bool pass = true;
     constexpr bool enable_check = true;
     if constexpr (enable_check) {
-        log_info(tt::LogTest, "Reading back outputs");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Reading back outputs");
         auto input_cpu = device_tensors[0].cpu();
         auto final_out_cpu = device_tensors.back().cpu();
 
@@ -2072,11 +2072,11 @@ bool RunPipelinedWorkersTest(
         bool input_copyback_check_passed = run_output_check(in_tensor_data, in_tensor_copyback) == Correctness::Correct;
         TT_FATAL(input_copyback_check_passed, "Input 0 copyback check failed");
 
-        log_info(tt::LogTest, "Comparing outputs");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Comparing outputs");
 
         pass &= run_output_check(in_tensor_data, out_tensor_copyback) == Correctness::Correct;
         if (pass) {
-            log_info(tt::LogTest, "Output check passed for output 0");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Output check passed for output 0");
         } else {
             log_error(tt::LogTest, "Output check failed for output 0");
         }
@@ -2101,17 +2101,17 @@ static void wait_for_worker_program_completion(
 
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_links, ttnn::Shape const& input_shape) {
-    log_info(tt::LogTest, "entering test");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;
     // DEVICES setuip
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 4;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        log_info("This test can only be run on T3000 devices");
+        TT_LOG_INFO("This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        TT_LOG_INFO("Test must be run on WH");
         return;
     }
     // Initialize MeshDevice with 1D Fabric
@@ -2134,7 +2134,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     const auto num_elems = input_shape.volume();
 
     // INPUT TENSOR setup
-    log_info(tt::LogTest, "setting up input tensors");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "setting up input tensors");
     size_t page_size = tile_size(DataFormat::Float16);
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
@@ -2149,7 +2149,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
                                          .to_device(test_fixture.mesh_device_.get());
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
 
-    log_info(tt::LogTest, "launching op");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "launching op");
 
     GlobalSemaphore multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
         test_fixture.mesh_device_.get(),
@@ -2169,22 +2169,22 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     // wait for op completion
     wait_for_worker_program_completion(devices, subdevice_managers);
-    log_info(tt::LogTest, "Finished");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finished");
 }
 
 void run_ring_all_gather_with_persistent_fabric(
     const size_t dim, const size_t num_links, const ttnn::Shape& input_shape) {
-    log_info(tt::LogTest, "entering test");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;
     // DEVICES setuip
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 8;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        log_info("This test can only be run on T3000 devices");
+        TT_LOG_INFO("This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        TT_LOG_INFO("Test must be run on WH");
         return;
     }
     // Initialize MeshDevice with 1D Fabric
@@ -2204,7 +2204,7 @@ void run_ring_all_gather_with_persistent_fabric(
     const auto num_elems = input_shape.volume();
 
     // INPUT TENSOR setup
-    log_info(tt::LogTest, "setting up input tensors");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "setting up input tensors");
     size_t page_size = tile_size(DataFormat::Float16);
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
@@ -2221,7 +2221,7 @@ void run_ring_all_gather_with_persistent_fabric(
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
 
-    log_info(tt::LogTest, "launching op");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "launching op");
 
     GlobalSemaphore multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
         test_fixture.mesh_device_.get(),
@@ -2484,11 +2484,11 @@ void Run1DFabricPacketSendTest(
     bool use_galaxy = num_devices == 32;
     bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
     if (num_devices < 4) {
-        log_info("This test can only be run on T3000 devices");
+        TT_LOG_INFO("This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        TT_LOG_INFO("Test must be run on WH");
         return;
     }
 
@@ -2532,10 +2532,10 @@ void Run1DFabricPacketSendTest(
     size_t dest_buffer_size = max_packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
-    log_info("Device open and fabric init");
+    TT_LOG_INFO("Device open and fabric init");
     // MeshFabric1DLineDeviceInitFixture test_fixture;
     FABRIC_DEVICE_FIXTURE test_fixture;
-    log_info("\tDone");
+    TT_LOG_INFO("\tDone");
     auto view = *(test_fixture.view_);
 
     auto fabrics_under_test_devices =
@@ -2828,7 +2828,7 @@ void Run1DFabricPacketSendTest(
                         const auto connection = local_device_fabric_handle->uniquely_connect_worker(device, direction);
                         const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
                             connection, program, {worker_core});
-                        log_info(
+                        TT_LOG_INFO_WITH_CAT(
                             tt::LogTest,
                             "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",
                             device->id(),
@@ -2940,7 +2940,7 @@ void Run1DFabricPacketSendTest(
     }
 
     for (size_t i = 0; i < params.num_op_invocations; i++) {
-        log_info(tt::LogTest, "Iteration: {}", i);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Iteration: {}", i);
         if (i != 0 && params.line_sync) {
             for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
                 auto& programs = programs_per_fabric[fabric_index];
@@ -2965,23 +2965,23 @@ void Run1DFabricPacketSendTest(
             build_and_enqueue(worker_devices, programs, i != 0);
         }
 
-        log_info(tt::LogTest, "Waiting for Op finish on all devices");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Waiting for Op finish on all devices");
         for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
             auto& worker_devices = fabric_under_test_worker_devices[fabric_index];
             wait_for_worker_program_completion(worker_devices, subdevice_managers);
         }
-        log_info(tt::LogTest, "Main op done");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Main op done");
     }
 
     if (!use_device_init_fabric) {
         auto& devices = fabrics_under_test_devices[0];
         TT_FATAL(fabric_programs->size() == devices.size(), "Expected fabric programs size to be same as devices size");
-        log_info(tt::LogTest, "Fabric teardown");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Fabric teardown");
         persistent_fabric_teardown_sequence(
             devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
     }
 
-    log_info(tt::LogTest, "Waiting for teardown completion");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Waiting for teardown completion");
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
         auto& devices = fabrics_under_test_devices[fabric_index];
         for (IDevice* d : devices) {
@@ -2995,7 +2995,7 @@ void Run1DFabricPacketSendTest(
             tt_metal::detail::DumpDeviceProfileResults(d);
         }
     }
-    log_info(tt::LogTest, "Finished");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finished");
 }
 
 void RunWriteThroughputStabilityTestWithPersistentFabric(
@@ -3040,17 +3040,17 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     switch (cluster_type) {
         case ClusterType::T3K:
             if (num_devices != 8) {
-                log_info(tt::LogTest, "This test can only be run 8 chips on T3000 devices");
+                TT_LOG_INFO_WITH_CAT(tt::LogTest, "This test can only be run 8 chips on T3000 devices");
                 return;
             }
             break;
         case ClusterType::GALAXY:
             if (num_devices != 4 && num_devices != 8) {
-                log_info(tt::LogTest, "This test can only be run on 4 or 8 chips on Galaxy devices");
+                TT_LOG_INFO_WITH_CAT(tt::LogTest, "This test can only be run on 4 or 8 chips on Galaxy devices");
                 return;
             }
             break;
-        default: log_info(tt::LogTest, "This test can only be run on T3000 or Galaxy devices"); return;
+        default: TT_LOG_INFO_WITH_CAT(tt::LogTest, "This test can only be run on T3000 or Galaxy devices"); return;
     }
 
     using namespace ttnn::ccl;
@@ -3302,7 +3302,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     }
 
     for (size_t i = 0; i < num_op_invocations; i++) {
-        log_info(tt::LogTest, "Iteration: {}", i);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Iteration: {}", i);
         if (i != 0 && line_sync) {
             for (size_t k = 0; k < worker_kernel_ids.size(); k++) {
                 auto& worker_rt_args_by_core = GetRuntimeArgs(programs[k], worker_kernel_ids[k]);
@@ -3317,12 +3317,12 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
 
         build_and_enqueue(worker_devices, programs, i != 0);
 
-        log_info(tt::LogTest, "Waiting for Op finish on all devices");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Waiting for Op finish on all devices");
         for (IDevice* d : devices) {
             tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
         }
-        log_info(tt::LogTest, "Main op done");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Main op done");
     }
 
-    log_info(tt::LogTest, "Finished");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finished");
 }

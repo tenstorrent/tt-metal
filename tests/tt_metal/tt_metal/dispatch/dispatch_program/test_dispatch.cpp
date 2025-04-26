@@ -230,7 +230,7 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         }
 
         if (not found_overlapping_core) {
-            log_info(tt::LogTest, "No core overlaps worker and eth core ranges, skipping");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "No core overlaps worker and eth core ranges, skipping");
             return;
         }
 

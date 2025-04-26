@@ -162,46 +162,54 @@ void init(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
     if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
-        log_info(LogTest, "Usage:");
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "Usage:");
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  -t: test type: 0:Terminate 1:Smoke 2:Random 3:PCIe 4:DRAM-read 5:DRAM-write-read 6:Host 7:Packed-read "
             "8:Ringbuffer-read"
             "(default {})",
             DEFAULT_TEST_TYPE);
-        log_info(LogTest, "  -w: warm-up before starting timer (default disabled)");
-        log_info(LogTest, "  -i: host iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, " -wx: right-most worker in grid (default {})", all_workers_g.end_coord.x);
-        log_info(LogTest, " -wy: bottom-most worker in grid (default {})", all_workers_g.end_coord.y);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -w: warm-up before starting timer (default disabled)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -i: host iterations (default {})", DEFAULT_ITERATIONS);
+        TT_LOG_INFO_WITH_CAT(LogTest, " -wx: right-most worker in grid (default {})", all_workers_g.end_coord.x);
+        TT_LOG_INFO_WITH_CAT(LogTest, " -wy: bottom-most worker in grid (default {})", all_workers_g.end_coord.y);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  -b: run a \"big\" test (fills memory w/ fewer transactions) (default false)",
             DEFAULT_TEST_TYPE);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             " -rb: gen data, readback and test every iteration - disable for perf measurements (default true)");
-        log_info(LogTest, "  -c: use coherent data as payload (default false)");
-        log_info(LogTest, "  -d: wrap all commands in debug commands and clear DRAM to known state (default disabled)");
-        log_info(LogTest, "  -hp: host huge page issue buffer size (default {})", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
-        log_info(LogTest, "  -pq: prefetch queue entries (default {})", DEFAULT_PREFETCH_Q_ENTRIES);
-        log_info(LogTest, "  -cs: cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
-        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", default_settings.prefetch_d_buffer_size_);
-        log_info(LogTest, "  -ss: scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -c: use coherent data as payload (default false)");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  -d: wrap all commands in debug commands and clear DRAM to known state (default disabled)");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  -hp: host huge page issue buffer size (default {})", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -pq: prefetch queue entries (default {})", DEFAULT_PREFETCH_Q_ENTRIES);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -cs: cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", default_settings.prefetch_d_buffer_size_);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -ss: scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             " -pcies: size of data to transfer in pcie bw test type (default: {})",
             PCIE_TRANSFER_SIZE_DEFAULT);
-        log_info(LogTest, " -dpgs: dram page size in dram bw test type (default: {})", DRAM_PAGE_SIZE_DEFAULT);
-        log_info(LogTest, " -dpgr: dram pages to read in dram bw test type (default: {})", DRAM_PAGES_TO_READ_DEFAULT);
-        log_info(LogTest, " -spre: split prefetcher into H and D variants (default not split)");
-        log_info(LogTest, " -sdis: split dispatcher into H and the other thing variants (default not split)");
-        log_info(LogTest, "  -packetized_timeout_en: packetized path timeout enabled (default false)");
-        log_info(LogTest, "  -packetized_en: packetized path enabled (default false)");
-        log_info(LogTest, "  -device_id: Device on which the test will be run, default = 0");
-        log_info(LogTest, "  -x: execute commands from dram exec_buf (default 0)");
-        log_info(LogTest, "  -mpps: give prefetcher the maximum number of packed data submcds to relay to dispatcher");
-        log_info(LogTest, "-xpls: execute buffer log dram page size (default {})", DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
-        log_info(LogTest, "  -s: seed for randomized tests (default 1)");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, " -dpgs: dram page size in dram bw test type (default: {})", DRAM_PAGE_SIZE_DEFAULT);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, " -dpgr: dram pages to read in dram bw test type (default: {})", DRAM_PAGES_TO_READ_DEFAULT);
+        TT_LOG_INFO_WITH_CAT(LogTest, " -spre: split prefetcher into H and D variants (default not split)");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, " -sdis: split dispatcher into H and the other thing variants (default not split)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -packetized_timeout_en: packetized path timeout enabled (default false)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -packetized_en: packetized path enabled (default false)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -device_id: Device on which the test will be run, default = 0");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -x: execute commands from dram exec_buf (default 0)");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  -mpps: give prefetcher the maximum number of packed data submcds to relay to dispatcher");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "-xpls: execute buffer log dram page size (default {})", DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -s: seed for randomized tests (default 1)");
         exit(0);
     }
 
@@ -708,7 +716,7 @@ void gen_paged_read_dram_test(
     uint32_t pages_read = 0;
     bool finished = false;
 
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         tt::LogTest,
         "Running Paged Read DRAM test with num_pages: {} page_size: {} to worker_core: {}",
         dram_pages_to_read_g,
@@ -754,7 +762,7 @@ void gen_paged_write_read_dram_test(
     uint32_t pages_written = 0;
     bool finished = false;
 
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         tt::LogTest,
         "Running Paged Write+Read DRAM test with num_pages: {} page_size: {} to worker_core: {}",
         dram_pages_to_read_g,
@@ -1814,7 +1822,7 @@ void initialize_dram_banks(IDevice* device) {
     auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0xBADDF00D);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        log_info(tt::LogTest, "Initializing DRAM {} bytes for bank_id: {}", bank_size, bank_id);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Initializing DRAM {} bytes for bank_id: {}", bank_size, bank_id);
         tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, 0, fill);
     }
 }
@@ -2073,7 +2081,7 @@ void configure_for_single_chip(
     constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
 
     if (split_prefetcher_g) {
-        log_info(LogTest, "split prefetcher test, packetized_path_en={}", packetized_path_en_g);
+        TT_LOG_INFO_WITH_CAT(LogTest, "split prefetcher test, packetized_path_en={}", packetized_path_en_g);
 
         // prefetch_d
         uint32_t scratch_db_base =
@@ -2197,7 +2205,7 @@ void configure_for_single_chip(
                 packet_switch_4B_pack(dest_endpoint_start_id, 0, 0, 0),  // 24: packetized input dest id
             };
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest, "run prefetch relay mux at x={},y={}", prefetch_relay_mux_core.x, prefetch_relay_mux_core.y);
 
             std::map<string, string> defines = {
@@ -2271,7 +2279,7 @@ void configure_for_single_chip(
                 packet_switch_4B_pack(0, 0, 0, 0),  // 29: output 3 packetize info
             };
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "run prefetch relay demux at x={},y={}",
                 prefetch_relay_demux_core.x,
@@ -2367,7 +2375,7 @@ void configure_for_single_chip(
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
     if (split_dispatcher_g) {
-        log_info(LogTest, "split dispatcher test, packetized_path_en={}", packetized_path_en_g);
+        TT_LOG_INFO_WITH_CAT(LogTest, "split dispatcher test, packetized_path_en={}", packetized_path_en_g);
 
         // dispatch_hd and dispatch_d
         uint32_t dispatch_d_preamble_size = packetized_path_en_g ? sizeof(dispatch_packet_header_t) : 0;
@@ -2488,7 +2496,7 @@ void configure_for_single_chip(
                 packet_switch_4B_pack(dest_endpoint_start_id, 0, 0, 0),  // 24: packetized input dest id
             };
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest, "run dispatch relay mux at x={},y={}", dispatch_relay_mux_core.x, dispatch_relay_mux_core.y);
 
             std::map<string, string> defines = {
@@ -2562,7 +2570,7 @@ void configure_for_single_chip(
                 packet_switch_4B_pack(0, 0, 0, 0),  // 29: output 3 packetize info
             };
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "run dispatch relay demux at x={},y={}",
                 dispatch_relay_demux_core.x,
@@ -2646,8 +2654,8 @@ void configure_for_multi_chip(
     CoreCoord tunneler_phys_core = device->ethernet_core_from_logical_core(tunneler_logical_core);
     CoreCoord r_tunneler_logical_core = device_r->get_ethernet_sockets(device_id_l)[0];
     CoreCoord r_tunneler_phys_core = device_r->ethernet_core_from_logical_core(r_tunneler_logical_core);
-    log_info(LogTest, "Left Tunneler = {}", tunneler_logical_core.str());
-    log_info(LogTest, "Right Tunneler = {}", r_tunneler_logical_core.str());
+    TT_LOG_INFO_WITH_CAT(LogTest, "Left Tunneler = {}", tunneler_logical_core.str());
+    TT_LOG_INFO_WITH_CAT(LogTest, "Right Tunneler = {}", r_tunneler_logical_core.str());
 
     // Packetized components will write their status + a few debug values here:
     uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -2807,7 +2815,7 @@ void configure_for_multi_chip(
     constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
 
     if (split_prefetcher_g) {
-        log_info(LogTest, "split prefetcher test, packetized_path_en={}", packetized_path_en_g);
+        TT_LOG_INFO_WITH_CAT(LogTest, "split prefetcher test, packetized_path_en={}", packetized_path_en_g);
 
         // prefetch_d
         uint32_t scratch_db_base =
@@ -2933,7 +2941,7 @@ void configure_for_multi_chip(
                 packet_switch_4B_pack(dest_endpoint_start_id, 0, 0, 0),  // 24: packetized input dest id
             };
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest, "run prefetch relay mux at x={},y={}", prefetch_relay_mux_core.x, prefetch_relay_mux_core.y);
 
             std::map<string, string> defines = {
@@ -3158,7 +3166,7 @@ void configure_for_multi_chip(
                 packet_switch_4B_pack(0, 0, 0, 0),  // 29: output 3 packetize info
             };
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "run prefetch relay demux at x={},y={}",
                 prefetch_relay_demux_core.x,
@@ -3240,7 +3248,7 @@ void configure_for_multi_chip(
 
     CoreCoord phys_upstream_from_dispatch_core = split_prefetcher_g ? phys_prefetch_d_core : phys_prefetch_core_g;
     if (split_dispatcher_g) {
-        log_info(LogTest, "split dispatcher test, packetized_path_en={}", packetized_path_en_g);
+        TT_LOG_INFO_WITH_CAT(LogTest, "split dispatcher test, packetized_path_en={}", packetized_path_en_g);
 
         // dispatch_hd and dispatch_d
         uint32_t dispatch_d_preamble_size = packetized_path_en_g ? sizeof(dispatch_packet_header_t) : 0;
@@ -3365,7 +3373,7 @@ void configure_for_multi_chip(
                 packet_switch_4B_pack(dest_endpoint_start_id, 0, 0, 0),  // 24: packetized input dest id
             };
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest, "run dispatch relay mux at x={},y={}", dispatch_relay_mux_core.x, dispatch_relay_mux_core.y);
 
             std::map<string, string> defines = {
@@ -3442,7 +3450,7 @@ void configure_for_multi_chip(
                 packet_switch_4B_pack(0, 0, 0, 0),  // 29: output 3 packetize info
             };
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "run dispatch relay demux at x={},y={}",
                 dispatch_relay_demux_core.x,
@@ -3476,7 +3484,7 @@ void configure_for_multi_chip(
 }
 
 int main(int argc, char** argv) {
-    log_info(tt::LogTest, "test_prefetcher.cpp - Test Start");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "test_prefetcher.cpp - Test Start");
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
@@ -3486,7 +3494,7 @@ int main(int argc, char** argv) {
     try {
         int num_devices = tt_metal::GetNumAvailableDevices();
         if (test_device_id_g >= num_devices) {
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest, "Device {} is not valid. Highest valid device id = {}.", test_device_id_g, num_devices - 1);
             throw std::runtime_error("Invalid Device Id.");
         }
@@ -3505,7 +3513,7 @@ int main(int argc, char** argv) {
             // holds mmio chips as well as remote chips accessed through that mmmio chip.
             remote_chips.erase(device_id_l);
             if (device_active_eth_cores.size() == 0) {
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     LogTest,
                     "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",
                     device_id_l);
@@ -3522,7 +3530,7 @@ int main(int argc, char** argv) {
                 }
             }
             if (device_id_r == device_id_l) {
-                log_info(LogTest, "Device {} does not have a remote device connected to it.", device_id_l);
+                TT_LOG_INFO_WITH_CAT(LogTest, "Device {} does not have a remote device connected to it.", device_id_l);
                 tt_metal::CloseDevice(device);
                 throw std::runtime_error("Test cannot run on specified device.");
             }
@@ -3592,30 +3600,31 @@ int main(int argc, char** argv) {
             exit(0);
         }
 
-        log_info(LogTest, "Hugepage buffer size {}", std::to_string(hugepage_issue_buffer_size_g));
-        log_info(LogTest, "Prefetch prefetch_q entries {}", std::to_string(prefetch_q_entries_g));
-        log_info(LogTest, "CmdDat buffer size {}", std::to_string(cmddat_q_size_g));
-        log_info(LogTest, "Prefetch scratch buffer size {}", std::to_string(scratch_db_size_g));
-        log_info(LogTest, "Max command size {}", std::to_string(max_prefetch_command_size_g));
+        TT_LOG_INFO_WITH_CAT(LogTest, "Hugepage buffer size {}", std::to_string(hugepage_issue_buffer_size_g));
+        TT_LOG_INFO_WITH_CAT(LogTest, "Prefetch prefetch_q entries {}", std::to_string(prefetch_q_entries_g));
+        TT_LOG_INFO_WITH_CAT(LogTest, "CmdDat buffer size {}", std::to_string(cmddat_q_size_g));
+        TT_LOG_INFO_WITH_CAT(LogTest, "Prefetch scratch buffer size {}", std::to_string(scratch_db_size_g));
+        TT_LOG_INFO_WITH_CAT(LogTest, "Max command size {}", std::to_string(max_prefetch_command_size_g));
         if (test_type_g >= 2) {
             perf_test_g = true;
         }
         if (test_type_g == 3) {
             perf_test_g = true;
-            log_info(LogTest, "PCIE transfer size {}", std::to_string(pcie_transfer_size_g));
+            TT_LOG_INFO_WITH_CAT(LogTest, "PCIE transfer size {}", std::to_string(pcie_transfer_size_g));
         }
         if (test_type_g == 4) {
             perf_test_g = true;
-            log_info(LogTest, "DRAM page size {}", std::to_string(dram_page_size_g));
-            log_info(LogTest, "DRAM pages to read {}", std::to_string(dram_pages_to_read_g));
+            TT_LOG_INFO_WITH_CAT(LogTest, "DRAM page size {}", std::to_string(dram_page_size_g));
+            TT_LOG_INFO_WITH_CAT(LogTest, "DRAM pages to read {}", std::to_string(dram_pages_to_read_g));
         }
         if (use_dram_exec_buf_g) {
-            log_info(LogTest, "Exec commands in DRAM exec_buf w/ page_size={}", 1 << exec_buf_log_page_size_g);
+            TT_LOG_INFO_WITH_CAT(
+                LogTest, "Exec commands in DRAM exec_buf w/ page_size={}", 1 << exec_buf_log_page_size_g);
         }
         if (debug_g) {
-            log_info(LogTest, "Debug mode enabled");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Debug mode enabled");
         }
-        log_info(LogTest, "Iterations: {}", iterations_g);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Iterations: {}", iterations_g);
 
         tt::Writer prefetch_q_writer = tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(
             tt_cxy_pair(device->id(), phys_prefetch_core_g));
@@ -3647,7 +3656,7 @@ int main(int argc, char** argv) {
         gen_terminate_cmds(terminate_cmds, terminate_sizes);
         gen_prefetcher_cmds(device_r, cmds, cmd_sizes, device_data, l1_buf_base_g);
         if (warmup_g) {
-            log_info(tt::LogTest, "Warming up cache now...");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Warming up cache now...");
             run_test(
                 1,
                 device,
@@ -3667,14 +3676,14 @@ int main(int argc, char** argv) {
             initialize_device_g = true;
         }
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             tt::LogTest,
             "Generating cmds and running {} iterations (readback_every_iter: {}) now...",
             iterations_g,
             readback_every_iteration_g);
         if (readback_every_iteration_g) {
             for (int i = 0; i < iterations_g; i++) {
-                log_info(LogTest, "Iteration: {}", std::to_string(i));
+                TT_LOG_INFO_WITH_CAT(LogTest, "Iteration: {}", std::to_string(i));
                 initialize_device_g = true;
                 cmds.resize(0);
                 cmd_sizes.resize(0);
@@ -3719,16 +3728,17 @@ int main(int argc, char** argv) {
                 phys_prefetch_core_g,
                 prefetch_q_writer);
 
-            log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
-            log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
+            TT_LOG_INFO_WITH_CAT(
+                LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);
             log_warning(LogTest, "Performance mode, not validating results");
             if (test_type_g == 2 || test_type_g == 3) {
                 float bw =
                     (long int)bytes_of_data_g * iterations_g / (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
                 std::stringstream ss;
                 ss << std::fixed << std::setprecision(3) << bw;
-                log_info(LogTest, "Sent {} bytes", bytes_of_data_g * iterations_g);
-                log_info(LogTest, "BW: {} GB/s", ss.str());
+                TT_LOG_INFO_WITH_CAT(LogTest, "Sent {} bytes", bytes_of_data_g * iterations_g);
+                TT_LOG_INFO_WITH_CAT(LogTest, "BW: {} GB/s", ss.str());
             }
         }
 
@@ -3742,7 +3752,7 @@ int main(int argc, char** argv) {
                 phys_prefetch_relay_mux_core,
                 packetized_path_test_results_addr,
                 packetized_path_test_results_size);
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "prefetch relay mux status = {}",
                 packet_queue_test_status_to_string(prefetch_relay_mux_results[PQ_TEST_STATUS_INDEX]));
@@ -3753,7 +3763,7 @@ int main(int argc, char** argv) {
                 phys_prefetch_relay_demux_core,
                 packetized_path_test_results_addr,
                 packetized_path_test_results_size);
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "prefetch relay demux status = {}",
                 packet_queue_test_status_to_string(prefetch_relay_demux_results[PQ_TEST_STATUS_INDEX]));
@@ -3764,7 +3774,7 @@ int main(int argc, char** argv) {
                 phys_dispatch_relay_mux_core,
                 packetized_path_test_results_addr,
                 packetized_path_test_results_size);
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "dispatch relay mux status = {}",
                 packet_queue_test_status_to_string(dispatch_relay_mux_results[PQ_TEST_STATUS_INDEX]));
@@ -3775,7 +3785,7 @@ int main(int argc, char** argv) {
                 phys_dispatch_relay_demux_core,
                 packetized_path_test_results_addr,
                 packetized_path_test_results_size);
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "dispatch relay demux status = {}",
                 packet_queue_test_status_to_string(dispatch_relay_demux_results[PQ_TEST_STATUS_INDEX]));
@@ -3794,7 +3804,7 @@ int main(int argc, char** argv) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
-        log_info(LogTest, "test_prefetcher.cpp - Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "test_prefetcher.cpp - Test Passed");
         return 0;
     } else {
         log_fatal(LogTest, "test_prefetcher.cpp - Test Failed\n");

@@ -42,11 +42,11 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     constexpr size_t test_expected_num_devices = 4;
     if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        log_info("This test can only be run on T3000 devices");
+        TT_LOG_INFO("This test can only be run on T3000 devices");
         return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        TT_LOG_INFO("Test must be run on WH");
         return;
     }
     MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
@@ -114,12 +114,12 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         subdevice_managers->worker_subdevice_id.at(devices[0]->id()));
 
     // wait for op completion
-    log_info(tt::LogTest, "Waiting for Op finish");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Waiting for Op finish");
     std::ranges::for_each(devices, [&](IDevice* d) {
         tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
     });
 
-    log_info(tt::LogTest, "Finished");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finished");
 }
 
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_128) {

@@ -445,7 +445,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     }
 
     EXPECT_TRUE(pass);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         LogTest,
         "TileDimH = {}, TileDimW = {}, MathFid = {}, ReduceType = {}, FP32DestAcc = {}, DstSyncFull = {}, at_start = "
         "{}",

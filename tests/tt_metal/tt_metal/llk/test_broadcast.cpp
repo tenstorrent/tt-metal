@@ -214,7 +214,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
     uint32_t tile_width = tile_dims.get_tile_shape()[1];
     uint32_t tile_height = tile_dims.get_tile_shape()[0];
     if (test_config.tile_shape != TileShape::FULL_TILE) {
-        log_info("Tile shape is {{{}, {}}}", tile_height, tile_width);
+        TT_LOG_INFO("Tile shape is {{{}, {}}}", tile_height, tile_width);
     }
 
     uint32_t single_tile_size = tile_width * tile_height * bfloat16::SIZEOF;
@@ -254,7 +254,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         {"BCAST_DIM", broadcast_dim_to_type.at(test_config.broadcast_dim)},
         {"BCAST_OP", eltwise_op_to_api_prefix.at(test_config.eltwise_op) + "_tiles_bcast"}};
 
-    log_info("Testing BCAST_LLKOP={} BCAST_DIM={}", defines["BCAST_LLKOP"], defines["BCAST_DIM"]);
+    TT_LOG_INFO("Testing BCAST_LLKOP={} BCAST_DIM={}", defines["BCAST_LLKOP"], defines["BCAST_DIM"]);
 
     if (test_config.api_convention == ApiConvention::SHORT_INIT ||
         test_config.api_convention == ApiConvention::SHORT_BOTH) {
@@ -269,9 +269,9 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
                                        broadcast_dim_to_api_suffix.at(test_config.broadcast_dim) + "_init_short";
         }
 
-        log_info("Init function is {}", defines["BCAST_OP_INIT"]);
+        TT_LOG_INFO("Init function is {}", defines["BCAST_OP_INIT"]);
     } else {
-        log_info("Init function is init_bcast");
+        TT_LOG_INFO("Init function is init_bcast");
     }
 
     if (test_config.api_convention == ApiConvention::SHORT_CALL ||
@@ -280,7 +280,7 @@ void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig&
         defines["BCAST_OP"] = defines["BCAST_OP"] + "_" + broadcast_dim_to_api_suffix.at(test_config.broadcast_dim);
     }
 
-    log_info("Compute function is {}", defines["BCAST_OP"]);
+    TT_LOG_INFO("Compute function is {}", defines["BCAST_OP"]);
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
@@ -378,7 +378,7 @@ TEST_P(BroadcastParameterizedDeviceFixture, TensixComputeSingleTileBroadcast) {
         if (i == 1) {
             continue;
         }
-        log_info("Math Fidelity = {}", i);
+        TT_LOG_INFO("Math Fidelity = {}", i);
         test_config.math_fidelity = MathFidelity(i);
         unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), test_config);
     }

@@ -52,9 +52,9 @@ int main(int argc, char** argv) {
     // Any arg means that we shouldn't do teardown.
     bool skip_teardown = (argc > 1);
     if (skip_teardown) {
-        tt::log_info("Running loopback test with no teardown, to see if we can recover next run.");
+        TT_LOG_INFO("Running loopback test with no teardown, to see if we can recover next run.");
     } else {
-        tt::log_info("Running loopback test with proper teardown");
+        TT_LOG_INFO("Running loopback test with proper teardown");
     }
 
     bool pass = true;
@@ -139,9 +139,9 @@ int main(int argc, char** argv) {
             );
 
             EnqueueProgram(cq, program, false);
-            tt::log_info("Started program");
+            TT_LOG_INFO("Started program");
             Finish(cq);
-            tt::log_info("Finished program");
+            TT_LOG_INFO("Finished program");
 
             /*
             * Validation & Teardown
@@ -160,7 +160,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        tt::log_info(tt::LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

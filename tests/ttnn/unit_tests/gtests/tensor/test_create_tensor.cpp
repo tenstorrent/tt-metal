@@ -121,7 +121,7 @@ TEST_P(EmptyTensorTest, Combinations) {
     auto dtype = std::get<1>(params);
     auto layout = std::get<2>(params);
     auto memory_config = std::get<3>(params);
-    tt::log_info(
+    TT_LOG_INFO(
         "Running test with shape={}, dtype={}, layout={}, memory_config={}", shape, dtype, layout, memory_config);
 
     if (layout == tt::tt_metal::Layout::ROW_MAJOR && dtype == tt::tt_metal::DataType::BFLOAT8_B) {

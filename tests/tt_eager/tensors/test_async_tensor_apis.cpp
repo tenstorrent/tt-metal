@@ -183,7 +183,7 @@ Tensor tensor_identity_copy_function(const Tensor& tensor) { return tensor; }
 TEST_F(DispatchFixture, TestAsyncRefCountManager) {
     IDevice* device = this->devices_[0];
 
-    log_info(LogTest, "Testing Device tensor copy assignment");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Testing Device tensor copy assignment");
     for (int i = 0; i < 5; i++) {
         // Run for multiple loops to ensure deterministic behaviour with device addresses
         // Initialize 2 tensors on device
@@ -212,7 +212,7 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         EXPECT_EQ(get_device_buffer_address(tensor3), tensor2_device_buf_addr);
         EXPECT_EQ(get_device_buffer_address(tensor1), get_device_buffer_address(tensor2));
     }
-    log_info(LogTest, "Testing Device tensor self-assignment through function");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Testing Device tensor self-assignment through function");
     for (int i = 0; i < 5; i++) {
         Tensor device_tensor = ttnn::full(
             ttnn::Shape({1, 1, 1024, 1024}),
@@ -227,7 +227,7 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         EXPECT_EQ(get_device_buffer_address(device_tensor), device_tensor_address);
     }
 
-    log_info(LogTest, "Testing Device tensor move assignment");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Testing Device tensor move assignment");
     for (int i = 0; i < 5; i++) {
         Tensor tensor1 = ttnn::full(
             ttnn::Shape({1, 1, 1024, 1024}),
@@ -238,7 +238,7 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         Tensor tensor2 = std::move(tensor1);
     }
 
-    log_info(LogTest, "Testing Device tensor self-assignment");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Testing Device tensor self-assignment");
     Tensor tensor_to_self_assign = ttnn::full(
         ttnn::Shape({1, 1, 1024, 1024}),
         static_cast<float>(0),
@@ -278,11 +278,11 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
     {
         // host_tensor only lives in this scope
         Tensor host_tensor = ttnn::arange(tensor_start, tensor_stop, /*step=*/1, DataType::FLOAT32);
-        log_info(LogTest, "Spawning worker thread");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Spawning worker thread");
         worker = std::thread([tensor_stop, host_tensor, readback_tensor, device]() mutable {
             // Sleep for 3 seconds to ensure that main thread deallocates host_tensor
             std::this_thread::sleep_for(std::chrono::milliseconds(3000));
-            log_info(LogTest, "Worker started");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Worker started");
             // Main thread should have deallocated host_tensor by this point
             EXPECT_EQ(host_tensor.tensor_attributes.use_count(), 1);
             // Ensure that the buffer inside host_buffer is owned by a single tensor_attr object
@@ -307,7 +307,7 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
             Tensor reshaped_tensor = ttnn::experimental::view(host_tensor, ttnn::Shape{1, 1, 32, tensor_stop / 32});
             auto device_tensor = reshaped_tensor.to_layout(Layout::TILE).to_device(device);
             auto thread_local_tensor = device_tensor.cpu().to_layout(Layout::ROW_MAJOR);
-            log_info(LogTest, "Worker populating empty host readback_tensor");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Worker populating empty host readback_tensor");
             readback_tensor.set_storage(thread_local_tensor.get_storage());
             readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
             // Ensure that this buffer is currently owned by both the thread_local and read_back tensors
@@ -327,15 +327,15 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
                     }
                 },
                 readback_tensor.get_storage());
-            log_info(LogTest, "Worker Done");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Worker Done");
         });
         // Call deallocate on the tensor in the main thread to ensure that this call is safe
         // i.e.: the tensor should not be deallocated until the thread is done with it
-        log_info(LogTest, "Main thread calling deallocate on tensor passed to worker");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Main thread calling deallocate on tensor passed to worker");
         host_tensor.deallocate();
     }
     worker.join();
-    log_info(LogTest, "Verifying populated tensor in main thread");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Verifying populated tensor in main thread");
     std::visit(
         [tensor_start, tensor_stop](auto&& storage) {
             using T = std::decay_t<decltype(storage)>;

@@ -42,14 +42,14 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
     CoreCoord logical_core, virtual_core;
     if (riscv_type == DebugErisc) {
         if (device->get_active_ethernet_cores(true).empty()) {
-            log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Skipping this test since device has no active ethernet cores.");
             GTEST_SKIP();
         }
         logical_core = *(device->get_active_ethernet_cores(true).begin());
         virtual_core = device->ethernet_core_from_logical_core(logical_core);
     } else if (riscv_type == DebugIErisc) {
         if (device->get_inactive_ethernet_cores().empty()) {
-            log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Skipping this test since device has no inactive ethernet cores.");
             GTEST_SKIP();
         }
         logical_core = *(device->get_inactive_ethernet_cores().begin());
@@ -58,7 +58,7 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
         logical_core = CoreCoord{0, 0};
         virtual_core = device->worker_core_from_logical_core(logical_core);
     }
-    log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
+    TT_LOG_INFO_WITH_CAT(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
 
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel;
@@ -144,9 +144,7 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
             );
             risc = "erisc";
             break;
-        default:
-            log_info("Unsupported risc type: {}, skipping test...", riscv_type);
-            GTEST_SKIP();
+        default: TT_LOG_INFO("Unsupported risc type: {}, skipping test...", riscv_type); GTEST_SKIP();
     }
 
     // Write runtime args that should not trip an assert.
@@ -154,9 +152,9 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
     SetRuntimeArgs(program, assert_kernel, logical_core, safe_args);
 
     // Run the kernel, don't expect an issue here.
-    log_info(LogTest, "Running args that shouldn't assert...");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Running args that shouldn't assert...");
     fixture->RunProgram(device, program);
-    log_info(LogTest, "Args did not assert!");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Args did not assert!");
 
     // Write runtime args that should trip an assert.
     const std::vector<uint32_t> unsafe_args = { 3, 3 };
@@ -164,13 +162,13 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
 
     // Run the kerel, expect an exit due to the assert.
     try {
-        log_info(LogTest, "Running args that should assert...");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running args that should assert...");
         fixture->RunProgram(device, program);
     } catch (std::runtime_error &e) {
         string expected = "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
         expected += tt::watcher_get_log_file_name();
         const string error = string(e.what());
-        log_info(LogTest, "Caught exception (one is expected in this test)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Caught exception (one is expected in this test)");
         EXPECT_TRUE(error.find(expected) != string::npos);
     }
 
@@ -192,12 +190,12 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
         kernel);
     expected += " Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file.";
 
-    log_info(LogTest, "Expected error: {}", expected);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Expected error: {}", expected);
     std::string exception = "";
     do {
         exception = get_watcher_exception_message();
     } while (exception == "");
-    log_info(LogTest, "Reported error: {}", exception);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Reported error: {}", exception);
     EXPECT_TRUE(expected == get_watcher_exception_message());
 }
 }
@@ -267,7 +265,7 @@ TEST_F(WatcherFixture, TestWatcherAssertErisc) {
 TEST_F(WatcherFixture, TestWatcherAssertIErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (!this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
     if (this->slow_dispatch_)

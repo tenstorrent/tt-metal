@@ -68,8 +68,8 @@ int main(int argc, char** argv) {
             (std::uint32_t)core_start_physical.x,
             (std::uint32_t)core_start_physical.y,
             (std::uint32_t)(grid_size.x * grid_size.y)};
-        log_info(LogTest, "Start = {}, {}", core_start_physical.x, core_start_physical.y);
-        log_info(LogTest, "End = {}, {}", core_end_physical.x, core_end_physical.y);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Start = {}, {}", core_start_physical.x, core_start_physical.y);
+        TT_LOG_INFO_WITH_CAT(LogTest, "End = {}, {}", core_end_physical.x, core_end_physical.y);
         auto mcast_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_include_src.cpp",
@@ -96,9 +96,9 @@ int main(int argc, char** argv) {
 
         tt_metal::SetRuntimeArgs(program, mcast_reader_kernel, core, mcast_reader_args);
 
-        log_info(LogTest, "Launching kernels");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Launching kernels");
         tt_metal::detail::LaunchProgram(device, program);
-        log_info(LogTest, "Kernels done");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Kernels done");
 
         for (int i = 0; i < grid_size.y; i++) {
             for (int j = 0; j < grid_size.x; j++) {
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
                 auto dest_core_data_unpacked = unpack_uint32_vec_into_bfloat16_vec(dest_core_data);
                 pass &= (dest_core_data_unpacked == tensor.get_values());
                 if (not(dest_core_data_unpacked == tensor.get_values())) {
-                    log_info(LogTest, "Mismatch on core {}, {}", dest_core.x, dest_core.y);
+                    TT_LOG_INFO_WITH_CAT(LogTest, "Mismatch on core {}, {}", dest_core.x, dest_core.y);
                     print_vec_of_bfloat16(dest_core_data_unpacked, 1, "Result");
                 }
             }
@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

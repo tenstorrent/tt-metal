@@ -63,9 +63,9 @@ TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tens
 
     shape4d expected_tensor_slice_shape = shape4d(1, 1, 1, 8);
 
-    log_info(tt::LogOp, "Commands");
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "Commands");
     for (std::size_t i = 0; i < args.size(); i++) {
-        log_info(tt::LogOp, "arg {}: {}", i, args[i]);
+        TT_LOG_INFO_WITH_CAT(tt::LogOp, "arg {}: {}", i, args[i]);
     }
 
     {  // Validate the first command

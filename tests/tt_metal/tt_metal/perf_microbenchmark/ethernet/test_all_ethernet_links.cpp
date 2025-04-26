@@ -579,7 +579,7 @@ void run(
             for (auto device : device_helper.devices) {
                 tt_metal::EnqueueProgram(device->command_queue(), programs.at(device->id()), false);
             }
-            log_info(tt::LogTest, "Iteration {} Calling Finish", iteration);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Iteration {} Calling Finish", iteration);
             for (auto device : device_helper.devices) {
                 tt_metal::Finish(device->command_queue());
             }
@@ -646,20 +646,20 @@ int main(int argc, char** argv) {
         .disable_trid = disable_trid,
         .num_iterations = num_iterations};
 
-    log_info(tt::LogTest, "Setting up test fixture");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Setting up test fixture");
     ConnectedDevicesHelper device_helper(params);
-    log_info(tt::LogTest, "Done setting up test fixture");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Done setting up test fixture");
     if (device_helper.num_devices < 2) {
-        log_info(tt::LogTest, "Need at least 2 devices to run this test");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Need at least 2 devices to run this test");
         return 0;
     }
 
     // Add more configurations here until proper argc parsing added
     bool success = false;
     success = true;
-    log_info(tt::LogTest, "STARTING");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "STARTING");
     try {
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             tt::LogTest,
             "benchmark type: {}, measurement type: {}, num_packets: {}, packet_size: {} B, num_buffer_slots: {}",
             magic_enum::enum_name(benchmark_type_enum.value()),

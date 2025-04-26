@@ -264,7 +264,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedFixture, TensixSfpuCompute) {
         .cores = core_range_set,
         .sfpu_op = sfpu_op,
         .approx_mode = false};
-    log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+    TT_LOG_INFO("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
     for (unsigned int id = 0; id < num_devices_; id++) {
         EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
     }
@@ -315,7 +315,7 @@ TEST_P(SingleCoreSingleDeviceSfpuParameterizedApproxFixture, TensixSfpuCompute) 
             .cores = core_range_set,
             .sfpu_op = sfpu_op,
             .approx_mode = true};
-        log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+        TT_LOG_INFO("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
         for (unsigned int id = 0; id < num_devices_; id++) {
             EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
         }

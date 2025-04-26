@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
         }
         uint64_t buffer_size = stoul(size_string);
 
-        log_info(LogTest, "Measuring performance for size={}bytes", buffer_size);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Measuring performance for size={}bytes", buffer_size);
 
         // Device Setup
         int device_id = 0;
@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
         srand(time(0));
         size_t core_x = rand() % 8;
         size_t core_y = rand() % 8;
-        log_info(LogTest, "Target core (x,y) = ({},{})", core_x, core_y);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Target core (x,y) = ({},{})", core_x, core_y);
         CoreCoord core = {core_x, core_y};
 
         // Can accomodate input size up to 920*1024
@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
             auto end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(end - begin).count();
             auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
-            log_info(LogTest, "WriteToDeviceL1 {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
+            TT_LOG_INFO_WITH_CAT(LogTest, "WriteToDeviceL1 {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
         }
 
         std::vector<uint32_t> result_vec;
@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
 
             auto elapsed_us = duration_cast<microseconds>(end - begin).count();
             auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
-            log_info(LogTest, "ReadFromDeviceL1 {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
+            TT_LOG_INFO_WITH_CAT(LogTest, "ReadFromDeviceL1 {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
         }
 
         // Validation & Teardown
@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

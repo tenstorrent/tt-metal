@@ -439,20 +439,20 @@ TEST_F(DispatchFixture, TensixMatmulLargeBlock) {
         if (i == 1) {
             continue;
         };
-        tt::log_info(tt::LogTest, "Math Fidelity = {}", i);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < devices_.size(); id++) {
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
                 this, devices_.at(id), false, false, MathFidelity(i)));
-            log_info(LogTest, "Tilized input, Tilized output Passed");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Tilized input, Tilized output Passed");
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
                 this, devices_.at(id), true, false, MathFidelity(i)));
-            log_info(LogTest, "Row major input, Tilized output Passed");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Row major input, Tilized output Passed");
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
                 this, devices_.at(id), false, true, MathFidelity(i)));
-            log_info(LogTest, "Tilized input, Row major output Passed");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Tilized input, Row major output Passed");
             ASSERT_TRUE(unit_tests_common::matmul::test_matmul_large_block::matmul_large_block(
                 this, devices_.at(id), true, true, MathFidelity(i)));
-            log_info(LogTest, "Row major input, Row major output Passed");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Row major input, Row major output Passed");
         }
     }
 }

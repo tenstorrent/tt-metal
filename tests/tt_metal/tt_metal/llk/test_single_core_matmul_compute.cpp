@@ -452,7 +452,7 @@ bool single_block_matmul(tt_metal::IDevice* device, uint32_t M, uint32_t K, uint
         [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); },
         &failed_index);
     if (not pass) {
-        log_info("Failed Index={}", failed_index);
+        TT_LOG_INFO("Failed Index={}", failed_index);
         print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(dest_buffer_data), 32);
     }
     return pass;
@@ -621,7 +621,7 @@ bool blocked_matmul(tt_metal::IDevice* device, uint32_t M, uint32_t K, uint32_t 
         [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); },
         &failed_index);
     if (not pass) {
-        log_info("Failed Index={}", failed_index);
+        TT_LOG_INFO("Failed Index={}", failed_index);
         print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(dest_buffer_data), 32);
     }
     return pass;

@@ -45,7 +45,7 @@ inline void RunPersistent1dFabricLatencyTest(
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     bool is_6u = num_devices == 32 && tt::tt_metal::GetNumPCIeDevices() == num_devices;
     if (num_devices < 4 && !is_6u) {
-        log_info("This test can only be run on T3000 or 6u systems");
+        TT_LOG_INFO("This test can only be run on T3000 or 6u systems");
         return;
     }
 
@@ -99,7 +99,7 @@ inline void RunPersistent1dFabricLatencyTest(
         devices.push_back(devices_.at(i));
         TT_FATAL(devices_.at(i) != nullptr, "Device at index {} is null", i);
         if (writer_specs.size() > i && writer_specs.at(i).has_value()) {
-            log_info(tt::LogTest, "index: {} has worker", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "index: {} has worker", i);
             devices_with_workers.push_back(devices_.at(i));
         }
     }
@@ -144,7 +144,7 @@ inline void RunPersistent1dFabricLatencyTest(
 
     // Persistent Fabric Setup
     for (auto d : devices) {
-        log_info(tt::LogTest, "Launching fabric on device {}", d->id());
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Launching fabric on device {}", d->id());
     }
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
     std::optional<std::vector<Program>> fabric_programs;
@@ -242,9 +242,9 @@ inline void RunPersistent1dFabricLatencyTest(
         bool is_latency_packet_sender = std::holds_alternative<LatencyPacketTestWriterSpec>(writer_specs[i]->spec);
         bool is_datapath_busy_sender = std::holds_alternative<DatapathBusyDataWriterSpec>(writer_specs[i]->spec);
         if (is_latency_packet_sender) {
-            log_info(tt::LogTest, "index: {} has latency packet sender", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "index: {} has latency packet sender", i);
         } else if (is_datapath_busy_sender) {
-            log_info(tt::LogTest, "index: {} has datapath busy sender", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "index: {} has datapath busy sender", i);
         }
 
         IDevice* backward_device = i == 0 ? is_ring ? devices.at(line_size - 1) : nullptr : devices.at(i - 1);
@@ -297,7 +297,7 @@ inline void RunPersistent1dFabricLatencyTest(
             bool sem_inc_only = writer_specs.at(i)->message_size_bytes == 0;
             worker_ct_args = {!sem_inc_only && enable_fused_payload_with_sync, payloads_are_mcast, sem_inc_only};
         } else {
-            log_info(tt::LogTest, "adding datapath busy writer");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "adding datapath busy writer");
             const auto& datapath_spec = std::get<DatapathBusyDataWriterSpec>(writer_specs[i]->spec);
             worker_ct_args.push_back(datapath_spec.mcast);
         }
@@ -322,7 +322,7 @@ inline void RunPersistent1dFabricLatencyTest(
                     const auto connection = local_device_fabric_handle->uniquely_connect_worker(device, direction);
                     const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
                         connection, program, {worker_core_logical});
-                    log_info(
+                    TT_LOG_INFO_WITH_CAT(
                         tt::LogTest,
                         "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",
                         device->id(),
@@ -444,24 +444,24 @@ inline void RunPersistent1dFabricLatencyTest(
     }
 
     for (auto d : devices_with_workers) {
-        log_info(tt::LogTest, "launch on Device {}", d->id());
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "launch on Device {}", d->id());
     }
     build_and_enqueue(devices_with_workers, programs);
 
-    log_info(tt::LogTest, "Waiting for Op finish on all devices");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Waiting for Op finish on all devices");
     wait_for_worker_program_completion(devices_with_workers, subdevice_managers);
-    log_info(tt::LogTest, "Main op done");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Main op done");
 
     TT_FATAL(
         is_ring || fabric_programs->size() == devices.size(),
         "Expected fabric programs size to be same as devices size");
-    log_info(tt::LogTest, "Fabric teardown");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Fabric teardown");
     if (!use_device_init_fabric) {
         persistent_fabric_teardown_sequence(
             devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
     }
 
-    log_info(tt::LogTest, "Waiting for teardown completion");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Waiting for teardown completion");
     for (IDevice* d : devices) {
         tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
@@ -470,7 +470,7 @@ inline void RunPersistent1dFabricLatencyTest(
         auto& program = programs.at(i);
         tt_metal::DumpDeviceProfileResults(d, program);
     }
-    log_info(tt::LogTest, "Finished");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finished");
 }
 
 int main(int argc, char** argv) {

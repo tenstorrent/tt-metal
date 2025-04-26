@@ -325,7 +325,7 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         print_vector(unpack_vector<bfloat16, uint32_t>(result_vec));
     }
     ASSERT_TRUE(pass);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         tt::LogTest,
         "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, DstSyncFull = {}, pass = {}",
         test_config.num_tiles_r,

@@ -1198,7 +1198,8 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthIncrementRuntimeArgsSanity
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-            log_info(tt::LogTest, "Issuing test for eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
+            TT_LOG_INFO_WITH_CAT(
+                tt::LogTest, "Issuing test for eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
             EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
                 device, dummy_program_config, 16, 16, tt::RISCV::ERISC));
         }
@@ -1215,7 +1216,8 @@ TEST_F(
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-            log_info(tt::LogTest, "Issuing test for idle eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
+            TT_LOG_INFO_WITH_CAT(
+                tt::LogTest, "Issuing test for idle eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
             EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
                 device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
         }
@@ -1233,7 +1235,7 @@ TEST_F(
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 tt::LogTest, "Issuing test for inactive eth_core: {} using cr_set: {}", eth_core.str(), cr_set.str());
             EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
                 device, dummy_program_config, 16, 16, tt::RISCV::ERISC, true));
@@ -1642,14 +1644,14 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
     // Make random
     auto random_seed = 0;  // (unsigned int)time(NULL);
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
 
-    log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
     vector<Program> programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
@@ -1854,7 +1856,8 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
     }
 
     for (uint8_t cq_id = 0; cq_id < this->device_->num_hw_cqs(); ++cq_id) {
-        log_info(tt::LogTest, "Running {} programs on cq {} for cache warmup.", programs.size(), (uint32_t)cq_id);
+        TT_LOG_INFO_WITH_CAT(
+            tt::LogTest, "Running {} programs on cq {} for cache warmup.", programs.size(), (uint32_t)cq_id);
         // This loop caches program and runs
         for (Program& program : programs) {
             EnqueueProgram(this->device_->command_queue(cq_id), program, false);
@@ -1864,7 +1867,7 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
         uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
                                         // iterations, need to come back to that
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             tt::LogTest,
             "Running {} programs on cq {} for {} iterations now.",
             programs.size(),
@@ -1887,7 +1890,7 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
             }
         }
 
-        log_info(tt::LogTest, "Calling Finish.");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Calling Finish.");
         Finish(this->device_->command_queue(cq_id));
     }
 }
@@ -1915,14 +1918,14 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
     // Make random
     auto random_seed = 0;  // (unsigned int)time(NULL);
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set(cr);
 
-    log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
     vector<Program> programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
@@ -1937,7 +1940,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
         bool USE_MAX_RT_ARGS;
 
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_PROGRAMS);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Compiling program {} of {}", i + 1, NUM_PROGRAMS);
         }
 
         if (i == 0) {
@@ -2130,7 +2133,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
         tt::tt_metal::detail::CompileProgram(this->device_, program);
     }
 
-    log_info(tt::LogTest, "Running {} programs for cache warmup.", programs.size());
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running {} programs for cache warmup.", programs.size());
     // This loop caches program and runs
     for (Program& program : programs) {
         EnqueueProgram(this->device_->command_queue(), program, false);
@@ -2140,12 +2143,12 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_ITERATIONS = 500;  // TODO(agrebenisan): Bump this to 5000, saw hangs for very large number of
                                     // iterations, need to come back to that
 
-    log_info(tt::LogTest, "Running {} programs for {} iterations now.", programs.size(), NUM_ITERATIONS);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running {} programs for {} iterations now.", programs.size(), NUM_ITERATIONS);
     for (uint32_t i = 0; i < NUM_ITERATIONS; i++) {
         auto rng = std::default_random_engine{};
         std::shuffle(std::begin(programs), std::end(programs), rng);
         if (i % 50 == 0) {
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i + 1, NUM_ITERATIONS);
         }
         for (Program& program : programs) {
@@ -2153,14 +2156,14 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
         }
     }
 
-    log_info(tt::LogTest, "Calling Finish.");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Calling Finish.");
     Finish(this->device_->command_queue());
 }
 
 TEST_F(RandomProgramFixture, TensixTestSimplePrograms) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::WORKER, true);
@@ -2177,7 +2180,7 @@ TEST_F(RandomProgramFixture, ActiveEthTestSimplePrograms) {
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::ETH, true);
@@ -2194,7 +2197,7 @@ TEST_F(RandomProgramFixture, TensixActiveEthTestSimplePrograms) {
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         Program program = CreateProgram();
 
@@ -2216,7 +2219,7 @@ TEST_F(RandomProgramFixture, TensixActiveEthTestSimplePrograms) {
 TEST_F(RandomProgramFixture, TensixTestPrograms) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::WORKER);
@@ -2233,7 +2236,7 @@ TEST_F(RandomProgramFixture, ActiveEthTestPrograms) {
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         Program program = CreateProgram();
         // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
@@ -2255,7 +2258,7 @@ TEST_F(RandomProgramFixture, TensixActiveEthTestPrograms) {
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         Program program = CreateProgram();
 
@@ -2285,7 +2288,7 @@ TEST_F(RandomProgramFixture, TensixActiveEthTestPrograms) {
 TEST_F(RandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         Program program = CreateProgram();
 
@@ -2306,7 +2309,7 @@ TEST_F(RandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms) {
 TEST_F(RandomProgramFixture, TensixTestLargeProgramFollowedBySmallPrograms) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         Program program = CreateProgram();
 
@@ -2327,7 +2330,7 @@ TEST_F(RandomProgramFixture, TensixTestLargeProgramFollowedBySmallPrograms) {
 TEST_F(RandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPrograms) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         Program program = CreateProgram();
 

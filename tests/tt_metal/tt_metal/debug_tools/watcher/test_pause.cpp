@@ -87,7 +87,7 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
         KernelHandle erisc_kid;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest, "Running on eth core {}({})", core.str(), device->ethernet_core_from_logical_core(core).str());
             eth_core_ranges.insert(CoreRange(core, core));
         }
@@ -105,7 +105,7 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
         KernelHandle ierisc_kid;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "Running on inactive eth core {}({})",
                 core.str(),

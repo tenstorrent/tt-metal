@@ -198,7 +198,8 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
     auto output_packed = ::unit_tests::compute::gold_standard_untilize(
         output_packed_tilized, {test_config.N * test_config.Ht, test_config.Wt});
 
-    log_info(tt::LogTest, "Running test for N = {}, Wt = {}, Ht = {}", test_config.N, test_config.Wt, test_config.Ht);
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "Running test for N = {}, Wt = {}, Ht = {}", test_config.N, test_config.Wt, test_config.Ht);
 
     bool result = is_close_packed_vectors<bfloat16, uint32_t>(
         output_packed, golden_packed, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.01f); });

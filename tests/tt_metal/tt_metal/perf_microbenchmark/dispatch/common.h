@@ -397,7 +397,7 @@ inline bool DeviceData::validate_one_core(
         results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, result_addr, size_bytes);
     }
 
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         tt::LogTest,
         "Validating {} bytes from {} bank {} log_core {}: phys_core: {} at addr: 0x{:x}",
         size_bytes,
@@ -446,7 +446,7 @@ inline bool DeviceData::validate_one_core(
 
 bool DeviceData::validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& host_data) {
     uint32_t size_bytes = host_data.data.size() * sizeof(uint32_t);
-    log_info(tt::LogTest, "Validating {} bytes from hugepage", size_bytes);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Validating {} bytes from hugepage", size_bytes);
 
     bool failed = false;
 
@@ -505,7 +505,7 @@ bool DeviceData::validate(IDevice* device) {
         }
     }
 
-    log_info(tt::LogTest, "Validated {} non-empty cores total.", validated_cores.size());
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Validated {} non-empty cores total.", validated_cores.size());
 
     return !failed;
 }

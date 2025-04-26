@@ -71,11 +71,11 @@ private:
     bool are_env_vars_set() {
         bool are_set = true;
         if (!tt_metal::MetalContext::instance().rtoptions().is_root_dir_specified()) {
-            log_info(LogTest, "Skipping test: TT_METAL_HOME must be set");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Skipping test: TT_METAL_HOME must be set");
             are_set = false;
         }
         if (!tt_metal::MetalContext::instance().rtoptions().is_kernel_dir_specified()) {
-            log_info(LogTest, "Skipping test: TT_METAL_KERNEL_PATH must be set");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Skipping test: TT_METAL_KERNEL_PATH must be set");
             are_set = false;
         }
         return are_set;
@@ -86,7 +86,7 @@ private:
         const std::string& kernel_dir = tt_metal::MetalContext::instance().rtoptions().get_kernel_dir();
         if (!this->does_path_exist(kernel_dir) || !this->is_path_a_directory(kernel_dir) ||
             !this->is_dir_empty(kernel_dir)) {
-            log_info(LogTest, "Skipping test: TT_METAL_KERNEL_PATH must be an existing, empty directory");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Skipping test: TT_METAL_KERNEL_PATH must be an existing, empty directory");
             is_valid = false;
         }
         return is_valid;

@@ -212,7 +212,7 @@ TEST_F(DeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
             continue;
         }
         for (bool dst_full_sync_en : {true, false}) {
-            log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
+            TT_LOG_INFO_WITH_CAT(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
             unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
                 .num_tiles = 8, .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en};
             unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
@@ -227,7 +227,7 @@ TEST_F(DeviceFixture, TensixComputeCopyBlockMultiple) {
             continue;
         }
         for (bool dst_full_sync_en : {true, false}) {
-            log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
+            TT_LOG_INFO_WITH_CAT(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
             unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
                 .num_tiles = 8,
                 .reader_ublock = 8,
@@ -248,7 +248,7 @@ TEST_F(DeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
             continue;
         }
         for (bool dst_full_sync_en : {true, false}) {
-            log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
+            TT_LOG_INFO_WITH_CAT(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
             unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
                 .num_tiles = 8,
                 .reader_ublock = 8,

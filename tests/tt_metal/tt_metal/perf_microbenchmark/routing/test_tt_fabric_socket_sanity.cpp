@@ -118,70 +118,73 @@ int main(int argc, char** argv) {
 
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
-        log_info(LogTest, "Usage:");
-        log_info(LogTest, "  --prng_seed: PRNG seed, default = 0x{:x}", default_prng_seed);
-        log_info(LogTest, "  --data_kb_per_tx: Total data in KB per TX endpoint, default = {}", default_data_kb_per_tx);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "Usage:");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --prng_seed: PRNG seed, default = 0x{:x}", default_prng_seed);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  --data_kb_per_tx: Total data in KB per TX endpoint, default = {}", default_data_kb_per_tx);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  --max_packet_size_words: Max packet size in words, default = 0x{:x}",
             default_max_packet_size_words);
-        log_info(LogTest, "  --tx_x: X coordinate of the starting TX core, default = {}", default_tx_x);
-        log_info(LogTest, "  --tx_y: Y coordinate of the starting TX core, default = {}", default_tx_y);
-        log_info(LogTest, "  --rx_x: X coordinate of the starting RX core, default = {}", default_rx_x);
-        log_info(LogTest, "  --rx_y: Y coordinate of the starting RX core, default = {}", default_rx_y);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --tx_x: X coordinate of the starting TX core, default = {}", default_tx_x);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --tx_y: Y coordinate of the starting TX core, default = {}", default_tx_y);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --rx_x: X coordinate of the starting RX core, default = {}", default_rx_x);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --rx_y: Y coordinate of the starting RX core, default = {}", default_rx_y);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  --routing_table_start_addr: Routing Table start address, default = 0x{:x}",
             default_routing_table_start_addr);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  --tx_queue_start_addr: TX queue start address, default = 0x{:x}", default_tx_queue_start_addr);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  --tx_queue_size_bytes: TX queue size in bytes, default = 0x{:x}", default_tx_queue_size_bytes);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  --rx_queue_start_addr: RX queue start address, default = 0x{:x}", default_rx_queue_start_addr);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  --rx_queue_size_bytes: RX queue size in bytes, default = 0x{:x}", default_rx_queue_size_bytes);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  --test_results_addr: test results buf address, default = 0x{:x}", default_test_results_addr);
-        log_info(LogTest, "  --test_results_size: test results buf size, default = 0x{:x}", default_test_results_size);
-        log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  --test_results_size: test results buf size, default = 0x{:x}", default_test_results_size);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  --check_txrx_timeout: Check if timeout happens during tx & rx (if enabled, timeout_mcycles will also be "
             "used), default = {}",
             default_check_txrx_timeout);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  --rx_disable_data_check: Disable data check on RX, default = {}",
             default_rx_disable_data_check);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  --rx_disable_header_check: Disable header check on RX, default = {}",
             default_rx_disable_header_check);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  --tx_skip_pkt_content_gen: Skip packet content generation during tx, default = {}",
             default_tx_skip_pkt_content_gen);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  --tx_pkt_dest_size_choice: choice for how packet destination and packet size are generated, default = "
             "{}",
             default_tx_pkt_dest_size_choice);  // pkt_dest_size_choices_t
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  --tx_data_sent_per_iter_low: the criteria to determine the amount of tx data sent per iter is low "
             "(unit: words); if both 0, then disable counting it in tx kernel, default = {}",
             default_tx_data_sent_per_iter_low);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  --tx_data_sent_per_iter_high: the criteria to determine the amount of tx data sent per iter is high "
             "(unit: words); if both 0, then disable counting it in tx kernel, default = {}",
             default_tx_data_sent_per_iter_high);
-        log_info(LogTest, "  --dump_stat_json: Dump stats in json to output_dir, default = {}", default_dump_stat_json);
-        log_info(LogTest, "  --output_dir: Output directory, default = {}", default_output_dir);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  --dump_stat_json: Dump stats in json to output_dir, default = {}", default_dump_stat_json);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --output_dir: Output directory, default = {}", default_output_dir);
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  --device_id: Device on which the test will be run, default = {}", default_test_device_id_l);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  --device_id_r: Device on which the test will be run, default = {}", default_test_device_id_r);
         return 0;
     }
@@ -268,7 +271,7 @@ int main(int argc, char** argv) {
 
         int num_devices = tt_metal::GetNumAvailableDevices();
         if (test_device_id_l >= num_devices) {
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest, "Device {} is not valid. Highest valid device id = {}.", test_device_id_l, num_devices - 1);
             throw std::runtime_error("Invalid Device Id.");
         }
@@ -281,7 +284,7 @@ int main(int argc, char** argv) {
         }
         device_map = tt::tt_metal::detail::CreateDevices(chip_ids);
 
-        log_info(LogTest, "Created {} Devices ...", device_map.size());
+        TT_LOG_INFO_WITH_CAT(LogTest, "Created {} Devices ...", device_map.size());
 
         std::map<chip_id_t, tt_metal::Program> program_map;
 
@@ -289,14 +292,14 @@ int main(int argc, char** argv) {
             program_map[i] = tt_metal::CreateProgram();
         }
 
-        log_info(LogTest, "Created Programs ...");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Created Programs ...");
 
         std::map<chip_id_t, std::vector<CoreCoord>> device_router_map;
 
         const auto& device_active_eth_cores = device_map[test_device_id_l]->get_active_ethernet_cores();
 
         if (device_active_eth_cores.size() == 0) {
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "Device {} does not have enough active cores. Need 1 active ethernet core for this test.",
                 test_device_id_l);
@@ -310,13 +313,13 @@ int main(int argc, char** argv) {
         auto [dev_l_mesh_id, dev_l_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_l);
         auto [dev_r_mesh_id, dev_r_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(test_device_id_r);
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Running on Left  Device {} : Fabric Mesh Id {} : Fabric Device Id {}",
             test_device_id_l,
             dev_l_mesh_id,
             dev_l_chip_id);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Running on Right Device {} : Fabric Mesh Id {} : Fabric Device Id {}",
             test_device_id_r,
@@ -334,9 +337,9 @@ int main(int argc, char** argv) {
         uint32_t client_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
         uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_pull_client_interface_t);
         uint32_t socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
-        log_info(LogTest, "GK Routing Table Addr = 0x{:08X}", routing_table_addr);
-        log_info(LogTest, "GK Info Addr = 0x{:08X}", gk_interface_addr);
-        log_info(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
+        TT_LOG_INFO_WITH_CAT(LogTest, "GK Routing Table Addr = 0x{:08X}", routing_table_addr);
+        TT_LOG_INFO_WITH_CAT(LogTest, "GK Info Addr = 0x{:08X}", gk_interface_addr);
+        TT_LOG_INFO_WITH_CAT(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
 
         for (auto device : device_map) {
             auto neighbors =
@@ -375,7 +378,7 @@ int main(int argc, char** argv) {
                 }
             }
 
-            log_info(LogTest, "Device {} router_mask = 0x{:04X}", device.first, router_mask);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Device {} router_mask = 0x{:04X}", device.first, router_mask);
             uint32_t sem_count = device_router_cores.size();
             device_router_map[device.first] = device_router_phys_cores;
 
@@ -414,7 +417,7 @@ int main(int argc, char** argv) {
                     device.second->ethernet_core_from_logical_core(logical_core));
             }
             // setup runtime args
-            log_info(LogTest, "run tt_fabric gatekeeper at x={},y={}", gk_core.x, gk_core.y);
+            TT_LOG_INFO_WITH_CAT(LogTest, "run tt_fabric gatekeeper at x={},y={}", gk_core.x, gk_core.y);
             std::vector<uint32_t> gk_compile_args = {
                 gk_interface_addr,   // 0:
                 socket_info_addr,    // 1:
@@ -489,7 +492,7 @@ int main(int argc, char** argv) {
                 runtime_args.push_back(target_address);
             }
 
-            log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
+            TT_LOG_INFO_WITH_CAT(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
                 program_map[test_device_id_l],
                 "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_tx_socket.cpp",
@@ -528,7 +531,7 @@ int main(int argc, char** argv) {
 
             std::vector<uint32_t> runtime_args = {(dev_l_mesh_id << 16 | dev_l_chip_id)};
 
-            log_info(LogTest, "run socket rx at x={},y={}", core.x, core.y);
+            TT_LOG_INFO_WITH_CAT(LogTest, "run socket rx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
                 program_map[test_device_id_r],
                 "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_rx_socket.cpp",
@@ -546,7 +549,7 @@ int main(int argc, char** argv) {
             defines.erase("CHECK_TIMEOUT");
         }
 
-        log_info(LogTest, "Starting test...");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Starting test...");
 
         auto start = std::chrono::system_clock::now();
 
@@ -569,7 +572,7 @@ int main(int argc, char** argv) {
         tt::llrt::write_hex_vec_to_core(test_device_id_l, tx_phys_core[0], zero_buf, test_results_addr);
 
         for (auto device : device_map) {
-            log_info(LogTest, "Launching on {}", device.first);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Launching on {}", device.first);
             tt_metal::detail::LaunchProgram(device.second, program_map[device.first], false);
         }
 
@@ -588,7 +591,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        log_info(LogTest, "Tx Finished");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Tx Finished");
 
         // terminate gatekeeper.
         // Gatekeeper will signal all routers on the device to terminate.
@@ -604,14 +607,15 @@ int main(int argc, char** argv) {
         auto end = std::chrono::system_clock::now();
 
         std::chrono::duration<double> elapsed_seconds = (end - start);
-        log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
         vector<vector<uint32_t>> tx_results;
 
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             tx_results.push_back(tt::llrt::read_hex_vec_from_core(
                 device_map[test_device_id_l]->id(), tx_phys_core[i], test_results_addr, 128));
-            log_info(LogTest, "TX{} status = {}", i, tt_fabric_status_to_string(tx_results[i][TT_FABRIC_STATUS_INDEX]));
+            TT_LOG_INFO_WITH_CAT(
+                LogTest, "TX{} status = {}", i, tt_fabric_status_to_string(tx_results[i][TT_FABRIC_STATUS_INDEX]));
             pass &= (tx_results[i][TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
         }
         /*
@@ -620,14 +624,14 @@ int main(int argc, char** argv) {
                 vector<uint32_t> router_results =
                     tt::llrt::read_hex_vec_from_core(
                         device_map[test_device_id_l]->id(), tunneler_phys_core, tunneler_test_results_addr, 128);
-                log_info(LogTest, "L Router status = {}",
+                TT_LOG_INFO_WITH_CAT(LogTest, "L Router status = {}",
            tt_fabric_status_to_string(router_results[TT_FABRIC_STATUS_INDEX])); pass &=
            (router_results[TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
 
                 vector<uint32_t> r_router_results =
                     tt::llrt::read_hex_vec_from_core(
                         device_map[test_device_id_r]->id(), r_tunneler_phys_core, tunneler_test_results_addr, 128);
-                log_info(LogTest, "R Router status = {}",
+                TT_LOG_INFO_WITH_CAT(LogTest, "R Router status = {}",
            tt_fabric_status_to_string(r_router_results[TT_FABRIC_STATUS_INDEX])); pass &=
            (r_router_results[TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
         */
@@ -653,16 +657,16 @@ int main(int argc, char** argv) {
                 // double bytes_per_pkt = static_cast<double>(tx_words_sent) * PACKET_WORD_SIZE_BYTES /
                 // static_cast<double>(num_packets);
 
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     LogTest,
                     "TX {} words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
                     i,
                     tx_words_sent,
                     tx_elapsed_cycles,
                     tx_bw);
-                // log_info(LogTest, "TX {} packets sent = {}, bytes/packet = {:.2f}, total iter = {}, zero data sent
-                // iter = {}, few data sent iter = {}, many data sent iter = {}", i, num_packets, bytes_per_pkt, iter,
-                // zero_data_sent_iter, few_data_sent_iter, many_data_sent_iter);
+                // TT_LOG_INFO_WITH_CAT(LogTest, "TX {} packets sent = {}, bytes/packet = {:.2f}, total iter = {}, zero
+                // data sent iter = {}, few data sent iter = {}, many data sent iter = {}", i, num_packets,
+                // bytes_per_pkt, iter, zero_data_sent_iter, few_data_sent_iter, many_data_sent_iter);
                 /*
                                 stat[fmt::format("tx_words_sent_{}", i)] = tx_words_sent;
                                 stat[fmt::format("tx_elapsed_cycles_{}", i)] = tx_elapsed_cycles;
@@ -674,7 +678,7 @@ int main(int argc, char** argv) {
                                 stat[fmt::format("tx_many_data_sent_iter_{}", i)] = many_data_sent_iter;
                 */
             }
-            log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
         }
 
     } catch (const std::exception& e) {
@@ -685,7 +689,7 @@ int main(int argc, char** argv) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
         return 0;
     } else {
         log_fatal(LogTest, "Test Failed\n");

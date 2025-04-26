@@ -236,7 +236,7 @@ void test_bert() {
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
 
     if (compute_grid_size.x * compute_grid_size.y == 88) {
-        tt::log_info(tt::LogTest, "Skipping test_bert for E75");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Skipping test_bert for E75");
         return;
     }
 
@@ -343,7 +343,7 @@ void test_bert() {
         auto output = qa_head(std::move(hidden_states), parameters).cpu();
         auto end = std::chrono::steady_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
-        tt::log_info(tt::LogTest, "run_bert finished in {} microseconds", duration);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "run_bert finished in {} microseconds", duration);
         return duration;
     };
 
@@ -354,9 +354,9 @@ void test_bert() {
         }
         auto average_duration = total_duration / num_iterations;
         auto num_samples_per_second = 1e6 / average_duration * batch_size;
-        tt::log_info(tt::LogTest, "total duration: {} microseconds", total_duration);
-        tt::log_info(tt::LogTest, "average duration: {} average_duration", total_duration);
-        tt::log_info(tt::LogTest, "samples per second: {}", num_samples_per_second);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "total duration: {} microseconds", total_duration);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "average duration: {} average_duration", total_duration);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "samples per second: {}", num_samples_per_second);
     };
     device->enable_program_cache();
     run_bert();

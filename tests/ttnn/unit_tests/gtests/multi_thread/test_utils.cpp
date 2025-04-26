@@ -110,7 +110,7 @@ void setup_test_with_persistent_fabric(
     bool enable_persistent_fabric,
     std::optional<size_t> num_links) {
     if (enable_persistent_fabric) {
-        log_info(tt::LogTest, "Enabling persistent fabric");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
         subdevice_managers = create_subdevices(devices);
         std::transform(
@@ -130,7 +130,7 @@ void setup_test_with_persistent_fabric(
         TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
         TT_FATAL(devices.size() == fabric_programs->size(), "Number of devices must match number of programs");
 
-        log_info(tt::LogTest, "Building EDM kernels");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Building EDM kernels");
         line_fabric->build_kernels();
         build_and_enqueue(devices, *fabric_programs);
     }
@@ -141,7 +141,7 @@ void persistent_fabric_teardown_sequence(
     std::optional<SubdeviceInfo>& subdevice_managers,
     ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
     tt::tt_fabric::TerminationSignal termination_mode) {
-    log_info("Tearing down fabric");
+    TT_LOG_INFO("Tearing down fabric");
 
     // Wait for workers to finish
     auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];

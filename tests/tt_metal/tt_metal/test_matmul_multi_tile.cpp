@@ -258,7 +258,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

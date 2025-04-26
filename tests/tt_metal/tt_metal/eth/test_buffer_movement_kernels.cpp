@@ -90,7 +90,7 @@ bool chip_to_chip_dram_buffer_transfer(
     auto output_dram_buffer = CreateBuffer(receiver_dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         tt::LogTest,
         "Sending {} bytes from device {} dram bank 0 addr {} to device {} dram bank 0 addr {}, using eth core {} and "
         "{}",
@@ -424,7 +424,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             tt::LogTest,
             "Sending interleaved buffer from device {} to device {}, using eth core {} and {}",
             sender_device->id(),
@@ -500,7 +500,7 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
                     continue;
                 }
 
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     tt::LogTest,
                     "Sending interleaved buffer from device {} to device {}, using eth core {} and {}",
                     sender_device->id(),
@@ -575,7 +575,7 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllC
                 if (receiver_device->id() != device_id) {
                     continue;
                 }
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     tt::LogTest,
                     "Sending dram buffer from device {} to device {}, using eth core {} and {}",
                     sender_device->id(),
@@ -633,7 +633,7 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
                     continue;
                 }
 
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     tt::LogTest,
                     "Sending interleaved buffer from device {} to device {}, using eth core {} and {}",
                     sender_device->id(),

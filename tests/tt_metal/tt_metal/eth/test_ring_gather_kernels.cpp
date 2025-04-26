@@ -147,7 +147,7 @@ std::vector<std::tuple<tt_metal::IDevice*, tt_metal::IDevice*, CoreCoord, CoreCo
                     sender_eth_core = second_eth_core, receiver_eth_core = first_eth_core;
                 }
                 sender_receivers.push_back({sender_device, receiver_device, sender_eth_core, receiver_eth_core});
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     tt::LogTest,
                     "Sender: {} Receiver: {} Sender Eth: {} Receiver Eth: {}",
                     sender_device->id(),
@@ -168,7 +168,7 @@ std::vector<std::tuple<tt_metal::IDevice*, tt_metal::IDevice*, CoreCoord, CoreCo
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() == device_id) {
                     sender_receivers.push_back({sender_device, receiver_device, sender_eth_core, receiver_eth_core});
-                    log_info(
+                    TT_LOG_INFO_WITH_CAT(
                         tt::LogTest,
                         "Sender: {} Receiver: {} Sender Eth: {} Receiver Eth: {}",
                         sender_device->id(),

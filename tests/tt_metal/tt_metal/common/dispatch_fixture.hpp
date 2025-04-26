@@ -111,7 +111,7 @@ protected:
         // targetting device 0 by default (and to not cause issues with BMs that have E300s).
         // TODO: when we can detect only supported devices, this check can be removed.
         if (this->arch_ == tt::ARCH::GRAYSKULL && device_id > 0) {
-            log_info(tt::LogTest, "Skipping test on device {} due to unsupported E300", device_id);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Skipping test on device {} due to unsupported E300", device_id);
             return true;
         }
 
@@ -122,18 +122,18 @@ protected:
         if (SkipTest(device->id())) {
             return;
         }
-        log_info(tt::LogTest, "Running test on device {}.", device->id());
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running test on device {}.", device->id());
         run_function();
-        log_info(tt::LogTest, "Finished running test on device {}.", device->id());
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finished running test on device {}.", device->id());
     }
 
     void DetectDispatchMode() {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            tt::log_info(tt::LogTest, "Running test using Slow Dispatch");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running test using Slow Dispatch");
             this->slow_dispatch_ = true;
         } else {
-            tt::log_info(tt::LogTest, "Running test using Fast Dispatch");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running test using Fast Dispatch");
             this->slow_dispatch_ = false;
         }
     }

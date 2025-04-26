@@ -128,7 +128,7 @@ TEST(DispatchStress, TensixRunManyTimes) {
     }
     // Run 500 times to make sure that things work
     for (int idx = 0; idx < 400; idx++) {
-        log_info(LogTest, "Running iteration #{}", idx);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running iteration #{}", idx);
         // Need to open/close the device each time in order to reproduce original issue.
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> chip_ids;
@@ -143,7 +143,7 @@ TEST(DispatchStress, TensixRunManyTimes) {
 
         // Run the test on each device
         for (IDevice* device : devices_) {
-            log_info(LogTest, "Running on device {}", device->id());
+            TT_LOG_INFO_WITH_CAT(LogTest, "Running on device {}", device->id());
             RunTest(device);
         }
 

@@ -110,45 +110,50 @@ void init(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
     if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
-        log_info(LogTest, "Usage:");
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "Usage:");
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "    -t: test type, 0:uni_write 1:mcast_write 2:dram paged_write 3:l1 paged_write 4:packed_write "
             "5:packed_write_large (default {})",
             0);
-        log_info(LogTest, "    -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
-        log_info(LogTest, "    -i: host iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(LogTest, "   -wx: right-most worker in grid (default {})", all_workers_g.end_coord.x);
-        log_info(LogTest, "   -wy: bottom-most worker in grid (default {})", all_workers_g.end_coord.y);
-        log_info(LogTest, "    -a: send to all workers (vs random) for 1-to-N cmds (default random)");
-        log_info(LogTest, "   -pi: prefetcher iterations (looping on device) (default {})", 1);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "    -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
+        TT_LOG_INFO_WITH_CAT(LogTest, "    -i: host iterations (default {})", DEFAULT_ITERATIONS);
+        TT_LOG_INFO_WITH_CAT(LogTest, "   -wx: right-most worker in grid (default {})", all_workers_g.end_coord.x);
+        TT_LOG_INFO_WITH_CAT(LogTest, "   -wy: bottom-most worker in grid (default {})", all_workers_g.end_coord.y);
+        TT_LOG_INFO_WITH_CAT(LogTest, "    -a: send to all workers (vs random) for 1-to-N cmds (default random)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "   -pi: prefetcher iterations (looping on device) (default {})", 1);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  -lps: log of page size of prefetch/dispatch buffer (default {})",
             DEFAULT_DISPATCH_BUFFER_LOG_PAGE_SIZE);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "   -bs: dispatcher block size in pages (default {})", DEFAULT_DISPATCH_BUFFER_BLOCK_SIZE_PAGES);
-        log_info(LogTest, "    -b: dispatcher buffer size in blocks (default {})", DEFAULT_DISPATCH_BUFFER_SIZE_BLOCKS);
-        log_info(LogTest, "  -pbs: prefetcher buffer size pages (default {})", DEFAULT_PREFETCHER_BUFFER_SIZE_PAGES);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "    -b: dispatcher buffer size in blocks (default {})", DEFAULT_DISPATCH_BUFFER_SIZE_BLOCKS);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  -pbs: prefetcher buffer size pages (default {})", DEFAULT_PREFETCHER_BUFFER_SIZE_PAGES);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             " -ppbs: prefetcher page batch size (process pages in batches of N to reduce overhead) (default {})",
             DEFAULT_PREFETCHER_PAGE_BATCH_SIZE);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "    -f: prefetcher fire once, use to measure dispatcher perf w/ prefetcher out of the way (default "
             "disabled)");
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "    -d: wrap all commands in debug commands and clear DRAM to known state (default disabled)");
-        log_info(LogTest, "    -c: use coherent data as payload (default false)");
-        log_info(LogTest, "   -np: paged-write number of pages (default {})", num_pages_g);
-        log_info(LogTest, "    -s: seed for randomized testing");
+        TT_LOG_INFO_WITH_CAT(LogTest, "    -c: use coherent data as payload (default false)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "   -np: paged-write number of pages (default {})", num_pages_g);
+        TT_LOG_INFO_WITH_CAT(LogTest, "    -s: seed for randomized testing");
 
-        log_info(LogTest, "Random Test args:");
-        log_info(LogTest, "  -max: max transfer size bytes (default {})", max_xfer_size_bytes_g);
-        log_info(LogTest, "  -min: min transfer size bytes (default {})", min_xfer_size_bytes_g);
-        log_info(LogTest, "  -max-addr: max paged-write dst base addr (default {})", max_paged_write_base_addr_g);
-        log_info(LogTest, "  -min-addr: min paged-write dst base addr (default {})", min_paged_write_base_addr_g);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Random Test args:");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -max: max transfer size bytes (default {})", max_xfer_size_bytes_g);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -min: min transfer size bytes (default {})", min_xfer_size_bytes_g);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  -max-addr: max paged-write dst base addr (default {})", max_paged_write_base_addr_g);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  -min-addr: min paged-write dst base addr (default {})", min_paged_write_base_addr_g);
 
         exit(0);
     }
@@ -204,7 +209,7 @@ void init(int argc, char** argv) {
     fire_once_g = test_args::has_command_option(input_args, "-f");
     if (fire_once_g) {
         if (prefetcher_buffer_size_g != dispatch_buffer_size_g + terminate_cmd_pages) {
-            log_info(LogTest, "Fire once overriding prefetcher buffer size");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Fire once overriding prefetcher buffer size");
             prefetcher_buffer_size_g = dispatch_buffer_size_g + terminate_cmd_pages * dispatch_buffer_page_size_g;
         }
     }
@@ -242,7 +247,7 @@ void gen_linear_or_packed_write_test(
     uint32_t total_size_bytes = 0;
     uint32_t buffer_size = prefetcher_buffer_size_g - page_size;  // for terminate
     bool is_linear_write = (test_type_g == 0 || test_type_g == 1);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         tt::LogTest,
         "Generating linear: {} multicast: {} Write Test with dispatch buffer page_size: {}",
         is_linear_write,
@@ -334,7 +339,7 @@ void gen_paged_write_test(
         page_size_bytes = min_xfer_size_bytes_g;
     }
 
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         tt::LogTest,
         "Generating Paged Write test to {} for dispatch buffer page_size: {} write_cmd_page_size: {} start_page: {}",
         is_dram ? "DRAM" : "L1",
@@ -410,7 +415,7 @@ void gen_cmds(
             break;
     }
 
-    log_info(LogTest, "Generated {} commands", cmd_count);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Generated {} commands", cmd_count);
 }
 
 // Clear DRAM (helpful for paged write to DRAM debug to have a fresh slate)
@@ -421,24 +426,20 @@ void initialize_dram_banks(IDevice* device) {
     auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0xBADDF00D);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        log_info(
-            tt::LogTest,
-            "Initializing DRAM {} bytes for bank_id: {}",
-            bank_size,
-            bank_id);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Initializing DRAM {} bytes for bank_id: {}", bank_size, bank_id);
         tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, 0, fill);
     }
 }
 
 int main(int argc, char** argv) {
-    log_info(tt::LogTest, "test_dispatcher.cpp - Test Start");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "test_dispatcher.cpp - Test Start");
 
     init(argc, argv);
     if (seed_g == 0) {
         seed_g = std::time(nullptr);
     }
     std::srand(seed_g);  // Seed the RNG
-    log_info(LogTest, "Random seed: {}", seed_g);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Random seed: {}", seed_g);
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
@@ -663,28 +664,29 @@ int main(int argc, char** argv) {
             my_noc_index);
 
         switch (test_type_g) {
-            case 0: log_info(LogTest, "Running linear unicast test"); break;
-            case 1: log_info(LogTest, "Running linear mcast test"); break;
+            case 0: TT_LOG_INFO_WITH_CAT(LogTest, "Running linear unicast test"); break;
+            case 1: TT_LOG_INFO_WITH_CAT(LogTest, "Running linear mcast test"); break;
             case 2:
-            case 3: log_info(LogTest, "Running paged {} test", is_paged_dram_test() ? "DRAM" : "L1"); break;
-            case 4: log_info(LogTest, "Running packed write unicast"); break;
-            case 5: log_info(LogTest, "Running packed write large unicast"); break;
+            case 3: TT_LOG_INFO_WITH_CAT(LogTest, "Running paged {} test", is_paged_dram_test() ? "DRAM" : "L1"); break;
+            case 4: TT_LOG_INFO_WITH_CAT(LogTest, "Running packed write unicast"); break;
+            case 5: TT_LOG_INFO_WITH_CAT(LogTest, "Running packed write large unicast"); break;
         }
 
-        log_info(LogTest, "Worker grid {}", all_workers_g.str());
-        log_info(LogTest, "Dispatch buffer size blocks {}", std::to_string(dispatch_buffer_size_blocks_g));
-        log_info(LogTest, "Dispatch buffer block size pages {}", std::to_string(dispatch_buffer_block_size_pages_g));
-        log_info(LogTest, "Dispatch buffer page size {}", std::to_string(dispatch_buffer_page_size_g));
-        log_info(LogTest, "Dispatch buffer pages {}", std::to_string(dispatch_buffer_pages));
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "Worker grid {}", all_workers_g.str());
+        TT_LOG_INFO_WITH_CAT(LogTest, "Dispatch buffer size blocks {}", std::to_string(dispatch_buffer_size_blocks_g));
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "Dispatch buffer block size pages {}", std::to_string(dispatch_buffer_block_size_pages_g));
+        TT_LOG_INFO_WITH_CAT(LogTest, "Dispatch buffer page size {}", std::to_string(dispatch_buffer_page_size_g));
+        TT_LOG_INFO_WITH_CAT(LogTest, "Dispatch buffer pages {}", std::to_string(dispatch_buffer_pages));
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "Dispatch buffer size {}", std::to_string(dispatch_buffer_page_size_g * dispatch_buffer_pages));
-        log_info(LogTest, "Dispatch buffer base {}", std::to_string(l1_buf_base));
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "Dispatch buffer base {}", std::to_string(l1_buf_base));
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Dispatch buffer end {}",
             std::to_string(l1_buf_base + dispatch_buffer_page_size_g * dispatch_buffer_pages));
-        log_info(LogTest, "Prefetcher CMD Buffer size {}", std::to_string(prefetcher_buffer_size_g));
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "Prefetcher CMD Buffer size {}", std::to_string(prefetcher_buffer_size_g));
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Worker result data total bytes written {}",
             std::to_string(device_data.size() * sizeof(uint32_t)));
@@ -703,16 +705,17 @@ int main(int argc, char** argv) {
 
         std::chrono::duration<double> elapsed_seconds = (end - start);
         uint32_t total_iterations = iterations_g * prefetcher_iterations_g;
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "Ran in {}us (for total iterations: {})", elapsed_seconds.count() * 1000 * 1000, total_iterations);
-        log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / total_iterations);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / total_iterations);
         if (iterations_g > 0) {
             float total_words = device_data.size();
             total_words *= total_iterations;
             float bw = total_words * sizeof(uint32_t) / (elapsed_seconds.count() * 1024.0 * 1024.0 * 1024.0);
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "BW: {} GB/s (from total_words: {} size: {} MB via host_iter: {} prefetcher_iter: {} for num_cores: "
                 "{})",
@@ -723,7 +726,7 @@ int main(int argc, char** argv) {
                 prefetcher_iterations_g,
                 all_workers_g.size());
         } else {
-            log_info(LogTest, "BW: -- GB/s (use -i 1 to report bandwidth)");
+            TT_LOG_INFO_WITH_CAT(LogTest, "BW: -- GB/s (use -i 1 to report bandwidth)");
         }
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
@@ -734,7 +737,7 @@ int main(int argc, char** argv) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
-        log_info(LogTest, "test_dispatcher.cpp - Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "test_dispatcher.cpp - Test Passed");
         return 0;
     } else {
         log_fatal(LogTest, "test_dispatcher.cpp - Test Failed\n");

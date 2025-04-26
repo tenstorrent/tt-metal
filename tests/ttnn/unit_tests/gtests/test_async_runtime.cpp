@@ -120,7 +120,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
     auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
     for (int loop = 0; loop < 10; loop++) {
-        log_info(LogTest, "Running outer loop {}", loop);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running outer loop {}", loop);
         for (auto input_val : inputs) {
             for (int i = 0; i < buf_size_datums; i++) {
                 host_data[i] = bfloat16(static_cast<float>(input_val));

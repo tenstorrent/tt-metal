@@ -77,7 +77,7 @@ protected:
 
     void initialize_seed() {
         const uint32_t seed = tt::parse_env("TT_METAL_SEED", static_cast<uint32_t>(time(nullptr)));
-        log_info(tt::LogTest, "Using seed: {}", seed);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Using seed: {}", seed);
         srand(seed);
     }
 

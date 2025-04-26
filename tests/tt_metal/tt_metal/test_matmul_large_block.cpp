@@ -411,39 +411,39 @@ int main(int argc, char** argv) {
     // Tilized input, Tilized output
     pass &= test_matmul_large_block(device, false, false);
     if (pass) {
-        log_info("Tilized input, Tilized output Passed");
+        TT_LOG_INFO("Tilized input, Tilized output Passed");
     } else {
-        log_info("Tilized input, Tilized output Failed");
+        TT_LOG_INFO("Tilized input, Tilized output Failed");
     }
 
     // Row major input, Tilized output
     pass &= test_matmul_large_block(device, true, false);
     if (pass) {
-        log_info("Row major input, Tilized output Passed");
+        TT_LOG_INFO("Row major input, Tilized output Passed");
     } else {
-        log_info("Row major input, Tilized output Failed");
+        TT_LOG_INFO("Row major input, Tilized output Failed");
     }
 
     // Tilized input, Row major output
     pass &= test_matmul_large_block(device, false, true);
     if (pass) {
-        log_info("Tilized input, Row major output Passed");
+        TT_LOG_INFO("Tilized input, Row major output Passed");
     } else {
-        log_info("Tilized input, Row major output Failed");
+        TT_LOG_INFO("Tilized input, Row major output Failed");
     }
 
     // Row major input, Row major output
     pass &= test_matmul_large_block(device, true, true);
     if (pass) {
-        log_info("Row major input, Row major output Passed");
+        TT_LOG_INFO("Row major input, Row major output Passed");
     } else {
-        log_info("Row major input, Row major output Failed");
+        TT_LOG_INFO("Row major input, Row major output Failed");
     }
 
     pass &= tt_metal::CloseDevice(device);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

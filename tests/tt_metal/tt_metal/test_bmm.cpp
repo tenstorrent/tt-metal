@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
-    log_info(LogTest, "====================================================================");
+    TT_LOG_INFO_WITH_CAT(LogTest, "====================================================================");
     try {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
@@ -217,7 +217,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

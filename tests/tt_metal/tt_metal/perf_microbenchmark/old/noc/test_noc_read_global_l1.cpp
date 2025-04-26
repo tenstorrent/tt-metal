@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
             TT_THROW("Command line arguments found exception", e.what());
         }
 
-        log_info(LogTest, "one_buffer_share {}, same_buffer_read {}", one_buffer_share, single_read);
+        TT_LOG_INFO_WITH_CAT(LogTest, "one_buffer_share {}, same_buffer_read {}", one_buffer_share, single_read);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
         if (one_buffer_share) {
             shape_Nt = (num_cores_r * num_cores_c) * Nt;
         }
-        log_info(LogTest, "Activations = {}x{}", shape_Nt * 32, 32);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Activations = {}x{}", shape_Nt * 32, 32);
 
         SHAPE shape = {1, 1, shape_Nt * 32, 32};
         std::vector<tt::deprecated::Tensor<bfloat16>> tensors;
@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
         CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
         const CoreRange all_cores(start_core, end_core);
 
-        log_info(LogTest, "core range {},{} - {},{}", start_core.x, start_core.y, end_core.x, end_core.y);
+        TT_LOG_INFO_WITH_CAT(LogTest, "core range {},{} - {},{}", start_core.x, start_core.y, end_core.x, end_core.y);
 
         uint32_t dst_cb_index = 0;
         uint32_t dst_cb_addr = 120 * 1024;
@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
         if (one_buffer_share) {
             total_tiles_size_bytes = shape_Nt * single_tile_size;
         }
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "dst_cb_addr {} / {} index {} tiles, activations_addr {} / {} "
             "index {} tiles",
@@ -308,22 +308,22 @@ int main(int argc, char** argv) {
             }
         }
 
-        log_info(LogTest, "Running {} core test", num_cores_r * num_cores_c);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running {} core test", num_cores_r * num_cores_c);
         auto begin = std::chrono::steady_clock::now();
         EnqueueProgram(device->command_queue(), program, false);
         Finish(device->command_queue());
         auto end = std::chrono::steady_clock::now();
         auto elapsed_us = duration_cast<microseconds>(end - begin).count();
         auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
-        log_info(LogTest, "Total bytes transfered: {} Bytes", total_tiles_size_bytes);
-        log_info(LogTest, "Read global to L1: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Total bytes transfered: {} Bytes", total_tiles_size_bytes);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Read global to L1: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
         tt_metal::DumpDeviceProfileResults(device, program);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         if (validation) {
-            log_info(LogTest, "Validation");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Validation");
             for (int r = 0; r < num_cores_r; ++r) {
                 for (int c = 0; c < num_cores_c; ++c) {
                     std::vector<uint32_t> result_vec;
@@ -361,7 +361,7 @@ int main(int argc, char** argv) {
                         pass = false;
                     } else {
                         if (debug) {
-                            log_info(LogTest, "{}/{} - comparision passed", r, c);
+                            TT_LOG_INFO_WITH_CAT(LogTest, "{}/{} - comparision passed", r, c);
                         }
                     }
                 }
@@ -379,7 +379,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

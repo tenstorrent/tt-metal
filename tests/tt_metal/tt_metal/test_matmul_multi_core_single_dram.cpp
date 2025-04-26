@@ -252,7 +252,7 @@ int main(int argc, char** argv) {
         CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         int num_cores_r = compute_with_storage_grid_size.y;
         int num_cores_c = compute_with_storage_grid_size.x;
-        log_info(LogTest, "Num cores r = {}, Num cores c = {}", num_cores_r, num_cores_c);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Num cores r = {}, Num cores c = {}", num_cores_r, num_cores_c);
         uint32_t M = 16 * num_cores_r;
         uint32_t K = 16 * 12;
         uint32_t N = 16 * num_cores_c;
@@ -263,17 +263,17 @@ int main(int argc, char** argv) {
         int per_core_N = N / num_cores_c;
         uint32_t single_tile_size = 2 * 1024;
         uint32_t dram_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
-        log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
-        log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
-        log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "M = {}, N = {}, K = {}", M, N, K);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Activation = {}x{}", M * 32, K * 32);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Weights = {}x{}", K * 32, N * 32);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}",
             out_subblock_h,
             in0_block_w,
             K / in0_block_w,
             M / out_subblock_h);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}",
             out_subblock_w,
@@ -303,7 +303,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        log_info(LogTest, "Slicing input tensors and copying them to dram along with sending runtime args to device");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "Slicing input tensors and copying them to dram along with sending runtime args to device");
         for (int i = 0; i < num_cores_r; i++) {
             std::vector<bfloat16> activation_slice = get_row_slice(tensor.get_values(), num_cores_r, i, M * 32, K * 32);
             for (int j = 0; j < num_cores_c; j++) {
@@ -375,13 +376,13 @@ int main(int argc, char** argv) {
             }
         }
 
-        log_info(LogTest, "Copying inputs to dram and runtime args to cores complete");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Copying inputs to dram and runtime args to cores complete");
 
-        log_info(LogTest, "Running Matmul {} core test", num_cores_c * num_cores_r);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running Matmul {} core test", num_cores_c * num_cores_r);
 
         tt_metal::detail::LaunchProgram(device, program);
-        log_info(LogTest, "Matmul test done");
-        log_info(LogTest, "Gathering data back from dram and checking against golden");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Matmul test done");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Gathering data back from dram and checking against golden");
         for (int i = 0; i < num_cores_r; i++) {
             auto golden_row = get_row_slice(golden, num_cores_r, i, M * 32, N * 32);
             for (int j = 0; j < num_cores_c; j++) {
@@ -403,7 +404,7 @@ int main(int argc, char** argv) {
                 pass &= (per_core_golden == result_untilized);
             }
         }
-        log_info(LogTest, "Golden check complete");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Golden check complete");
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -418,7 +419,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

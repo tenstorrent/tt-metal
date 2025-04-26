@@ -44,7 +44,7 @@ std::unordered_set<int> get_harvested_rows(chip_id_t device_id) {
         tmp = tmp >> 1;
         row_coordinate++;
     }
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         LogTest,
         "Device {} has {} harvested rows. Physical harvested row coordinates are: {}",
         device_id,
@@ -68,7 +68,7 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
             tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
         const metal_SocDescriptor& soc_desc =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
-        log_info(LogTest, "Device {} harvesting mask {}", device_id, harvested_rows_mask);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Device {} harvesting mask {}", device_id, harvested_rows_mask);
         std::unordered_set<int> harvested_rows = unit_tests::basic::soc_desc::get_harvested_rows(device_id);
 
         CoreCoord logical_grid_size = device->logical_grid_size();

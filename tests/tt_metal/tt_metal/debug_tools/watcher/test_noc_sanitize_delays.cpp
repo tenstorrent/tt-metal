@@ -169,7 +169,7 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, IDevice* device, CoreCoord
                 offsetof(watcher_msg_t, debug_insert_delays),
             sizeof(debug_insert_delays_msg_t));
 
-        log_info(tt::LogTest, "Read back debug_insert_delays: 0x{:x}", read_vec[0]);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Read back debug_insert_delays: 0x{:x}", read_vec[0]);
         EXPECT_TRUE((read_vec[0] >> 24) == 0x3);
 }
 

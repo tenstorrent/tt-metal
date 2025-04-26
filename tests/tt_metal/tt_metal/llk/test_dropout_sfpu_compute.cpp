@@ -88,7 +88,7 @@ bool check_dropout(
             probability,
             dropout_rate);
     } else {
-        tt::log_info(tt::LogTest, "dropout probability={}, dropout_rate={} ", probability, dropout_rate);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "dropout probability={}, dropout_rate={} ", probability, dropout_rate);
     }
 
     pass &= rate_ok;
@@ -247,7 +247,7 @@ void test_dropout(tt_metal::IDevice* device, const DropoutConfig& test_config) {
         tt::log_error(
             tt::LogTest, "Same parameters gave different results probability={}, seed={}", probability, seed_0);
     } else {
-        tt::log_info(tt::LogTest, "Two attempts with same parameters matched");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Two attempts with same parameters matched");
     }
     pass &= repeatable;
 
@@ -262,7 +262,7 @@ void test_dropout(tt_metal::IDevice* device, const DropoutConfig& test_config) {
                 seed_0,
                 seed_1);
         } else {
-            tt::log_info(tt::LogTest, "Different seed gave different results");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Different seed gave different results");
         }
         pass &= unique;
     }

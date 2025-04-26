@@ -285,7 +285,7 @@ bool write_runtime_args_to_device(
     for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            // log_info(LogTest, "Runtime kernel args for core {}, {}", core.x, core.y);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "Runtime kernel args for core {}, {}", core.x, core.y);
 
             CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
             CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
@@ -455,17 +455,17 @@ int main(int argc, char** argv) {
         uint32_t in1_mcast_sender_semaphore_noc_addr = 109664;
         uint32_t in1_mcast_receiver_semaphore_noc_addr = 109696;
 
-        log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
-        log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
-        log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "M = {}, N = {}, K = {}", M, N, K);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Activation = {}x{}", M * 32, K * 32);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Weights = {}x{}", K * 32, N * 32);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}",
             per_core_M,
             in0_block_w,
             K / in0_block_w,
             per_core_M / out_subblock_h);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}",
             in0_block_w,
@@ -515,7 +515,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        log_info(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
         auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
         auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
@@ -525,7 +525,7 @@ int main(int argc, char** argv) {
         auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         pass &= move_tiles_to_dram(device, weights, K, N, in1_dram_addr);
-        log_info(LogTest, "Copying inputs to dram complete");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Copying inputs to dram complete");
 
         for (int i = 0; i < num_cores_r; i++) {
             for (int j = 0; j < num_cores_c; j++) {
@@ -536,7 +536,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        log_info(LogTest, "Writing kernel runtime args to device");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Writing kernel runtime args to device");
         pass &= write_runtime_args_to_device(
             device,
             program,
@@ -565,14 +565,14 @@ int main(int argc, char** argv) {
             in1_mcast_sender_semaphore_noc_addr,
             in0_mcast_receiver_semaphore_noc_addr,
             in1_mcast_receiver_semaphore_noc_addr);
-        log_info(LogTest, "Writing kernel runtime args to device complete");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Writing kernel runtime args to device complete");
 
-        log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
 
         tt_metal::detail::LaunchProgram(device, program);
-        log_info(LogTest, "Matmul test done");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Matmul test done");
 
-        log_info(LogTest, "Gathering data back from dram and checking against golden");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Gathering data back from dram and checking against golden");
 
         for (int i = 0; i < M; i++) {
             auto row = get_row_slice(golden, M, i, M * 32, N * 32);
@@ -587,12 +587,12 @@ int main(int argc, char** argv) {
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
 
-                // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
-                // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
+                // TT_LOG_INFO_WITH_CAT(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank,
+                // dram_address); print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
                 pass &= (golden_tile == result_flat_layout);
             }
         }
-        log_info(LogTest, "Golden check complete");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Golden check complete");
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -608,7 +608,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

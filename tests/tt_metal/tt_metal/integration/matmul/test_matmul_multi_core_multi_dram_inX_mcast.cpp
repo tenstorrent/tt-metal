@@ -251,7 +251,7 @@ bool write_runtime_args_to_device(
             CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
             int core_x = in1_or_in0 ? core.x : start_core_x;
             int core_y = in1_or_in0 ? start_core_y : core.y;
-            // log_info(LogTest, "Runtime kernel args for core {}, {}", core.x, core.y);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "Runtime kernel args for core {}, {}", core.x, core.y);
             CoreCoord mcast_sender = {(std::size_t)core_x, (std::size_t)core_y};
             CoreCoord core_start = {(std::size_t)(core_x + (1 - in1_or_in0)), (std::size_t)(core_y + in1_or_in0)};
             CoreCoord core_end = {
@@ -339,17 +339,17 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::IDevice* device, int in1_o
     uint32_t in1_dram_addr = 400 * 1024 * 1024;
     uint32_t out_dram_addr = 800 * 1024 * 1024;
 
-    log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
-    log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
-    log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(LogTest, "M = {}, N = {}, K = {}", M, N, K);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Activation = {}x{}", M * 32, K * 32);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Weights = {}x{}", K * 32, N * 32);
+    TT_LOG_INFO_WITH_CAT(
         LogTest,
         "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}",
         per_core_M,
         in0_block_w,
         K / in0_block_w,
         per_core_M / out_subblock_h);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         LogTest,
         "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}",
         in0_block_w,
@@ -445,8 +445,8 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::IDevice* device, int in1_o
             auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
             auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::MakeConstSpan(result_bfp16));
 
-            // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
-            // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
+            // TT_LOG_INFO_WITH_CAT(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank,
+            // dram_address); print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
             pass &= (golden_tile == result_flat_layout);
         }
     }
@@ -457,7 +457,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::IDevice* device, int in1_o
 
 TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCast) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
     for (unsigned int id = 0; id < devices_.size(); id++) {
@@ -468,7 +468,7 @@ TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCast) {
 
 TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAMIn1MCast) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     }
     for (unsigned int id = 0; id < devices_.size(); id++) {

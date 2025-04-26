@@ -156,7 +156,8 @@ void RunAsyncWriteTest(
     }
 
     std::string test_type = is_raw_write ? "Raw Async Write" : "Async Write";
-    tt::log_info(tt::LogTest, "{} from {} to {}", test_type, start_mesh_chip_id.second, end_mesh_chip_id.second);
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "{} from {} to {}", test_type, start_mesh_chip_id.second, end_mesh_chip_id.second);
 
     // Get the optimal routers (no internal hops) on the start chip that will forward in the direction of the end chip
     auto routers = control_plane->get_routers_to_chip(
@@ -507,7 +508,7 @@ void RunAsyncWriteMulticastTest(
     // Log test configuration
     std::string test_type = is_raw_write ? "Raw" : "";
     std::string direction_type = multidirectional ? "Multidirectional" : "";
-    tt::log_info(
+    TT_LOG_INFO_WITH_CAT(
         tt::LogTest,
         "Async {} Write Mcast {} from {} to {}",
         test_type,

@@ -189,12 +189,13 @@ int main(int argc, char** argv) {
         //                      Inputs Setup
         ////////////////////////////////////////////////////////////////////////////
         if (debug) {
-            log_info(LogTest, "row {} x col {} = {} cores", num_cores_r, num_cores_c, num_cores_r * num_cores_c);
+            TT_LOG_INFO_WITH_CAT(
+                LogTest, "row {} x col {} = {} cores", num_cores_r, num_cores_c, num_cores_r * num_cores_c);
         }
 
-        log_info(LogTest, "M = {}, N = {}, K = {}", Mt, Nt, Kt);
-        log_info(LogTest, "Activation = {}x{}", Mt * 32, Kt * 32);
-        log_info(LogTest, "Weights = {}x{}", Kt * 32, Nt * 32);
+        TT_LOG_INFO_WITH_CAT(LogTest, "M = {}, N = {}, K = {}", Mt, Nt, Kt);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Activation = {}x{}", Mt * 32, Kt * 32);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Weights = {}x{}", Kt * 32, Nt * 32);
 
         if (Mt % num_cores_r != 0) {
             TT_THROW("Mt {} must be a multiple of num_cores_r {}", Mt, num_cores_r);
@@ -219,17 +220,18 @@ int main(int argc, char** argv) {
         uint32_t output_addr = weights_addr + (per_core_weights_tiles * single_tile_size);
 
         if (debug) {
-            log_info(LogTest, "per core M = {}, N = {}, K = {}", per_core_Mt, per_core_Nt, Kt);
-            log_info(
+            TT_LOG_INFO_WITH_CAT(LogTest, "per core M = {}, N = {}, K = {}", per_core_Mt, per_core_Nt, Kt);
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "per core activations tiles = {}, weights tiles = {}",
                 per_core_activations_tiles,
                 per_core_weights_tiles);
         }
 
-        log_info(LogTest, "activations_addr ({} x 1024) {} tiles", activations_addr / 1024, per_core_activations_tiles);
-        log_info(LogTest, "weights_addr ({} x 1024) {} tiles", weights_addr / 1024, per_core_weights_tiles);
-        log_info(LogTest, "output_addr ({} x 1024) {} tiles", output_addr / 1024, per_core_output_tiles);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "activations_addr ({} x 1024) {} tiles", activations_addr / 1024, per_core_activations_tiles);
+        TT_LOG_INFO_WITH_CAT(LogTest, "weights_addr ({} x 1024) {} tiles", weights_addr / 1024, per_core_weights_tiles);
+        TT_LOG_INFO_WITH_CAT(LogTest, "output_addr ({} x 1024) {} tiles", output_addr / 1024, per_core_output_tiles);
 
         if (output_addr + (per_core_output_tiles * single_tile_size) > 1024 * 1024) {
             log_error(LogTest, "inputs and output CBs don't fit in L1");
@@ -250,7 +252,7 @@ int main(int argc, char** argv) {
             print_vec(identity, 2, Nt * 32, std::string("Weights first row"));
         }
 
-        log_info(LogTest, "Slicing input tensors and copying them to L1");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Slicing input tensors and copying them to L1");
         for (int r = 0; r < num_cores_r; r++) {
             std::vector<bfloat16> activation_slice =
                 get_row_slice(tensor.get_values(), num_cores_r, r, Mt * 32, Kt * 32);
@@ -283,8 +285,8 @@ int main(int argc, char** argv) {
         CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
         const CoreRange all_cores(start_core, end_core);
 
-        log_info(LogTest, "start_core {},{}", start_core.x, start_core.y);
-        log_info(LogTest, "end_core {},{}", end_core.x, end_core.y);
+        TT_LOG_INFO_WITH_CAT(LogTest, "start_core {},{}", start_core.x, start_core.y);
+        TT_LOG_INFO_WITH_CAT(LogTest, "end_core {},{}", end_core.x, end_core.y);
 
         // CB creation
         uint32_t cb_activations_index = 0;
@@ -335,18 +337,18 @@ int main(int argc, char** argv) {
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
         if (debug) {
-            log_info(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
+            TT_LOG_INFO_WITH_CAT(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
         }
 
         double tflops = static_cast<double>(num_of_matmul_ops) / duration.count() / 1000;
-        log_info(LogTest, "time duration: {} ns, TFLOPS {}", duration.count(), tflops);
+        TT_LOG_INFO_WITH_CAT(LogTest, "time duration: {} ns, TFLOPS {}", duration.count(), tflops);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         auto golden = select_columns(tensor.get_values(), Mt, Kt, Nt);
         if (validation) {
-            log_info(LogTest, "Validation");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Validation");
             for (int r = 0; r < num_cores_r; ++r) {
                 auto golden_row = get_row_slice(golden, num_cores_r, r, Mt * 32, Nt * 32);
                 for (int c = 0; c < num_cores_c; ++c) {
@@ -375,7 +377,7 @@ int main(int argc, char** argv) {
                         pass = false;
                     } else {
                         if (debug) {
-                            log_info(LogTest, "{}/{} - comparision passed", r, c);
+                            TT_LOG_INFO_WITH_CAT(LogTest, "{}/{} - comparision passed", r, c);
                         }
                     }
                 }
@@ -392,7 +394,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

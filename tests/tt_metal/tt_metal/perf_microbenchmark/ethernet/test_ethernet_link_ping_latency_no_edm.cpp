@@ -214,11 +214,11 @@ int main(int argc, char** argv) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
-        log_info(tt::LogTest, "Need at least 2 devices to run this test");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Need at least 2 devices to run this test");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest, "Test must be run on WH");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Test must be run on WH");
         return 0;
     }
 
@@ -259,7 +259,7 @@ int main(int argc, char** argv) {
         for (auto num_samples : sample_counts) {
             for (auto sample_page_size : sample_sizes) {
                 for (auto max_channels_per_direction : channel_counts) {
-                    log_info(
+                    TT_LOG_INFO_WITH_CAT(
                         tt::LogTest,
                         "num_samples: {}, sample_page_size: {}, num_channels_per_direction: {}",
                         num_samples,

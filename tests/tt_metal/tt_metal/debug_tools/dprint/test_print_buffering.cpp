@@ -87,7 +87,7 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
 
         SetRuntimeArgs(program, kernel_id, core, {core.x, core.y});
 
-        log_info(tt::LogTest, "Running test on core {}:({},{})", device->id(), core.x, core.y);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running test on core {}:({},{})", device->id(), core.x, core.y);
     }
 
     fixture->RunProgram(device, program);

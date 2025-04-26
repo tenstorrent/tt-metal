@@ -64,22 +64,22 @@ void init(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
     if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
-        log_info(LogTest, "Usage:");
-        log_info(LogTest, "     -v: device number to run on (default 0) ", DEFAULT_SECONDS);
-        log_info(LogTest, "     -t: time in seconds (default {})", DEFAULT_SECONDS);
-        log_info(LogTest, "     -x: grid top left x");
-        log_info(LogTest, "     -y: grid top left y");
-        log_info(LogTest, "-width: unicast grid width (default {})", DEFAULT_TARGET_WIDTH);
-        log_info(LogTest, "-height: unicast grid height (default {})", DEFAULT_TARGET_HEIGHT);
-        log_info(LogTest, "    -mx: mcast core x");
-        log_info(LogTest, "    -my: mcast core y");
-        log_info(LogTest, "     -e: mcast from nth idle eth core (ignores -mx,-my)");
-        log_info(LogTest, "     -m: mcast packet size");
-        log_info(LogTest, "     -u: ucast packet size");
-        log_info(LogTest, "     -ucast-only: skip multicasting");
-        log_info(LogTest, "-rdelay: insert random delay between noc transactions");
-        log_info(LogTest, "     -n: noc to use (default 0)");
-        log_info(LogTest, "     -s: seed random number generator");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Usage:");
+        TT_LOG_INFO_WITH_CAT(LogTest, "     -v: device number to run on (default 0) ", DEFAULT_SECONDS);
+        TT_LOG_INFO_WITH_CAT(LogTest, "     -t: time in seconds (default {})", DEFAULT_SECONDS);
+        TT_LOG_INFO_WITH_CAT(LogTest, "     -x: grid top left x");
+        TT_LOG_INFO_WITH_CAT(LogTest, "     -y: grid top left y");
+        TT_LOG_INFO_WITH_CAT(LogTest, "-width: unicast grid width (default {})", DEFAULT_TARGET_WIDTH);
+        TT_LOG_INFO_WITH_CAT(LogTest, "-height: unicast grid height (default {})", DEFAULT_TARGET_HEIGHT);
+        TT_LOG_INFO_WITH_CAT(LogTest, "    -mx: mcast core x");
+        TT_LOG_INFO_WITH_CAT(LogTest, "    -my: mcast core y");
+        TT_LOG_INFO_WITH_CAT(LogTest, "     -e: mcast from nth idle eth core (ignores -mx,-my)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "     -m: mcast packet size");
+        TT_LOG_INFO_WITH_CAT(LogTest, "     -u: ucast packet size");
+        TT_LOG_INFO_WITH_CAT(LogTest, "     -ucast-only: skip multicasting");
+        TT_LOG_INFO_WITH_CAT(LogTest, "-rdelay: insert random delay between noc transactions");
+        TT_LOG_INFO_WITH_CAT(LogTest, "     -n: noc to use (default 0)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "     -s: seed random number generator");
         exit(0);
     }
 
@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
                                  .get_physical_tensix_core_from_logical(mcast_logical);
         }
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "MCast {} core: {}, virtual {}, physical {}, writing {} bytes per xfer",
             mcast_from_eth_g ? "ETH" : "TENSIX",
@@ -258,20 +258,20 @@ int main(int argc, char** argv) {
             mcast_size_g);
     }
 
-    log_info(LogTest, "Unicast grid: {}, writing {} bytes per xfer", workers_logical.str(), ucast_size_g);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Unicast grid: {}, writing {} bytes per xfer", workers_logical.str(), ucast_size_g);
 
     if (rnd_coord_g) {
-        log_info("Randomizing ucast noc write destinations");
+        TT_LOG_INFO("Randomizing ucast noc write destinations");
     } else {
-        log_info("Non-random ucast noc write destinations TBD");
+        TT_LOG_INFO("Non-random ucast noc write destinations TBD");
     }
 
-    log_info("Using NOC {}", (noc_g == tt_metal::NOC::NOC_0) ? 0 : 1);
+    TT_LOG_INFO("Using NOC {}", (noc_g == tt_metal::NOC::NOC_0) ? 0 : 1);
 
     if (rnd_delay_g) {
-        log_info("Randomizing delay");
+        TT_LOG_INFO("Randomizing delay");
     }
-    log_info(LogTest, "Running for {} seconds", time_secs_g);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Running for {} seconds", time_secs_g);
 
     tt::tt_metal::detail::LaunchProgram(device, program, true);
     tt_metal::CloseDevice(device);

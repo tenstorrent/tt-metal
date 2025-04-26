@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
 
         std::vector<uint32_t> first_kernel_result;
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(int), first_kernel_result);
-        log_info(LogVerif, "first kernel result = {}", first_kernel_result[0]);
+        TT_LOG_INFO_WITH_CAT(LogVerif, "first kernel result = {}", first_kernel_result[0]);
 
         ////////////////////////////////////////////////////////////////////////////
         //                  Update Runtime Args and Re-run Application
@@ -84,14 +84,14 @@ int main(int argc, char** argv) {
 
         std::vector<uint32_t> second_kernel_result;
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(int), second_kernel_result);
-        log_info(LogVerif, "second kernel result = {}", second_kernel_result[0]);
+        TT_LOG_INFO_WITH_CAT(LogVerif, "second kernel result = {}", second_kernel_result[0]);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         uint32_t first_expected_result = first_runtime_args[0] + first_runtime_args[1];
         uint32_t second_expected_result = second_runtime_args[0] + second_runtime_args[1];
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogVerif,
             "first expected result = {} second expected result = {}",
             first_expected_result,
@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

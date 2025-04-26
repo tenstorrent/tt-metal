@@ -353,7 +353,7 @@ TEST_F(DeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
                     .out0_t = out0_t_,
                     .out1_t = (out0_t_ == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b};
 
-                log_info(
+                TT_LOG_INFO(
                     "Testing UNARY BROADCAST BCAST_DIM_0={} in0_t={} out0_t={} | BCAST_DIM_1={} in1_t={} out1_t={}",
                     broadcast_dim_to_type.at(test_config.broadcast_dim_0),
                     test_config.in0_t,

@@ -57,7 +57,7 @@ TEST(Cluster, ReportSystemHealth) {
         }
         ss << std::endl;
     }
-    log_info(tt::LogTest, "{}", ss.str());
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "{}", ss.str());
 
     // Print a summary of unexpected system states
     for (const auto& err_str : unexpected_system_states) {

@@ -87,41 +87,45 @@ void init(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
     if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
-        log_info(LogTest, "Usage:");
-        log_info(LogTest, "  -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
-        log_info(LogTest, "  -i: iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "Usage:");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -i: iterations (default {})", DEFAULT_ITERATIONS);
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  -bs: batch size in K of data to xfer in one iteration (default {}K)", DEFAULT_BATCH_SIZE_K);
-        log_info(LogTest, "  -p: page size (default {})", DEFAULT_PAGE_SIZE);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -p: page size (default {})", DEFAULT_PAGE_SIZE);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  -m: source mem, 0:PCIe, 1:DRAM, 2:L1, 3:ALL_DRAMs, 4:HOST_READ, 5:HOST_WRITE, 6:MULTICAST_WRITE "
             "(default 0:PCIe)");
-        log_info(LogTest, "  -l: measure latency (default is bandwidth)");
-        log_info(LogTest, "  -rx: X of core to issue read or write (default {})", 1);
-        log_info(LogTest, "  -ry: Y of core to issue read or write (default {})", 0);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -l: measure latency (default is bandwidth)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -rx: X of core to issue read or write (default {})", 1);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -ry: Y of core to issue read or write (default {})", 0);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  -sx: when reading from L1, X of core to read from. when issuing a multicast write, X of start core to "
             "write to. (default {})",
             0);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  -sy: when reading from L1, Y of core to read from. when issuing a multicast write, Y of start core to "
             "write to. (default {})",
             0);
-        log_info(LogTest, "  -tx: when issuing a multicast write, X of end core to write to (default {})", 0);
-        log_info(LogTest, "  -ty: when issuing a multicast write, Y of end core to write to (default {})", 0);
-        log_info(LogTest, "  -wr: issue unicast write instead of read (default false)");
-        log_info(LogTest, "  -c: when reading from dram, DRAM channel (default 0)");
-        log_info(LogTest, "  -f: time just the finish call (default disabled)");
-        log_info(LogTest, "  -o: use read_one_packet API.  restricts page size to 8K max (default {})", 0);
-        log_info(LogTest, "-link: link mcast transactions");
-        log_info(LogTest, " -hr: hammer write_reg while executing (for PCIe test)");
-        log_info(LogTest, " -hp: hammer hugepage PCIe memory while executing (for PCIe test)");
-        log_info(LogTest, " -hpt:hammer hugepage PCIe hammer type: 0:32bit writes 1:128bit non-temporal writes");
-        log_info(LogTest, "  -psrta: pass page size as a runtime argument (default compile time define)");
-        log_info(LogTest, " -nop: time loop of <n> nops");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  -tx: when issuing a multicast write, X of end core to write to (default {})", 0);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  -ty: when issuing a multicast write, Y of end core to write to (default {})", 0);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -wr: issue unicast write instead of read (default false)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -c: when reading from dram, DRAM channel (default 0)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -f: time just the finish call (default disabled)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -o: use read_one_packet API.  restricts page size to 8K max (default {})", 0);
+        TT_LOG_INFO_WITH_CAT(LogTest, "-link: link mcast transactions");
+        TT_LOG_INFO_WITH_CAT(LogTest, " -hr: hammer write_reg while executing (for PCIe test)");
+        TT_LOG_INFO_WITH_CAT(LogTest, " -hp: hammer hugepage PCIe memory while executing (for PCIe test)");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, " -hpt:hammer hugepage PCIe hammer type: 0:32bit writes 1:128bit non-temporal writes");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -psrta: pass page size as a runtime argument (default compile time define)");
+        TT_LOG_INFO_WITH_CAT(LogTest, " -nop: time loop of <n> nops");
         exit(0);
     }
 
@@ -147,14 +151,14 @@ void init(int argc, char** argv) {
     nop_count_g = test_args::get_command_option_uint32(input_args, "-nop", 0);
 
     if (read_one_packet_g && page_size_g > 8192) {
-        log_info(LogTest, "Page size must be <= 8K for read_one_packet\n");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Page size must be <= 8K for read_one_packet\n");
         exit(-1);
     }
     page_count_g = size_bytes / page_size_g;
 
     test_write = test_args::has_command_option(input_args, "-wr");
     if (test_write && (source_mem_g != 2 && source_mem_g != 6)) {
-        log_info(LogTest, "Writing only tested w/ L1 destination\n");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Writing only tested w/ L1 destination\n");
         exit(-1);
     }
 
@@ -165,14 +169,15 @@ void init(int argc, char** argv) {
 
     if (source_mem_g == 6) {
         if (mcast_end_core_x < src_core_x || mcast_end_core_y < src_core_y) {
-            log_info(LogTest, "X of end core must be >= X of start core, Y of end core must be >= Y of start core");
+            TT_LOG_INFO_WITH_CAT(
+                LogTest, "X of end core must be >= X of start core, Y of end core must be >= Y of start core");
             exit(-1);
         }
 
         mcast_src_workers_g = CoreRange({src_core_x, src_core_y}, {mcast_end_core_x, mcast_end_core_y});
 
         if (mcast_src_workers_g.intersects(worker_g)) {
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "Multicast destination rectangle and core that issues the multicast cannot overlap - Multicast "
                 "destination rectangle: {} Master core: {}",
@@ -270,7 +275,7 @@ int main(int argc, char** argv) {
             } break;
             case 4: {
                 src_mem = "FROM_L1_TO_HOST";
-                log_info(LogTest, "Host bw test overriding page_count to 1");
+                TT_LOG_INFO_WITH_CAT(LogTest, "Host bw test overriding page_count to 1");
                 CoreCoord w = device->worker_core_from_logical_core(src_worker_g);
                 page_count_g = 1;
                 noc_addr_x = w.x;
@@ -278,7 +283,7 @@ int main(int argc, char** argv) {
             } break;
             case 5: {
                 src_mem = "FROM_HOST_TO_L1";
-                log_info(LogTest, "Host bw test overriding page_count to 1");
+                TT_LOG_INFO_WITH_CAT(LogTest, "Host bw test overriding page_count to 1");
                 CoreCoord w = device->worker_core_from_logical_core(src_worker_g);
                 page_count_g = 1;
                 noc_addr_x = w.x;
@@ -338,16 +343,16 @@ int main(int argc, char** argv) {
         std::shared_ptr<Event> sync_event = std::make_shared<Event>();
 
         CoreCoord w = device->worker_core_from_logical_core(worker_g.start_coord);
-        log_info(LogTest, "Master core: {}", w.str());
+        TT_LOG_INFO_WITH_CAT(LogTest, "Master core: {}", w.str());
         string direction = test_write ? "Writing" : "Reading";
         if (source_mem_g == 3) {
-            log_info(LogTest, "{}: {}", direction, src_mem);
+            TT_LOG_INFO_WITH_CAT(LogTest, "{}: {}", direction, src_mem);
         } else if (source_mem_g == 4) {
-            log_info(LogTest, "{}: {} - core ({}, {})", direction, src_mem, w.x, w.y);
+            TT_LOG_INFO_WITH_CAT(LogTest, "{}: {} - core ({}, {})", direction, src_mem, w.x, w.y);
         } else if (source_mem_g == 5) {
-            log_info(LogTest, "{}: {} - core ({}, {})", test_write, src_mem, w.x, w.y);
+            TT_LOG_INFO_WITH_CAT(LogTest, "{}: {} - core ({}, {})", test_write, src_mem, w.x, w.y);
         } else if (source_mem_g == 6) {
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "direction: {} - core grid [({}, {}) - ({}, {})]",
                 direction,
@@ -357,7 +362,7 @@ int main(int argc, char** argv) {
                 mcast_noc_addr_end_x,
                 mcast_noc_addr_end_y);
         } else {
-            log_info(LogTest, "{}: {} - core ({}, {})", direction, src_mem, noc_addr_x, noc_addr_y);
+            TT_LOG_INFO_WITH_CAT(LogTest, "{}: {} - core ({}, {})", direction, src_mem, noc_addr_x, noc_addr_y);
         }
         if (source_mem_g < 4 || source_mem_g == 6) {
             std::string api;
@@ -369,15 +374,15 @@ int main(int argc, char** argv) {
             } else {
                 api = "noc_async_" + read_write;
             }
-            log_info(LogTest, "Using API: {}", api);
-            log_info(
+            TT_LOG_INFO_WITH_CAT(LogTest, "Using API: {}", api);
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "Page size ({}): {}",
                 page_size_as_runtime_arg_g ? "runtime arg" : "compile time define",
                 page_size_g);
-            log_info(LogTest, "Size per iteration: {}", page_count_g * page_size_g);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Size per iteration: {}", page_count_g * page_size_g);
         }
-        log_info(LogTest, "Iterations: {}", iterations_g);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Iterations: {}", iterations_g);
         if (hammer_pcie_g) {
             log_warning(LogTest, "WARNING: Hardcoded PCIe addresses may not be safe w/ FD, check above if hung");
         }
@@ -474,10 +479,10 @@ int main(int argc, char** argv) {
             elapsed_seconds = (end - start);
         }
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "Ran in {}us", std::chrono::duration_cast<std::chrono::microseconds>(elapsed_seconds).count());
         if (latency_g) {
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "Latency: {} us",
                 (float)std::chrono::duration_cast<std::chrono::microseconds>(elapsed_seconds).count() /
@@ -487,7 +492,7 @@ int main(int argc, char** argv) {
                        (elapsed_seconds.count() * 1000.0 * 1000.0 * 1000.0);
             std::stringstream ss;
             ss << std::fixed << std::setprecision(3) << bw;
-            log_info(LogTest, "BW: {} GB/s", ss.str());
+            TT_LOG_INFO_WITH_CAT(LogTest, "BW: {} GB/s", ss.str());
         }
 
         pass &= tt_metal::CloseDevice(device);
@@ -497,7 +502,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
         return 0;
     } else {
         log_fatal(LogTest, "Test Failed\n");

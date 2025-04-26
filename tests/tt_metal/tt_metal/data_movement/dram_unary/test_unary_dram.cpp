@@ -120,7 +120,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
             .compile_args = writer_compile_args});
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    TT_LOG_INFO("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Launch program and record outputs
@@ -130,9 +130,9 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
     detail::ReadFromBuffer(output_dram_buffer, packed_output);
 
     // Print output and golden vectors
-    log_info("Golden vector");
+    TT_LOG_INFO("Golden vector");
     print_vector<uint32_t>(packed_golden);
-    log_info("Output vector");
+    TT_LOG_INFO("Output vector");
     print_vector<uint32_t>(packed_output);
 
     // Return comparison
@@ -187,7 +187,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         // Cores
         auto grid_size = devices_.at(id)->compute_with_storage_grid_size();
-        log_info("Grid size x: {}, y: {}", grid_size.x, grid_size.y);
+        TT_LOG_INFO("Grid size x: {}, y: {}", grid_size.x, grid_size.y);
 
         for (unsigned int x = 0; x < grid_size.x; x++) {
             for (unsigned int y = 0; y < grid_size.y; y++) {
@@ -252,8 +252,8 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
                 .tensor_shape_in_pages = tensor_shape_in_pages,
                 .num_dram_banks = num_dram_banks};
 
-            log_info("Tensor shape in pages: {}", tensor_shape_in_pages);
-            log_info("Number of dram banks: {}", num_dram_banks);
+            TT_LOG_INFO("Tensor shape in pages: {}", tensor_shape_in_pages);
+            TT_LOG_INFO("Number of dram banks: {}", num_dram_banks);
 
             // Run
             for (unsigned int id = 0; id < num_devices_; id++) {

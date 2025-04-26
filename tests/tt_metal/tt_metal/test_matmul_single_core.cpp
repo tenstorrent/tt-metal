@@ -118,17 +118,17 @@ int main(int argc, char** argv) {
         int out_subblock_h = 4;
         int out_subblock_w = 2;
         int in0_block_w = 2;
-        log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
-        log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
-        log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "M = {}, N = {}, K = {}", M, N, K);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Activation = {}x{}", M * 32, K * 32);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Weights = {}x{}", K * 32, N * 32);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}",
             out_subblock_h,
             in0_block_w,
             K / in0_block_w,
             M / out_subblock_h);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}",
             out_subblock_w,
@@ -295,9 +295,9 @@ int main(int argc, char** argv) {
 
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_rt_args);
 
-        log_info(LogTest, "Launching kernels");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Launching kernels");
         tt_metal::detail::LaunchProgram(device, program);
-        log_info(LogTest, "Kernels done");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Kernels done");
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
@@ -317,7 +317,7 @@ int main(int argc, char** argv) {
         // auto golden = tensor.get_values();
         pass &= (golden == result_untilized);
         pass &= tt_metal::CloseDevice(device);
-        log_info(LogTest, "Closing device");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Closing device");
 
     } catch (const std::exception& e) {
         pass = false;
@@ -328,7 +328,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

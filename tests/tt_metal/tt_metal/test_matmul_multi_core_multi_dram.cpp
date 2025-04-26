@@ -316,17 +316,17 @@ int main(int argc, char** argv) {
         int per_core_M = M / num_cores_r;
         int per_core_N = N / num_cores_c;
         uint32_t single_tile_size = 2 * 1024;
-        log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
-        log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
-        log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "M = {}, N = {}, K = {}", M, N, K);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Activation = {}x{}", M * 32, K * 32);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Weights = {}x{}", K * 32, N * 32);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}",
             per_core_M,
             in0_block_w,
             K / in0_block_w,
             per_core_M / out_subblock_h);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}",
             in0_block_w,
@@ -371,7 +371,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        log_info(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
         auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
         auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
@@ -385,12 +385,12 @@ int main(int argc, char** argv) {
 
         Buffer weight_buffer(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
         pass &= move_tiles_to_dram(cq, weight_buffer, weights, K, N);
-        log_info(LogTest, "Copying inputs to dram complete");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Copying inputs to dram complete");
 
         Buffer out_buffer(device, M * N * sizeof(uint32_t) * 32 * 32, 1024 * 2, BufferType::DRAM);
         uint32_t out_dram_addr = out_buffer->address();
 
-        log_info(LogTest, "Writing kernel runtime args to device");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Writing kernel runtime args to device");
         pass &= assign_runtime_args_to_program(
             device,
             program,
@@ -409,13 +409,13 @@ int main(int argc, char** argv) {
             activation_buffer->address(),
             weight_buffer->address(),
             out_dram_addr);
-        log_info(LogTest, "Writing kernel runtime args to device complete");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Writing kernel runtime args to device complete");
 
-        log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
         EnqueueProgram(cq, program, false);
 
-        log_info(LogTest, "Matmul test done");
-        log_info(LogTest, "Gathering data back from dram and checking against golden");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Matmul test done");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Gathering data back from dram and checking against golden");
 
         vector<uint32_t> result;
         EnqueueReadBuffer(cq, out_buffer, result, true);
@@ -438,7 +438,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        log_info(LogTest, "Golden check complete");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Golden check complete");
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -454,7 +454,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

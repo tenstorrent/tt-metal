@@ -815,7 +815,7 @@ TEST(
         for (auto& num_workers_per_stage : num_workers_per_stage_sweep) {
             for (size_t slices_per_stage : slices_per_stage_sweep) {
                 for (auto& mem_configs : mem_configs_sweep) {
-                    log_info(
+                    TT_LOG_INFO_WITH_CAT(
                         tt::LogTest,
                         "tensor shape {} and workers stage {} slices_per_stage {}",
                         tensor_shape,

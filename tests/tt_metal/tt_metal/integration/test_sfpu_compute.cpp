@@ -268,7 +268,7 @@ TEST_P(SingleCoreSingleCardSfpuParameterizedFixture, TensixSfpuCompute) {
             .cores = core_range_set,
             .sfpu_op = sfpu_op,
             .approx_mode = false};
-        log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+        TT_LOG_INFO("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
         EXPECT_TRUE(run_sfpu_all_same_buffer(device_->command_queue(), test_config));
     }
 }
@@ -316,7 +316,7 @@ TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, TensixSfpuCompute) {
             .cores = core_range_set,
             .sfpu_op = sfpu_op,
             .approx_mode = true};
-        log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+        TT_LOG_INFO("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
         EXPECT_TRUE(run_sfpu_all_same_buffer(device_->command_queue(), test_config));
     }
 }
@@ -366,7 +366,7 @@ TEST_P(MultiCoreSingleCardSfpuParameterizedApproxFixture, TensixAllCoreMultiTile
             .cores = core_range_set,
             .sfpu_op = sfpu_op,
             .approx_mode = true};
-        log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+        TT_LOG_INFO("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
         EXPECT_TRUE(run_sfpu_all_same_buffer(device_->command_queue(), test_config));
     }
 }

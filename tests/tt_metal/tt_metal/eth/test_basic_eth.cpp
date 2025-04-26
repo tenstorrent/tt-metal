@@ -280,7 +280,7 @@ bool noc_reader_and_writer_kernels(
     auto eth_readback_vec = llrt::read_hex_vec_from_core(device->id(), eth_noc_xy, eth_dst_l1_address, byte_size);
     pass &= (eth_readback_vec == reader_inputs);
     if (not pass) {
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             tt::LogTest,
             "Mismatch at eth core: {}, eth kernel read incorrect values from DRAM",
             logical_eth_core.str());
@@ -289,7 +289,7 @@ bool noc_reader_and_writer_kernels(
     tt_metal::detail::ReadFromBuffer(writer_dram_buffer, dram_readback_vec);
     pass &= (dram_readback_vec == writer_inputs);
     if (not pass) {
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             tt::LogTest, "Mismatch at eth core: {}, eth kernel wrote incorrect values to DRAM", logical_eth_core.str());
     }
 

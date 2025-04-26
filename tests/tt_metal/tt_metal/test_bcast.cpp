@@ -104,8 +104,8 @@ int main(int argc, char** argv) {
     // ops = { BcastOp::MUL }; // TODO(AP): for debugging
     for (auto bcast_op : ops) {
         for (auto bcast_dim : bdims) {
-            log_info(LogTest, "=============================================================");
-            log_info(
+            TT_LOG_INFO_WITH_CAT(LogTest, "=============================================================");
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "======= Running bcast test for bdim={}, op={}",
                 bdim_to_log_string[bcast_dim],
@@ -379,7 +379,7 @@ int main(int argc, char** argv) {
     }  // for bcast_mode loop
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

@@ -27,7 +27,7 @@ void ForEachCoreTypeXHWCQs(const std::function<void(const CoreType& core_type, c
         if (core_type == CoreType::ETH && MetalContext::instance().hal().get_programmable_core_type_index(
                                               tt::tt_metal::HalProgrammableCoreType::IDLE_ETH) == -1) {
             // This device does not have the eth core
-            tt::log_info(tt::LogTest, "IDLE_ETH core type is not on this device");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "IDLE_ETH core type is not on this device");
             continue;
         }
         for (const auto& num_hw_cqs : num_hw_cqs_to_test) {
@@ -119,7 +119,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
     if (MetalContext::instance().hal().get_programmable_core_type_index(
             tt::tt_metal::HalProgrammableCoreType::IDLE_ETH) == -1) {
         // This device does not have the eth core
-        tt::log_info(tt::LogTest, "Test not supported on this device");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Test not supported on this device");
         return;
     }
     const auto core_type = CoreType::WORKER;

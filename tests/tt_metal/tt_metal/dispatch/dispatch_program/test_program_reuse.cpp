@@ -229,7 +229,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
     uint32_t cb_config_buffer_size =
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     for (auto device : devices_) {
-        log_info(LogTest, "Running test on {}", device->id());
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running test on {}", device->id());
         EnqueueProgram(device->command_queue(), *program, false);
         Finish(device->command_queue());
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
@@ -414,7 +414,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestDataCopyComputeProgramReuse) {
     }
     // Run program multiple times with different RTAs and validate for each iteration
     for (int iter = 0; iter < 100; iter++) {
-        log_info(LogTest, "Run iter {}", iter);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Run iter {}", iter);
         if (iter) {
             auto& rtas = GetRuntimeArgs(program, reader_writer_kernel);
             for (auto core : full_grid) {

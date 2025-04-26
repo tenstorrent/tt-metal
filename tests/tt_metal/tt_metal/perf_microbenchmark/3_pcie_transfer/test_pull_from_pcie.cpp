@@ -158,28 +158,29 @@ int main(int argc, char** argv) {
         std::vector<std::string> input_args(argv, argv + argc);
 
         if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
-            log_info(LogTest, "Usage:");
-            log_info(LogTest, "  --num-tests: number of iterations");
-            log_info(
+            TT_LOG_INFO_WITH_CAT(LogTest, "Usage:");
+            TT_LOG_INFO_WITH_CAT(LogTest, "  --num-tests: number of iterations");
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "  --total-transfer-size: total size to copy to hugepage in bytes (default {} B)",
                 512 * 1024 * 1024);
-            log_info(LogTest, "  --transfer-size: size of one write to hugepage (default {} B)", 64 * 1024);
-            log_info(LogTest, "  --enable-kernel-read: whether to run a kernel that reads from PCIe (default false)");
-            log_info(
+            TT_LOG_INFO_WITH_CAT(LogTest, "  --transfer-size: size of one write to hugepage (default {} B)", 64 * 1024);
+            TT_LOG_INFO_WITH_CAT(
+                LogTest, "  --enable-kernel-read: whether to run a kernel that reads from PCIe (default false)");
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "  --simulate-wr-ptr-update: whether host writes to reg address at 32KB intervals (default false)");
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "  --wr-ptr-rdbk-interval: after this many num writes to reg address, do readback (default 0 means no "
                 "readbacks)");
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "  --copy-mode: method used to write to pcie. 0: memcpy, 1: 4 byte writes, 2: nt_memcpy (16B streaming "
                 "loads + stores), 3: nt_memcpy (16B aligned loads + streaming stores), 4: nt_memcpy (16B unaligned "
                 "loads + streaming stores), 5: nt_memcpy (32B streaming loads + stores), 6: nt_memcpy (32B aligned "
                 "loads + streaming stores), 7: nt_memcpy (32B unaligned loads + streaming stores) 8: memcpy_to_device");
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "  --addr-align: Alignment of start of data. Must be a power of 2 (default {} B)",
                 memcpy_alignment);
@@ -294,7 +295,7 @@ int main(int argc, char** argv) {
 
         const std::string copy_mode_str = copy_mode == 0 ? "memcpy" : copy_mode == 1 ? "4 byte writes" : "nt_memcpy";
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Measuring host-to-device bandwidth for "
             "total_transfer_size={} B "
@@ -310,7 +311,7 @@ int main(int argc, char** argv) {
             write_ptr_readback_interval,
             copy_mode_str);
 
-        log_info(LogTest, "Num tests {}", num_tests);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             // Execute application
             std::thread t1([&]() {
@@ -404,7 +405,7 @@ int main(int argc, char** argv) {
 
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             h2d_bandwidth.push_back((total_transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
-            log_info(LogTest, "H2D BW: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, h2d_bandwidth[i]);
+            TT_LOG_INFO_WITH_CAT(LogTest, "H2D BW: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, h2d_bandwidth[i]);
         }
 
         pass &= tt_metal::CloseDevice(device);
@@ -433,12 +434,12 @@ int main(int argc, char** argv) {
         }
     }
 
-    log_info("test_pull_from_pcie");
-    log_info("Bandwidth(GB/s): {:.3f}", avg_h2d_bandwidth);
-    log_info("pass:{}", pass);
+    TT_LOG_INFO("test_pull_from_pcie");
+    TT_LOG_INFO("Bandwidth(GB/s): {:.3f}", avg_h2d_bandwidth);
+    TT_LOG_INFO("pass:{}", pass);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         log_error(LogTest, "Test Failed");
     }

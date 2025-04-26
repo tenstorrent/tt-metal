@@ -43,7 +43,7 @@ void build_and_run_program(
     // Make random
     auto random_seed = 0; // (unsigned int)time(NULL);
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
     // CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
@@ -51,7 +51,7 @@ void build_and_run_program(
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set(cr);
 
-    log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
     Program program1;
     Program program2;
@@ -138,7 +138,7 @@ void build_and_run_program(
 
     // This loop caches program1 and runs
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        log_info(tt::LogTest, "Running program1 {} of {}", i + 1, NUM_PROGRAMS);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running program1 {} of {}", i + 1, NUM_PROGRAMS);
         if (i % 2 == 0) {
             if (slow_dispatch) {
                 tt::tt_metal::detail::LaunchProgram(device, program1);
@@ -155,9 +155,9 @@ void build_and_run_program(
     }
     if (!slow_dispatch) {
         Finish(device->command_queue());
-        log_info(tt::LogTest, "Finish FD runs");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finish FD runs");
     } else {
-        log_info(tt::LogTest, "Finish SD runs");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finish SD runs");
     }
 }
 

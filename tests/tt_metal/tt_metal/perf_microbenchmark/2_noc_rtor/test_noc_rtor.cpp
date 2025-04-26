@@ -201,7 +201,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::detail::CompileProgram(device, program);
 
-        log_info(LogTest, "Num tests {}", num_tests);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
             EnqueueProgram(device->command_queue(), program, false);
@@ -209,12 +209,13 @@ int main(int argc, char** argv) {
             auto t_end = std::chrono::steady_clock::now();
             elapsed_us.push_back(duration_cast<microseconds>(t_end - t_begin).count());
 
-            log_info(LogTest, "Time elapsed for NOC transfers: {}us", elapsed_us[i]);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Time elapsed for NOC transfers: {}us", elapsed_us[i]);
 
             if (use_device_profiler) {
                 elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
                 elapsed_us.push_back((double)elapsed_cc / clock_freq_mhz);
-                log_info(LogTest, "Time elapsed uisng device profiler: {}us ({}cycles)", elapsed_us[i], elapsed_cc);
+                TT_LOG_INFO_WITH_CAT(
+                    LogTest, "Time elapsed uisng device profiler: {}us ({}cycles)", elapsed_us[i], elapsed_cc);
             }
         }
 
@@ -233,8 +234,8 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_noc_rtor");
-    log_info(
+    TT_LOG_INFO("CSV_MICROBENCHMARK:title:test_noc_rtor");
+    TT_LOG_INFO(
         "CSV_INPUT:num-cores-r:{}:num-cores-c:{}:num-tiles:{}:noc-index:{}:"
         "access-type:{}:use-device-profiler:{}",
         num_cores_r,
@@ -243,11 +244,11 @@ int main(int argc, char** argv) {
         NOC_INDEXToString(static_cast<NOC_INDEX>(noc_index)),
         ACCESS_TYPEToString(static_cast<ACCESS_TYPE>(access_type)),
         use_device_profiler);
-    log_info("CSV_OUTPUT:ElapsedTime(us):{}", avg_elapsed_us);
-    log_info("CSV_RESULT:pass:{}", pass);
+    TT_LOG_INFO("CSV_OUTPUT:ElapsedTime(us):{}", avg_elapsed_us);
+    TT_LOG_INFO("CSV_RESULT:pass:{}", pass);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         log_error(LogTest, "Test Failed");
     }

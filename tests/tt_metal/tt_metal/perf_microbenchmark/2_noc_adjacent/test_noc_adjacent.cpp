@@ -239,7 +239,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::detail::CompileProgram(device, program);
 
-        log_info(LogTest, "Num tests {}", num_tests);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
             EnqueueProgram(device->command_queue(), program, false);
@@ -248,19 +248,20 @@ int main(int argc, char** argv) {
             unsigned long elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             unsigned long elapsed_cc = clock_freq_mhz * elapsed_us;
 
-            log_info(LogTest, "Time elapsed for NOC transfers: {}us ({}cycles)", elapsed_us, elapsed_cc);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Time elapsed for NOC transfers: {}us ({}cycles)", elapsed_us, elapsed_cc);
 
             if (use_device_profiler) {
                 elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
                 elapsed_us = (double)elapsed_cc / clock_freq_mhz;
-                log_info(LogTest, "Time elapsed using device profiler: {}us ({}cycles)", elapsed_us, elapsed_cc);
+                TT_LOG_INFO_WITH_CAT(
+                    LogTest, "Time elapsed using device profiler: {}us ({}cycles)", elapsed_us, elapsed_cc);
             }
 
             // total transfer amount per core = tile size * number of tiles
             // NOC bandwidth = total transfer amount per core / elapsed clock cycle
             measured_bandwidth.push_back((double)single_tile_size * num_tiles / elapsed_cc);
 
-            log_info(LogTest, "Measured NOC bandwidth: {:.3f}B/cc", measured_bandwidth[i]);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Measured NOC bandwidth: {:.3f}B/cc", measured_bandwidth[i]);
         }
 
         pass &= tt_metal::CloseDevice(device);
@@ -288,8 +289,8 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_noc_adjacent");
-    log_info(
+    TT_LOG_INFO("CSV_MICROBENCHMARK:title:test_noc_adjacent");
+    TT_LOG_INFO(
         "CSV_INPUT:num-cores-r:{}:num-cores-c:{}:num-tiles:{}:tiles-per-transfer:{}:noc-index:{}:noc-direction:{}:"
         "access-type:{}:use-device-profiler:{}",
         num_cores_r,
@@ -300,11 +301,11 @@ int main(int argc, char** argv) {
         NOC_DIRECTIONToString(static_cast<NOC_DIRECTION>(noc_direction)),
         ACCESS_TYPEToString(static_cast<ACCESS_TYPE>(access_type)),
         use_device_profiler);
-    log_info("CSV_OUTPUT:Bandwidth(B/cc):{:.3f}", avg_measured_bandwidth);
-    log_info("CSV_RESULT:pass:{}", pass);
+    TT_LOG_INFO("CSV_OUTPUT:Bandwidth(B/cc):{:.3f}", avg_measured_bandwidth);
+    TT_LOG_INFO("CSV_RESULT:pass:{}", pass);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         log_error(LogTest, "Test Failed");
     }

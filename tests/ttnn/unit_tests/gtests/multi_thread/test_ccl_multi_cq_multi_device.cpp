@@ -86,7 +86,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
         test_expected_num_devices,
         num_devices);
 
-    log_info(LogTest, "Creating Global Semaphore for Ccl Ops");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Creating Global Semaphore for Ccl Ops");
     auto
         [from_remote_multi_device_global_semaphore,
          to_remote_multi_device_global_semaphore,
@@ -106,10 +106,10 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     TensorSpec tensor_spec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
 
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
-        log_info(LogTest, "Running outer loop {}", outer_loop);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running outer loop {}", outer_loop);
         std::vector<Tensor> device_tensors(devices.size());
 
-        log_info(LogTest, "Enqueue Operations before AllGather");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Enqueue Operations before AllGather");
         std::vector<std::future<void>> futures;
         for (size_t dev_idx = 0; dev_idx < devices.size(); ++dev_idx) {
             auto device = devices[dev_idx];
@@ -143,7 +143,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
         }
         futures.clear();
 
-        log_info(LogTest, "Enqueue AllGather");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Enqueue AllGather");
 
         // Enqueue the all_gather_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
@@ -156,7 +156,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
             ttnn::ccl::Topology::Linear,
             SubDeviceId(0));
 
-        log_info(LogTest, "Enqueue dummy ops");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Enqueue dummy ops");
         for (int dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
             auto device = devices[dev_idx];
             auto promise = std::make_shared<std::promise<void>>();
@@ -181,7 +181,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
         }
         futures.clear();
 
-        log_info(LogTest, "EnqueueReadBuffer");
+        TT_LOG_INFO_WITH_CAT(LogTest, "EnqueueReadBuffer");
         // Read the values from each device and compare them with the results calculated on the host
         for (size_t i = 0; i < devices.size(); ++i) {
             auto device = devices[i];
@@ -194,7 +194,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
                     int base = j / num_elems;  // dev_idx
                     ASSERT_EQ(output_data[j].to_float(), (-1.0 * base * 32.0 + 128));
                 }
-                log_info(LogTest, "Device{} Compare Success", device->id());
+                TT_LOG_INFO_WITH_CAT(LogTest, "Device{} Compare Success", device->id());
             });
         }
     }
@@ -205,7 +205,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0) {
         ttnn::queue_synchronize(device->command_queue(op_cq_id));
     }
 
-    log_info(tt::LogTest, "Finished");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finished");
 }
 
 TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
@@ -232,7 +232,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
         test_expected_num_devices,
         num_devices);
 
-    log_info(LogTest, "Creating Global Semaphore for Ccl Ops");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Creating Global Semaphore for Ccl Ops");
     auto
         [from_remote_multi_device_global_semaphore,
          to_remote_multi_device_global_semaphore,
@@ -252,13 +252,13 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     boost::asio::thread_pool pool(devices.size());
 
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
-        log_info(LogTest, "Running outer loop {}", outer_loop);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running outer loop {}", outer_loop);
         std::vector<Tensor> device_tensors(devices.size());
 
         TensorSpec tensor_spec(
             input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
 
-        log_info(LogTest, "Enqueue Operations before AllGather");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Enqueue Operations before AllGather");
         std::vector<std::future<void>> futures;
         for (size_t dev_idx = 0; dev_idx < devices.size(); ++dev_idx) {
             auto device = devices[dev_idx];
@@ -298,7 +298,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
         }
         futures.clear();
 
-        log_info(LogTest, "Enqueue AllGather");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Enqueue AllGather");
 
         // Enqueue the all_gather_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
@@ -311,7 +311,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
             ttnn::ccl::Topology::Linear,
             SubDeviceId(0));
 
-        log_info(LogTest, "Enqueue dummy ops");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Enqueue dummy ops");
         for (size_t dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
             auto device = devices[dev_idx];
             auto promise = std::make_shared<std::promise<void>>();
@@ -359,7 +359,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
         }
         futures.clear();
 
-        log_info(LogTest, "EnqueueReadBuffer");
+        TT_LOG_INFO_WITH_CAT(LogTest, "EnqueueReadBuffer");
         // Read the values from each device and compare them with the results calculated on the host
         for (size_t i = 0; i < devices.size(); ++i) {
             auto device = devices[i];
@@ -373,7 +373,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
                     int base = j / num_elems;  // dev_idx
                     ASSERT_EQ(output_data[j].to_float(), (-1.0 * base * 32.0 + 128));
                 }
-                log_info(LogTest, "Device{} Compare Success", device->id());
+                TT_LOG_INFO_WITH_CAT(LogTest, "Device{} Compare Success", device->id());
             });
         }
     }
@@ -384,7 +384,7 @@ TEST_F(T3000MultiCQFabricMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
         ttnn::queue_synchronize(device->command_queue(op_cq_id));
     }
 
-    log_info(tt::LogTest, "Finished");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Finished");
 }
 
 }  // namespace ttnn::distributed::test

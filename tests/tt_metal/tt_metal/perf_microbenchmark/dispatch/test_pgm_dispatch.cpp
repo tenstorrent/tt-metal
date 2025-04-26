@@ -107,35 +107,36 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
     auto core_count = get_core_count();
 
     if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
-        log_info(LogTest, "Usage:");
-        log_info(LogTest, "  -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
-        log_info(LogTest, "  -i: iterations (default {})", DEFAULT_ITERATIONS);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "Usage:");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  -w: warm-up iterations before starting timer (default {}), ", DEFAULT_WARMUP_ITERATIONS);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -i: iterations (default {})", DEFAULT_ITERATIONS);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  -s: size of kernels in powers of 2 bytes (default {}, min {})",
             DEFAULT_KERNEL_SIZE_K * 1024,
             MIN_KERNEL_SIZE_BYTES);
-        log_info(LogTest, "  -x: X end of inclusive core range (default {})", 0);
-        log_info(LogTest, "  -y: Y end of inclusive core range (default {})", 0);
-        log_info(LogTest, "  -c: number of CBs (default {}, max {})", 0, MAX_CBS);
-        log_info(LogTest, "  -a: number of runtime args (default {}, max {})", 0, MAX_ARGS);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -x: X end of inclusive core range (default {})", 0);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -y: Y end of inclusive core range (default {})", 0);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -c: number of CBs (default {}, max {})", 0, MAX_CBS);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -a: number of runtime args (default {}, max {})", 0, MAX_ARGS);
+        TT_LOG_INFO_WITH_CAT(
             LogTest, " -ca: number of common runtime args multicast to all cores (default {}, max {})", 0, MAX_ARGS);
-        log_info(LogTest, "  -S: number of semaphores (default {}, max {})", 0, NUM_SEMAPHORES);
-        log_info(LogTest, " -kg: number of kernel groups (default 1)");
-        log_info(LogTest, "  -g: use a 4 byte global variable (additional spans");
-        log_info(LogTest, " -rs: run \"slow\" kernels for exactly <n> cycles (default 0)");
-        log_info(LogTest, " -rf: run \"fast\" kernels for exactly <n> cycles (default 0)");
-        log_info(LogTest, " -nf: run <n> fast kernels between slow kernels (default 0)");
-        log_info(LogTest, "  -b: disable brisc kernel (default enabled)");
-        log_info(LogTest, "  -n: disable ncrisc kernel (default enabled)");
-        log_info(LogTest, "  -t: disable trisc kernels (default enabled)");
-        log_info(LogTest, "  +e: enable erisc kernels (default disabled)");
-        log_info(LogTest, " -ec: erisc count (default 1 if enabled)");
-        log_info(LogTest, "  -f: time just the finish call (default disabled)");
-        log_info(LogTest, " -tr: enable trace (default disabled)");
-        log_info(LogTest, " -de: dispatch from eth cores (default tensix)");
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -S: number of semaphores (default {}, max {})", 0, NUM_SEMAPHORES);
+        TT_LOG_INFO_WITH_CAT(LogTest, " -kg: number of kernel groups (default 1)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -g: use a 4 byte global variable (additional spans");
+        TT_LOG_INFO_WITH_CAT(LogTest, " -rs: run \"slow\" kernels for exactly <n> cycles (default 0)");
+        TT_LOG_INFO_WITH_CAT(LogTest, " -rf: run \"fast\" kernels for exactly <n> cycles (default 0)");
+        TT_LOG_INFO_WITH_CAT(LogTest, " -nf: run <n> fast kernels between slow kernels (default 0)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -b: disable brisc kernel (default enabled)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -n: disable ncrisc kernel (default enabled)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -t: disable trisc kernels (default enabled)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  +e: enable erisc kernels (default disabled)");
+        TT_LOG_INFO_WITH_CAT(LogTest, " -ec: erisc count (default 1 if enabled)");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  -f: time just the finish call (default disabled)");
+        TT_LOG_INFO_WITH_CAT(LogTest, " -tr: enable trace (default disabled)");
+        TT_LOG_INFO_WITH_CAT(LogTest, " -de: dispatch from eth cores (default tensix)");
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             " -ac: use all viable worker cores (default {}x{})",
             std::get<0>(core_count),
@@ -333,7 +334,7 @@ struct FakeBenchmarkState {
 template <typename T>
 static int pgm_dispatch(T& state, TestInfo info) {
     if constexpr (std::is_same_v<T, benchmark::State>) {
-        log_info(LogTest, "Running {}", state.name());
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running {}", state.name());
     }
     if (info.use_all_cores) {
         auto core_count = get_core_count();
@@ -341,29 +342,29 @@ static int pgm_dispatch(T& state, TestInfo info) {
     }
 
     if (info.use_trace) {
-        log_info(LogTest, "Running with trace enabled");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running with trace enabled");
     }
-    log_info(LogTest, "Warmup iterations: {}", info.warmup_iterations);
-    log_info(LogTest, "Iterations: {}", info.iterations);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(LogTest, "Warmup iterations: {}", info.warmup_iterations);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Iterations: {}", info.iterations);
+    TT_LOG_INFO_WITH_CAT(
         LogTest,
         "Grid: ({}-{}) ({} cores)",
         info.workers.start_coord.str(),
         info.workers.end_coord.str(),
         info.workers.size());
-    log_info(LogTest, "Kernel size: {}", info.kernel_size);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Kernel size: {}", info.kernel_size);
     if (info.nfast_kernels != 0) {
-        log_info(LogTest, "Fast kernel cycles: {}", info.fast_kernel_cycles);
-        log_info(LogTest, "Slow kernel cycles: {}", info.slow_kernel_cycles);
-        log_info(LogTest, "{} fast kernels between slow kernels", info.nfast_kernels);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Fast kernel cycles: {}", info.fast_kernel_cycles);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Slow kernel cycles: {}", info.slow_kernel_cycles);
+        TT_LOG_INFO_WITH_CAT(LogTest, "{} fast kernels between slow kernels", info.nfast_kernels);
     } else {
-        log_info(LogTest, "Kernel cycles: {}", info.slow_kernel_cycles);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Kernel cycles: {}", info.slow_kernel_cycles);
     }
-    log_info(LogTest, "KGs: {}", info.n_kgs);
-    log_info(LogTest, "CBs: {}", info.n_cbs);
-    log_info(LogTest, "UniqueRTArgs: {}", info.n_args);
-    log_info(LogTest, "CommonRTArgs: {}", info.n_common_args);
-    log_info(LogTest, "Sems: {}", info.n_sems);
+    TT_LOG_INFO_WITH_CAT(LogTest, "KGs: {}", info.n_kgs);
+    TT_LOG_INFO_WITH_CAT(LogTest, "CBs: {}", info.n_cbs);
+    TT_LOG_INFO_WITH_CAT(LogTest, "UniqueRTArgs: {}", info.n_args);
+    TT_LOG_INFO_WITH_CAT(LogTest, "CommonRTArgs: {}", info.n_common_args);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Sems: {}", info.n_sems);
     if constexpr (std::is_same_v<T, benchmark::State>) {
         if (dump_test_info) {
             state.counters["cores"] = benchmark::Counter(info.workers.size(), benchmark::Counter::kDefaults);
@@ -453,8 +454,9 @@ static int pgm_dispatch(T& state, TestInfo info) {
                 state.SetIterationTime(elapsed_seconds.count());
             } else {
                 std::chrono::duration<double> elapsed_seconds = (end - start);
-                log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
-                log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / info.iterations);
+                TT_LOG_INFO_WITH_CAT(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
+                TT_LOG_INFO_WITH_CAT(
+                    LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / info.iterations);
             }
         }
 
@@ -473,13 +475,13 @@ static int pgm_dispatch(T& state, TestInfo info) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
         return 0;
     } else {
         if constexpr (std::is_same_v<T, benchmark::State>) {
             state.SkipWithError("Test failed");
         } else {
-            log_info(LogTest, "Test failed");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Test failed");
         }
         return 1;
     }

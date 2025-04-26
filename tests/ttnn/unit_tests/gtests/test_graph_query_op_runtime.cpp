@@ -81,7 +81,7 @@ TEST_P(BinaryOpTraceRuntime, Add) {
         auto query = ttnn::graph::query_op_runtime(ttnn::add, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        tt::log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Trace runtime: {} ns", query.runtime);
     }
 }
 
@@ -94,7 +94,7 @@ TEST_P(BinaryOpTraceRuntime, AddChain) {
         auto query = ttnn::graph::query_op_runtime(add_chain, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        tt::log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Trace runtime: {} ns", query.runtime);
     }
 }
 

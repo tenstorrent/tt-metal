@@ -73,8 +73,8 @@ int main(int argc, char** argv) {
 
     auto ops = EltwiseOp::all();
     for (auto eltwise_op : ops) {
-        log_info(LogTest, "====================================================================");
-        log_info(LogTest, "======= Running eltwise_binary test for op={}", op_id_to_op_name[eltwise_op]);
+        TT_LOG_INFO_WITH_CAT(LogTest, "====================================================================");
+        TT_LOG_INFO_WITH_CAT(LogTest, "======= Running eltwise_binary test for op={}", op_id_to_op_name[eltwise_op]);
 
         try {
             ////////////////////////////////////////////////////////////////////////////
@@ -221,7 +221,7 @@ int main(int argc, char** argv) {
     pass &= tt_metal::CloseDevice(device);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

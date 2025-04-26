@@ -118,7 +118,7 @@ bool run_test(MeshDevice* device, const ttnn::Shape& shape, float low, float hig
 
 void test_operation_infrastructure() {
     using namespace tt::constants;
-    tt::log_info(tt::LogTest, "Running {}", __func__);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running {}", __func__);
 
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
@@ -144,7 +144,7 @@ void test_operation_infrastructure() {
 
 void test_shape_padding() {
     using namespace tt::constants;
-    tt::log_info(tt::LogTest, "Running {}", __func__);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running {}", __func__);
 
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
@@ -181,7 +181,7 @@ struct exp_with_param {
 }  // namespace tt
 
 void test_numerically() {
-    tt::log_info(tt::LogTest, "Running {}", __func__);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running {}", __func__);
 
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
@@ -237,7 +237,7 @@ void test_numerically() {
 }
 
 void test_program_cache() {
-    tt::log_info(tt::LogTest, "Running {}", __func__);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running {}", __func__);
 
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;

@@ -87,22 +87,22 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
         cores.push_back({i, 0});
     }
 
-    log_info(LogTest, "num_cores: {}", num_cores);
-    log_info(LogTest, "num_tiles: {}", num_tiles);
-    log_info(LogTest, "block_size_tiles: {}", block_size_tiles);
-    log_info(LogTest, "num_blocks_in_CB: {}", num_blocks_in_CB);
-    log_info(LogTest, "num_repetitions: {}", num_repetitions);
+    TT_LOG_INFO_WITH_CAT(LogTest, "num_cores: {}", num_cores);
+    TT_LOG_INFO_WITH_CAT(LogTest, "num_tiles: {}", num_tiles);
+    TT_LOG_INFO_WITH_CAT(LogTest, "block_size_tiles: {}", block_size_tiles);
+    TT_LOG_INFO_WITH_CAT(LogTest, "num_blocks_in_CB: {}", num_blocks_in_CB);
+    TT_LOG_INFO_WITH_CAT(LogTest, "num_repetitions: {}", num_repetitions);
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t block_size_bytes = block_size_tiles * single_tile_size;
-    log_info(LogTest, "block_size_bytes: {}", block_size_bytes);
-    log_info(LogTest, "CB size: {}", block_size_bytes * num_blocks_in_CB);
+    TT_LOG_INFO_WITH_CAT(LogTest, "block_size_bytes: {}", block_size_bytes);
+    TT_LOG_INFO_WITH_CAT(LogTest, "CB size: {}", block_size_bytes * num_blocks_in_CB);
 
     // source and destination buffers
     uint32_t buffer_size =
         single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t total_bytes_moved = buffer_size * num_repetitions;
-    log_info(LogTest, "total_bytes_moved: {}", total_bytes_moved);
+    TT_LOG_INFO_WITH_CAT(LogTest, "total_bytes_moved: {}", total_bytes_moved);
 
     // circular buffers in L1
     uint32_t cb_index = 8;
@@ -243,16 +243,16 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    log_info(LogTest, "Writing to device buffer->..");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Writing to device buffer->..");
     tt_metal::detail::WriteToBuffer(src_buffer, src_vec);
-    log_info(LogTest, "Writing to device buffer Done.");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Writing to device buffer Done.");
 
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    log_info(LogTest, "Kernels done.");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Kernels done.");
 
-    log_info(LogTest, "Reading results from device...");
+    TT_LOG_INFO_WITH_CAT(LogTest, "Reading results from device...");
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_buffer, result_vec);
 

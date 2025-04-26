@@ -21,35 +21,45 @@ TEST_P(SlidingWindowTestFixture, SlidingWindowHash) {
 
     // start of same input
     auto sliding_window_b = sliding_window_a;
-    log_info(tt::LogTest, "sliding_window_a:[{}] {}", sliding_window_a.get_hash(), sliding_window_a.to_string());
-    log_info(tt::LogTest, "sliding_window_b:[{}] {}", sliding_window_b.get_hash(), sliding_window_b.to_string());
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "sliding_window_a:[{}] {}", sliding_window_a.get_hash(), sliding_window_a.to_string());
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "sliding_window_b:[{}] {}", sliding_window_b.get_hash(), sliding_window_b.to_string());
     EXPECT_EQ(sliding_window_a.get_hash(), sliding_window_b.get_hash());
 
     // flip snap_to_tile
     sliding_window_b.snap_to_tile = !sliding_window_a.snap_to_tile;
-    log_info(tt::LogTest, "sliding_window_a:[{}] {}", sliding_window_a.get_hash(), sliding_window_a.to_string());
-    log_info(tt::LogTest, "sliding_window_b:[{}] {}", sliding_window_b.get_hash(), sliding_window_b.to_string());
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "sliding_window_a:[{}] {}", sliding_window_a.get_hash(), sliding_window_a.to_string());
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "sliding_window_b:[{}] {}", sliding_window_b.get_hash(), sliding_window_b.to_string());
     EXPECT_NE(sliding_window_a.get_hash(), sliding_window_b.get_hash());
     sliding_window_b.snap_to_tile = !sliding_window_a.snap_to_tile;
 
     // flip is_bilinear
     sliding_window_b.is_bilinear = !sliding_window_a.is_bilinear;
-    log_info(tt::LogTest, "sliding_window_a:[{}] {}", sliding_window_a.get_hash(), sliding_window_a.to_string());
-    log_info(tt::LogTest, "sliding_window_b:[{}] {}", sliding_window_b.get_hash(), sliding_window_b.to_string());
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "sliding_window_a:[{}] {}", sliding_window_a.get_hash(), sliding_window_a.to_string());
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "sliding_window_b:[{}] {}", sliding_window_b.get_hash(), sliding_window_b.to_string());
     EXPECT_NE(sliding_window_a.get_hash(), sliding_window_b.get_hash());
     sliding_window_b.is_bilinear = !sliding_window_a.is_bilinear;
 
     // flip is_transpose
     sliding_window_b.is_transpose = !sliding_window_a.is_transpose;
-    log_info(tt::LogTest, "sliding_window_a:[{}] {}", sliding_window_a.get_hash(), sliding_window_a.to_string());
-    log_info(tt::LogTest, "sliding_window_b:[{}] {}", sliding_window_b.get_hash(), sliding_window_b.to_string());
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "sliding_window_a:[{}] {}", sliding_window_a.get_hash(), sliding_window_a.to_string());
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "sliding_window_b:[{}] {}", sliding_window_b.get_hash(), sliding_window_b.to_string());
     EXPECT_NE(sliding_window_a.get_hash(), sliding_window_b.get_hash());
     sliding_window_b.is_transpose = !sliding_window_a.is_transpose;
 
     // flip ceil_mode
     sliding_window_b.ceil_mode = !sliding_window_a.ceil_mode;
-    log_info(tt::LogTest, "sliding_window_a:[{}] {}", sliding_window_a.get_hash(), sliding_window_a.to_string());
-    log_info(tt::LogTest, "sliding_window_b:[{}] {}", sliding_window_b.get_hash(), sliding_window_b.to_string());
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "sliding_window_a:[{}] {}", sliding_window_a.get_hash(), sliding_window_a.to_string());
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogTest, "sliding_window_b:[{}] {}", sliding_window_b.get_hash(), sliding_window_b.to_string());
     EXPECT_NE(sliding_window_a.get_hash(), sliding_window_b.get_hash());
     sliding_window_b.ceil_mode = !sliding_window_a.ceil_mode;
 }

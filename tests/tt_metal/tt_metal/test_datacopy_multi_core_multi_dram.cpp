@@ -201,39 +201,39 @@ bool write_runtime_args_to_device(
                 (std::uint32_t)N                                                       // dst_stride_y
             };
 
-            // log_info(LogTest, "Core = {}, {}", core.x, core.y);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "Core = {}, {}", core.x, core.y);
 
-            // log_info(LogTest, "Reader args");
-            // log_info(LogTest, "src0_addr = {}", src0_dram_addr);
-            // log_info(LogTest, "src0_start_tile_id = {}", K * per_core_M * core_idx_y);
-            // log_info(LogTest, "src0_block_x = {}", block_tile_dim);
-            // log_info(LogTest, "src0_block_y = {}", per_core_M);
-            // log_info(LogTest, "src0_stride_x = {}", 1);
-            // log_info(LogTest, "src0_stride_y = {}", K);
-            // log_info(LogTest, "src0_block_stride = {}", block_tile_dim);
-            // log_info(LogTest, "src0_block_num_tiles = {}", block_tile_dim * per_core_M);
-            // log_info(LogTest, "src1_addr = {}", src1_dram_addr);
-            // log_info(LogTest, "src1_start_tile_id = {}", per_core_N * core_idx_x);
-            // log_info(LogTest, "src1_sub_block_x = {}", num_tiles_per_sub_block_n);
-            // log_info(LogTest, "src1_sub_block_y = {}", block_tile_dim);
-            // log_info(LogTest, "src1_num_sub_blocks = {}", (per_core_N / num_tiles_per_sub_block_n));
-            // log_info(LogTest, "src1_stride_x = {}", 1);
-            // log_info(LogTest, "src1_stride_y = {}", N);
-            // log_info(LogTest, "src1_block_stride = {}", block_tile_dim * N);
-            // log_info(LogTest, "src1_block_num_tiles = {}", per_core_N * block_tile_dim);
-            // log_info(LogTest, "num_blocks = {}", K / block_tile_dim);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "Reader args");
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src0_addr = {}", src0_dram_addr);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src0_start_tile_id = {}", K * per_core_M * core_idx_y);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src0_block_x = {}", block_tile_dim);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src0_block_y = {}", per_core_M);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src0_stride_x = {}", 1);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src0_stride_y = {}", K);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src0_block_stride = {}", block_tile_dim);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src0_block_num_tiles = {}", block_tile_dim * per_core_M);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src1_addr = {}", src1_dram_addr);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src1_start_tile_id = {}", per_core_N * core_idx_x);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src1_sub_block_x = {}", num_tiles_per_sub_block_n);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src1_sub_block_y = {}", block_tile_dim);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src1_num_sub_blocks = {}", (per_core_N / num_tiles_per_sub_block_n));
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src1_stride_x = {}", 1);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src1_stride_y = {}", N);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src1_block_stride = {}", block_tile_dim * N);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "src1_block_num_tiles = {}", per_core_N * block_tile_dim);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "num_blocks = {}", K / block_tile_dim);
 
-            // log_info(LogTest, "Writer args");
-            // log_info(LogTest, "dst_addr = {}", dst_dram_addr);
-            // log_info(LogTest, "dst_start_tile_id = {}", core_idx_x * per_core_N + core_idx_y * per_core_M * N);
-            // log_info(LogTest, "dst_sub_block_x = {}", num_tiles_per_sub_block_n);
-            // log_info(LogTest, "dst_sub_block_y = {}", num_tiles_per_sub_block_m);
-            // log_info(LogTest, "dst_num_sub_blocks_x = {}", (per_core_N / num_tiles_per_sub_block_n));
-            // log_info(LogTest, "dst_num_sub_blocks_y = {}", (per_core_M / num_tiles_per_sub_block_m));
-            // log_info(LogTest, "dst_sb_stride_x = {}", num_tiles_per_sub_block_n);
-            // log_info(LogTest, "dst_sb_stride_y = {}", num_tiles_per_sub_block_m * N);
-            // log_info(LogTest, "dst_stride_x = {}", 1);
-            // log_info(LogTest, "dst_stride_y = {}", N);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "Writer args");
+            // TT_LOG_INFO_WITH_CAT(LogTest, "dst_addr = {}", dst_dram_addr);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "dst_start_tile_id = {}", core_idx_x * per_core_N + core_idx_y * per_core_M
+            // * N); TT_LOG_INFO_WITH_CAT(LogTest, "dst_sub_block_x = {}", num_tiles_per_sub_block_n);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "dst_sub_block_y = {}", num_tiles_per_sub_block_m);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "dst_num_sub_blocks_x = {}", (per_core_N / num_tiles_per_sub_block_n));
+            // TT_LOG_INFO_WITH_CAT(LogTest, "dst_num_sub_blocks_y = {}", (per_core_M / num_tiles_per_sub_block_m));
+            // TT_LOG_INFO_WITH_CAT(LogTest, "dst_sb_stride_x = {}", num_tiles_per_sub_block_n);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "dst_sb_stride_y = {}", num_tiles_per_sub_block_m * N);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "dst_stride_x = {}", 1);
+            // TT_LOG_INFO_WITH_CAT(LogTest, "dst_stride_y = {}", N);
 
             tt_metal::SetRuntimeArgs(program, mm_reader_kernel, core, mm_reader_args);
             tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
@@ -308,17 +308,17 @@ int main(int argc, char** argv) {
         uint32_t src0_dram_addr = 0;
         uint32_t src1_dram_addr = 400 * 1024 * 1024;
         uint32_t dst_dram_addr = 800 * 1024 * 1024;
-        log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
-        log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
-        log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "M = {}, N = {}, K = {}", M, N, K);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Activation = {}x{}", M * 32, K * 32);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Weights = {}x{}", K * 32, N * 32);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}",
             per_core_M,
             block_tile_dim,
             K / block_tile_dim,
             per_core_M / num_tiles_per_sub_block_m);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}",
             block_tile_dim,
@@ -364,7 +364,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        log_info(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
         auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
         auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
@@ -374,9 +374,9 @@ int main(int argc, char** argv) {
         auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         pass &= move_tiles_to_dram(device, weights, K, N, src1_dram_addr);
-        log_info(LogTest, "Copying inputs to dram complete");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Copying inputs to dram complete");
 
-        log_info(LogTest, "Writing kernel runtime args to device");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Writing kernel runtime args to device");
         pass &= write_runtime_args_to_device(
             device,
             program,
@@ -395,14 +395,14 @@ int main(int argc, char** argv) {
             src0_dram_addr,
             src1_dram_addr,
             dst_dram_addr);
-        log_info(LogTest, "Writing kernel runtime args to device complete");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Writing kernel runtime args to device complete");
 
-        log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
 
         tt_metal::detail::LaunchProgram(device, program);
 
-        log_info(LogTest, "Matmul test done");
-        log_info(LogTest, "Gathering data back from dram and checking against golden");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Matmul test done");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Gathering data back from dram and checking against golden");
 
         for (int i = 0; i < M; i++) {
             auto row = get_row_slice(golden, M, i, M * 32, N * 32);
@@ -417,12 +417,12 @@ int main(int argc, char** argv) {
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                 auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
 
-                // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
-                // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
+                // TT_LOG_INFO_WITH_CAT(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank,
+                // dram_address); print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));
                 pass &= (golden_tile == result_flat_layout);
             }
         }
-        log_info(LogTest, "Golden check complete");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Golden check complete");
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -438,7 +438,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

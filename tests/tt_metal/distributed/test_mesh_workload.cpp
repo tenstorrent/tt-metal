@@ -186,7 +186,7 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
     uint32_t num_iters = 500;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     std::vector<std::shared_ptr<MeshWorkload>> workloads = {};
-    log_info("Create {} workloads", num_workloads);
+    TT_LOG_INFO("Create {} workloads", num_workloads);
     for (int i = 0; i < num_workloads; i++) {
         std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
         for (const auto& device_coord : MeshCoordinateRange(mesh_device_->shape())) {
@@ -201,7 +201,7 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
     }
     for (int i = 0; i < num_iters; i++) {
         if (i % 100 == 0) {
-            log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : workloads) {
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
@@ -234,16 +234,16 @@ TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
     uint32_t num_iterations = 1000;
     auto random_seed = 0;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    log_info("Create MeshWorkloads with multiple programs each");
+    TT_LOG_INFO("Create MeshWorkloads with multiple programs each");
 
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
 
-    log_info(tt::LogTest, "Compile and load {} MeshWorkloads", num_programs);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Compile and load {} MeshWorkloads", num_programs);
     for (int i = 0; i < num_programs; i += 2) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         if (i % 2) {
@@ -302,7 +302,7 @@ TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
 
     for (int i = 0; i < num_iterations; i++) {
         if (i % 100 == 0) {
-            log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : mesh_workloads) {
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
@@ -318,14 +318,14 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
     uint32_t num_iterations = 1000;
     auto random_seed = 0;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    log_info("Create MeshWorkloads with multiple programs each");
+    TT_LOG_INFO("Create MeshWorkloads with multiple programs each");
 
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
 
-    log_info(tt::LogTest, "Compile and load {} MeshWorkloads", 2 * (num_programs_0 + num_programs_1));
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Compile and load {} MeshWorkloads", 2 * (num_programs_0 + num_programs_1));
 
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs_0, mesh_device_->compute_with_storage_grid_size(), seed);
@@ -397,7 +397,7 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
     }
     for (int i = 0; i < num_iterations; i++) {
         if (i % 100 == 0) {
-            log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : mesh_workloads) {
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
@@ -411,9 +411,9 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
     uint32_t num_iterations = 1500;
     auto random_seed = 10;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
-    log_info("Create {} MeshWorkloads", num_programs);
+    TT_LOG_INFO("Create {} MeshWorkloads", num_programs);
     auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
         num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     std::mt19937 rng(seed);
@@ -423,7 +423,7 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
 
     // Create multiple mesh workloads on grids of random sizes.
     // Compile the workload (lower + send binaries to mesh device here as well)
-    log_info(tt::LogTest, "Compile and load {} MeshWorkloads", num_programs);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Compile and load {} MeshWorkloads", num_programs);
     for (int i = 0; i < num_programs; i += 1) {
         // Choose a grid of random dimensions and run a MeshWorkload on it
         MeshCoordinateRange device_range(MeshCoordinate{0, 0}, MeshCoordinate{gen_row(rng) - 1, gen_col(rng) - 1});
@@ -434,13 +434,13 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
     }
     for (int i = 0; i < num_iterations; i++) {
         if (i % 100 == 0) {
-            log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : mesh_workloads) {
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         }
     }
-    log_info(tt::LogTest, "Calling Finish");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Calling Finish");
     Finish(mesh_device_->mesh_command_queue());
 }
 
@@ -591,7 +591,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     }
 
     for (int iter = 0; iter < 100; iter++) {
-        log_info(LogTest, "Run iter {}", iter);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Run iter {}", iter);
         if (iter) {
             auto& program = mesh_workload.get_programs().at(devices_0);
             auto& rtas = GetRuntimeArgs(program, reader_writer_kernel);

@@ -103,7 +103,7 @@ protected:
 TEST_F(MeshTraceTestSuite, Sanity) {
     auto random_seed = 10;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
     uint32_t num_workloads_per_trace = 5;
@@ -508,7 +508,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
 TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
     auto random_seed = 10;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
     MeshCoordinateRange all_devices(mesh_device_->shape());
     auto workload = std::make_shared<MeshWorkload>();
@@ -527,7 +527,7 @@ void run_heterogenous_trace_sweep(
     const std::vector<std::vector<MeshCoordinateRange>>& workload_grids) {
     auto random_seed = 10;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    log_info(tt::LogTest, "Using Test Seed: {}", seed);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
     uint32_t num_workloads = 10;

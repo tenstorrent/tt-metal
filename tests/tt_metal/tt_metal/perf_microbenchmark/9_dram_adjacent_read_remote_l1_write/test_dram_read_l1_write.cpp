@@ -138,8 +138,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     uint32_t page_size, num_pages, num_pages_w_per_receiver;
     get_max_page_size_and_num_pages(block_w, block_h, single_tile_size, page_size, num_pages, num_pages_w_per_receiver);
 
-    log_info("Input block size: {}x{}, num_blocks: {}", block_h, block_w, num_blocks);
-    log_info(
+    TT_LOG_INFO("Input block size: {}x{}, num_blocks: {}", block_h, block_w, num_blocks);
+    TT_LOG_INFO(
         "Pages set up as page_size: {}, num_pages: {}, num_pages_w_per_receiver: {}",
         page_size,
         num_pages,
@@ -207,7 +207,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
         const std::array reader_rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
 
-        log_info("core: {}, vc: {}", core, vc);
+        TT_LOG_INFO("core: {}, vc: {}", core, vc);
 
         tt_metal::SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
 
@@ -216,8 +216,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         auto writer_core2 = all_l1_writer_cores_ordered[(i * 2) + 1];
         auto writer_core_phy2 = device->worker_core_from_logical_core(writer_core2);
 
-        log_info("writer_core_phy1: {}", writer_core_phy1);
-        log_info("writer_core_phy2: {}", writer_core_phy2);
+        TT_LOG_INFO("writer_core_phy1: {}", writer_core_phy1);
+        TT_LOG_INFO("writer_core_phy2: {}", writer_core_phy2);
 
         const std::array writer_rt_args = {
             (std::uint32_t)(vc + 2) & 0x3,
@@ -343,7 +343,7 @@ bool validation(
         }
         core_id++;
     }
-    log_info("Validation passed.");
+    TT_LOG_INFO("Validation passed.");
     return true;
 }
 
@@ -432,7 +432,7 @@ int main(int argc, char** argv) {
     uint32_t num_banks = 1;
     uint32_t bank_start_id = 1;
 
-    log_info("start DRAM benchmark");
+    TT_LOG_INFO("start DRAM benchmark");
 
     // try {
     ////////////////////////////////////////////////////////////////////////////
@@ -517,7 +517,7 @@ int main(int argc, char** argv) {
             };
 
             auto input_size_aligned = align_to_single_tile(input_size);
-            log_info(LogTest, "input size {} is aligned to {} bytes", input_size, input_size_aligned);
+            TT_LOG_INFO_WITH_CAT(LogTest, "input size {} is aligned to {} bytes", input_size, input_size_aligned);
             input_size = input_size_aligned;
         }
         ////////////////////////////////////////////////////////////////////////////
@@ -566,18 +566,18 @@ int main(int argc, char** argv) {
         uint32_t num_tiles_per_core = num_tiles / num_cores;
         uint32_t num_tiles_cb = num_tiles_per_core / num_blocks;
 
-        log_info("all_dram_reader_cores");
+        TT_LOG_INFO("all_dram_reader_cores");
         for (auto core : all_dram_reader_cores_ordered) {
             auto phys_core = device->worker_core_from_logical_core(core);
-            log_info("logical core: {}, virtual core: {}", core, phys_core);
+            TT_LOG_INFO("logical core: {}, virtual core: {}", core, phys_core);
         }
-        log_info("all_l1_writer_cores");
+        TT_LOG_INFO("all_l1_writer_cores");
         for (auto core : all_l1_writer_cores_ordered) {
             auto phys_core = device->worker_core_from_logical_core(core);
-            log_info("logical core: {}, virtual core: {}", core, phys_core);
+            TT_LOG_INFO("logical core: {}, virtual core: {}", core, phys_core);
         }
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Measuring DRAM bandwidth for input_size = {} bytes ({:.3f} MB, "
             "{} tiles), using {} DRAM reading cores",
@@ -633,7 +633,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::detail::CompileProgram(device, program);
 
-        log_info(LogTest, "Num tests {}", num_tests);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
             EnqueueProgram(device->command_queue(), program, false);
@@ -642,7 +642,7 @@ int main(int argc, char** argv) {
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "Time elapsed for DRAM accesses: {:.3f}ms ({:.3f}GB/s)",
                 elapsed_us / 1000.0,
@@ -672,7 +672,7 @@ int main(int argc, char** argv) {
             num_datum_per_slice);
 
         if (!pass) {
-            log_info(LogTest, "Validation failed");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Validation failed");
         }
 
         pass &= tt_metal::CloseDevice(device);
@@ -701,7 +701,7 @@ int main(int argc, char** argv) {
         }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         log_error(LogTest, "Test Failed");
     }

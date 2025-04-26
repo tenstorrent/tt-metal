@@ -45,7 +45,7 @@ bool SimpleL1ReadOnly(IDevice* device, size_t local_address, size_t byte_size) {
     readL1Backdoor(device, bank0_logical_core, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
-        tt::log_info("Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
+        TT_LOG_INFO("Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
     }
     return pass;
 }
@@ -58,7 +58,7 @@ bool SimpleL1WriteOnly(IDevice* device, size_t local_address, size_t byte_size) 
     readL1Backdoor(device, bank0_logical_core, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
-        tt::log_info("Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
+        TT_LOG_INFO("Mismatch at Core={}, Packet Size(in Bytes)={}", bank0_logical_core.str(), byte_size);
     }
     return pass;
 }
@@ -132,7 +132,7 @@ bool SimpleTiledL1WriteCBRead(
     tt::log_debug("inputs[0]={} == outputs[0]={}", inputs[0], outputs[0]);
     bool pass = (inputs == outputs);
     if (not pass) {
-        tt::log_info(
+        TT_LOG_INFO(
             "Mismatch at Core={}, phys_core={}, Packet Size(in Bytes)={}", core.str(), phys_core.str(), byte_size);
     }
     return pass;

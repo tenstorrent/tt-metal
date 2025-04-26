@@ -318,7 +318,7 @@ TEST_F(DispatchFixture, TensixFlatten) {
     uint32_t num_tiles_r = 2;
     uint32_t num_tiles_c = 2;
     if (!this->IsSlowDispatch()) {
-        log_info(LogTest, "Flatten running with num_tiles_r=1, num_tiles_c=1");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Flatten running with num_tiles_r=1, num_tiles_c=1");
         num_tiles_r = 1;
         num_tiles_c = 1;
     }

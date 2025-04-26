@@ -237,14 +237,14 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
 }
 
 bool run_unit_test(std::string op_name, int tile_factor, bool use_DRAM) {
-    log_info(LogTest, "Running {}", op_name);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Running {}", op_name);
 
     bool pass_ = run_sfpu_test(op_name, tile_factor, use_DRAM);
 
     if (pass_) {
-        log_info(LogTest, "{} test passed", op_name);
+        TT_LOG_INFO_WITH_CAT(LogTest, "{} test passed", op_name);
     } else {
-        log_info(LogTest, "{} test failed", op_name);
+        TT_LOG_INFO_WITH_CAT(LogTest, "{} test failed", op_name);
     }
     return pass_;
 }
@@ -263,9 +263,9 @@ int main(int argc, char** argv) {
         for (const auto& [op_name, _] : sfpu_op_to_hlk_op_name) {
             pass &= run_unit_test(op_name, arg_tile_factor, arg_use_DRAM);
             if (pass) {
-                log_info(LogTest, "PASS-SFPU test {}", op_name);
+                TT_LOG_INFO_WITH_CAT(LogTest, "PASS-SFPU test {}", op_name);
             } else {
-                log_info(LogTest, "FAIL-SFPU test {}", op_name);
+                TT_LOG_INFO_WITH_CAT(LogTest, "FAIL-SFPU test {}", op_name);
             }
         }
     } else {
@@ -294,7 +294,7 @@ int main(int argc, char** argv) {
             for (const auto& [op_name, _] : sfpu_op_to_hlk_op_name) {
                 ss << op_name << ", ";
             }
-            log_info(LogTest, "Help: {}", ss.str().c_str());
+            TT_LOG_INFO_WITH_CAT(LogTest, "Help: {}", ss.str().c_str());
             exit(0);
         }
         for (uint32_t idx = 0; idx < operators.size(); idx++) {
@@ -303,7 +303,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Sfpu tests passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Sfpu tests passed");
     } else {
         TT_THROW("Sfpu tests failed");
     }

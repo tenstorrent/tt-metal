@@ -66,17 +66,17 @@ bool matmul_single_core(
 
     CoreCoord core = {0, 0};
     int in0_block_w = 2;
-    log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
-    log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
-    log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(LogTest, "M = {}, N = {}, K = {}", M, N, K);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Activation = {}x{}", M * 32, K * 32);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Weights = {}x{}", K * 32, N * 32);
+    TT_LOG_INFO_WITH_CAT(
         LogTest,
         "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}",
         out_subblock_h,
         in0_block_w,
         K / in0_block_w,
         M / out_subblock_h);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         LogTest,
         "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}",
         out_subblock_w,
@@ -277,7 +277,7 @@ TEST_F(DispatchFixture, TensixMatmulSingleCoreSmall) {
 
 TEST_F(DispatchFixture, TensixMatmulSingleCore) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        log_info(LogTest, "Fast dispatch buffer memory issue, skipping for now");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Fast dispatch buffer memory issue, skipping for now");
         GTEST_SKIP();
     }
     uint32_t M = 16;

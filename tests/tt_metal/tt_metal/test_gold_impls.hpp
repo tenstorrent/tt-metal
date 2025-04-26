@@ -41,7 +41,7 @@ inline std::vector<uint16_t> gold_transpose_hc(std::vector<uint16_t> src_vec, st
             }
         }
     }
-    // log_info(tt::LogVerif, "Prior size = {}", transposed.size());
+    // TT_LOG_INFO_WITH_CAT(tt::LogVerif, "Prior size = {}", transposed.size());
     return transposed;
 };
 

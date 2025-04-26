@@ -74,7 +74,7 @@ void set_edm_runtime_args(
     for (auto const& s : edm_clockwise_kernel_rt_args) {
         ss << "\t" << s << "\n";
     }
-    log_info(tt::LogOp, "{}", ss.str());
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "{}", ss.str());
 }
 
 }  // namespace ccl
@@ -164,13 +164,13 @@ void generate_receiver_worker_kernels(
         page_size,
         num_pages_per_edm_buffer};
     std::vector<uint32_t> receiver_worker_writer_runtime_args{dram_output_buffer_base_addr};
-    log_info(tt::LogTest, "\tReceiverWriter CT Args");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "\tReceiverWriter CT Args");
     for (auto const& arg : receiver_worker_writer_compile_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "\t\t{}", arg);
     }
-    log_info(tt::LogTest, "\tReceiverWriter RT Args");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "\tReceiverWriter RT Args");
     for (auto const& arg : receiver_worker_writer_runtime_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "\t\t{}", arg);
     }
 
     std::vector<uint32_t> receiver_worker_receiver_compile_args{
@@ -186,13 +186,13 @@ void generate_receiver_worker_kernels(
         (uint32_t)device->ethernet_core_from_logical_core(edm_core).y,
         worker_semaphore_address,
         num_buffers_per_edm_channel};
-    log_info(tt::LogTest, "\tReceiverReader CT Args");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "\tReceiverReader CT Args");
     for (auto const& arg : receiver_worker_receiver_compile_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "\t\t{}", arg);
     }
-    log_info(tt::LogTest, "\tReceiverReader RT Args");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "\tReceiverReader RT Args");
     for (auto const& arg : receiver_worker_receiver_runtime_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "\t\t{}", arg);
     }
 
     auto receiver_worker_receiver_kernel = tt_metal::CreateKernel(
@@ -237,13 +237,13 @@ void generate_sender_worker_kernels(
         num_pages_per_edm_buffer};
     std::vector<uint32_t> sender_worker_reader_runtime_args{dram_output_buffer_base_addr};
 
-    log_info(tt::LogTest, "\tSenderReader CT Args");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "\tSenderReader CT Args");
     for (auto const& arg : sender_worker_reader_compile_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "\t\t{}", arg);
     }
-    log_info(tt::LogTest, "\tSenderReader RT Args");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "\tSenderReader RT Args");
     for (auto const& arg : sender_worker_reader_runtime_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "\t\t{}", arg);
     }
 
     std::vector<uint32_t> sender_worker_writer_compile_args{
@@ -256,13 +256,13 @@ void generate_sender_worker_kernels(
         (uint32_t)device->ethernet_core_from_logical_core(edm_core).y,
         num_buffers_per_edm_channel};
     uint32_t src0_cb_index = CBIndex::c_0;
-    log_info(tt::LogTest, "\tSenderWriter CT Args");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "\tSenderWriter CT Args");
     for (auto const& arg : sender_worker_writer_compile_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "\t\t{}", arg);
     }
-    log_info(tt::LogTest, "\tSenderWriter RT Args");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "\tSenderWriter RT Args");
     for (auto const& arg : sender_worker_writer_runtime_args) {
-        log_info(tt::LogTest, "\t\t{}", arg);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "\t\t{}", arg);
     }
     // Just want a dummy DF
     tt::DataFormat df = page_size == 1024   ? tt::DataFormat::Bfp8
@@ -338,7 +338,7 @@ bool RunWriteBWTest(
     for (auto const& worker_core : worker_cores) {
         local_worker_semaphore_addresses.push_back(tt::tt_metal::CreateSemaphore(sender_program, worker_core, 0));
         remote_worker_semaphore_addresses.push_back(tt::tt_metal::CreateSemaphore(receiver_program, worker_core, 0));
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             tt::LogTest,
             "worker_core=(x={},y={}), local_worker_semaphore_address={}, remote_worker_semaphore_address={}",
             worker_core.x,
@@ -430,10 +430,10 @@ bool RunWriteBWTest(
     TT_ASSERT(num_bytes_per_send >= page_size);
     TT_ASSERT(num_bytes_per_send >= page_size);
     const uint32_t num_messages_to_send = (((num_pages_total * page_size) - 1) / num_bytes_per_send) + 1;
-    log_info(tt::LogTest, "num_bytes_per_send={}", num_bytes_per_send);
-    log_info(tt::LogTest, "page_size={}", page_size);
-    log_info(tt::LogTest, "pages_per_send={}", pages_per_send);
-    log_info(tt::LogTest, "num_messages_to_send={}", num_messages_to_send);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "num_bytes_per_send={}", num_bytes_per_send);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "page_size={}", page_size);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "pages_per_send={}", pages_per_send);
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "num_messages_to_send={}", num_messages_to_send);
     std::vector<uint32_t> num_messages_to_send_over_channel(num_edm_channels, num_messages_to_send);
 
     std::vector<CoreCoord> local_sender_workers;
@@ -488,10 +488,10 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     // Build Workers
     ////////////////////////////////////////////////////////////////////////////
-    log_info(tt::LogTest, "Generating local_sender -> remote_receiver workers");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Generating local_sender -> remote_receiver workers");
     for (uint32_t i = 0; i < num_local_sender_channels; i++) {
         auto const& worker_core = worker_cores.at(i);
-        log_info(tt::LogTest, "Worker {}. On Core x={},y={}", i, worker_core.x, worker_core.y);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Worker {}. On Core x={},y={}", i, worker_core.x, worker_core.y);
         generate_sender_worker_kernels(
             sender_program,
             sender_device,
@@ -521,9 +521,9 @@ bool RunWriteBWTest(
             dest_is_dram,
             edm_termination_mode);
     }
-    log_info(tt::LogTest, "Generating remote_sender -> local_receiver workers");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Generating remote_sender -> local_receiver workers");
     for (uint32_t i = 0; i < num_remote_sender_channels; i++) {
-        log_info(tt::LogTest, "Worker {}", i);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Worker {}", i);
         auto const& worker_core = worker_cores.at(i + num_local_sender_channels);
         generate_sender_worker_kernels(
             receiver_program,
@@ -579,7 +579,7 @@ bool RunWriteBWTest(
         throw e;
     }
 
-    log_info(tt::LogTest, "Running...");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Running...");
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, sender_program); });
@@ -597,7 +597,7 @@ bool RunWriteBWTest(
     }
     // tt::tt_metal::detail::DumpDeviceProfileResults(receiver_device);
     // tt::tt_metal::detail::DumpDeviceProfileResults(sender_device);
-    log_info(tt::LogTest, "Reading back outputs");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Reading back outputs");
 
     auto is_output_correct = [&all_zeros, &inputs](const std::shared_ptr<tt_metal::Buffer>& output_buffer) {
         constexpr bool debug_mode = false;
@@ -606,7 +606,7 @@ bool RunWriteBWTest(
         std::fill(readback_data_vec.begin(), readback_data_vec.end(), 0);
 
         tt_metal::detail::ReadFromBuffer(output_buffer, readback_data_vec);
-        log_info(tt::LogTest, "Checking outputs");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Checking outputs");
         if (readback_data_vec.size() != inputs.size()) {
             log_error(tt::LogTest, "Output size mismatch: expected {} got {}", inputs.size(), readback_data_vec.size());
             return false;
@@ -665,11 +665,11 @@ int TestEntrypoint(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
-        log_info("This test can only be run on n300 devices");
+        TT_LOG_INFO("This test can only be run on n300 devices");
         return 0;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info("Test must be run on WH");
+        TT_LOG_INFO("Test must be run on WH");
         return 0;
     }
 

@@ -124,7 +124,7 @@ create_programs(
     uint32_t cb_padding,
     const std::shared_ptr<tt::tt_metal::Buffer>& input_buffer,
     bool use_sub_devices) {
-    log_info("created program");
+    TT_LOG_INFO("created program");
     std::vector<tt_metal::Program> programs;
     programs.push_back(tt_metal::Program());
 
@@ -160,8 +160,8 @@ create_programs(
     uint32_t writer_page_size, writer_num_pages;
     get_max_page_size_and_num_pages(block_w / num_receivers, single_tile_size, writer_page_size, writer_num_pages);
 
-    log_info("writer_page_size: {}", writer_page_size);
-    log_info("writer_num_pages: {}", writer_num_pages);
+    TT_LOG_INFO("writer_page_size: {}", writer_page_size);
+    TT_LOG_INFO("writer_num_pages: {}", writer_num_pages);
 
     tt_metal::CircularBufferConfig reader_cb_config =
         tt_metal::CircularBufferConfig(reader_cb_size, {{reader_cb_index, tile_format}})
@@ -207,8 +207,8 @@ create_programs(
     auto receiver_cb = tt_metal::experimental::CreateCircularBuffer(
         receiver_program, l1_receiver_cores, receiver_cb_config, global_cb);
 
-    log_info("reader_cb_size: {}", reader_cb_size);
-    log_info("receiver_cb_size: {}", receiver_cb_size);
+    TT_LOG_INFO("reader_cb_size: {}", reader_cb_size);
+    TT_LOG_INFO("receiver_cb_size: {}", receiver_cb_size);
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_buffer->address(),
@@ -256,7 +256,7 @@ create_programs(
 
     // reader rt
     auto dram_reader_core_coord = dram_reader_core.ranges().begin()->start_coord;
-    log_info("dram_reader_core_coord: {}", dram_reader_core_coord);
+    TT_LOG_INFO("dram_reader_core_coord: {}", dram_reader_core_coord);
     auto dram_reader_core_coord_physical = device->worker_core_from_logical_core(dram_reader_core_coord);
     uint32_t bank_id = 0;
     uint32_t vc = bank_id & 0x1;
@@ -328,7 +328,7 @@ create_programs(
             receiver_rt_args.push_back(i % 2 == 0 ? receiver_block_num_tile : next_layer_receiver_block_num_tile);
         }
 
-        log_info("l1_receiver_core_coords: {}", l1_receiver_core_coords[i]);
+        TT_LOG_INFO("l1_receiver_core_coords: {}", l1_receiver_core_coords[i]);
 
         tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, l1_receiver_core_coords[i], receiver_rt_args);
     }
@@ -602,9 +602,9 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {ht, wt});
 
-    log_info("cores: {}", cores);
-    log_info("size_bytes: {}", size_bytes);
-    log_info("page_size_bytes: {}", page_size_bytes);
+    TT_LOG_INFO("cores: {}", cores);
+    TT_LOG_INFO("size_bytes: {}", size_bytes);
+    TT_LOG_INFO("page_size_bytes: {}", page_size_bytes);
 
     auto config = tt::tt_metal::ShardedBufferConfig{
         .device = device,
@@ -623,7 +623,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-    log_info("created sharded tensor");
+    TT_LOG_INFO("created sharded tensor");
 
     return input_buffer;
 }
@@ -680,8 +680,8 @@ int main(int argc, char** argv) {
             TT_ASSERT(false);
         }
 
-        log_info("num_mixed_df_layers: {} ", num_mixed_df_layers);
-        log_info("num_receivers: {} ", num_receivers);
+        TT_LOG_INFO("num_mixed_df_layers: {} ", num_mixed_df_layers);
+        TT_LOG_INFO("num_receivers: {} ", num_receivers);
 
         TT_FATAL(
             num_mixed_df_layers % 2 == 1,
@@ -841,7 +841,7 @@ int main(int argc, char** argv) {
         }
 
         for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
-            log_info("input_buffers addr: {}", input_buffers[i]->address());
+            TT_LOG_INFO("input_buffers addr: {}", input_buffers[i]->address());
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -899,7 +899,7 @@ int main(int argc, char** argv) {
             tt_metal::detail::CompileProgram(device, program);
         }
 
-        log_info(LogTest, "Num tests {}", num_tests);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             if (use_sub_devices) {
                 // Enqueue the sender program
@@ -951,7 +951,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         log_error(LogTest, "Test Failed");
     }

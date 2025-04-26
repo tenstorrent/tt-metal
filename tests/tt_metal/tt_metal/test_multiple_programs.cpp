@@ -300,7 +300,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         pass &= (src0_activations == intermediate_result_vec);  // src1 is ZEROS
         if (pass) {
-            log_info(LogTest, "Eltwise binary ran successfully");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Eltwise binary ran successfully");
         } else {
             log_error(LogTest, "Eltwise binary did not run sucessfully!");
         }
@@ -346,7 +346,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

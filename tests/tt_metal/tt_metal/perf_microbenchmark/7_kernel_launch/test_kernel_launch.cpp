@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
                                                         : (num_cores_r / num_core_groups) * (core_group_idx + 1) - 1};
             CoreRange group_of_cores(start_core, end_core);
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "Setting kernels for core group {}, cores ({},{}) ~ ({},{})",
                 core_group_idx,
@@ -202,7 +202,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::detail::CompileProgram(device, program);
 
-        log_info(LogTest, "Num tests {}", num_tests);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
             EnqueueProgram(device->command_queue(), program, false);
@@ -210,7 +210,7 @@ int main(int argc, char** argv) {
             auto t_end = std::chrono::steady_clock::now();
             elapsed_us.push_back(duration_cast<microseconds>(t_end - t_begin).count());
 
-            log_info(LogTest, "Time elapsed for executing empty kernels: {}us", elapsed_us[i]);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Time elapsed for executing empty kernels: {}us", elapsed_us[i]);
         }
 
         pass &= tt_metal::CloseDevice(device);
@@ -238,13 +238,13 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_kernel_launch");
-    log_info("CSV_INPUT:num-cores-r:{}:num-cores-c:{}:core-groups:{}", num_cores_r, num_cores_c, num_core_groups);
-    log_info("CSV_OUTPUT:ElapsedTime(us):{}", avg_elapsed_us);
-    log_info("CSV_RESULT:pass:{}", pass);
+    TT_LOG_INFO("CSV_MICROBENCHMARK:title:test_kernel_launch");
+    TT_LOG_INFO("CSV_INPUT:num-cores-r:{}:num-cores-c:{}:core-groups:{}", num_cores_r, num_cores_c, num_core_groups);
+    TT_LOG_INFO("CSV_OUTPUT:ElapsedTime(us):{}", avg_elapsed_us);
+    TT_LOG_INFO("CSV_RESULT:pass:{}", pass);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         log_error(LogTest, "Test Failed");
     }

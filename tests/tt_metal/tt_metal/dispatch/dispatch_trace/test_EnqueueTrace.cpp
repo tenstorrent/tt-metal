@@ -519,7 +519,7 @@ TEST_F(CommandQueueTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
 
     for (bool blocking : blocking_flags) {
         std::string mode = blocking ? "Eager-B" : "Eager-NB";
-        log_info(LogTest, "Starting {} profiling with {} programs", mode, num_programs);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Starting {} profiling with {} programs", mode, num_programs);
         for (uint32_t iter = 0; iter < num_loops; iter++) {
             ScopedTimer timer(mode + " loop " + std::to_string(iter));
             EnqueueWriteBuffer(command_queue, input, input_data.data(), blocking);
@@ -557,7 +557,7 @@ TEST_F(CommandQueueTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
 TEST_F(RandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
@@ -579,7 +579,7 @@ TEST_F(RandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
@@ -601,7 +601,7 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace) {
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
@@ -627,7 +627,7 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace) {
 TEST_F(RandomProgramTraceFixture, TensixTestProgramsTrace) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
@@ -649,7 +649,7 @@ TEST_F(RandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
@@ -676,7 +676,7 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
@@ -711,7 +711,7 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
 TEST_F(RandomProgramTraceFixture, TensixTestAlternatingLargeAndSmallProgramsTrace) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
@@ -736,7 +736,7 @@ TEST_F(RandomProgramTraceFixture, TensixTestAlternatingLargeAndSmallProgramsTrac
 TEST_F(RandomProgramTraceFixture, TensixTestLargeProgramFollowedBySmallProgramsTrace) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
@@ -761,7 +761,7 @@ TEST_F(RandomProgramTraceFixture, TensixTestLargeProgramFollowedBySmallProgramsT
 TEST_F(RandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSmallProgramsTrace) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
@@ -788,7 +788,7 @@ TEST_F(RandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
     std::unordered_map<uint64_t, uint32_t> program_ids_to_trace_ids;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
@@ -832,7 +832,7 @@ TEST_F(RandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) {
     std::unordered_map<uint64_t, uint32_t> program_ids_to_trace_ids;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];
@@ -881,7 +881,7 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
     std::unordered_map<uint64_t, uint32_t> program_ids_to_trace_ids;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Creating Program {}", i);
         }
         this->programs[i] = CreateProgram();
         Program& program = this->programs[i];

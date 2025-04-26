@@ -886,7 +886,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
             cpuTime = get<0>(device_core_sync_info.at(worker_core));
             delay = get<1>(device_core_sync_info.at(worker_core));
             frequency = get<2>(device_core_sync_info.at(worker_core));
-            TT_LOG_INFO_WITH_CAT(
+            TT_LOG_INFO(
                 "Device {} sync info are, frequency {} GHz,  delay {} cycles and, sync point {} seconds",
                 device_id,
                 frequency,

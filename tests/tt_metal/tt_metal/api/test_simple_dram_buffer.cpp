@@ -31,7 +31,7 @@ bool SimpleDramReadOnly(IDevice* device, size_t local_address, size_t byte_size)
     readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
-        tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
+        TT_LOG_INFO("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
     }
     return pass;
 }
@@ -44,7 +44,7 @@ bool SimpleDramWriteOnly(IDevice* device, size_t local_address, size_t byte_size
     readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
     if (not pass) {
-        tt::log_info("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
+        TT_LOG_INFO("Mismatch at Channel={}, Packet Size(in Bytes)={}", dram_channel, byte_size);
     }
     return pass;
 }

@@ -651,7 +651,7 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreams) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest, "Test must be run on WH");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Test must be run on WH");
         return;
     }
     std::srand(0);
@@ -694,7 +694,7 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsSmal
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest, "Test must be run on WH");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Test must be run on WH");
         return;
     }
     std::srand(0);
@@ -737,7 +737,7 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoop
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest, "Test must be run on WH");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Test must be run on WH");
         return;
     }
     std::srand(0);
@@ -783,11 +783,11 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoop
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     // if (num_devices != 8) {
-    //     log_info(tt::LogTest, "Need at least 2 devices to run this test");
+    //     TT_LOG_INFO_WITH_CAT(tt::LogTest, "Need at least 2 devices to run this test");
     //     return;
     // }
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest, "Test must be run on WH");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Test must be run on WH");
         return;
     }
     std::srand(0);
@@ -814,7 +814,7 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoop
             EXPECT_TRUE(sub_sizes.at(i) < (page_size / noc_word_size));
         }
         std::vector<Program> programs;
-        log_info(tt::LogTest, "Iteration: {}", i);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Iteration: {}", i);
         tt::tt_metal::build_and_run_autonomous_stream_test(
             programs,
             {device_},
@@ -838,7 +838,7 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoop
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest, "Test must be run on WH");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Test must be run on WH");
         return;
     }
     std::srand(0);
@@ -884,7 +884,7 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsSwee
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest, "Test must be run on WH");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Test must be run on WH");
         return;
     }
 
@@ -922,7 +922,7 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsSwee
                         }
                         uint32_t enable_variable_sized_messages = 1;
 
-                        log_info(
+                        TT_LOG_INFO_WITH_CAT(
                             tt::LogTest,
                             "num_messages: {}, fw_stream_buffer_size: {}, relay_stream_buffer_size: {}, "
                             "tile_header_buffer_num_messages: {}, page_size: {}, enable_variable_sized_messages: {}",

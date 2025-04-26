@@ -181,7 +181,7 @@ bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
     CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     int num_cores_r = compute_with_storage_grid_size.y;
     int num_cores_c = compute_with_storage_grid_size.x;
-    log_info(LogTest, "Num cores r = {}, Num cores c = {}", num_cores_r, num_cores_c);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Num cores r = {}, Num cores c = {}", num_cores_r, num_cores_c);
     uint32_t M = 16 * num_cores_r;
     uint32_t K = 16 * 12;
     uint32_t N = 16 * num_cores_c;
@@ -192,17 +192,17 @@ bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
     int per_core_N = N / num_cores_c;
     uint32_t single_tile_size = 2 * 1024;
     uint32_t dram_unreserved_base = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::DRAM);
-    log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
-    log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
-    log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(LogTest, "M = {}, N = {}, K = {}", M, N, K);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Activation = {}x{}", M * 32, K * 32);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Weights = {}x{}", K * 32, N * 32);
+    TT_LOG_INFO_WITH_CAT(
         LogTest,
         "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}",
         out_subblock_h,
         in0_block_w,
         K / in0_block_w,
         M / out_subblock_h);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         LogTest,
         "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}",
         out_subblock_w,
@@ -459,18 +459,18 @@ bool matmul_multi_core_multi_dram(tt_metal::DispatchFixture* fixture, tt_metal::
     int per_core_M = M / num_cores_r;
     int per_core_N = N / num_cores_c;
     uint32_t single_tile_size = 2 * 1024;
-    log_info(LogTest, "num_cores_r={}, num_cores_c={}", num_cores_r, num_cores_c);
-    log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
-    log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
-    log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(LogTest, "num_cores_r={}, num_cores_c={}", num_cores_r, num_cores_c);
+    TT_LOG_INFO_WITH_CAT(LogTest, "M = {}, N = {}, K = {}", M, N, K);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Activation = {}x{}", M * 32, K * 32);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Weights = {}x{}", K * 32, N * 32);
+    TT_LOG_INFO_WITH_CAT(
         LogTest,
         "Activation block = {}x{}, #blocks = {}, #sub-blocks = {}",
         per_core_M,
         in0_block_w,
         K / in0_block_w,
         per_core_M / out_subblock_h);
-    log_info(
+    TT_LOG_INFO_WITH_CAT(
         LogTest,
         "Weights block = {}x{}, #blocks = {}, #sub-blocks = {}",
         in0_block_w,
@@ -582,10 +582,10 @@ bool matmul_multi_core_multi_dram(tt_metal::DispatchFixture* fixture, tt_metal::
 
 TEST_F(DispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        log_info(LogTest, "This test is only supported in slow dispatch mode");
+        TT_LOG_INFO_WITH_CAT(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
     } else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-        tt::log_info("This test is disabled in WH B0");
+        TT_LOG_INFO("This test is disabled in WH B0");
         GTEST_SKIP();
     }
     for (unsigned int id = 0; id < devices_.size(); id++) {
@@ -597,7 +597,8 @@ TEST_F(DispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
 TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAM) {
     // need to update move_tiles_to_dram to support both slow and fast
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        log_info(LogTest, "This test is not supported in slow dispatch mode, need to update move_tiles_to_dram..");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "This test is not supported in slow dispatch mode, need to update move_tiles_to_dram..");
         GTEST_SKIP();
     }
     for (unsigned int id = 0; id < devices_.size(); id++) {

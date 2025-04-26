@@ -78,7 +78,7 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
 
         auto json_trace = graph::query_trace(call);
 
-        tt::log_info("Trace: {}", json_trace.dump(4));
+        TT_LOG_INFO("Trace: {}", json_trace.dump(4));
 
         // Direct calls
         {
@@ -115,19 +115,19 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             if (output_info.size() != params.expected_output_info.size()) {
                 auto print = [](const auto& infos) {
                     for (const auto& info : infos) {
-                        tt::log_info("{}", info);
+                        TT_LOG_INFO("{}", info);
                     }
                 };
 
-                tt::log_info(
+                TT_LOG_INFO(
                     "Output info size mismatch. Expected {} but got {}",
                     params.expected_output_info.size(),
                     output_info.size());
 
-                tt::log_info("Expected output info:");
+                TT_LOG_INFO("Expected output info:");
                 print(params.expected_output_info);
 
-                tt::log_info("Actual output info:");
+                TT_LOG_INFO("Actual output info:");
                 print(output_info);
                 ASSERT_TRUE(false);
             }

@@ -185,7 +185,7 @@ int main(int argc, char** argv) {
             };
 
             auto input_size_aligned = align_to_single_tile(input_size);
-            log_info(LogTest, "input size {} is aligned to {} bytes", input_size, input_size_aligned);
+            TT_LOG_INFO_WITH_CAT(LogTest, "input size {} is aligned to {} bytes", input_size, input_size_aligned);
             input_size = input_size_aligned;
         }
         ////////////////////////////////////////////////////////////////////////////
@@ -205,7 +205,7 @@ int main(int argc, char** argv) {
             [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
                 split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Measuring DRAM bandwidth for input_size = {} bytes ({:.3f} MB, "
             "{} tiles), using {} cores",
@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::detail::CompileProgram(device, program);
 
-        log_info(LogTest, "Num tests {}", num_tests);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
             EnqueueProgram(device->command_queue(), program, false);
@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "Time elapsed for DRAM accesses: {:.3f}ms ({:.3f}GB/s)",
                 elapsed_us / 1000.0,
@@ -290,7 +290,7 @@ int main(int argc, char** argv) {
                 unsigned long elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
                 elapsed_us = (double)elapsed_cc / clock_freq_mhz;
                 dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     LogTest,
                     "Time elapsed using device profiler: {:.3f}ms ({:.3f}GB/s)",
                     elapsed_us / 1000.0,
@@ -343,17 +343,17 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_dram_offchip");
-    log_info(
+    TT_LOG_INFO("CSV_MICROBENCHMARK:title:test_dram_offchip");
+    TT_LOG_INFO(
         "CSV_INPUT:input-size:{}:access-type:{}:use-device-profiler:{}",
         input_size,
         ACCESS_TYPEToString(static_cast<ACCESS_TYPE>(access_type)),
         use_device_profiler);
-    log_info("CSV_OUTPUT:Bandwidth(GB/s):{:.3f}", avg_dram_bandwidth);
-    log_info("CSV_RESULT:pass:{}", pass);
+    TT_LOG_INFO("CSV_OUTPUT:Bandwidth(GB/s):{:.3f}", avg_dram_bandwidth);
+    TT_LOG_INFO("CSV_RESULT:pass:{}", pass);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         log_error(LogTest, "Test Failed");
     }
@@ -503,9 +503,9 @@ bool validation(
         }
     } else {
         std::vector<uint32_t> result_vec;
-        log_info(LogTest, "detail::ReadFromBuffer API may take a long time if the input size is large");
+        TT_LOG_INFO_WITH_CAT(LogTest, "detail::ReadFromBuffer API may take a long time if the input size is large");
         tt_metal::detail::ReadFromBuffer(input_buffer, result_vec);
-        log_info(LogTest, "detail::ReadFromBuffer API done");
+        TT_LOG_INFO_WITH_CAT(LogTest, "detail::ReadFromBuffer API done");
 
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};

@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
         }
         uint64_t buffer_size = stoul(size_string);
 
-        log_info(LogTest, "Measuring performance for size={}bytes", buffer_size);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Measuring performance for size={}bytes", buffer_size);
 
         // Device Setup
         int device_id = 0;
@@ -64,10 +64,10 @@ int main(int argc, char** argv) {
         srand(time(0));
         uint32_t dram_addr = 64;
         uint32_t dram_channel = rand() % 8;
-        log_info(LogTest, "Target DRAM channel = {}", dram_channel);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Target DRAM channel = {}", dram_channel);
 
         // Execute Application
-        log_info(LogTest, "iter {}", iter);
+        TT_LOG_INFO_WITH_CAT(LogTest, "iter {}", iter);
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
 
             auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
             auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
-            log_info(LogTest, "WriteToDeviceDRAMChannel {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
+            TT_LOG_INFO_WITH_CAT(LogTest, "WriteToDeviceDRAMChannel {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
         }
 
         std::vector<uint32_t> result_vec;
@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
 
             auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
             auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
-            log_info(LogTest, "ReadFromDeviceDRAMChannel {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
+            TT_LOG_INFO_WITH_CAT(LogTest, "ReadFromDeviceDRAMChannel {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
         }
 
         // Validation & Teardown
@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

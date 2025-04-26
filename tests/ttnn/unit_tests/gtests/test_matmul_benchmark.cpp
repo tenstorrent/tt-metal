@@ -199,7 +199,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             "dtype,math_fidelity,inference_time_avg (ns),TFLOPs (avg),Utilization (vs user grid),Utilization (vs 8x8 "
             "full grid)\n";
 
-    tt::log_info("Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
+    TT_LOG_INFO("Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
 
     const int in0_block_w = k / grid_size.height() / 32 / in0_block_w_div;
     const int per_core_M = m / grid_size.width() / tile_h;
@@ -208,7 +208,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     const int out_block_w = per_core_N / num_out_blocks_w;
     const Shape2D out_subblock = get_subblock_sizes(out_block_h, out_block_w, out_sharded);
 
-    tt::log_info(
+    TT_LOG_INFO(
         "M*K*N = {}*{}*{} out_subblock_h: {}, out_subblock_w: {}",
         m,
         k,
@@ -376,7 +376,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     double utilization_user_grid = ideal_cycle_user_grid / inference_cycle;
     std::string utilization_full_grid_percentage = std::to_string(utilization_full_grid * 100);
     std::string utilization_user_grid_percentage = std::to_string(utilization_user_grid * 100);
-    tt::log_info(
+    TT_LOG_INFO(
         "M*K*N = {}*{}*{} == inference time (avg): {}, tflops (avg): {}, utilization (vs user grid): {}%, "
         "utilization (vs 8x8 grid): {}%",
         m,

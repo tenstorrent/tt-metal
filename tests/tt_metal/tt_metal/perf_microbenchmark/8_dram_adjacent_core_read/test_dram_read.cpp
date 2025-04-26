@@ -164,7 +164,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
         const std::array rt_args = {(std::uint32_t)bank_id, (std::uint32_t)vc};
 
-        log_info("core: {}, vc: {}", core, vc);
+        TT_LOG_INFO("core: {}, vc: {}", core, vc);
 
         tt_metal::SetRuntimeArgs(program, reader_kernel, core, rt_args);
     }
@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
     uint32_t num_banks = 1;
     uint32_t bank_start_id = 1;
 
-    log_info("start DRAM benchmark");
+    TT_LOG_INFO("start DRAM benchmark");
 
     try {
         ////////////////////////////////////////////////////////////////////////////
@@ -364,7 +364,7 @@ int main(int argc, char** argv) {
             };
 
             auto input_size_aligned = align_to_single_tile(input_size);
-            log_info(LogTest, "input size {} is aligned to {} bytes", input_size, input_size_aligned);
+            TT_LOG_INFO_WITH_CAT(LogTest, "input size {} is aligned to {} bytes", input_size, input_size_aligned);
             input_size = input_size_aligned;
         }
         ////////////////////////////////////////////////////////////////////////////
@@ -392,10 +392,10 @@ int main(int argc, char** argv) {
 
         for (auto core : all_cores_list) {
             auto virtual_core = device->worker_core_from_logical_core(core);
-            log_info("logical core: {}, virtual core: {}", core, virtual_core);
+            TT_LOG_INFO("logical core: {}, virtual core: {}", core, virtual_core);
         }
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Measuring DRAM bandwidth for input_size = {} bytes ({:.3f} MB, "
             "{} tiles), using {} cores",
@@ -449,7 +449,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::detail::CompileProgram(device, program);
 
-        log_info(LogTest, "Num tests {}", num_tests);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
             EnqueueProgram(device->command_queue(), program, false);
@@ -458,7 +458,7 @@ int main(int argc, char** argv) {
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "Time elapsed for DRAM accesses: {:.3f}ms ({:.3f}GB/s)",
                 elapsed_us / 1000.0,
@@ -512,7 +512,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         log_error(LogTest, "Test Failed");
     }

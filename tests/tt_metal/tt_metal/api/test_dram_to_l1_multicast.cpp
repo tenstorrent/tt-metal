@@ -136,7 +136,7 @@ bool dram_to_l1_multicast(
             auto dest_core_data_unpacked = unpack_uint32_vec_into_bfloat16_vec(dest_core_data);
             pass &= (dest_core_data_unpacked == tensor.get_values());
             if (not(dest_core_data_unpacked == tensor.get_values())) {
-                log_info(LogTest, "Mismatch on core {}, {}", dest_core.x, dest_core.y);
+                TT_LOG_INFO_WITH_CAT(LogTest, "Mismatch on core {}, {}", dest_core.x, dest_core.y);
                 print_vec_of_bfloat16(dest_core_data_unpacked, 1, "Result");
             }
         }
@@ -178,7 +178,7 @@ TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionUpLeft) {
         .exclude_direction = {0, 0}};
     for (unsigned int id = 0; id < devices_.size(); id++) {
         if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)) {
-            tt::log_info(tt::LogTest, "This test is only supported on Blackhole");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "This test is only supported on Blackhole");
             GTEST_SKIP();
         }
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(
@@ -195,7 +195,7 @@ TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionUpRight) {
         .exclude_direction = {1, 0}};
     for (unsigned int id = 0; id < devices_.size(); id++) {
         if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)) {
-            tt::log_info(tt::LogTest, "This test is only supported on Blackhole");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "This test is only supported on Blackhole");
             GTEST_SKIP();
         }
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(
@@ -212,7 +212,7 @@ TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionDownLeft) {
         .exclude_direction = {0, 1}};
     for (unsigned int id = 0; id < devices_.size(); id++) {
         if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)) {
-            tt::log_info(tt::LogTest, "This test is only supported on Blackhole");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "This test is only supported on Blackhole");
             GTEST_SKIP();
         }
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(
@@ -229,7 +229,7 @@ TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionDownRight) {
         .exclude_direction = {1, 1}};
     for (unsigned int id = 0; id < devices_.size(); id++) {
         if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)) {
-            tt::log_info(tt::LogTest, "This test is only supported on Blackhole");
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "This test is only supported on Blackhole");
             GTEST_SKIP();
         }
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(

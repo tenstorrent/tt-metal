@@ -59,22 +59,22 @@ int main(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
-        log_info(LogTest, "Usage:");
-        log_info(LogTest, "  --prng_seed: PRNG seed, default = 0x{:x}", default_prng_seed);
-        log_info(LogTest, "  --data_kb_per_tx: Total data in KB per TX endpoint, default = {}", default_data_kb_per_tx);
-        log_info(LogTest, "  --max_packet_size_words: Max packet size in words, default = 0x{:x}", default_max_packet_size_words);
-        log_info(LogTest, "  --tx_queue_start_addr: TX queue start address, default = 0x{:x}", default_tx_queue_start_addr);
-        log_info(LogTest, "  --tx_queue_size_bytes: TX queue size in bytes, default = 0x{:x}", default_tx_queue_size_bytes);
-        log_info(LogTest, "  --rx_queue_start_addr: RX queue start address, default = 0x{:x}", default_rx_queue_start_addr);
-        log_info(LogTest, "  --rx_queue_size_bytes: RX queue size in bytes, default = 0x{:x}", default_rx_queue_size_bytes);
-        log_info(LogTest, "  --mux_queue_start_addr: MUX queue start address, default = 0x{:x}", default_mux_queue_start_addr);
-        log_info(LogTest, "  --mux_queue_size_bytes: MUX queue size in bytes, default = 0x{:x}", default_mux_queue_size_bytes);
-        log_info(LogTest, "  --demux_queue_start_addr: DEMUX queue start address, default = 0x{:x}", default_demux_queue_start_addr);
-        log_info(LogTest, "  --demux_queue_size_bytes: DEMUX queue size in bytes, default = 0x{:x}", default_demux_queue_size_bytes);
-        log_info(LogTest, "  --test_results_addr: test results buffer address, default = 0x{:x}", default_test_results_addr);
-        log_info(LogTest, "  --test_results_size: test results buffer size, default = 0x{:x}", default_test_results_size);
-        log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
-        log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Usage:");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --prng_seed: PRNG seed, default = 0x{:x}", default_prng_seed);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --data_kb_per_tx: Total data in KB per TX endpoint, default = {}", default_data_kb_per_tx);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --max_packet_size_words: Max packet size in words, default = 0x{:x}", default_max_packet_size_words);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --tx_queue_start_addr: TX queue start address, default = 0x{:x}", default_tx_queue_start_addr);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --tx_queue_size_bytes: TX queue size in bytes, default = 0x{:x}", default_tx_queue_size_bytes);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --rx_queue_start_addr: RX queue start address, default = 0x{:x}", default_rx_queue_start_addr);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --rx_queue_size_bytes: RX queue size in bytes, default = 0x{:x}", default_rx_queue_size_bytes);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --mux_queue_start_addr: MUX queue start address, default = 0x{:x}", default_mux_queue_start_addr);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --mux_queue_size_bytes: MUX queue size in bytes, default = 0x{:x}", default_mux_queue_size_bytes);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --demux_queue_start_addr: DEMUX queue start address, default = 0x{:x}", default_demux_queue_start_addr);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --demux_queue_size_bytes: DEMUX queue size in bytes, default = 0x{:x}", default_demux_queue_size_bytes);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --test_results_addr: test results buffer address, default = 0x{:x}", default_test_results_addr);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --test_results_size: test results buffer size, default = 0x{:x}", default_test_results_size);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
         return 0;
     }
 
@@ -193,7 +193,7 @@ int main(int argc, char **argv) {
                     0, // 20: data_sent_per_iter_low
                     0 // 21: data_sent_per_iter_high
                 };
-            log_info(LogTest, "run TX {} at x={},y={} (phys x={},y={})",
+            TT_LOG_INFO_WITH_CAT(LogTest, "run TX {} at x={},y={} (phys x={},y={})",
                             i, tx_core[i].x, tx_core[i].y, tx_phys_core[i].x, tx_phys_core[i].y);
             auto kernel = tt_metal::CreateKernel(
                 program,
@@ -233,7 +233,7 @@ int main(int argc, char **argv) {
                     timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
                     0 // 18: disable_header_check
                 };
-            log_info(LogTest, "run RX {} at x={},y={} (phys x={},y={})",
+            TT_LOG_INFO_WITH_CAT(LogTest, "run RX {} at x={},y={} (phys x={},y={})",
                     i, rx_core[i].x, rx_core[i].y, rx_phys_core[i].x, rx_phys_core[i].y);
             auto kernel = tt_metal::CreateKernel(
                 program,
@@ -284,7 +284,7 @@ int main(int argc, char **argv) {
                     timeout_mcycles * 1000 * 1000, // 16: timeout_cycles
                     0, 0, 0, 0, 0, 0, 0, 0 // 17-24: packetize/depacketize settings
                 };
-            log_info(LogTest, "run L1 MUX {} at x={},y={} (phys x={},y={})",
+            TT_LOG_INFO_WITH_CAT(LogTest, "run L1 MUX {} at x={},y={} (phys x={},y={})",
                             i, mux_l1_core[i].x, mux_l1_core[i].y, mux_l1_phys_core[i].x, mux_l1_phys_core[i].y);
             auto mux_kernel = tt_metal::CreateKernel(
                 program,
@@ -332,7 +332,7 @@ int main(int argc, char **argv) {
                 timeout_mcycles * 1000 * 1000, // 16: timeout_cycles
                 0, 0, 0, 0, 0, 0, 0, 0 // 17-24: packetize/depacketize settings
             };
-        log_info(LogTest, "run L2 MUX at x={},y={} (phys x={},y={})",
+        TT_LOG_INFO_WITH_CAT(LogTest, "run L2 MUX at x={},y={} (phys x={},y={})",
                  mux_l2_core.x, mux_l2_core.y, mux_l2_phys_core.x, mux_l2_phys_core.y);
         auto mux_kernel = tt_metal::CreateKernel(
             program,
@@ -393,7 +393,7 @@ int main(int argc, char **argv) {
                 0, 0, 0, 0, 0 // 25-29: packetize/depacketize settings
             };
 
-        log_info(LogTest, "run L1 DEMUX at x={},y={} (phys x={},y={})",
+        TT_LOG_INFO_WITH_CAT(LogTest, "run L1 DEMUX at x={},y={} (phys x={},y={})",
                         demux_l1_core.x, demux_l1_core.y, demux_l1_phys_core.x, demux_l1_phys_core.y);
         auto demux_kernel = tt_metal::CreateKernel(
             program,
@@ -458,7 +458,7 @@ int main(int argc, char **argv) {
                     0, 0, 0, 0, 0 // 25-29: packetize/depacketize settings
                 };
 
-            log_info(LogTest, "run L2 DEMUX at x={},y={} (phys x={},y={})",
+            TT_LOG_INFO_WITH_CAT(LogTest, "run L2 DEMUX at x={},y={} (phys x={},y={})",
                             demux_l2_core[i].x, demux_l2_core[i].y, demux_l2_phys_core[i].x, demux_l2_phys_core[i].y);
             auto demux_kernel = tt_metal::CreateKernel(
                 program,
@@ -474,14 +474,14 @@ int main(int argc, char **argv) {
 
         }
 
-        log_info(LogTest, "Starting test...");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Starting test...");
 
         auto start = std::chrono::system_clock::now();
         tt_metal::detail::LaunchProgram(device, program);
         auto end = std::chrono::system_clock::now();
 
         std::chrono::duration<double> elapsed_seconds = (end-start);
-        log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
         vector<vector<uint32_t>> tx_results;
         vector<vector<uint32_t>> rx_results;
@@ -494,7 +494,7 @@ int main(int argc, char **argv) {
             tx_results.push_back(
                 tt::llrt::read_hex_vec_from_core(
                     device->id(), tx_phys_core[i], test_results_addr, test_results_size));
-            log_info(LogTest, "TX{} status = {}", i, packet_queue_test_status_to_string(tx_results[i][PQ_TEST_STATUS_INDEX]));
+            TT_LOG_INFO_WITH_CAT(LogTest, "TX{} status = {}", i, packet_queue_test_status_to_string(tx_results[i][PQ_TEST_STATUS_INDEX]));
             pass &= (tx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
         }
 
@@ -502,7 +502,7 @@ int main(int argc, char **argv) {
             rx_results.push_back(
                 tt::llrt::read_hex_vec_from_core(
                     device->id(), rx_phys_core[i], test_results_addr, test_results_size));
-            log_info(LogTest, "RX{} status = {}", i, packet_queue_test_status_to_string(rx_results[i][PQ_TEST_STATUS_INDEX]));
+            TT_LOG_INFO_WITH_CAT(LogTest, "RX{} status = {}", i, packet_queue_test_status_to_string(rx_results[i][PQ_TEST_STATUS_INDEX]));
             pass &= (rx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
         }
 
@@ -511,14 +511,14 @@ int main(int argc, char **argv) {
                 tt::llrt::read_hex_vec_from_core(
                     device->id(), mux_l1_phys_core[i], test_results_addr, test_results_size)
             );
-            log_info(LogTest, "L1 MUX {} status = {}", i, packet_queue_test_status_to_string(mux_l1_results[i][PQ_TEST_STATUS_INDEX]));
+            TT_LOG_INFO_WITH_CAT(LogTest, "L1 MUX {} status = {}", i, packet_queue_test_status_to_string(mux_l1_results[i][PQ_TEST_STATUS_INDEX]));
             pass &= (mux_l1_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
         }
 
         mux_l2_results =
             tt::llrt::read_hex_vec_from_core(
                 device->id(), mux_l2_phys_core, test_results_addr, test_results_size);
-        log_info(LogTest, "L2 MUX status = {}", packet_queue_test_status_to_string(mux_l2_results[PQ_TEST_STATUS_INDEX]));
+        TT_LOG_INFO_WITH_CAT(LogTest, "L2 MUX status = {}", packet_queue_test_status_to_string(mux_l2_results[PQ_TEST_STATUS_INDEX]));
         pass &= (mux_l2_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
 
         for (uint32_t i = 0; i < num_demux_l2; i++) {
@@ -526,14 +526,14 @@ int main(int argc, char **argv) {
                 tt::llrt::read_hex_vec_from_core(
                     device->id(), demux_l2_phys_core[i], test_results_addr, test_results_size)
             );
-            log_info(LogTest, "L2 DEMUX {} status = {}", i, packet_queue_test_status_to_string(demux_l2_results[i][PQ_TEST_STATUS_INDEX]));
+            TT_LOG_INFO_WITH_CAT(LogTest, "L2 DEMUX {} status = {}", i, packet_queue_test_status_to_string(demux_l2_results[i][PQ_TEST_STATUS_INDEX]));
             pass &= (demux_l2_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
         }
 
         demux_l1_results =
             tt::llrt::read_hex_vec_from_core(
                 device->id(), demux_l1_phys_core, test_results_addr, test_results_size);
-        log_info(LogTest, "L1 DEMUX status = {}", packet_queue_test_status_to_string(demux_l1_results[0]));
+        TT_LOG_INFO_WITH_CAT(LogTest, "L1 DEMUX status = {}", packet_queue_test_status_to_string(demux_l1_results[0]));
         pass &= (demux_l1_results[0] == PACKET_QUEUE_TEST_PASS);
 
         pass &= tt_metal::CloseDevice(device);
@@ -547,29 +547,29 @@ int main(int argc, char **argv) {
                 total_tx_words_sent += tx_words_sent;
                 uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], PQ_TEST_CYCLES_INDEX);
                 double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
-                log_info(LogTest,
+                TT_LOG_INFO_WITH_CAT(LogTest,
                          "TX {} words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
                          i, tx_words_sent, tx_elapsed_cycles, tx_bw);
                 total_tx_bw += tx_bw;
             }
-            log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
             double total_rx_bw = 0.0;
             for (uint32_t i = 0; i < num_dest_endpoints; i++) {
                 uint64_t rx_words_checked = get_64b_result(rx_results[i], PQ_TEST_WORD_CNT_INDEX);
                 total_rx_words_checked += rx_words_checked;
                 uint64_t rx_elapsed_cycles = get_64b_result(rx_results[i], PQ_TEST_CYCLES_INDEX);
                 double rx_bw = ((double)rx_words_checked) * PACKET_WORD_SIZE_BYTES / rx_elapsed_cycles;
-                log_info(LogTest,
+                TT_LOG_INFO_WITH_CAT(LogTest,
                          "RX {} words checked = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
                          i, rx_words_checked, rx_elapsed_cycles, rx_bw);
                 total_rx_bw += rx_bw;
             }
-            log_info(LogTest, "Total RX BW = {:.2f} B/cycle", total_rx_bw);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Total RX BW = {:.2f} B/cycle", total_rx_bw);
             if (total_tx_words_sent != total_rx_words_checked) {
                 log_error(LogTest, "Total TX words sent = {} != Total RX words checked = {}", total_tx_words_sent, total_rx_words_checked);
                 pass = false;
             } else {
-                log_info(LogTest, "Total TX words sent = {} == Total RX words checked = {} -> OK", total_tx_words_sent, total_rx_words_checked);
+                TT_LOG_INFO_WITH_CAT(LogTest, "Total TX words sent = {} == Total RX words checked = {} -> OK", total_tx_words_sent, total_rx_words_checked);
             }
 
             uint64_t mux_l2_words_sent = get_64b_result(mux_l2_results, PQ_TEST_WORD_CNT_INDEX);
@@ -577,17 +577,17 @@ int main(int argc, char **argv) {
             uint64_t mux_l2_iter = get_64b_result(mux_l2_results, PQ_TEST_ITER_INDEX);
             double mux_l2_bw = ((double)mux_l2_words_sent) * PACKET_WORD_SIZE_BYTES / mux_l2_elapsed_cycles;
             double mux_l2_cycles_per_iter = ((double)mux_l2_elapsed_cycles) / mux_l2_iter;
-            log_info(LogTest,
+            TT_LOG_INFO_WITH_CAT(LogTest,
                      "L2 MUX words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
                      mux_l2_words_sent, mux_l2_elapsed_cycles, mux_l2_bw);
-            log_info(LogTest,
+            TT_LOG_INFO_WITH_CAT(LogTest,
                     "L2 MUX iter = {}, elapsed cycles = {} -> cycles/iter = {:.2f}",
                     mux_l2_iter, mux_l2_elapsed_cycles, mux_l2_cycles_per_iter);
             if (mux_l2_words_sent != total_rx_words_checked) {
                 log_error(LogTest, "L2 MUX words sent = {} != Total RX words checked = {}", mux_l2_words_sent, total_rx_words_checked);
                 pass = false;
             } else {
-                log_info(LogTest, "L2 MUX words sent = {} == Total RX words checked = {} -> OK", mux_l2_words_sent, total_rx_words_checked);
+                TT_LOG_INFO_WITH_CAT(LogTest, "L2 MUX words sent = {} == Total RX words checked = {} -> OK", mux_l2_words_sent, total_rx_words_checked);
             }
 
             uint64_t demux_l1_words_sent = get_64b_result(demux_l1_results, PQ_TEST_WORD_CNT_INDEX);
@@ -595,17 +595,17 @@ int main(int argc, char **argv) {
             uint64_t demux_l1_iter = get_64b_result(demux_l1_results, PQ_TEST_ITER_INDEX);
             double demux_l1_bw = ((double)demux_l1_words_sent) * PACKET_WORD_SIZE_BYTES / demux_l1_elapsed_cycles;
             double demux_l1_cycles_per_iter = ((double)demux_l1_elapsed_cycles) / demux_l1_iter;
-            log_info(LogTest,
+            TT_LOG_INFO_WITH_CAT(LogTest,
                      "L1 DEMUX words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
                      demux_l1_words_sent, demux_l1_elapsed_cycles, demux_l1_bw);
-            log_info(LogTest,
+            TT_LOG_INFO_WITH_CAT(LogTest,
                     "L1 DEMUX iter = {}, elapsed cycles = {} -> cycles/iter = {:.2f}",
                     demux_l1_iter, demux_l1_elapsed_cycles, demux_l1_cycles_per_iter);
             if (demux_l1_words_sent != total_rx_words_checked) {
                 log_error(LogTest, "L1 DEMUX words sent = {} != Total RX words checked = {}", demux_l1_words_sent, total_rx_words_checked);
                 pass = false;
             } else {
-                log_info(LogTest, "L1 DEMUX words sent = {} == Total RX words checked = {} -> OK", demux_l1_words_sent, total_rx_words_checked);
+                TT_LOG_INFO_WITH_CAT(LogTest, "L1 DEMUX words sent = {} == Total RX words checked = {} -> OK", demux_l1_words_sent, total_rx_words_checked);
             }
         }
 
@@ -617,7 +617,7 @@ int main(int argc, char **argv) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
         return 0;
     } else {
         log_fatal(LogTest, "Test Failed\n");

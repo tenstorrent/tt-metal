@@ -103,7 +103,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     } else {
         virtual_core = device->worker_core_from_logical_core(core);
     }
-    log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
+    TT_LOG_INFO_WITH_CAT(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
 
     // Set up dram buffers
     uint32_t single_tile_size = 2 * 1024;
@@ -131,10 +131,10 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
 
     auto input_buf_noc_xy = get_core_coord_for_test(input_buffer);
     auto output_buf_noc_xy = get_core_coord_for_test(output_buffer);
-    log_info("Input/Output Buffer mem type: {}", magic_enum::enum_name(buffer_mem_type));
-    log_info("Input Buffer NOC XY: {}", input_buf_noc_xy);
-    log_info("Output Buffer NOC XY: {}", output_buf_noc_xy);
-    log_info("Local scratch buffer addr: {:#x}", buffer_addr);
+    TT_LOG_INFO("Input/Output Buffer mem type: {}", magic_enum::enum_name(buffer_mem_type));
+    TT_LOG_INFO("Input Buffer NOC XY: {}", input_buf_noc_xy);
+    TT_LOG_INFO("Output Buffer NOC XY: {}", output_buf_noc_xy);
+    TT_LOG_INFO("Local scratch buffer addr: {:#x}", buffer_addr);
 
     // A copy kernel, we'll feed it incorrect inputs to test sanitization.
     KernelHandle dram_copy_kernel;
@@ -217,7 +217,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
         string expected = "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.\n";
         expected += tt::watcher_get_log_file_name();
         const string error = string(e.what());
-        log_info(tt::LogTest, "Caught exception (one is expected in this test)");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Caught exception (one is expected in this test)");
         EXPECT_TRUE(error.find(expected) != string::npos);
     }
 
@@ -342,12 +342,12 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
             break;
     }
 
-    log_info(LogTest, "Expected error: {}", expected);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Expected error: {}", expected);
     std::string exception = "";
     do {
         exception = get_watcher_exception_message();
     } while (exception == "");
-    log_info(LogTest, "Reported error: {}", exception);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Reported error: {}", exception);
     EXPECT_EQ(get_watcher_exception_message(), expected);
 }
 
@@ -357,7 +357,7 @@ void RunTestEth(WatcherFixture* fixture, IDevice* device, watcher_features_t fea
     }
     // Run on the first ethernet core (if there are any).
     if (device->get_active_ethernet_cores(true).empty()) {
-        log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Skipping this test since device has no active ethernet cores.");
         GTEST_SKIP();
     }
     CoreCoord core = *(device->get_active_ethernet_cores(true).begin());
@@ -370,7 +370,7 @@ void RunTestIEth(WatcherFixture* fixture, IDevice* device, watcher_features_t fe
     }
     // Run on the first ethernet core (if there are any).
     if (device->get_inactive_ethernet_cores().empty()) {
-        log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Skipping this test since device has no active ethernet cores.");
         GTEST_SKIP();
     }
     CoreCoord core = *(device->get_inactive_ethernet_cores().begin());
@@ -388,7 +388,7 @@ void CheckHostSanitization(IDevice* device) {
     } catch (std::runtime_error& e) {
         const string expected = fmt::format("Host watcher: bad {} NOC coord {}\n", "read", core.str());
         const string error = string(e.what());
-        log_info(tt::LogTest, "Caught exception (one is expected in this test)");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Caught exception (one is expected in this test)");
         EXPECT_TRUE(error.find(expected) != string::npos);
     }
 }
@@ -479,7 +479,7 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherSanitizeInlineWriteDram) {
 
 TEST_F(WatcherFixture, IdleEthTestWatcherSanitizeIEth) {
     if (!this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
     this->RunTestOnDevice(
@@ -489,7 +489,7 @@ TEST_F(WatcherFixture, IdleEthTestWatcherSanitizeIEth) {
 
 TEST_F(WatcherFixture, IdleEthTestWatcherSanitizeInlineWriteDram) {
     if (!this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
     this->RunTestOnDevice(

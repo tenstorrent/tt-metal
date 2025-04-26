@@ -105,14 +105,14 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     }
     auto logical_grid_size = device->logical_grid_size();
     if (logical_grid_size == unharvested_logical_grid_size) {
-        tt::log_info("Harvesting Disabled in SW");
+        TT_LOG_INFO("Harvesting Disabled in SW");
     } else {
-        tt::log_info("Harvesting Enabled in SW");
-        tt::log_info("Number of Harvested Rows={}", unharvested_logical_grid_size.y - logical_grid_size.y);
+        TT_LOG_INFO("Harvesting Enabled in SW");
+        TT_LOG_INFO("Number of Harvested Rows={}", unharvested_logical_grid_size.y - logical_grid_size.y);
     }
 
-    tt::log_info("Logical -- Virtual Mapping");
-    tt::log_info("[Logical <-> Virtual] Coordinates");
+    TT_LOG_INFO("Logical -- Virtual Mapping");
+    TT_LOG_INFO("[Logical <-> Virtual] Coordinates");
     for (int r = 0; r < logical_grid_size.y; r++) {
         string output_row = "";
         for (int c = 0; c < logical_grid_size.x; c++) {
@@ -124,7 +124,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
             output_row += "-y" + std::to_string(noc_coord.y);
             output_row += "]}, ";
         }
-        tt::log_info("{}", output_row);
+        TT_LOG_INFO("{}", output_row);
     }
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }

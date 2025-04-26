@@ -48,14 +48,14 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
     CoreCoord logical_core, virtual_core;
     if (riscv_type == DebugErisc) {
         if (device->get_active_ethernet_cores(true).empty()) {
-            log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Skipping this test since device has no active ethernet cores.");
             GTEST_SKIP();
         }
         logical_core = *(device->get_active_ethernet_cores(true).begin());
         virtual_core = device->ethernet_core_from_logical_core(logical_core);
     } else if (riscv_type == DebugIErisc) {
         if (device->get_inactive_ethernet_cores().empty()) {
-            log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Skipping this test since device has no inactive ethernet cores.");
             GTEST_SKIP();
         }
         logical_core = *(device->get_inactive_ethernet_cores().begin());
@@ -64,7 +64,7 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
         logical_core = CoreCoord{0, 0};
         virtual_core = device->worker_core_from_logical_core(logical_core);
     }
-    log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
+    TT_LOG_INFO_WITH_CAT(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel;
@@ -142,15 +142,13 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
                 }
             );
             break;
-        default:
-            log_info("Unsupported risc type: {}, skipping test...", riscv_type);
-            GTEST_SKIP();
+        default: TT_LOG_INFO("Unsupported risc type: {}, skipping test...", riscv_type); GTEST_SKIP();
     }
 
     // Run the program
     fixture->RunProgram(device, program, true);
 
-    log_info("Checking file: {}", fixture->log_file_name);
+    TT_LOG_INFO("Checking file: {}", fixture->log_file_name);
 
     // Check log
     EXPECT_TRUE(
@@ -225,7 +223,7 @@ TEST_F(WatcherFixture, TestWatcherRingBufferErisc) {
 TEST_F(WatcherFixture, TestWatcherRingBufferIErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (!this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
     for (IDevice* device : this->devices_) {

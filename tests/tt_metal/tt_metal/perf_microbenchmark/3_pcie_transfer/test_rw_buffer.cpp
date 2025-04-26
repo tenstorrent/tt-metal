@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
 
         // Device setup
         if (device_id >= tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices()) {
-            log_info(LogTest, "Skip! Device id {} is not applicable on this system", device_id);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Skip! Device id {} is not applicable on this system", device_id);
             return 1;
         }
 
@@ -112,7 +112,7 @@ int main(int argc, char** argv) {
         device_is_mmio = device->is_mmio_capable();
 
         if (!device->using_fast_dispatch()) {
-            log_info(LogTest, "Skip! This test needs to be run with fast dispatch enabled");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Skip! This test needs to be run with fast dispatch enabled");
             return 1;
         }
 
@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
             transfer_size, 1000, std::chrono::system_clock::now().time_since_epoch().count());
         std::vector<uint32_t> result_vec;
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Measuring host-to-device and device-to-host bandwidth for "
             "buffer_type={}, transfer_size={} bytes, page_size={} bytes",
@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
             transfer_size,
             page_size);
 
-        log_info(LogTest, "Num tests {}", num_tests);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Num tests {}", num_tests);
         float best_write_bw = 0.0f;
         float best_read_bw = 0.0f;
         for (uint32_t i = 0; i < num_tests; ++i) {
@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
                 float write_bw = transfer_size / (elapsed_us * 1000.0);
                 h2d_bandwidth.push_back(write_bw);
                 best_write_bw = std::fmax(best_write_bw, write_bw);
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     LogTest,
                     "EnqueueWriteBuffer to {} (H2D): {:.3f}ms, {:.3f}GB/s",
                     buffer_type == 0 ? "DRAM" : "L1",
@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
                 float read_bw = transfer_size / (elapsed_us * 1000.0);
                 d2h_bandwidth.push_back(read_bw);
                 best_read_bw = std::fmax(best_read_bw, read_bw);
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     LogTest,
                     "EnqueueReadBuffer from {} (D2H): {:.3f}ms, {:.3f}GB/s",
                     buffer_type == 0 ? "DRAM" : "L1",
@@ -172,10 +172,10 @@ int main(int argc, char** argv) {
         }
 
         if (!skip_write) {
-            log_info(LogTest, "Best write: {} GB/s", best_write_bw);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Best write: {} GB/s", best_write_bw);
         }
         if (!skip_read) {
-            log_info(LogTest, "Best read: {} GB/s", best_read_bw);
+            TT_LOG_INFO_WITH_CAT(LogTest, "Best read: {} GB/s", best_read_bw);
         }
 
         // Validation & teardown
@@ -232,16 +232,17 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:title:test_rw_buffer");
-    log_info(
+    TT_LOG_INFO("CSV_MICROBENCHMARK:title:test_rw_buffer");
+    TT_LOG_INFO(
         "CSV_INPUT:buffer-type:{}:transfer-size:{}",
         BUFFER_TYPEToString(static_cast<BUFFER_TYPE>(buffer_type)),
         transfer_size);
-    log_info("CSV_OUTPUT:H2D_Bandwidth(GB/s):{:.3f}:D2H_Bandwidth(GB/s):{:.3f}", avg_h2d_bandwidth, avg_d2h_bandwidth);
-    log_info("CSV_RESULT:pass:{}", pass);
+    TT_LOG_INFO(
+        "CSV_OUTPUT:H2D_Bandwidth(GB/s):{:.3f}:D2H_Bandwidth(GB/s):{:.3f}", avg_h2d_bandwidth, avg_d2h_bandwidth);
+    TT_LOG_INFO("CSV_RESULT:pass:{}", pass);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         log_error(LogTest, "Test Failed");
     }

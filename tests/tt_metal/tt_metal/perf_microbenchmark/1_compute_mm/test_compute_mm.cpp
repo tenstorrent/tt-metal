@@ -341,7 +341,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         uint32_t l1_size = get_l1_size(arch);
         auto [Mt, Nt, Kt] = get_aligned_input_tile_num(M, N, K);
-        log_info(LogTest, "Input M, N, K = {}, {}, {} / {}, {}, {} tile(s)", M, N, K, Mt, Nt, Kt);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Input M, N, K = {}, {}, {} / {}, {}, {} tile(s)", M, N, K, Mt, Nt, Kt);
 
         tt::DataFormat data_format = tt::DataFormat::Bfp8_b;
         if (single_core) {
@@ -591,7 +591,7 @@ int main(int argc, char** argv) {
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
         log_debug(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
 
-        log_info(LogTest, "Num tests {}", num_tests);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             if (!fast_dispatch_mode) {
                 log_debug(LogTest, "calling detail::LaunchProgram");
@@ -605,7 +605,7 @@ int main(int argc, char** argv) {
 
                 log_debug(LogTest, "cycle time {:.8f}s", cycle_time);
                 log_debug(LogTest, "t0_to_any_riscfw_end {}", t0_to_any_riscfw_end);
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     LogTest,
                     "time duration: {:.5}us ({}cycles) rmax_tflops {:.2f}",
                     execution_time,
@@ -628,7 +628,7 @@ int main(int argc, char** argv) {
 
                     log_debug(LogTest, "cycle time {:.8f}s", cycle_time);
                     log_debug(LogTest, "t0_to_any_riscfw_end {}", t0_to_any_riscfw_end);
-                    log_info(
+                    TT_LOG_INFO_WITH_CAT(
                         LogTest,
                         "time duration: {:.5}us ({}cycles) rmax_tflops {:.2f}",
                         execution_time,
@@ -644,14 +644,15 @@ int main(int argc, char** argv) {
                     auto t_end = std::chrono::high_resolution_clock::now();
                     duration = t_end - t_begin;
                     rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / duration.count() / 1000);
-                    log_info(LogTest, "time duration: {:.5} ns, rmax_tflops {:.2f}", duration.count(), rmax_tflops[i]);
+                    TT_LOG_INFO_WITH_CAT(
+                        LogTest, "time duration: {:.5} ns, rmax_tflops {:.2f}", duration.count(), rmax_tflops[i]);
                 }
             }
         }
 
         auto avg_rmax_tflops = calculate_average(rmax_tflops);
         double rmax_per_rpeak = avg_rmax_tflops / rpeak_tflops;
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "Avg Rmax(TFLOPS) {:.3f}, Rpeak {:.3f}, Rmax / Rpeak {:.2f}%",
             avg_rmax_tflops,
@@ -703,10 +704,10 @@ int main(int argc, char** argv) {
         pass &= tt_metal::CloseDevice(device);
 
         // for csv
-        log_info("CSV_MICROBENCHMARK:title:test_compute_mm");
-        log_info("CSV_INPUT:M:{}:N:{}:K:{}:fast-dispatch:{}", M, N, K, fast_dispatch_mode);
-        log_info("CSV_OUTPUT:RMax(TFLOPS):{:.2f}", avg_rmax_tflops);
-        log_info("CSV_RESULT:pass:{}", pass);
+        TT_LOG_INFO("CSV_MICROBENCHMARK:title:test_compute_mm");
+        TT_LOG_INFO("CSV_INPUT:M:{}:N:{}:K:{}:fast-dispatch:{}", M, N, K, fast_dispatch_mode);
+        TT_LOG_INFO("CSV_OUTPUT:RMax(TFLOPS):{:.2f}", avg_rmax_tflops);
+        TT_LOG_INFO("CSV_RESULT:pass:{}", pass);
 
     } catch (const std::exception& e) {
         pass = false;
@@ -717,7 +718,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         log_error(LogTest, "Test Failed");
     }
@@ -779,7 +780,8 @@ std::tuple<uint32_t, uint32_t, uint32_t> get_aligned_input_tile_num(uint32_t M, 
     uint32_t K_aligned = align_to_tile(K);
 
     if (M % constants::TILE_WIDTH || N % constants::TILE_WIDTH || K % constants::TILE_WIDTH) {
-        log_info(LogTest, "M, N, K = {}, {}, {} are aligned to {}, {}, {}", M, N, K, M_aligned, N_aligned, K_aligned);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "M, N, K = {}, {}, {} are aligned to {}, {}, {}", M, N, K, M_aligned, N_aligned, K_aligned);
     }
 
     uint32_t Mt = M_aligned / constants::TILE_WIDTH;

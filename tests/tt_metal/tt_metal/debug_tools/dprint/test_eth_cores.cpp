@@ -75,14 +75,8 @@ void RunTest(
             config);
 
         // Run the program
-        log_info(
-            tt::LogTest,
-            "Running print test on eth core {}:({},{}), {}",
-            device->id(),
-            core.x,
-            core.y,
-            processor
-        );
+        TT_LOG_INFO_WITH_CAT(
+            tt::LogTest, "Running print test on eth core {}:({},{}), {}", device->id(), core.x, core.y, processor);
         fixture->RunProgram(device, program);
 
         // Check the print log against golden output.
@@ -102,13 +96,13 @@ void RunTest(
 
 TEST_F(DPrintFixture, ActiveEthTestPrint) {
     if (this->arch_ == ARCH::BLACKHOLE) {  // TODO: Re-enable when this is supported on BH
-        log_info(tt::LogTest, "DPrint on BH active eth not yet supported");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "DPrint on BH active eth not yet supported");
         GTEST_SKIP();
     }
     for (IDevice* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).size() == 0) {
-            log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
         this->RunTestOnDevice(
@@ -121,13 +115,13 @@ TEST_F(DPrintFixture, ActiveEthTestPrint) {
 }
 TEST_F(DPrintFixture, IdleEthTestPrint) {
     if (!this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
     for (IDevice* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_inactive_ethernet_cores().size() == 0) {
-            log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
+            TT_LOG_INFO_WITH_CAT(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
         this->RunTestOnDevice(

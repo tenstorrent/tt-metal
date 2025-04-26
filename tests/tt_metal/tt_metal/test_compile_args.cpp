@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
 
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
             // Test that the kernel_args.csv file was generated for both kernels
-            log_info(LogTest, "Test kernel args logging");
+            TT_LOG_INFO_WITH_CAT(LogTest, "Test kernel args logging");
             auto kernel_args_path = binary_path.parent_path() / "kernel_args.csv";
             TT_FATAL(
                 std::filesystem::exists(kernel_args_path),
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

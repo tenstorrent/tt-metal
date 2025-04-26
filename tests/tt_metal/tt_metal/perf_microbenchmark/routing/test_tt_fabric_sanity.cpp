@@ -959,7 +959,7 @@ typedef struct test_traffic {
             tt::llrt::write_hex_vec_to_core(
                 tx_device->physical_chip_id, controller_virtual_core, zero_buf, host_signal_address);
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "[Device: Phys: {}, Logical: {}] Controller running on: logical: x={},y={}; virtual: x={},y={}",
                 tx_device->physical_chip_id,
@@ -1009,7 +1009,7 @@ typedef struct test_traffic {
             tt::llrt::write_hex_vec_to_core(
                 tx_device->physical_chip_id, tx_virtual_cores[i], zero_buf, tx_signal_address);
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "[Device: Phys: {}, Logical: {}] TX running on: logical: x={},y={}; virtual: x={},y={}, Eth chan: {}",
                 tx_device->physical_chip_id,
@@ -1066,7 +1066,7 @@ typedef struct test_traffic {
                 tt::llrt::write_hex_vec_to_core(
                     rx_device->physical_chip_id, rx_virtual_cores[i], zero_buf, test_results_address);
 
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     LogTest,
                     "[Device: Phys: {}, Logical: {}] RX kernel running on: logical: x={},y={}; virtual: x={},y={}",
                     rx_device->physical_chip_id,
@@ -1136,7 +1136,7 @@ typedef struct test_traffic {
         for (uint32_t i = 0; i < num_tx_workers; i++) {
             tx_results.push_back(tt::llrt::read_hex_vec_from_core(
                 tx_device->physical_chip_id, tx_virtual_cores[i], test_results_address, 128));
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "[Device: Phys: {}, Logical: {}] TX{} status = {}",
                 tx_device->physical_chip_id,
@@ -1152,7 +1152,7 @@ typedef struct test_traffic {
             for (uint32_t i = 0; i < num_rx_workers; i++) {
                 rx_results[d].push_back(tt::llrt::read_hex_vec_from_core(
                     rx_devices[d]->physical_chip_id, rx_virtual_cores[i], test_results_address, 128));
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     LogTest,
                     "[Device: Phys: {}, Logical: {}] RX{} status = {}",
                     rx_devices[d]->physical_chip_id,
@@ -1221,7 +1221,7 @@ typedef struct test_traffic {
             // double bytes_per_pkt = static_cast<double>(tx_words_sent) * PACKET_WORD_SIZE_BYTES /
             // static_cast<double>(num_packets);
 
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 LogTest,
                 "[Device: Phys: {}, Logical: {}] TX {} words sent: {}, elapsed cycles: {} -> BW: {:.2f} B/cycle",
                 tx_device->physical_chip_id,
@@ -1230,7 +1230,8 @@ typedef struct test_traffic {
                 tx_words_sent,
                 tx_elapsed_cycles,
                 tx_bw);
-            // log_info(LogTest, "TX {} packets sent = {}, bytes/packet = {:.2f}, total iter = {}, zero data sent iter =
+            // TT_LOG_INFO_WITH_CAT(LogTest, "TX {} packets sent = {}, bytes/packet = {:.2f}, total iter = {}, zero data
+            // sent iter =
             // {}, few data sent iter = {}, many data sent iter = {}", i, num_packets, bytes_per_pkt, iter,
             // zero_data_sent_iter, few_data_sent_iter, many_data_sent_iter);
             /*
@@ -1256,7 +1257,7 @@ typedef struct test_traffic {
             for (uint32_t i = 0; i < num_rx_workers; i++) {
                 uint64_t words_received = get_64b_result(rx_results[d][i], TT_FABRIC_WORD_CNT_INDEX);
                 uint32_t num_tx = rx_to_tx_map[i].size();
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     LogTest,
                     "[Device: Phys: {}, Logical: {}] RX {}, num producers = {}, words received = {}",
                     rx_devices[d]->physical_chip_id,
@@ -1266,8 +1267,8 @@ typedef struct test_traffic {
                     words_received);
             }
         }
-        // log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
-        log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw_2);
+        // TT_LOG_INFO_WITH_CAT(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw_2);
     }
 
     // generates mapping of tx core indices to rx core indices
@@ -1408,40 +1409,66 @@ int main(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
-        log_info(LogTest, "Usage:");
-        log_info(LogTest, "  --prng_seed: PRNG seed, default = 0x{:x}", default_prng_seed);
-        log_info(LogTest, "  --data_kb_per_tx: Total data in KB per TX endpoint, default = {}", default_data_kb_per_tx);
-        log_info(LogTest, "  --tx_x: X coordinate of the starting TX core, default = {}", default_tx_x);
-        log_info(LogTest, "  --tx_y: Y coordinate of the starting TX core, default = {}", default_tx_y);
-        log_info(LogTest, "  --rx_x: X coordinate of the starting RX core, default = {}", default_rx_x);
-        log_info(LogTest, "  --rx_y: Y coordinate of the starting RX core, default = {}", default_rx_y);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(LogTest, "Usage:");
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --prng_seed: PRNG seed, default = 0x{:x}", default_prng_seed);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  --data_kb_per_tx: Total data in KB per TX endpoint, default = {}", default_data_kb_per_tx);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --tx_x: X coordinate of the starting TX core, default = {}", default_tx_x);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --tx_y: Y coordinate of the starting TX core, default = {}", default_tx_y);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --rx_x: X coordinate of the starting RX core, default = {}", default_rx_x);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --rx_y: Y coordinate of the starting RX core, default = {}", default_rx_y);
+        TT_LOG_INFO_WITH_CAT(
             LogTest,
             "  --routing_table_start_addr: Routing Table start address, default = 0x{:x}",
             default_routing_table_start_addr);
-        log_info(LogTest, "  --tx_queue_start_addr: TX queue start address, default = 0x{:x}", default_tx_queue_start_addr);
-        log_info(LogTest, "  --tx_queue_size_bytes: TX queue size in bytes, default = 0x{:x}", default_tx_queue_size_bytes);
-        log_info(LogTest, "  --rx_queue_start_addr: RX queue start address, default = 0x{:x}", default_rx_queue_start_addr);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  --tx_queue_start_addr: TX queue start address, default = 0x{:x}", default_tx_queue_start_addr);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  --tx_queue_size_bytes: TX queue size in bytes, default = 0x{:x}", default_tx_queue_size_bytes);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  --rx_queue_start_addr: RX queue start address, default = 0x{:x}", default_rx_queue_start_addr);
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  --rx_queue_size_bytes: RX queue size in bytes, default = 0x{:x}", default_rx_queue_size_bytes);
-        log_info(LogTest, "  --test_results_addr: test results buf address, default = 0x{:x}", default_test_results_addr);
-        log_info(LogTest, "  --test_results_size: test results buf size, default = 0x{:x}", default_test_results_size);
-        log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
-        log_info(LogTest, "  --disable_txrx_timeout: Disable timeout during tx & rx (enabled by default)");
-        log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
-        log_info(LogTest, "  --rx_disable_header_check: Disable header check on RX, default = {}", default_rx_disable_header_check);
-        log_info(LogTest, "  --tx_skip_pkt_content_gen: Skip packet content generation during tx, default = {}", false);
-        log_info(LogTest, "  --tx_pkt_dest_size_choice: choice for how packet destination and packet size are generated, default = {}", default_tx_pkt_dest_size_choice); // pkt_dest_size_choices_t
-        log_info(LogTest, "  --tx_data_sent_per_iter_low: the criteria to determine the amount of tx data sent per iter is low (unit: words); if both 0, then disable counting it in tx kernel, default = {}", default_tx_data_sent_per_iter_low);
-        log_info(LogTest, "  --tx_data_sent_per_iter_high: the criteria to determine the amount of tx data sent per iter is high (unit: words); if both 0, then disable counting it in tx kernel, default = {}", default_tx_data_sent_per_iter_high);
-        log_info(LogTest, "  --dump_stat_json: Dump stats in json to output_dir, default = {}", default_dump_stat_json);
-        log_info(LogTest, "  --output_dir: Output directory, default = {}", default_output_dir);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  --test_results_addr: test results buf address, default = 0x{:x}", default_test_results_addr);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  --test_results_size: test results buf size, default = 0x{:x}", default_test_results_size);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --disable_txrx_timeout: Disable timeout during tx & rx (enabled by default)");
+        TT_LOG_INFO_WITH_CAT(
+            LogTest,
+            "  --rx_disable_data_check: Disable data check on RX, default = {}",
+            default_rx_disable_data_check);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest,
+            "  --rx_disable_header_check: Disable header check on RX, default = {}",
+            default_rx_disable_header_check);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  --tx_skip_pkt_content_gen: Skip packet content generation during tx, default = {}", false);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest,
+            "  --tx_pkt_dest_size_choice: choice for how packet destination and packet size are generated, default = "
+            "{}",
+            default_tx_pkt_dest_size_choice);  // pkt_dest_size_choices_t
+        TT_LOG_INFO_WITH_CAT(
+            LogTest,
+            "  --tx_data_sent_per_iter_low: the criteria to determine the amount of tx data sent per iter is low "
+            "(unit: words); if both 0, then disable counting it in tx kernel, default = {}",
+            default_tx_data_sent_per_iter_low);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest,
+            "  --tx_data_sent_per_iter_high: the criteria to determine the amount of tx data sent per iter is high "
+            "(unit: words); if both 0, then disable counting it in tx kernel, default = {}",
+            default_tx_data_sent_per_iter_high);
+        TT_LOG_INFO_WITH_CAT(
+            LogTest, "  --dump_stat_json: Dump stats in json to output_dir, default = {}", default_dump_stat_json);
+        TT_LOG_INFO_WITH_CAT(LogTest, "  --output_dir: Output directory, default = {}", default_output_dir);
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  --device_id: Device on which the test will be run, default = {}", default_test_device_id_l);
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  --device_id_r: DDevice on which the test will be run, default = {}", default_test_device_id_r);
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             LogTest, "  --metal_fabric_init_level: use Metal runtime to load fabric, 0 is disable, 1 is enable", 0);
         return 0;
     }
@@ -1770,7 +1797,7 @@ int main(int argc, char **argv) {
             tt_metal::detail::LaunchProgram(test_device->device_handle, test_device->program_handle, false);
         }
 
-        log_info(LogTest, "Programs launched, waiting for router sync");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Programs launched, waiting for router sync");
 
         if (metal_fabric_init_level == 0) {
             // wait for all routers to handshake with master router
@@ -1779,28 +1806,28 @@ int main(int argc, char **argv) {
             }
         }
 
-        log_info(LogTest, "Routers sync done, notifying tx controllers");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Routers sync done, notifying tx controllers");
 
         // notify tx controller to signal the tx workers
         for (auto& traffic : fabric_traffic) {
             traffic.notify_tx_controller();
         }
 
-        log_info(LogTest, "Notified TX controllers, waiting for TX workers to finish");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Notified TX controllers, waiting for TX workers to finish");
 
         // wait for rx kernels to finish
         for (auto& traffic : fabric_traffic) {
             traffic.wait_for_tx_workers_to_finish();
         }
 
-        log_info(LogTest, "TX workers done, waiting for RX workers to finish");
+        TT_LOG_INFO_WITH_CAT(LogTest, "TX workers done, waiting for RX workers to finish");
 
         // wait for rx kernels to finish
         for (auto& traffic : fabric_traffic) {
             traffic.wait_for_rx_workers_to_finish();
         }
 
-        log_info(LogTest, "RX workers done, terminating routers");
+        TT_LOG_INFO_WITH_CAT(LogTest, "RX workers done, terminating routers");
 
         // terminate fabric routers if control plane is not managed by DevicePool
         if (metal_fabric_init_level == 0) {
@@ -1809,7 +1836,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        log_info(LogTest, "Terminated routers, waiting for program done");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Terminated routers, waiting for program done");
 
         // wait for programs to exit
         for (auto& [chip_id, test_device] : test_devices) {
@@ -1818,9 +1845,9 @@ int main(int argc, char **argv) {
         auto end = std::chrono::system_clock::now();
 
         std::chrono::duration<double> elapsed_seconds = (end-start);
-        log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
-        log_info(LogTest, "Programs done, collecting results");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Programs done, collecting results");
 
         // collect traffic results
         for (auto& traffic : fabric_traffic) {
@@ -1860,7 +1887,7 @@ int main(int argc, char **argv) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_kernels_nullified(false);
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
         return 0;
     } else {
         log_fatal(LogTest, "Test Failed\n");

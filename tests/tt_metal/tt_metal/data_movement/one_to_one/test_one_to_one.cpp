@@ -125,7 +125,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     SetRuntimeArgs(program, receiver_kernel, slave_core_set, {sem_id});
 
     // Assign unique id
-    log_info("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    TT_LOG_INFO("Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Input
@@ -143,9 +143,9 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     detail::ReadFromBuffer(slave_l1_buffer, packed_output);
 
     // Print output and golden vectors
-    log_info("Golden vector");
+    TT_LOG_INFO("Golden vector");
     print_vector<uint32_t>(packed_golden);
-    log_info("Output vector");
+    TT_LOG_INFO("Output vector");
     print_vector<uint32_t>(packed_output);
 
     // Return comparison

@@ -366,7 +366,7 @@ TEST_F(DeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool block_copy : {true, false}) {
                     for (bool dst_full_sync_en : {true, false}) {
-                        log_info(
+                        TT_LOG_INFO_WITH_CAT(
                             LogTest,
                             "Block Copy = {}, "
                             "Explicit = {}, "
@@ -404,7 +404,8 @@ TEST_F(DeviceFixture, TensixTileCopyReconfigL1Acc) {
     }
     for (bool l1_acc : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
-            log_info(LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);
+            TT_LOG_INFO_WITH_CAT(
+                LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);
             unit_tests::compute::reconfig::ReconfigConfig test_config = {
                 .num_tiles = 1, .ublock_size_tiles = 1, .dst_full_sync_en = dst_full_sync_en};
             for (unsigned int id = 0; id < num_devices_; id++) {

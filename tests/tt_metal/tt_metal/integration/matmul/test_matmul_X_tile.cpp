@@ -357,7 +357,7 @@ void matmul_tile(
     }
     DeallocateBuffer(*dst_dram_buffer);
 
-    tt::log_info(
+    TT_LOG_INFO_WITH_CAT(
         tt::LogTest,
         "Math Fidelity = {}, FP32_DestAcc = {}, DstSyncFull = {}",
         cfg.math_fidelity,
@@ -440,10 +440,10 @@ TEST_F(DispatchFixture, TensixMatmulMultiTile) {
 
                 for (unsigned int id = 0; id < devices_.size(); id++) {
                     matmul_tile(this, devices_.at(id), matmul_config, stimuli.a, stimuli.w, stimuli.t);
-                    log_info(LogTest, "Multi tile with no bias passed");
+                    TT_LOG_INFO_WITH_CAT(LogTest, "Multi tile with no bias passed");
                     matmul_config.with_bias = true;
                     matmul_tile(this, devices_.at(id), matmul_config, stimuli.a, stimuli.w, stimuli.t);
-                    log_info(LogTest, "Multi tile with bias passed");
+                    TT_LOG_INFO_WITH_CAT(LogTest, "Multi tile with bias passed");
                 }
             }
         }

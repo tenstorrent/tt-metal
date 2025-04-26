@@ -1001,21 +1001,22 @@ int main(int argc, char** argv) {
         //                      Inputs Setup
         ////////////////////////////////////////////////////////////////////////////
         if (debug) {
-            log_info(LogTest, "row {} x col {} = {} cores", num_cores_y, num_cores_x, num_cores_y * num_cores_x);
-            log_info(LogTest, "in0_block_w {}", in0_block_w);
-            log_info(LogTest, "out_subblock_h {}", out_subblock_h);
-            log_info(LogTest, "out_subblock_w {}", out_subblock_w);
-            log_info(LogTest, "per_core_mt {}", per_core_Mt);
-            log_info(LogTest, "per_core_nt {}", per_core_Nt);
-            log_info(LogTest, "l1_in0 {}", l1_in0);
-            log_info(LogTest, "l1_in1 {}", l1_in1);
-            log_info(LogTest, "l1_out {}", l1_out);
+            TT_LOG_INFO_WITH_CAT(
+                LogTest, "row {} x col {} = {} cores", num_cores_y, num_cores_x, num_cores_y * num_cores_x);
+            TT_LOG_INFO_WITH_CAT(LogTest, "in0_block_w {}", in0_block_w);
+            TT_LOG_INFO_WITH_CAT(LogTest, "out_subblock_h {}", out_subblock_h);
+            TT_LOG_INFO_WITH_CAT(LogTest, "out_subblock_w {}", out_subblock_w);
+            TT_LOG_INFO_WITH_CAT(LogTest, "per_core_mt {}", per_core_Mt);
+            TT_LOG_INFO_WITH_CAT(LogTest, "per_core_nt {}", per_core_Nt);
+            TT_LOG_INFO_WITH_CAT(LogTest, "l1_in0 {}", l1_in0);
+            TT_LOG_INFO_WITH_CAT(LogTest, "l1_in1 {}", l1_in1);
+            TT_LOG_INFO_WITH_CAT(LogTest, "l1_out {}", l1_out);
         }
 
-        log_info(LogTest, "Mt = {}, Nt = {}, Kt = {}", Mt, Nt, Kt);
-        log_info(LogTest, "activations = {}x{}", Mt * 32, Kt * 32);
-        log_info(LogTest, "weights = {}x{}", Kt * 32, Nt * 32);
-        log_info(LogTest, "output = {}x{}", Mt * 32, Nt * 32);
+        TT_LOG_INFO_WITH_CAT(LogTest, "Mt = {}, Nt = {}, Kt = {}", Mt, Nt, Kt);
+        TT_LOG_INFO_WITH_CAT(LogTest, "activations = {}x{}", Mt * 32, Kt * 32);
+        TT_LOG_INFO_WITH_CAT(LogTest, "weights = {}x{}", Kt * 32, Nt * 32);
+        TT_LOG_INFO_WITH_CAT(LogTest, "output = {}x{}", Mt * 32, Nt * 32);
 
         tt::DataFormat data_format = tt::DataFormat::Float16_b;
         uint32_t single_tile_size = 2 * 1024;
@@ -1114,11 +1115,11 @@ int main(int argc, char** argv) {
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
         if (debug) {
-            log_info(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
+            TT_LOG_INFO_WITH_CAT(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
         }
 
         double tflops = static_cast<double>(num_of_matmul_ops) / duration.count() / 1000;
-        log_info(LogTest, "time duration: {} ns, TFLOPS {}", duration.count(), tflops);
+        TT_LOG_INFO_WITH_CAT(LogTest, "time duration: {} ns, TFLOPS {}", duration.count(), tflops);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -1142,7 +1143,7 @@ int main(int argc, char** argv) {
     }
 
     if (pass) {
-        log_info(LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }
