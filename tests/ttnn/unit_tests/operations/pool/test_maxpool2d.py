@@ -24,6 +24,7 @@ parameters = {
         "input_specs": [
             # Contains following parameters
             # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
+            [1, 48, 10, 10, 2, 2, 2, 2, 0, 0, 1, 1, False],  # test for auto sharding
             [1, 128, 112, 112, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 128, 150, 150, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 128, 56, 56, 2, 2, 2, 2, 0, 0, 1, 1, False],
@@ -127,6 +128,7 @@ parameters = {
             [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
             [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
             [1, 32, 6, 6, 3, 3, 1, 1, 1, 1, 1, 1, False],  # partial grid on WH to use noop cores
+            [1, 48, 10, 10, 3, 3, 1, 1, 1, 1, 1, 1, False],  # test for auto sharding
         ],
     },
     "test_run_max_pool_block_shard": {

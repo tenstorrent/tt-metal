@@ -170,13 +170,15 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     Pool2DType pool_type,
     DataType output_dtype,
-    MemoryConfig memory_config) {
+    MemoryConfig memory_config,
+    uint32_t memory_used) {
     return {
         operation_attributes_t{
             .sliding_window_config_ = sliding_window_config,
             .pool_type_ = pool_type,
             .output_dtype_ = output_dtype,
-            .memory_config_ = std::move(memory_config)},
+            .memory_config_ = std::move(memory_config),
+            .memory_used = memory_used},
         tensor_args_t{input_tensor}};
 }
 

@@ -6,8 +6,6 @@
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/assert.hpp>
-#include <sys/types.h>
-#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <tuple>
@@ -28,7 +26,6 @@
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 
-using namespace tt;
 namespace ttnn {
 namespace operations::pool {
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
@@ -81,7 +78,6 @@ uint32_t calculate_L1_usage(
 
     auto in_dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
     tt::DataFormat in_df = datatype_to_dataformat_converter(in_dtype);
-    // tt::DataFormat out_df = in_df;
     uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = in_nbytes;
 
@@ -98,12 +94,6 @@ uint32_t calculate_L1_usage(
         num_shards_c = grid_size.x;
     }
 
-    uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;  // row of input (channels)
-
-    tt::DataFormat indices_df =
-        tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.get_dtype());
-    uint32_t indices_nbytes = datum_size(indices_df);
-
     uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
 
@@ -116,17 +106,6 @@ uint32_t calculate_L1_usage(
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     uint32_t nblocks = 1;
-    // TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
-
-    // distributing out_hw across the grid
-    uint32_t out_nhw_per_core = output_memory.shard_spec.value().shape[0];
-
-    // TODO: support generic nblocks
-    TT_FATAL(
-        out_nhw_per_core % nblocks == 0,
-        "number of sticks per core ({}) should be divisible by nblocks ({})",
-        out_nhw_per_core,
-        nblocks);
 
     // CBs
     uint32_t multi_buffering_factor = 2;
@@ -138,13 +117,6 @@ uint32_t calculate_L1_usage(
     uint32_t in_scalar_cb_npages = 1;
     uint32_t in_scalar_cb_config_size = in_scalar_cb_npages * in_scalar_cb_pagesize;
 
-    // incoming data is the input cb instead of raw l1/dram addr
-    // this input shard has halo and padding inserted.
-    auto raw_in_cb_id = tt::CBIndex::c_2;
-    uint32_t raw_in_cb_npages = input_memory.shard_spec.value().shape[0];
-    uint32_t raw_in_cb_pagesize = in_nbytes_c;
-    uint32_t raw_in_cb_config_size = raw_in_cb_npages * raw_in_cb_pagesize;
-
     // For avgpool, instantiate and use this CB, which consists of 1s. We don't want to divide
     // twice by kernel size for large kernel case.
     uint32_t in_one_cb_size = 0;
@@ -153,12 +125,6 @@ uint32_t calculate_L1_usage(
         uint32_t in_one_cb_npages = 1;
         in_one_cb_size = in_one_cb_pagesize * in_one_cb_npages;
     }
-
-    // reader indices
-    uint32_t in_reader_indices_cb_pagesize =
-        tt::round_up(out_nhw_per_core * indices_nbytes, 4);  // pagesize needs to be multiple of 4
-    uint32_t in_reader_indices_cb_npages = 1;
-    uint32_t in_reader_indices_cb_config_size = in_reader_indices_cb_npages * in_reader_indices_cb_pagesize;
 
     uint32_t in_cb_sz = 0;
     uint32_t in_nblocks_c = 1;
@@ -195,13 +161,8 @@ uint32_t calculate_L1_usage(
         max_pool_partials_cb_config_size = max_pool_partials_cb_npages * max_pool_partials_cb_pagesize;
     }
 
-    return in_scalar_cb_config_size
-           //+ raw_in_cb_config_size                 /* global, involved */  // input, ignore (should be global?)
-           + in_one_cb_size
-           //+ in_reader_indices_cb_config_size      /* global */    // ignore
-           + in_cb_config_0_size +
-           in_cb_config_1_size
-           //+ out_cb_config_size                    /* global, involved */
+    return in_scalar_cb_config_size + in_one_cb_size + in_cb_config_0_size + in_cb_config_1_size +
+           out_cb_config_size /* global, involved */
            + max_pool_partials_cb_config_size;
 }
 
@@ -221,10 +182,10 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
 
     auto get_memconfig = [&](const ParallelConfig& parallel_config) {
         uint32_t nhw = batch_size * output_shape[1] * output_shape[2];
-        uint32_t out_channeal_padded = tt::round_up(
+        uint32_t out_channel_padded = tt::round_up(
             channels, conv::get_num_cores_channels_from_parallel_config(parallel_config) * tt::constants::TILE_WIDTH);
         return conv::create_sharded_memory_config_from_parallel_config(
-            ttnn::Shape({1, 1, nhw, out_channeal_padded}), parallel_config, tt::constants::TILE_HEIGHT);
+            ttnn::Shape({1, 1, nhw, out_channel_padded}), parallel_config, tt::constants::TILE_HEIGHT);
     };
 
     auto calc_l1_usage_inner = [&](TensorMemoryLayout layout, ShardOrientation orientation) -> l1_usage_config {
@@ -239,8 +200,6 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
             orientation,
             false,
             false);
-        auto output_parallel_config =
-            conv::determine_output_parallel_config(input_parallel_config, compute_grid_size, channels, false);
 
         uint32_t l1_usage = calculate_L1_usage(
             input_tensor,
@@ -249,7 +208,7 @@ sliding_window::ParallelConfig determine_pool_config_for_auto_shard(
             sliding_window_config.get_output_shape()[1],
             sliding_window_config.get_output_shape()[2],
             get_memconfig(input_parallel_config),
-            get_memconfig(output_parallel_config),
+            get_memconfig(input_parallel_config),
             pool_type);
 
         return {l1_usage, input_parallel_config};
