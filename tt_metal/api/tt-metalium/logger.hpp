@@ -300,7 +300,7 @@ static void log_fatal(char const* str) { log_fatal(LogAlways, "{}", str); }
 // Custom formatter for LogType
 namespace fmt {
 template <>
-struct fmt::formatter<tt::LogType> : fmt::formatter<std::string_view> {
+struct formatter<tt::LogType> : fmt::formatter<std::string_view> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
 
     template <typename FormatContext>
