@@ -256,3 +256,8 @@ if(simd-everywhere_ADDED)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
 endif()
+
+############################################################################################################################
+# spdlog : https://github.com/gabime/spdlog
+############################################################################################################################
+CPMAddPackage("gh:gabime/spdlog@1.15.2")

@@ -4,6 +4,8 @@ if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_link_options(--coverage)
 endif()
 
+link_libraries(spdlog::spdlog)
+
 add_library(tt_metal)
 add_library(TT::Metalium ALIAS tt_metal)
 add_library(Metalium::Metal ALIAS tt_metal) # For backwards compatibility
@@ -402,6 +404,7 @@ install(
         magic_enum
         TracyClient
         span
+        spdlog
         small_vector
     EXPORT Metalium
     FILE_SET
