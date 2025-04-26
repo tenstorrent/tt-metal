@@ -261,7 +261,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     const auto& input_shape = input_tensor.get_logical_shape();
     const auto dim = operation_attributes.dim;
     uint32_t rank = input_shape.size();
-    auto& output_tensor = tensor_return_value;
+    auto& output_tensor = tensor_return_value[0];
     auto& output_shape = output_tensor.get_logical_shape();
     auto& padded_output_shape = output_tensor.get_padded_shape();
     // const auto& input_tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
@@ -762,7 +762,7 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads
     auto& output_tensor = tensor_return_value;
 
     auto input_tensor_buffer = input_tensor.buffer();
-    auto output_tensor_buffer = output_tensor.buffer();
+    auto output_tensor_buffer = output_tensor[0].buffer();
     auto packet_buffer = intermediate_packet_buffer.buffer();
 
     auto& all_cores_grid = cached_program.shared_variables.core_range;

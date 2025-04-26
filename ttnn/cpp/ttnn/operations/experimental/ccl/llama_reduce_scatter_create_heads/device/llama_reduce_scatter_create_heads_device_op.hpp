@@ -27,6 +27,9 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         const std::optional<MemoryConfig> output_mem_config;
         const uint32_t ring_devices;
         const uint32_t num_links;
+        const uint32_t num_heads;
+        const uint32_t num_kv_heads;
+        const std::optional<MemoryConfig> qkv_memory_config;
         std::optional<IDevice*> forward_device;
         std::optional<IDevice*> backward_device;
     };
@@ -35,9 +38,9 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         Tensor intermediate_packet_buffer;
     };
 
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 
-    using tensor_return_value_t = Tensor;
+    using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
     struct LlamaReduceScatterCreateHeads {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
@@ -95,7 +98,10 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         std::optional<IDevice*>& backward_device,
         const uint32_t ring_devices,
         const uint32_t num_links,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
+        const uint32_t num_heads,
+        const uint32_t num_kv_heads,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& qkv_memory_config = std::nullopt);
 };
 }  // namespace ttnn::operations::experimental::ccl
 

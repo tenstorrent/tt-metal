@@ -123,8 +123,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
 
-    auto tensor = create_device_tensor(output_spec, tensor_args.input_tensor.device());
-    return tensor;
+    auto tensor = create_device_tensor(output_spec[0], tensor_args.input_tensor.device());
+    return {tensor};
 }
 
 std::tuple<
@@ -142,7 +142,10 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
     std::optional<IDevice*>& backward_device,
     const uint32_t ring_devices,
     const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    const uint32_t num_heads,
+    const uint32_t num_kv_heads,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::MemoryConfig>& qkv_memory_config) {
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
@@ -153,6 +156,9 @@ LlamaReduceScatterCreateHeadsDeviceOperation::invoke(
             .output_mem_config = memory_config,
             .ring_devices = ring_devices,
             .num_links = num_links,
+            .num_heads = num_heads,
+            .num_kv_heads = num_kv_heads,
+            .qkv_memory_config = qkv_memory_config,
             .forward_device = forward_device,
             .backward_device = backward_device,
         },

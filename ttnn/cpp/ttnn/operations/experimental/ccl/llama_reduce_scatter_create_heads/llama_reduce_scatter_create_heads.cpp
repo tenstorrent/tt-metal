@@ -15,7 +15,7 @@
 namespace ttnn::operations::experimental::ccl {
 namespace detail {}  // namespace detail
 
-ttnn::Tensor ExecuteLlamaReduceScatterCreateHeads::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCreateHeads::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& intermediate_packet_buffer,
@@ -56,7 +56,17 @@ ttnn::Tensor ExecuteLlamaReduceScatterCreateHeads::invoke(
 
     std::vector<GlobalSemaphore> semaphores = cross_device_semaphore.global_semaphores;
     tt::tt_metal::operation::launch_op(
-        [dim, semaphores, subdevice_id, cluster_axis, ring_devices, memory_config, mesh_view, num_links](
+        [dim,
+         semaphores,
+         subdevice_id,
+         cluster_axis,
+         ring_devices,
+         memory_config,
+         mesh_view,
+         num_links,
+         num_heads,
+         num_kv_heads,
+         qkv_memory_config](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -93,11 +103,14 @@ ttnn::Tensor ExecuteLlamaReduceScatterCreateHeads::invoke(
                 backward_device,
                 ring_devices,
                 num_links,
-                memory_config)};
+                num_heads,
+                num_kv_heads,
+                memory_config,
+                qkv_memory_config)};
         },
         {input_tensor, intermediate_packet_buffer},
         output_tensors);
-    return output_tensors.at(0);
+    return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2), output_tensors.at(3)};
 }
 
 }  // namespace ttnn::operations::experimental::ccl
