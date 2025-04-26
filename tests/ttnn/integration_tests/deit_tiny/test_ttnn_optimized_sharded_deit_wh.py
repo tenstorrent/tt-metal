@@ -52,11 +52,11 @@ def test_deit_patch_embeddings(device, model_name, batch_size, image_size, image
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(batch_size - 1, 0),
+                ttnn.CoreCoord(batch_size - 1, 3),
             ),
         }
     )
-    n_cores = batch_size
+    n_cores = batch_size * 3
     shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
     pixel_values = ttnn.from_torch(
@@ -139,11 +139,11 @@ def test_deit_embeddings(device, model_name, batch_size, image_size, image_chann
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(batch_size - 1, 0),
+                ttnn.CoreCoord(batch_size - 1, 3),
             ),
         }
     )
-    n_cores = batch_size
+    n_cores = batch_size * 3
     shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
     pixel_values = ttnn.from_torch(
@@ -495,11 +495,11 @@ def test_deit(device, model_name, batch_size, image_size, image_channels, sequen
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(batch_size - 1, 0),
+                ttnn.CoreCoord(batch_size - 1, 3),
             ),
         }
     )
-    n_cores = batch_size
+    n_cores = batch_size * 3
     shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
     pixel_values = ttnn.from_torch(

@@ -106,11 +106,11 @@ def test_deit(device, use_program_cache):
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(batch_size - 1, 0),
+                    ttnn.CoreCoord(batch_size - 1, 3),
                 ),
             }
         )
-        n_cores = batch_size
+        n_cores = batch_size * 3
         shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
         output = None
