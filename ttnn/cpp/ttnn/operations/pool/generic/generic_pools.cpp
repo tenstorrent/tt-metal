@@ -17,7 +17,6 @@
 
 namespace ttnn {
 namespace operations::pool {
-
 template <Pool2DType pool_type>
 Tensor Pool2DOp<pool_type>::invoke(
     QueueId queue_id,
@@ -158,15 +157,16 @@ Tensor Pool2DOp<pool_type>::invoke(
         is_out_tiled,
         in_place_halo);
 
+    uint32_t pre_allocate_size = haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
-
-        auto output_tensor = ttnn::prim::pool2d(
-            queue_id,
-            haloed_tensor,
-            sliding_window_config,
-            pool_type,
-            DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
-            out_memory_config);
+    auto output_tensor = ttnn::prim::pool2d(
+        queue_id,
+        haloed_tensor,
+        sliding_window_config,
+        pool_type,
+        DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
+        out_memory_config,
+        pre_allocate_size);
 
 
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {

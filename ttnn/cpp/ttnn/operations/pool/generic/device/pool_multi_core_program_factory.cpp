@@ -13,7 +13,6 @@ namespace ttnn::operations::pool {
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
-
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
     Program& program,
     const Tensor& input,
@@ -36,7 +35,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t dilation_w,
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
-    uint32_t nblocks) {
+    uint32_t nblocks,
+    uint32_t memory_used) {
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
@@ -232,13 +232,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     }
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
 
-    auto actual_size = program.get_cb_memory_size();
-    auto l1_usage = calculate_L1_usage(
-        input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
-    if (actual_size != l1_usage) {
-        TT_FATAL(0, "Calculated CB size {} does not match with the actual CB size {}", actual_size, l1_usage);
-    }
-
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
         log_debug(tt::LogOp, "in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
@@ -385,7 +378,20 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
 
-    // Capture reader_indices_storage to cache this with the program
+    auto temparory_size = program.get_cb_memory_size();
+    auto post_allocate_size =
+        input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+    auto l1_usage = calculate_L1_usage(
+        input, kernel_size_h, kernel_size_w, out_h, out_w, input.memory_config(), output.memory_config(), pool_type);
+    auto output_cb_size = post_allocate_size - memory_used;
+
+    TT_FATAL(
+        temparory_size + output_cb_size == l1_usage,
+        "Calculated CB size {} does not match with the actual CB size {}  ",
+        temparory_size + output_cb_size,
+        l1_usage);
+
+    // Capture reader_indices_buffer to cache this with the program
     return {
         std::move(program),
         {.reader0_kernel = reader0_kernel,
@@ -465,7 +471,8 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         dilation_w,
         num_shards_c,
         out_mem_config,
-        1);
+        1,
+        op_attr.memory_used);
 }
 
 void Pool2D::MultiCore::override_runtime_arguments(

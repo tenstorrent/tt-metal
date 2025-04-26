@@ -25,6 +25,7 @@ struct Pool2D {
         Pool2DType pool_type_;
         DataType output_dtype_;
         MemoryConfig memory_config_;
+        int32_t memory_used;
     };
 
     struct tensor_args_t {
@@ -74,7 +75,8 @@ struct Pool2D {
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         Pool2DType pool_type,
         DataType output_dtype,
-        MemoryConfig memory_config);
+        MemoryConfig memory_config,
+        uint32_t memory_used);
 };
 
 }  // namespace pool
