@@ -63,6 +63,12 @@ def test_decoder_inference(
     reset_seeds,
     ensure_gc,
 ):
+    model_name_env = os.getenv("HF_MODEL")
+    if max_seq_len > 256 and model_name_env and "Mistral-7B" in model_name_env:
+        pytest.skip(
+            "Mistral-7B models do not support max_seq_len > 256. See issue: https://github.com/tenstorrent/tt-metal/issues/19806"
+        )
+
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
 
