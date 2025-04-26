@@ -260,4 +260,11 @@ endif()
 ############################################################################################################################
 # spdlog : https://github.com/gabime/spdlog
 ############################################################################################################################
-CPMAddPackage("gh:gabime/spdlog@1.15.2")
+CPMAddPackage(
+    NAME spdlog
+    GITHUB_REPOSITORY gabime/spdlog
+    GIT_TAG v1.15.2
+    OPTIONS
+        "BUILD_SHARED_LIBS OFF"
+        "SPDLOG_BUILD_SHARED OFF"
+)
