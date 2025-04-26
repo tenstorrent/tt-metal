@@ -86,20 +86,20 @@ ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @d
 ttnn/**/kernels/ # Removes the owners above from owning kernels unless specified afterwards
 ttnn/**/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
 ttnn/cpp/ttnn/tensor/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
-ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/ @SeanNijjar
+ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/ @SeanNijjar @jvegaTT @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
 
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
-ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @jvegaTT @tt-aho
+ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 ttnn/cpp/ttnn/operations/pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/conv/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/sliding_window/ @tenstorrent/metalium-developers-convolutions
-ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @yugi957 @jvegaTT @llongTT @nardoTT
+ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @yugi957 @jvegaTT @llongTT @nardoTT @amorrisonTT
 ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
-ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho
+ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/experimental/slice_write/ @tenstorrent/metalium-developers-convolutions @sjameelTT @ntarafdar @amorrisonTT
@@ -120,8 +120,8 @@ ttnn/ttnn/operations/eltwise @patrickroberts @sjameelTT @ntarafdar @dchenTT
 ttnn/tracy/ @mo-tenstorrent
 ttnn/tools/profiler/ @mo-tenstorrent
 tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na @bbradelTT @omilyutin-tt
-tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @tt-aho
-tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho
+tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
+tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
@@ -138,7 +138,7 @@ tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 tests/sweep_framework/sweeps/conv2d/  @tenstorrent/metalium-developers-convolutions
-tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @jaykru-tt @yugi957 @llongTT @jvegaTT @nardoTT
+tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @yugi957 @llongTT @jvegaTT @nardoTT @amorrisonTT
 tests/sweep_framework/sweeps/fused/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
 tests/sweep_framework/sweeps/matmul/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
 tests/sweep_framework/sweeps/reduction/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
