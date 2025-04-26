@@ -1381,7 +1381,7 @@ void LightMetalBeginCapture() {
     lm_capture_ctx.reset();            // Clear previous traces if any, ensure tracing disabled
     lm_capture_ctx.set_tracing(true);  // Enable tracing
 #else
-    log_warning(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalBeginCapture()");
+    TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalBeginCapture()");
 #endif
 }
 
@@ -1394,7 +1394,7 @@ LightMetalBinary LightMetalEndCapture() {
     lm_capture_ctx.set_tracing(false);  // Disable tracing
     return lm_capture_ctx.create_light_metal_binary();
 #else
-    log_warning(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalEndCapture()");
+    TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalEndCapture()");
     return {};
 #endif
 }

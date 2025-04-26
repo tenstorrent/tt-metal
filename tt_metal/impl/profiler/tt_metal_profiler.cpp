@@ -899,7 +899,7 @@ void DumpDeviceProfileResults(
                             curr_core.x,
                             curr_core.y);
                         TracyMessageC(msg.c_str(), msg.size(), tracy::Color::Tomato3);
-                        log_warning(msg.c_str());
+                        TT_LOG_WARN(msg.c_str());
                     }
                     dispatchCores.erase(dispatchCores.begin());
                 }

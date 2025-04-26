@@ -43,7 +43,7 @@ int main(int argc, char* argv[]) {
     int num_user_provided_arguments = argc - 1;
 
     if (std::getenv("RUNNING_FROM_PYTHON") == nullptr) {
-        log_warning(tt::LogDevice, "It is recommended to run this script from 'memset.py'");
+        TT_LOG_WARN_WITH_CAT(tt::LogDevice, "It is recommended to run this script from 'memset.py'");
         sleep(2);
     }
 

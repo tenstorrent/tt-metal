@@ -58,7 +58,7 @@ std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node(std::
         }
     } else {
         // Host does not have NUMA. Place all CPU Ids under a single node (0).
-        log_warning(tt::LogMetal, "Host does not use NUMA. May see reduced performance.");
+        TT_LOG_WARN_WITH_CAT(tt::LogMetal, "Host does not use NUMA. May see reduced performance.");
         for (int cpu = 0; cpu < sysconf(_SC_NPROCESSORS_ONLN); ++cpu) {
             free_cores.insert(cpu);
         }

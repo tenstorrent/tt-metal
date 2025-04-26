@@ -199,7 +199,7 @@ MemoryBlockTable BankManager::get_memory_block_table() const {
         return allocator_->get_memory_block_table();
     }
 
-    log_warning("allocator is not initialized, cannot get block table for memory");
+    TT_LOG_WARN("allocator is not initialized, cannot get block table for memory");
     return {};
 }
 

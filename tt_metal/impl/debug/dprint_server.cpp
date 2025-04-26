@@ -912,7 +912,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     "DPRINT server timed out on {}, waiting on a RAISE signal: {}\n", core_str, wait_signal);
                 *intermediate_stream << error_str;
                 TransferToAndFlushOutputStream(risc_key, intermediate_stream);
-                log_warning(tt::LogMetal, "Debug Print Server encountered an error: {}", error_str);
+                TT_LOG_WARN_WITH_CAT(tt::LogMetal, "Debug Print Server encountered an error: {}", error_str);
                 raise_wait_lock_.unlock();
                 TT_THROW("{}", error_str);
                 server_killed_due_to_hang_ = true;

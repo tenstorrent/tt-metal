@@ -85,7 +85,7 @@ uint32_t LightMetalCaptureContext::add_to_map(const Buffer* obj) {
 
 void LightMetalCaptureContext::remove_from_map(const Buffer* obj) {
     if (!is_in_map(obj)) {
-        log_warning(tt::LogMetalTrace, "Buffer not found in global_id map.");
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "Buffer not found in global_id map.");
     }
     buffer_id_to_global_id_map_.erase(obj->unique_id());
 }
@@ -105,7 +105,7 @@ bool LightMetalCaptureContext::is_in_map(const Program* obj) {
 
 uint32_t LightMetalCaptureContext::add_to_map(const Program* obj) {
     if (is_in_map(obj)) {
-        log_warning(tt::LogMetalTrace, "Program id: {} already exists in global_id map.", obj->get_id());
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "Program id: {} already exists in global_id map.", obj->get_id());
     }
     uint32_t global_id = next_global_id_++;
     program_id_to_global_id_map_[obj->get_id()] = global_id;
@@ -114,7 +114,7 @@ uint32_t LightMetalCaptureContext::add_to_map(const Program* obj) {
 
 void LightMetalCaptureContext::remove_from_map(const Program* obj) {
     if (!is_in_map(obj)) {
-        log_warning(tt::LogMetalTrace, "Program id: {} not found in global_id map.", obj->get_id());
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "Program id: {} not found in global_id map.", obj->get_id());
     }
     program_id_to_global_id_map_.erase(obj->get_id());
 }
@@ -134,7 +134,7 @@ bool LightMetalCaptureContext::is_in_map(const Kernel* obj) {
 
 uint32_t LightMetalCaptureContext::add_to_map(const Kernel* obj) {
     if (is_in_map(obj)) {
-        log_warning(tt::LogMetalTrace, "Kernel already exists in global_id map.");
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "Kernel already exists in global_id map.");
     }
     uint32_t global_id = next_global_id_++;
     kernel_to_global_id_map_[obj] = global_id;
@@ -143,7 +143,7 @@ uint32_t LightMetalCaptureContext::add_to_map(const Kernel* obj) {
 
 void LightMetalCaptureContext::remove_from_map(const Kernel* obj) {
     if (!is_in_map(obj)) {
-        log_warning(tt::LogMetalTrace, "Kernel not found in global_id map.");
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "Kernel not found in global_id map.");
     }
     kernel_to_global_id_map_.erase(obj);
 }
@@ -163,7 +163,7 @@ bool LightMetalCaptureContext::is_in_map(const CBHandle handle) {
 
 uint32_t LightMetalCaptureContext::add_to_map(const CBHandle handle) {
     if (is_in_map(handle)) {
-        log_warning(tt::LogMetalTrace, "CBHandle already exists in global_id map.");
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "CBHandle already exists in global_id map.");
     }
     uint32_t global_id = next_global_id_++;
     cb_handle_to_global_id_map_[handle] = global_id;
@@ -172,7 +172,7 @@ uint32_t LightMetalCaptureContext::add_to_map(const CBHandle handle) {
 
 void LightMetalCaptureContext::remove_from_map(const CBHandle handle) {
     if (!is_in_map(handle)) {
-        log_warning(tt::LogMetalTrace, "CBHandle not found in global_id map.");
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "CBHandle not found in global_id map.");
     }
     cb_handle_to_global_id_map_.erase(handle);
 }

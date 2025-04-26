@@ -168,7 +168,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     tracy::riscName[riscEndIndex],
                     bufferEndIndex);
                 TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
-                log_warning(warningMsg.c_str());
+                TT_LOG_WARN(warningMsg.c_str());
             }
 
             uint32_t riscNumRead = 0;
@@ -776,7 +776,7 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
 
         auto did_insert = zone_src_locations.insert(zone_src_location);
         if (did_insert.second && (hash_to_zone_src_locations.find(hash_16bit) != hash_to_zone_src_locations.end())) {
-            log_warning("Source location hashes are colliding, two different locations are having the same hash");
+            TT_LOG_WARN("Source location hashes are colliding, two different locations are having the same hash");
         }
         hash_to_zone_src_locations.emplace(hash_16bit, zone_src_location);
     }
@@ -821,7 +821,7 @@ void DeviceProfiler::dumpResults(
         }
 
         if (rtoptions.get_profiler_noc_events_enabled()) {
-            log_warning("Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
+            TT_LOG_WARN("Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
         }
 
         // open CSV log file
@@ -857,7 +857,7 @@ void DeviceProfiler::dumpResults(
             }
         }
     } else {
-        log_warning("DRAM profiler buffer is not initialized");
+        TT_LOG_WARN("DRAM profiler buffer is not initialized");
     }
 #endif
 }

@@ -97,7 +97,8 @@ void set_process_priority(int requested_priority) {
     // Set priority for calling process to user specified value
     int rc = setpriority(PRIO_PROCESS, 0, requested_priority);
     if (rc) {
-        log_warning(tt::LogMetal, "Unable to set process priority to {}, error code: {}", requested_priority, rc);
+        TT_LOG_WARN_WITH_CAT(
+            tt::LogMetal, "Unable to set process priority to {}, error code: {}", requested_priority, rc);
     }
 }
 

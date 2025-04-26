@@ -28,7 +28,7 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
         TT_FATAL(!mesh_ids.empty(), "There are no user physical meshes in the system found by control plane.");
 
         if (mesh_ids.size() > 1) {
-            tt::log_warning(LogMetal, "Only one user physical mesh is supported, using the first one");
+            TT_LOG_WARN_WITH_CAT(LogMetal, "Only one user physical mesh is supported, using the first one");
         }
 
         const auto mesh_id = mesh_ids.front();

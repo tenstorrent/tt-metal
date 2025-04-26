@@ -603,8 +603,8 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
 
     // If we logged an error, print to stdout and throw.
     if (!error_msg.empty()) {
-        log_warning("Watcher detected NOC error and stopped device:");
-        log_warning("{}: {}", core_str, error_msg);
+        TT_LOG_WARN("Watcher detected NOC error and stopped device:");
+        TT_LOG_WARN("{}: {}", core_str, error_msg);
         DumpWaypoints(core, mbox_data, true);
         DumpRingBuffer(core, mbox_data, true);
         LogRunningKernels(core, launch_msg);
@@ -631,8 +631,8 @@ void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor& core, const string& c
                 assert_status->line_num,
                 GetKernelName(core, launch_msg, assert_status->which).c_str(),
                 line_num_warning.c_str());
-            log_warning("Watcher stopped the device due to tripped assert, see watcher log for more details");
-            log_warning(error_msg.c_str());
+            TT_LOG_WARN("Watcher stopped the device due to tripped assert, see watcher log for more details");
+            TT_LOG_WARN(error_msg.c_str());
             DumpWaypoints(core, mbox_data, true);
             DumpRingBuffer(core, mbox_data, true);
             LogRunningKernels(core, launch_msg);
@@ -669,8 +669,8 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& co
         } else if (pause > 1) {
             string error_reason = fmt::format(
                 "Watcher data corruption, pause state on core {} unknown code: {}.\n", core.coord.str(), pause);
-            log_warning(error_reason.c_str());
-            log_warning("{}: {}", core_str, error_reason);
+            TT_LOG_WARN(error_reason.c_str());
+            TT_LOG_WARN("{}: {}", core_str, error_reason);
             DumpWaypoints(core, mbox_data, true);
             DumpRingBuffer(core, mbox_data, true);
             LogRunningKernels(core, get_valid_launch_message(mbox_data));

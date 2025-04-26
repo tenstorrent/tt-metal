@@ -75,7 +75,7 @@ namespace detail {
 LightMetalReplayImpl::LightMetalReplayImpl(LightMetalBinary&& binary, IDevice* device) :
     binary_(std::move(binary)), fb_binary_(nullptr), device_(device) {
     if (binary_.is_empty()) {
-        log_warning(tt::LogMetalTrace, "Empty LightMetalBinary provided to LightMetalReplay.");
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "Empty LightMetalBinary provided to LightMetalReplay.");
     }
 
     show_reads_ = parse_env("TT_LIGHT_METAL_SHOW_READS", false);
@@ -161,7 +161,7 @@ std::optional<TraceDescriptor> LightMetalReplayImpl::get_trace_by_id(uint32_t ta
 void LightMetalReplayImpl::add_buffer_to_map(
     uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Buffer>& buffer) {
     if (buffer_map_.find(global_id) != buffer_map_.end()) {
-        log_warning(tt::LogMetalTrace, "Buffer with global_id: {} already exists in map.", global_id);
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "Buffer with global_id: {} already exists in map.", global_id);
     }
     buffer_map_[global_id] = buffer;  // Shared ownership
 }
@@ -176,7 +176,7 @@ void LightMetalReplayImpl::remove_bufer_from_map(uint32_t global_id) { buffer_ma
 void LightMetalReplayImpl::add_program_to_map(
     uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Program>& program) {
     if (program_map_.find(global_id) != program_map_.end()) {
-        log_warning(tt::LogMetalTrace, "Program with global_id: {} already exists in map.", global_id);
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "Program with global_id: {} already exists in map.", global_id);
     }
     program_map_[global_id] = program;  // Shared ownership
 }
@@ -190,7 +190,7 @@ void LightMetalReplayImpl::remove_program_from_map(uint32_t global_id) { program
 
 void LightMetalReplayImpl::add_kernel_handle_to_map(uint32_t global_id, ::tt::tt_metal::KernelHandle kernel_id) {
     if (kernel_handle_map_.find(global_id) != kernel_handle_map_.end()) {
-        log_warning(tt::LogMetalTrace, "KernelHandle with global_id: {} already exists in map.", global_id);
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "KernelHandle with global_id: {} already exists in map.", global_id);
     }
     kernel_handle_map_[global_id] = kernel_id;  // Shared ownership
 }
@@ -205,7 +205,7 @@ void LightMetalReplayImpl::remove_kernel_handle_from_map(uint32_t global_id) { k
 void LightMetalReplayImpl::add_kernel_to_map(
     uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Kernel>& kernel) {
     if (kernel_map_.find(global_id) != kernel_map_.end()) {
-        log_warning(tt::LogMetalTrace, "Kernel with global_id: {} already exists in map.", global_id);
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "Kernel with global_id: {} already exists in map.", global_id);
     }
     kernel_map_[global_id] = kernel;  // Shared ownership
 }
@@ -219,7 +219,7 @@ void LightMetalReplayImpl::remove_kernel_from_map(uint32_t global_id) { kernel_m
 
 void LightMetalReplayImpl::add_cb_handle_to_map(uint32_t global_id, ::tt::tt_metal::CBHandle cb_handle) {
     if (cb_handle_map_.find(global_id) != cb_handle_map_.end()) {
-        log_warning(tt::LogMetalTrace, "CBHandle with global_id: {} already exists in map.", global_id);
+        TT_LOG_WARN_WITH_CAT(tt::LogMetalTrace, "CBHandle with global_id: {} already exists in map.", global_id);
     }
     cb_handle_map_[global_id] = cb_handle;  // Shared ownership
 }

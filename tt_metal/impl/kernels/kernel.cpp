@@ -277,7 +277,12 @@ void Kernel::validate_runtime_args_size(
     uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
 
     if (total_rt_args > max_rt_args) {
-        log_warning(tt::LogMetal, "Too many runtime args, unique: {} common: {} on {}", num_unique_rt_args, num_common_rt_args, this->processor());
+        TT_LOG_WARN_WITH_CAT(
+            tt::LogMetal,
+            "Too many runtime args, unique: {} common: {} on {}",
+            num_unique_rt_args,
+            num_common_rt_args,
+            this->processor());
         TT_THROW("{} unique+common runtime args targeting kernel {} on {} are too large. Max allowable is {}", total_rt_args, this->name(), logical_core.str(), max_runtime_args);
     }
 }
