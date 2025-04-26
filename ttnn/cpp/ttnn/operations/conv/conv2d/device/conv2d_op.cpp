@@ -397,14 +397,14 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
     operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_dev_clock_cycles);
 
 #if 0
-    tt::log_info(tt::LogOp, "OptimizedConv PerfModel:");
-    tt::log_info(tt::LogOp, "\t Batch: {}", batch_size);
-    tt::log_info(tt::LogOp, "\t In (H, W, C): ({}, {}, {})", conv_activation_h, conv_activation_w, conv_activation_c);
-    tt::log_info(tt::LogOp, "\t Filter (H, W): ({}, {})", filter_h, filter_w);
-    tt::log_info(tt::LogOp, "\t Filter Stride (H, W): ({}, {})", stride_h, stride_w);
-    tt::log_info(tt::LogOp, "\t Pad (H, W): ({}, {})", pad_h, pad_w);
-    tt::log_info(tt::LogOp, "\t Out (H, W, C): ({}, {}, {})", output_height, output_width, this->output_channels);
-    tt::log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "OptimizedConv PerfModel:");
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t Batch: {}", batch_size);
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t In (H, W, C): ({}, {}, {})", conv_activation_h, conv_activation_w, conv_activation_c);
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t Filter (H, W): ({}, {})", filter_h, filter_w);
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t Filter Stride (H, W): ({}, {})", stride_h, stride_w);
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t Pad (H, W): ({}, {})", pad_h, pad_w);
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t Out (H, W, C): ({}, {}, {})", output_height, output_width, this->output_channels);
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
 #endif
 
     return result;

@@ -102,7 +102,7 @@ void create_log_file() {
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
         TT_THROW("Watcher failed to create log file\n");
     }
-    log_info(LogLLRuntime, "Watcher log file: {}", fname);
+    TT_LOG_INFO_WITH_CAT(LogLLRuntime, "Watcher log file: {}", fname);
 
     fprintf(f, "At %.3lfs starting\n", watcher::get_elapsed_secs());
     fprintf(f, "Legend:\n");
@@ -173,7 +173,7 @@ static void watcher_loop(int sleep_usecs) {
     } else {
         disabled_features = "None";
     }
-    log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
+    TT_LOG_INFO_WITH_CAT(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     while (true) {
         // Delay the amount of time specified by the user. Don't include watcher polling time to avoid the case where
@@ -223,7 +223,7 @@ static void watcher_loop(int sleep_usecs) {
         watcher::dump_count++;
     }
 
-    log_info(LogLLRuntime, "Watcher thread stopped watching...");
+    TT_LOG_INFO_WITH_CAT(LogLLRuntime, "Watcher thread stopped watching...");
     watcher::server_running = false;
 }
 
@@ -348,7 +348,7 @@ void watcher_init(chip_id_t device_id) {
 
     // Iterate over debug_delays_val and print what got configured where
     for (auto& delay : debug_delays_val) {
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             tt::LogMetal,
             "Configured Watcher debug delays for device {}, core {}: read_delay_cores_mask=0x{:x}, "
             "write_delay_cores_mask=0x{:x}, atomic_delay_cores_mask=0x{:x}. Delay cycles: {}",
@@ -439,7 +439,7 @@ void watcher_attach(chip_id_t device_id) {
     }
 
     if (watcher::enabled) {
-        log_info(LogLLRuntime, "Watcher attached device {}", device_id);
+        TT_LOG_INFO_WITH_CAT(LogLLRuntime, "Watcher attached device {}", device_id);
     }
 
     // Always register the device w/ watcher, even if disabled
@@ -456,7 +456,7 @@ void watcher_detach(chip_id_t device_id) {
 
         TT_ASSERT(watcher::devices.find(device_id) != watcher::devices.end());
         if (watcher::enabled && watcher::logfile != nullptr) {
-            log_info(LogLLRuntime, "Watcher detached device {}", device_id);
+            TT_LOG_INFO_WITH_CAT(LogLLRuntime, "Watcher detached device {}", device_id);
             fprintf(watcher::logfile, "At %.3lfs detach device %d\n", watcher::get_elapsed_secs(), device_id);
         }
         watcher::devices.erase(device_id);

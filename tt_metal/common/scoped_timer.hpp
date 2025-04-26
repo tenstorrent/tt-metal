@@ -35,7 +35,8 @@ struct ScopedTimer {
         auto end = std::chrono::time_point_cast<std::chrono::nanoseconds>(Clock::now());
         this->elapsed = std::chrono::duration_cast<TimeUnit>(end - this->start);
         if (print_duration) {
-            tt::log_info(tt::LogTimer, "{} -- elapsed: {}{}", this->name, this->elapsed.count(), time_unit_to_string());
+            TT_LOG_INFO_WITH_CAT(
+                tt::LogTimer, "{} -- elapsed: {}{}", this->name, this->elapsed.count(), time_unit_to_string());
         }
     }
 

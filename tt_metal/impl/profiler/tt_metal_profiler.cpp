@@ -245,7 +245,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         tt_metal::detail::WaitProgramDone(device, sync_program, false);
     }
 
-    log_info("SYNC PROGRAM FINISH IS DONE ON {}", device_id);
+    TT_LOG_INFO("SYNC PROGRAM FINISH IS DONE ON {}", device_id);
     if ((smallestHostime[device_id] == 0) || (smallestHostime[device_id] > hostStartTime)) {
         smallestHostime[device_id] = hostStartTime;
     }
@@ -357,7 +357,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
                  << std::endl;
     }
     log_file.close();
-    log_info(
+    TT_LOG_INFO(
         "Host sync data for device: {}, cpu_start:{}, delay:{}, freq:{} Hz",
         device_id,
         smallestHostime[device_id],
@@ -371,7 +371,7 @@ void setShift(int device_id, int64_t shift, double scale) {
     if (std::isnan(scale)) {
         return;
     }
-    log_info("Device sync data for device: {}, delay: {} ns, freq scale: {}", device_id, shift, scale);
+    TT_LOG_INFO("Device sync data for device: {}, delay: {} ns, freq scale: {}", device_id, shift, scale);
     if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
         tt_metal_device_profiler_map.at(device_id).shift = shift;
         tt_metal_device_profiler_map.at(device_id).freqScale = scale;
@@ -429,7 +429,7 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         TT_FATAL(
             fabric_config != FabricConfig::DISABLED,
             "Cannot support device to device synchronization when TT-Fabric is disabled.");
-        log_info("Calling {} when TT-Fabric is enabled. This may take a while", __FUNCTION__);
+        TT_LOG_INFO("Calling {} when TT-Fabric is enabled. This may take a while", __FUNCTION__);
 
         constexpr std::uint16_t sample_count = 240;
         constexpr std::uint16_t sample_size = 16;

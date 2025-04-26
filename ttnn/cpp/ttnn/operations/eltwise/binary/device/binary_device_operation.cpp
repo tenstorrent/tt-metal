@@ -339,9 +339,9 @@ operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model
     // TODO: update OpPerformanceModel to work on variadic arguments
     operation::OpPerformanceModel result(input_tensors, {output_tensor}, ideal_eltwise_cycles);
 #if 0
-        tt::log_info(tt::LogOp, "BinaryDeviceOperation PerfModel:");
-        tt::log_info(tt::LogOp, "\t Data (Bytes): {}", total_bytes);
-        tt::log_info(tt::LogOp, "\t ideal_eltwise_cycles: {}", ideal_eltwise_cycles);
+        TT_LOG_INFO_WITH_CAT(tt::LogOp, "BinaryDeviceOperation PerfModel:");
+        TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t Data (Bytes): {}", total_bytes);
+        TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t ideal_eltwise_cycles: {}", ideal_eltwise_cycles);
 #endif
     return result;
 }

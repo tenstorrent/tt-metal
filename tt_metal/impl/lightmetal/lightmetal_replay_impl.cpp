@@ -506,7 +506,8 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBu
     // One idea is to store in map by global_read_id that caller can access.
     if (show_reads_) {
         for (size_t i = 0; i < readback_data.size(); i++) {
-            log_info(tt::LogMetalTrace, " rd_data i: {:3d} => data: {} ({:x})", i, readback_data[i], readback_data[i]);
+            TT_LOG_INFO_WITH_CAT(
+                tt::LogMetalTrace, " rd_data i: {:3d} => data: {} ({:x})", i, readback_data[i], readback_data[i]);
         }
     }
 }
@@ -691,7 +692,7 @@ void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalC
         if (show_reads_) {
             for (size_t i = 0; i < rd_data.size(); i++) {
                 bool match = rd_data[i] == cmd->golden_data()->Get(i);
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     tt::LogMetalTrace,
                     "LightMetalCompare i: {:3d} match: {} RdData: {:x} Golden: {:x}",
                     i,
@@ -725,7 +726,7 @@ bool LightMetalReplayImpl::run() {
             return false;
         }
 
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             tt::LogMetalTrace,
             "Running LightMetal Binary with {} cmds, {} traces. ManageDevice: {}",
             commands->size(),

@@ -28,25 +28,30 @@ void PrintHostDataType(const HostDataType& data) {
     std::visit(
         tt::stl::overloaded{
             [](const std::shared_ptr<std::vector<uint8_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint8_t>>");
+                TT_LOG_INFO_WITH_CAT(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint8_t>>");
             },
             [](const std::shared_ptr<std::vector<uint16_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint16_t>>");
+                TT_LOG_INFO_WITH_CAT(
+                    tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint16_t>>");
             },
             [](const std::shared_ptr<std::vector<int32_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<int32_t>>");
+                TT_LOG_INFO_WITH_CAT(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<int32_t>>");
             },
             [](const std::shared_ptr<std::vector<uint32_t>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint32_t>>");
+                TT_LOG_INFO_WITH_CAT(
+                    tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<uint32_t>>");
             },
             [](const std::shared_ptr<std::vector<float>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<float>>");
+                TT_LOG_INFO_WITH_CAT(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<float>>");
             },
             [](const std::shared_ptr<std::vector<bfloat16>>& /*value*/) {
-                log_info(tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<bfloat16>>");
+                TT_LOG_INFO_WITH_CAT(
+                    tt::LogMetalTrace, "HostDataType contains: std::shared_ptr<std::vector<bfloat16>>");
             },
-            [](const void* /*value*/) { log_info(tt::LogMetalTrace, "HostDataType contains: const void*"); },
-            [](auto&&) { log_info(tt::LogMetalTrace, "HostDataType contains: Unknown type"); }},
+            [](const void* /*value*/) {
+                TT_LOG_INFO_WITH_CAT(tt::LogMetalTrace, "HostDataType contains: const void*");
+            },
+            [](auto&&) { TT_LOG_INFO_WITH_CAT(tt::LogMetalTrace, "HostDataType contains: Unknown type"); }},
         data);
 }
 }  // namespace

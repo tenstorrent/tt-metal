@@ -214,7 +214,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                 }
                 if (enable_core_placement_opt) {
                     if (edm_fwd.my_noc_x < edm_bwd.my_noc_x) {
-                        log_info(
+                        TT_LOG_INFO_WITH_CAT(
                             tt::LogTest,
                             "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
                             edm_fwd.my_chip_id,
@@ -236,7 +236,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                             edm_bwd.config.sender_channel_ack_noc_ids[i] = 0;
                         }
                     } else if (edm_fwd.my_noc_x > edm_bwd.my_noc_x) {
-                        log_info(
+                        TT_LOG_INFO_WITH_CAT(
                             tt::LogTest,
                             "device {} edm_fwd {} {} is connecting to edm_bwd {} {} on link {}",
                             edm_fwd.my_chip_id,
@@ -639,7 +639,7 @@ void initialize_edm_fabric(
 
         for (size_t r = 0; r < num_rows; r++) {
             for (size_t c = 0; c < num_cols; c++) {
-                log_info(tt::LogAlways, "Compile EDM program");
+                TT_LOG_INFO_WITH_CAT(tt::LogAlways, "Compile EDM program");
                 tt::tt_metal::IDevice* device = mesh_device->get_device(r, c);
                 auto& program = programs.at(r).at(c);
                 device->push_work([&]() { tt::tt_metal::detail::CompileProgram(device, program); }, false);

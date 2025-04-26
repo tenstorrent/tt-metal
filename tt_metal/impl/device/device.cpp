@@ -338,7 +338,7 @@ void Device::initialize_cluster() {
         this->clear_l1_state();
     }
     int ai_clk = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->id_);
-    log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
+    TT_LOG_INFO_WITH_CAT(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
 }
 
 void Device::initialize_default_sub_device_state(
@@ -667,7 +667,7 @@ void Device::reset_cores() {
 
                 data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
                 launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
-                log_info(
+                TT_LOG_INFO_WITH_CAT(
                     tt::LogMetal,
                     "While initializing Device {}, active ethernet core {} on Device {} detected as still running, "
                     "issuing exit signal.",
@@ -704,7 +704,7 @@ void Device::reset_cores() {
                     virtual_core, id_and_cores.first)) {
                 // Ethernet cores won't be reset, so just signal the dispatch cores to early exit.
                 if (erisc_app_still_running(virtual_core)) {
-                    log_info(
+                    TT_LOG_INFO_WITH_CAT(
                         tt::LogMetal,
                         "While initializing device {}, idle ethernet dispatch core {} on Device {} detected as still "
                         "running, issuing exit signal.",
@@ -1165,7 +1165,11 @@ bool Device::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
     ZoneScoped;
-    log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache_.is_enabled() ? "": "NOT ");
+    TT_LOG_INFO_WITH_CAT(
+        tt::LogMetal,
+        "Initializing device {}. Program cache is {}enabled",
+        this->id_,
+        this->program_cache_.is_enabled() ? "" : "NOT ");
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
     this->using_fast_dispatch_ = false;
@@ -1227,7 +1231,7 @@ void Device::push_work(std::function<void()> work, bool blocking) {
 }
 
 bool Device::close() {
-    log_info(tt::LogMetal, "Closing device {}", this->id_);
+    TT_LOG_INFO_WITH_CAT(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
@@ -1607,11 +1611,11 @@ std::shared_ptr<TraceBuffer> Device::get_trace(uint32_t tid) {
 }
 
 void Device::enable_program_cache() {
-    log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
+    TT_LOG_INFO_WITH_CAT(tt::LogMetal, "Enabling program cache on device {}", this->id_);
     program_cache_.enable();
 }
 void Device::disable_and_clear_program_cache() {
-    log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
+    TT_LOG_INFO_WITH_CAT(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
     if (this->program_cache_.is_enabled()) {
         program_cache_.disable();
     }

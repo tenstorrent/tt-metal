@@ -639,7 +639,7 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
                     print_cores_sanitized.push_back(logical_core);
                 }
             }
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 tt::LogMetal,
                 "DPRINT enabled on device {}, all {} cores.",
                 device_id,
@@ -652,7 +652,7 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
                     print_cores_sanitized.push_back(logical_core);
                 }
             }
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 tt::LogMetal,
                 "DPRINT enabled on device {}, {} dispatch cores.",
                 device_id,
@@ -668,7 +668,7 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
                     }
                 }
             }
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 tt::LogMetal,
                 "DPRINT enabled on device {}, {} worker cores.",
                 device_id,
@@ -694,7 +694,7 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
                 }
                 if (valid_logical_core && all_cores.count({logical_core, core_type}) > 0) {
                     print_cores_sanitized.push_back({logical_core, core_type});
-                    log_info(
+                    TT_LOG_INFO_WITH_CAT(
                         tt::LogMetal,
                         "DPRINT enabled on device {}, {} core {} (virtual {}).",
                         device_id,
@@ -744,7 +744,7 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
         device_to_core_range_.count(device_id) == 0, "Device {} added to DPRINT server more than once!", device_id);
     device_to_core_range_[device_id] = print_cores_sanitized;
     device_to_core_range_lock_.unlock();
-    log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
+    TT_LOG_INFO_WITH_CAT(tt::LogMetal, "DPRINT Server attached device {}", device_id);
 }  // AttachDevice
 
 void DebugPrintServerContext::DetachDevice(chip_id_t device_id) {
@@ -826,7 +826,7 @@ void DebugPrintServerContext::DetachDevice(chip_id_t device_id) {
         "Device {} not present in DPRINT server but tried removing it!",
         device_id);
     device_to_core_range_.erase(device_id);
-    log_info(tt::LogMetal, "DPRINT Server dettached device {}", device_id);
+    TT_LOG_INFO_WITH_CAT(tt::LogMetal, "DPRINT Server dettached device {}", device_id);
 
     // When detaching a device, disable prints on it.
     tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(device_id);

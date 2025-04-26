@@ -160,12 +160,12 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
-        log_info(tt::LogTest, "Large moreh_layer_norm algorithm is selected.");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Large moreh_layer_norm algorithm is selected.");
         in0_t = 2 * block_size;
         im1_t = 2 * block_size;
         im2_t = 2 * block_size;
     } else {
-        log_info(tt::LogTest, "Small moreh_layer_norm algorithm is selected.");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Small moreh_layer_norm algorithm is selected.");
     }
 
     CreateCircularBuffer(

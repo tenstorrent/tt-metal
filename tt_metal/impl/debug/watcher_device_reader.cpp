@@ -247,7 +247,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     TT_ASSERT(this->f != nullptr);
 
     if (f != stdout && f != stderr) {
-        log_info(LogLLRuntime, "Watcher checking device {}", device_id);
+        TT_LOG_INFO_WITH_CAT(LogLLRuntime, "Watcher checking device {}", device_id);
     }
 
     // Clear per-dump info
@@ -342,7 +342,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         }
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
-        log_info(LogLLRuntime, "{}Press ENTER to unpause core(s) and continue...", paused_cores_str);
+        TT_LOG_INFO_WITH_CAT(LogLLRuntime, "{}Press ENTER to unpause core(s) and continue...", paused_cores_str);
         if (!tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_auto_unpause()) {
             while (std::cin.get() != '\n') {
                 ;
@@ -712,7 +712,7 @@ void WatcherDeviceReader::DumpRingBuffer(CoreDescriptor& /*core*/, const mailbox
     if (to_stdout) {
         if (!out.empty()) {
             out = string("Last ring buffer status: ") + out;
-            log_info(out.c_str());
+            TT_LOG_INFO(out.c_str());
         }
     } else {
         fprintf(f, "%s", out.c_str());
@@ -878,7 +878,7 @@ void WatcherDeviceReader::DumpWaypoints(CoreDescriptor& core, const mailboxes_t*
     // This function can either log the waypoint to the log or stdout.
     if (to_stdout) {
         out = string("Last waypoint: ") + out;
-        log_info(out.c_str());
+        TT_LOG_INFO(out.c_str());
     } else {
         fprintf(f, "%s ", out.c_str());
     }
@@ -979,13 +979,15 @@ void WatcherDeviceReader::ValidateKernelIDs(CoreDescriptor& core, const launch_m
 }
 
 void WatcherDeviceReader::LogRunningKernels(CoreDescriptor& core, const launch_msg_t* launch_msg) {
-    log_info("While running kernels:");
+    TT_LOG_INFO("While running kernels:");
     if (core.type == CoreType::ETH) {
-        log_info(" erisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
+        TT_LOG_INFO(" erisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
     } else {
-        log_info(" brisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]]);
-        log_info(" ncrisc: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]]);
-        log_info(
+        TT_LOG_INFO(
+            " brisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]]);
+        TT_LOG_INFO(
+            " ncrisc: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]]);
+        TT_LOG_INFO(
             " triscs: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]]);
     }
 }

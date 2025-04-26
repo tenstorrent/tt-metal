@@ -250,10 +250,10 @@ int main() {
         matmul_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
         result_vec = untilize_nfaces(result_vec, M, N);
 
-        log_info(tt::LogVerif, "Output vector of size {}", result_vec.size());
+        TT_LOG_INFO_WITH_CAT(tt::LogVerif, "Output vector of size {}", result_vec.size());
 
         float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
-        log_info(tt::LogVerif, "Metalium vs Golden -- PCC = {}", pearson);
+        TT_LOG_INFO_WITH_CAT(tt::LogVerif, "Metalium vs Golden -- PCC = {}", pearson);
         TT_FATAL(pearson > 0.97, "PCC not high enough. Result PCC: {}, Expected PCC: 0.97", pearson);
 
         pass &= CloseDevice(device);
@@ -266,7 +266,7 @@ int main() {
     }
 
     if (pass) {
-        tt::log_info(tt::LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

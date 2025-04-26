@@ -104,7 +104,7 @@ void JitBuildEnv::init(
     this->aliased_arch_name_ = get_string_aliased_arch_lowercase(arch);
 
 #ifndef GIT_COMMIT_HASH
-    log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
+    TT_LOG_INFO_WITH_CAT(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
 #else
     std::string git_hash(GIT_COMMIT_HASH);
 
@@ -115,7 +115,7 @@ void JitBuildEnv::init(
             std::filesystem::directory_iterator{root_path},
             [&git_hash_path](const auto& dir_entry) { check_built_dir(dir_entry.path(), git_hash_path); });
     } else {
-        log_info(tt::LogBuildKernels, "Skipping deleting built cache");
+        TT_LOG_INFO_WITH_CAT(tt::LogBuildKernels, "Skipping deleting built cache");
     }
 
     this->out_root_ = this->out_root_  + git_hash + "/";

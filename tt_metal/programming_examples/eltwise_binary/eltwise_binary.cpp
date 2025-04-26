@@ -308,7 +308,7 @@ int main() {
     }
 
     if (pass) {
-        tt::log_info(tt::LogTest, "Test Passed");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Test Passed");
     } else {
         TT_THROW("Test Failed");
     }

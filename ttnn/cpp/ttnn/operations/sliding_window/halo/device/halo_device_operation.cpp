@@ -74,7 +74,7 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     }
 
     if (this->in_place_) {
-        tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
+        TT_LOG_INFO_WITH_CAT(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
         // TODO: `input_tensor` is const qualified, but Tensor::deallocate() is not.
         // Find a nicer way to do this.
         input_tensor.mesh_buffer()->deallocate();
@@ -268,7 +268,7 @@ Tensor halo_op(
         p_config.shard_orientation = input_tensor.shard_spec().value().orientation;
 
         if (in_place && in_nsticks_per_core > max_out_nsticks_per_core) {
-            tt::log_info(
+            TT_LOG_INFO_WITH_CAT(
                 tt::LogAlways,
                 "halo_device_operation - in place operation is not supported for parameterizations with "
                 "input shard size larger than output shard size, falling back to normal operation");

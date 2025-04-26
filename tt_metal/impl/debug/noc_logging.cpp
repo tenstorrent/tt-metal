@@ -88,7 +88,7 @@ void DumpNocData(const std::vector<chip_id_t>& devices) {
 
     noc_data_t noc_data = {}, dispatch_noc_data = {};
     for (chip_id_t device_id : devices) {
-        log_info("Dumping noc data for Device {}...", device_id);
+        TT_LOG_INFO("Dumping noc data for Device {}...", device_id);
         DumpDeviceNocData(device_id, noc_data, dispatch_noc_data);
     }
 

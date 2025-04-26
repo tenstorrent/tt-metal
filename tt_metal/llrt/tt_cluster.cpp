@@ -6,7 +6,8 @@
 
 #include <core_coord.hpp>
 #include <dev_msgs.h>
-#include <logger.hpp>
+#include <tt-metalium/logger.hpp>
+// #include <logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <algorithm>
 #include <cstdint>
@@ -91,7 +92,7 @@ namespace tt {
 
 Cluster::Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
     ZoneScoped;
-    log_info(tt::LogDevice, "Opening user mode device driver");
+    TT_LOG_INFO_WITH_CAT(tt::LogDevice, "Opening user mode device driver");
 
     this->detect_arch_and_target();
 
@@ -338,7 +339,7 @@ void Cluster::start_driver(tt_device_params &device_params) const {
 }
 
 Cluster::~Cluster() {
-    log_info(tt::LogDevice, "Closing user mode device drivers");
+    TT_LOG_INFO_WITH_CAT(tt::LogDevice, "Closing user mode device drivers");
     this->driver_->close_device();
 
     this->sdesc_per_chip_.clear();
@@ -671,7 +672,7 @@ void Cluster::read_sysmem(
 void Cluster::verify_sw_fw_versions(
     int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
     tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));
-    tt::log_info(
+    TT_LOG_INFO_WITH_CAT(
         tt::LogDevice,
         "Software version {}, Ethernet FW version {} (Device {})",
         sw.str(),

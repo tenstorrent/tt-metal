@@ -674,7 +674,7 @@ void DeviceProfiler::serializeJsonNocTraces(
         }
     }
 
-    log_info("Writing profiler noc traces to '{}'", output_dir);
+    TT_LOG_INFO("Writing profiler noc traces to '{}'", output_dir);
     for (auto& [runtime_id, events] : events_by_opname) {
         // dump events to a json file inside directory output_dir named after the opname
         std::filesystem::path rpt_path = output_dir;
@@ -886,7 +886,7 @@ void DeviceProfiler::pushTracyDeviceResults() {
             cpuTime = get<0>(device_core_sync_info.at(worker_core));
             delay = get<1>(device_core_sync_info.at(worker_core));
             frequency = get<2>(device_core_sync_info.at(worker_core));
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 "Device {} sync info are, frequency {} GHz,  delay {} cycles and, sync point {} seconds",
                 device_id,
                 frequency,

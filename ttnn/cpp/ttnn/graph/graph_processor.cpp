@@ -182,7 +182,7 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program, const tt::tt_
 
 void GraphProcessor::track_function_start(std::string_view function_name, std::span<std::any> input_parameters) {
     const std::lock_guard<std::mutex> lock(mutex);
-    tt::log_info("Begin op: {}", function_name);
+    TT_LOG_INFO("Begin op: {}", function_name);
     std::unordered_map<std::string, std::string> params = {
         {kInputs, std::to_string(input_parameters.size())},
         {kName, std::string(function_name)},
@@ -214,14 +214,14 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         if (it != begin_function_any_map.end()) {
             it->second(any);
         } else {
-            tt::log_info("input any type name ignored: {}", graph_demangle(any.type().name()));
+            TT_LOG_INFO("input any type name ignored: {}", graph_demangle(any.type().name()));
         }
     }
 }
 
 void GraphProcessor::track_function_end_impl() {
     auto name = graph[current_op_id.top()].params[kName];
-    tt::log_info("End op: {}", name);
+    TT_LOG_INFO("End op: {}", name);
 
     auto counter = graph.size();
     {
@@ -249,7 +249,7 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     if (it != end_function_any_map.end()) {
         it->second(output_tensors);
     } else {
-        tt::log_info("output any type name ignored: {}", graph_demangle(output_tensors.type().name()));
+        TT_LOG_INFO("output any type name ignored: {}", graph_demangle(output_tensors.type().name()));
     }
     TT_ASSERT(current_op_id.size() > 0);  // we should always have capture_start on top
     current_op_id.pop();
@@ -297,7 +297,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     }
 
     if (buffers.empty()) {
-        tt::log_info(
+        TT_LOG_INFO(
             "Tensor doesn't have buffer, but storage is {}", graph_demangle(get_type_in_var(t.get_storage()).name()));
     }
 

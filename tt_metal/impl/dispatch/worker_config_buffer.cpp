@@ -205,18 +205,18 @@ void WorkerConfigBufferMgr::PrintStatus() {
     size_t num_buffer_types = this->reservation_.size();
     for (size_t i = 0; i < num_buffer_types; i++) {
         fprintf(stderr, "Buffer type %zu\n", i);
-        log_info(tt::LogTest, "Buffer type {}", i);
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Buffer type {}", i);
 
         size_t free_index = this->alloc_index_[i];
         while (free_index != this->alloc_index_[i]) {
             auto& entry = this->entries_[free_index][i];
-            log_info(
+            TT_LOG_INFO_WITH_CAT(
                 tt::LogTest, "Free index {} has values {} {} {}", free_index, entry.addr, entry.size, entry.sync_count);
 
             free_index = (free_index + 1) % this->entries_.size();
         }
         auto& entry = this->entries_[free_index][i];
-        log_info(
+        TT_LOG_INFO_WITH_CAT(
             tt::LogTest, "Alloc index {} has values {} {} {}", free_index, entry.addr, entry.size, entry.sync_count);
     }
 }

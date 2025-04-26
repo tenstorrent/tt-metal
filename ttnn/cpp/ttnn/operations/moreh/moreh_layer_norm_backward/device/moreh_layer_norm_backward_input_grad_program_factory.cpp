@@ -122,12 +122,12 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
-        log_info(tt::LogTest, "Large moreh_layer_norm_backward_input_grad algorithm is selected.");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Large moreh_layer_norm_backward_input_grad algorithm is selected.");
         im0_t = 1;
         im1_t = 1;
         im7_t = 0;
     } else {
-        log_info(tt::LogTest, "Small moreh_layer_norm_backward_input_grad algorithm is selected.");
+        TT_LOG_INFO_WITH_CAT(tt::LogTest, "Small moreh_layer_norm_backward_input_grad algorithm is selected.");
     }
 
     CreateCircularBuffer(

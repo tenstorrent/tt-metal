@@ -190,7 +190,7 @@ void DevicePool::init_profiler() const {
         auto tunnels_from_mmio =
             tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
         detail::InitDeviceProfiler(dev);
-        log_info(tt::LogMetal, "Profiler started on device {}", mmio_device_id);
+        TT_LOG_INFO_WITH_CAT(tt::LogMetal, "Profiler started on device {}", mmio_device_id);
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
@@ -198,10 +198,7 @@ void DevicePool::init_profiler() const {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto mmio_device = get_device(mmio_controlled_device_id);
                     detail::InitDeviceProfiler(mmio_device);
-                    log_info(
-                        tt::LogMetal,
-                        "Profiler started on remote device {}",
-                        mmio_device->id());
+                    TT_LOG_INFO_WITH_CAT(tt::LogMetal, "Profiler started on remote device {}", mmio_device->id());
                 }
             }
         }
@@ -312,7 +309,7 @@ void DevicePool::initialize_active_devices() const {
     // Activate fabric (must be before FD)
     FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_config();
     if (tt_fabric::is_1d_fabric_config(fabric_config) || tt_fabric::is_2d_fabric_config(fabric_config)) {
-        log_info(tt::LogMetal, "Initializing Fabric");
+        TT_LOG_INFO_WITH_CAT(tt::LogMetal, "Initializing Fabric");
         if (tt_fabric::is_2d_fabric_config(fabric_config)) {
             // write routing tables to all ethernet cores
             tt::tt_metal::MetalContext::instance()
@@ -325,7 +322,7 @@ void DevicePool::initialize_active_devices() const {
         for (const auto& dev : active_devices) {
             dev->init_fabric();
         }
-        log_info(tt::LogMetal, "Fabric Initialized");
+        TT_LOG_INFO_WITH_CAT(tt::LogMetal, "Fabric Initialized");
     }
 
     // Activate FD kernels

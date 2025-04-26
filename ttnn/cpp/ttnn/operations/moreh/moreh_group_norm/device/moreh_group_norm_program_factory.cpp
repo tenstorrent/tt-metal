@@ -139,12 +139,12 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
-        log_info(LogTest, "Large moreh_group_norm algorithm is selected.");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Large moreh_group_norm algorithm is selected.");
         in0_t = block_size;
         im1_t = 2 * block_size;
         im2_t = 2 * block_size;
     } else {
-        log_info(LogTest, "Small moreh_group_norm algorithm is selected.");
+        TT_LOG_INFO_WITH_CAT(LogTest, "Small moreh_group_norm algorithm is selected.");
     }
 
     CreateCircularBuffer(

@@ -41,7 +41,7 @@ int main(int argc, char* argv[]) {
         log_fatal("Light Metal Binary {} failed to execute or encountered errors.", binary_filename);
         return 1;
     } else {
-        log_info(tt::LogMetalTrace, "Light Metal Binary {} executed successfully", binary_filename);
+        TT_LOG_INFO_WITH_CAT(tt::LogMetalTrace, "Light Metal Binary {} executed successfully", binary_filename);
         return 0;
     }
 }

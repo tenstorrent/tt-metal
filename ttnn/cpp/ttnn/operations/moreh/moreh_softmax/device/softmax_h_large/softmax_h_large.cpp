@@ -12,7 +12,7 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    log_info(tt::LogTest, "Large tensor algorithm selected");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Large tensor algorithm selected");
     const auto& input = tensor_args.input;
     const auto op = operation_attributes.op;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;

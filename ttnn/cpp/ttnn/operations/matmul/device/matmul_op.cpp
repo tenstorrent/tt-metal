@@ -131,14 +131,14 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
 
     operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_dev_clock_cycles);
 #if 0
-    tt::log_info(tt::LogOp, "Matmul PerfModel:");
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "Matmul PerfModel:");
     for (auto i = 0; i < out_shape.rank() - 2; i++) {
-        tt::log_info(tt::LogOp, "\t Batch Values: (Index: {}, Value: {})", i, out_shape[i]);
+        TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t Batch Values: (Index: {}, Value: {})", i, out_shape[i]);
     }
-    tt::log_info(tt::LogOp, "\t In A (H, W): ({}, {})", in_a_shape[-2], in_a_shape[-1]);
-    tt::log_info(tt::LogOp, "\t In B (H, W): ({}, {})", in_b_shape[-2], in_b_shape[-1]);
-    tt::log_info(tt::LogOp, "\t Out (H, W): ({}, {})", out_shape[-2], out_shape[-1]);
-    tt::log_info(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t In A (H, W): ({}, {})", in_a_shape[-2], in_a_shape[-1]);
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t In B (H, W): ({}, {})", in_b_shape[-2], in_b_shape[-1]);
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t Out (H, W): ({}, {})", out_shape[-2], out_shape[-1]);
+    TT_LOG_INFO_WITH_CAT(tt::LogOp, "\t ideal_dev_clock_cycles: {}", ideal_dev_clock_cycles);
 #endif
     return result;
 }

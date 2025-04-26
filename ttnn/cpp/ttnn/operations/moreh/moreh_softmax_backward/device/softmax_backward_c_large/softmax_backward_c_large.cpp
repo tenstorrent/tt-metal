@@ -12,7 +12,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& input_grad) {
-    log_info(tt::LogTest, "Large tensor algorithm selected");
+    TT_LOG_INFO_WITH_CAT(tt::LogTest, "Large tensor algorithm selected");
     const auto& output = tensor_args.output_tensor;
     const auto& output_grad = tensor_args.output_grad_tensor;
     const auto dim = operation_attributes.dim;
