@@ -15,9 +15,28 @@
 #include <pybind11/iostream.h>
 #endif
 
+#include <fmt/format.h>
 #include <fmt/color.h>
 #include <fmt/core.h>
 #include <fmt/ostream.h>
+
+#include <spdlog/spdlog.h>
+
+// Forwarding Macros
+#define TT_LOG_INFO(fmt, ...) SPDLOG_INFO(fmt, ##__VA_ARGS__)
+#define TT_LOG_INFO_WITH_CAT(category, fmt, ...) SPDLOG_INFO("[{}] | " fmt, category, ##__VA_ARGS__)
+
+#define TT_LOG_WARN(fmt, ...) SPDLOG_WARN(fmt, ##__VA_ARGS__)
+#define TT_LOG_WARN_WITH_CAT(category, fmt, ...) SPDLOG_WARN("[{}] | " fmt, category, ##__VA_ARGS__)
+
+#define TT_LOG_ERROR(fmt, ...) SPDLOG_ERROR(fmt, ##__VA_ARGS__)
+#define TT_LOG_ERROR_WITH_CAT(category, fmt, ...) SPDLOG_ERROR("[{}] | " fmt, category, ##__VA_ARGS__)
+
+#define TT_LOG_DEBUG(fmt, ...) SPDLOG_DEBUG(fmt, ##__VA_ARGS__)
+#define TT_LOG_DEBUG_WITH_CAT(category, fmt, ...) SPDLOG_DEBUG("[{}] | " fmt, category, ##__VA_ARGS__)
+
+#define TT_LOG_TRACE(fmt, ...) SPDLOG_TRACE(fmt, ##__VA_ARGS__)
+#define TT_LOG_TRACE_WITH_CAT(category, fmt, ...) SPDLOG_TRACE("[{}] | " fmt, category, ##__VA_ARGS__)
 
 namespace tt {
 
@@ -53,6 +72,18 @@ enum LogType : uint32_t {
     // clang-format on
 };
 static_assert(LogType_Count < 64, "Exceeded number of log types");
+
+constexpr const char* log_type_names[] = {
+#define X(name) #name,
+    LOGGER_TYPES
+#undef X
+};
+
+constexpr const char* logtype_to_string(LogType logtype) {
+    return static_cast<std::size_t>(logtype) < std::size(log_type_names)
+               ? log_type_names[static_cast<std::size_t>(logtype)]
+               : "UnknownType";
+}
 
 #pragma GCC visibility push(hidden)
 class Logger {
@@ -227,18 +258,6 @@ static void log(Logger::Level log_level, LogType type, fmt::format_string<Args..
 }
 
 template <typename... Args>
-static void log_info(LogType type, fmt::format_string<Args...> fmt, Args&&... args) {
-    Logger::get().log_level_type(Logger::Level::Info, type, fmt, std::forward<Args>(args)...);
-}
-
-template <typename... Args>
-static void log_info(fmt::format_string<Args...> fmt, Args&&... args) {
-    log_info(LogAlways, fmt, std::forward<Args>(args)...);
-}
-
-static void log_info(char const* str) { log_info(LogAlways, "{}", str); }
-
-template <typename... Args>
 static void log_warning(LogType type, fmt::format_string<Args...> fmt, Args&&... args) {
     Logger::get().log_level_type(Logger::Level::Warning, type, fmt, std::forward<Args>(args)...);
 }
@@ -277,3 +296,16 @@ static void log_fatal(char const* str) { log_fatal(LogAlways, "{}", str); }
 #undef LOGGER_TYPES
 
 }  // namespace tt
+
+// Custom formatter for LogType
+namespace fmt {
+template <>
+struct fmt::formatter<tt::LogType> : fmt::formatter<std::string_view> {
+    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    constexpr auto format(tt::LogType logtype, FormatContext& ctx) const {
+        return fmt::formatter<std::string_view>::format(tt::logtype_to_string(logtype), ctx);
+    }
+};
+}  // namespace fmt

@@ -25,6 +25,7 @@ ALLOWED_PREFIXES = {
     "magic_enum",
     "nlohmann",
     "pybind11",
+    "spdlog",
 }
 
 STD_HEADERS = {
