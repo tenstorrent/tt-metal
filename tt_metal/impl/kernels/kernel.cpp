@@ -233,7 +233,7 @@ std::string Kernel::compute_hash(bool lightweight) const {
         TT_FATAL(file.is_open(), "Failed to open kernel source file: {}", this->kernel_src_.source_);
         std::stringstream buffer;
         buffer << file.rdbuf();
-        source = buffer.str();
+        source += "_" + buffer.str();
     }
     return fmt::format(
         "{}_{}_{}_{}",
