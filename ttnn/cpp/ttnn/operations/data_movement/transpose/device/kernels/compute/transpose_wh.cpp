@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/transpose_wh_dest_int32.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -26,8 +26,8 @@ void MAIN {
         copy_tile_init(tt::CBIndex::c_0);
         copy_tile(tt::CBIndex::c_0, 0, 0);
 
-        transpose_wh_dest_int32_init_short();
-        transpose_wh_dest_int32(0);
+        transpose_wh_dest_init_short();
+        transpose_wh_dest<true>(0);
         tile_regs_commit();
 
         tile_regs_wait();
