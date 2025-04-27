@@ -1376,12 +1376,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         build_options,
                         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key,
                         true);
-                    auto kernel_hash =
-                        detail::HashLookup::inst().get_generated_bin(key_hash).value_or(KernelCompileHash(
-                            kernel,
-                            build_options,
-                            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key,
-                            false));
+                    auto kernel_hash = detail::HashLookup::inst().get(key_hash).value_or(KernelCompileHash(
+                        kernel,
+                        build_options,
+                        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key,
+                        false));
 
                     const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
@@ -1389,16 +1388,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
                     if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
                         if (not detail::HashLookup::inst().exists(key_hash)) {
-                            detail::HashLookup::inst().add(key_hash);
-                            detail::HashLookup::inst().add_generated_bin(kernel_hash);
-                            detail::HashLookup::inst().add_key_to_generated_bin(key_hash, kernel_hash);
+                            detail::HashLookup::inst().add(key_hash, kernel_hash);
                         }
-                    } else if (detail::HashLookup::inst().add(key_hash)) {
+                    } else if (not detail::HashLookup::inst().exists(key_hash)) {
                         GenerateBinaries(device, build_options, kernel);
-                        detail::HashLookup::inst().add_generated_bin(kernel_hash);
-                        detail::HashLookup::inst().add_key_to_generated_bin(key_hash, kernel_hash);
-                    }
-                    while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
+                        detail::HashLookup::inst().add(key_hash, kernel_hash);
                     }
                 },
                 events);

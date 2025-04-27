@@ -19,29 +19,10 @@ struct HashLookup {
 
     bool exists(size_t khash) {
         std::unique_lock<std::mutex> lock(mutex_);
-        return hashes_.find(khash) != hashes_.end();
-    }
-    bool add(size_t khash) {
-        std::unique_lock<std::mutex> lock(mutex_);
-        bool ret = false;
-        if (hashes_.find(khash) == hashes_.end()) {
-            hashes_.insert(khash);
-            ret = true;
-        }
-        return ret;
+        return map_key_to_generated_bin_.find(khash) != map_key_to_generated_bin_.end();
     }
 
-    bool is_bin_generated(size_t khash) {
-        std::unique_lock<std::mutex> lock(mutex_);
-        return generated_bins_.find(khash) != generated_bins_.end();
-    }
-
-    void add_generated_bin(size_t khash) {
-        std::unique_lock<std::mutex> lock(mutex_);
-        generated_bins_.insert(khash);
-    }
-
-    bool add_key_to_generated_bin(size_t khash, size_t key) {
+    bool add(size_t khash, size_t key) {
         std::unique_lock<std::mutex> lock(mutex_);
         auto it = map_key_to_generated_bin_.find(key);
         if (it == map_key_to_generated_bin_.end()) {
@@ -51,7 +32,7 @@ struct HashLookup {
         return false;
     }
 
-    std::optional<size_t> get_generated_bin(size_t key) {
+    std::optional<size_t> get(size_t key) {
         std::unique_lock<std::mutex> lock(mutex_);
         auto it = map_key_to_generated_bin_.find(key);
         if (it != map_key_to_generated_bin_.end()) {
@@ -62,15 +43,11 @@ struct HashLookup {
 
     void clear() {
         std::unique_lock<std::mutex> lock(mutex_);
-        hashes_.clear();
-        generated_bins_.clear();
         map_key_to_generated_bin_.clear();
     }
 
 private:
     std::mutex mutex_;
-    std::unordered_set<size_t> hashes_;
-    std::unordered_set<size_t> generated_bins_;
     std::unordered_map<size_t, size_t> map_key_to_generated_bin_;
 };
 
