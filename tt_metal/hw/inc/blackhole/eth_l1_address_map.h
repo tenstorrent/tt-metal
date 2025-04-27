@@ -24,7 +24,7 @@ struct address_map {
     static constexpr std::int32_t MAX_SIZE = 512 * 1024 - SYSENG_RESERVED_SIZE - ERISC_BARRIER_SIZE -
                                              ERISC_APP_ROUTING_INFO_SIZE - ERISC_APP_SYNC_INFO_SIZE -
                                              FABRIC_ROUTER_CONFIG_SIZE;
-    static constexpr std::int32_t MAX_L1_LOADING_SIZE = MAX_SIZE;
+    static constexpr std::int32_t MAX_L1_LOADING_ADDR = MAX_SIZE;
 
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE = MAX_SIZE;
     static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = FABRIC_ROUTER_CONFIG_BASE + FABRIC_ROUTER_CONFIG_SIZE;

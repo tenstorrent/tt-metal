@@ -17,7 +17,6 @@ foreach(TEST_SRC ${BENCHMARK_SRCS})
         ${TEST_TARGET}
         BEFORE
         PRIVATE
-            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${arch}
             "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
             ${PROJECT_SOURCE_DIR}/tests

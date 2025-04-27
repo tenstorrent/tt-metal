@@ -998,7 +998,6 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
 void configure_2d_fabric_cores(IDevice* device) {
     std::vector<uint32_t> router_zero_buf(1, 0);
 
-    const auto& hal = MetalContext::instance().hal();
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
@@ -1010,8 +1009,7 @@ void configure_2d_fabric_cores(IDevice* device) {
                 device->id(), router_chan);
         auto router_logical_core = device->logical_core_from_ethernet_core(virtual_eth_core);
         // initialize the semaphore
-        auto fabric_router_sync_sem_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         detail::WriteToDeviceL1(
             device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
     }

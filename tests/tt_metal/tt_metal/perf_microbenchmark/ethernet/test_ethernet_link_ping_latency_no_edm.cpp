@@ -29,8 +29,6 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "df/float32.hpp"
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -104,12 +102,11 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
     std::vector<uint32_t> const& ct_args = {num_channels};
 
     // Kernel Setup
-
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto rt_args = [&]() -> std::vector<uint32_t> {
         return std::vector<uint32_t>{
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-            static_cast<uint32_t>(num_samples),
-            static_cast<uint32_t>(sample_page_size)};
+            erisc_unreserved_base, static_cast<uint32_t>(num_samples), static_cast<uint32_t>(sample_page_size)};
     };
 
     local_kernel = tt_metal::CreateKernel(
@@ -151,11 +148,11 @@ void run(
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t max_channels_per_direction) {
+    uint32_t erisc_unreserved_base = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     auto rt_args = [&]() -> std::vector<uint32_t> {
         return std::vector<uint32_t>{
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-            static_cast<uint32_t>(num_samples),
-            static_cast<uint32_t>(sample_page_size)};
+            erisc_unreserved_base, static_cast<uint32_t>(num_samples), static_cast<uint32_t>(sample_page_size)};
     };
     log_trace(tt::LogTest, "Running...");
 

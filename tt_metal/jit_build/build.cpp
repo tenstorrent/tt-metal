@@ -240,6 +240,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_HW_CACHE_INVALIDATION ";
     }
 
+    if (tt::tt_metal::MetalContext::instance().get_cluster().is_base_routing_fw_enabled()) {
+        this->defines_ += "-DROUTING_FW_ENABLED ";
+    }
+
     // Includes
     // TODO(pgk) this list is insane
     std::vector<std::string> includeDirs = {

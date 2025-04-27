@@ -26,8 +26,6 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
@@ -47,8 +45,6 @@ using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
-constexpr std::int32_t MAX_NUM_WORDS =
-    (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE) / WORD_SIZE;
 
 struct BankedConfig {
     size_t num_pages = 1;
@@ -487,9 +483,11 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 namespace tt::tt_metal {
 
 TEST_F(DeviceFixture, ActiveEthKernelsDirectRingGatherAllChips) {
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t sem_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    auto erisc_unreserved_base_addr =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
+    const size_t dst_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
+    const size_t sem_l1_byte_address = erisc_unreserved_base_addr;
     const auto& device_ring = get_device_ring(devices_);
     if (device_ring.empty()) {
         GTEST_SKIP();
@@ -499,9 +497,11 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectRingGatherAllChips) {
 }
 
 TEST_F(DeviceFixture, ActiveEthKernelsInterleavedRingGatherAllChips) {
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t sem_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    auto erisc_unreserved_base_addr =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
+    const size_t dst_eth_l1_byte_address = erisc_unreserved_base_addr + 32;
+    const size_t sem_l1_byte_address = erisc_unreserved_base_addr;
     BankedConfig test_config =
         BankedConfig{.num_pages = 10, .size_bytes = 10 * 2 * 32 * 32, .page_size_bytes = 2 * 32 * 32};
     const auto& device_ring = get_device_ring(devices_);
