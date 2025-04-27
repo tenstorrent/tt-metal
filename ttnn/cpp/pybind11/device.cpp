@@ -568,6 +568,8 @@ void device_module(py::module& m_device) {
 
     m_device.def("EnablePersistentKernelCache", &tt::tt_metal::detail::EnablePersistentKernelCache, R"doc(
         Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.
+
+        The persistent kernel cache is keyed by the Metal build ID, the content of the kernel and build options (including the core type and command queue). Included files changing _will not_ invalidate the cache.
     )doc");
     m_device.def("DisablePersistentKernelCache", &tt::tt_metal::detail::DisablePersistentKernelCache, R"doc(
         Disables kernel compilation cache from being persistent across runs
