@@ -11,10 +11,12 @@
 
 void kernel_main() {
     uint32_t output_dram_base_addr = get_arg_val<uint32_t>(0);  // output base addr (DRAM)
-    uint32_t tiles_per_row = get_arg_val<uint32_t>(1);          // number of tiles in a row / along axis
-    uint32_t product_high_dims = get_arg_val<uint32_t>(2);
-    uint32_t product_low_dims = get_arg_val<uint32_t>(3);
-    uint32_t HtWt = get_arg_val<uint32_t>(4);
+    uint32_t start_row = get_arg_val<uint32_t>(1);
+    uint32_t num_rows = get_arg_val<uint32_t>(2);
+    uint32_t tiles_per_row = get_arg_val<uint32_t>(3);  // number of tiles in a row / along axis
+    uint32_t product_high_dims = get_arg_val<uint32_t>(4);
+    uint32_t product_low_dims = get_arg_val<uint32_t>(5);
+    uint32_t HtWt = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_in = tt::CBIndex::c_1;
 
@@ -30,9 +32,7 @@ void kernel_main() {
     InterleavedAddrGenFast<true> dram_output_addrg = {
         .bank_base_address = output_dram_base_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
-    uint32_t start_row = 0;
-    const uint32_t total_num_rows = product_low_dims * product_high_dims * HtWt;
-    for (uint32_t i = start_row; i < total_num_rows; i++) {
+    for (uint32_t i = start_row; i < num_rows; i++) {
         uint32_t i0 = i / (product_high_dims * HtWt);
         uint32_t i1 = i % (product_high_dims * HtWt);
 
