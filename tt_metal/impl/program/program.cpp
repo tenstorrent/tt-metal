@@ -1387,9 +1387,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     build_options.set_name(kernel_path_suffix);
 
                     if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
-                        if (not detail::HashLookup::inst().exists(key_hash)) {
-                            detail::HashLookup::inst().add(key_hash, kernel_hash);
-                        }
+                        // No need to check as the function itself will check if the kernel is already cached
+                        detail::HashLookup::inst().add(key_hash, kernel_hash);
                     } else if (not detail::HashLookup::inst().exists(key_hash)) {
                         GenerateBinaries(device, build_options, kernel);
                         detail::HashLookup::inst().add(key_hash, kernel_hash);
