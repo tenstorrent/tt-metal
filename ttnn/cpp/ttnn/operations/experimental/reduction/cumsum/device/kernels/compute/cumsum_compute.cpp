@@ -30,6 +30,7 @@ void MAIN {
     constexpr uint32_t first_tile = 0;
 
     unary_op_init_common(cb_in, cb_out);
+    PACK(DPRINT << "[Cumsum Pack] start" << ENDL());
 
     // [UNPACK]: Acquire lock on cb_zero
     // cb_zero is only written once per execution: we can (and should) keep the lock
@@ -112,6 +113,8 @@ void MAIN {
     }
 
     cb_pop_front(cb_zero, 1);  // end of kernel: release lock on cb_zero
+
+    PACK(DPRINT << "[Cumsum Pack] end" << ENDL());
 }
 
 }  // namespace NAMESPACE

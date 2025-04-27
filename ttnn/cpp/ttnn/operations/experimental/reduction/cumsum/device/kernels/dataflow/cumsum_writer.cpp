@@ -32,7 +32,9 @@ void kernel_main() {
     InterleavedAddrGenFast<true> dram_output_addrg = {
         .bank_base_address = output_dram_base_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
-    for (uint32_t i = start_row; i < num_rows; i++) {
+    DPRINT << "[Cumsum Writer]: start_row = " << start_row << ", num rows = " << num_rows << ENDL();
+
+    for (uint32_t i = start_row; i < start_row + num_rows; i++) {
         uint32_t i0 = i / (product_high_dims * HtWt);
         uint32_t i1 = i % (product_high_dims * HtWt);
 
@@ -49,4 +51,5 @@ void kernel_main() {
             cb_pop_front(cb_in, 1);
         }
     }
+    DPRINT << "[Cumsum Writer] end" << ENDL();
 }

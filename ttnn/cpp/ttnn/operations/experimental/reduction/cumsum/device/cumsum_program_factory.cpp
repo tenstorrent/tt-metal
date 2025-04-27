@@ -116,9 +116,14 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
     constexpr uint32_t cb_intermed_index = CBIndex::c_3;
 
     auto grid = device->compute_with_storage_grid_size();
-    const CoreCoord single_core_grid = {1, 1};
-    auto [core_count, all_cores, busiest_cores, laziest_cores, busy_work_units, lazy_work_unit] =
-        tt_metal::split_work_to_cores(single_core_grid, num_rows);
+    // const CoreCoord single_core_grid = {1, 1};
+    //  auto grid = CoreCoord(1, 3);
+    auto [num_cores, all_cores, busy_cores, lazy_cores, busy_work_units, lazy_work_units] =
+        tt_metal::split_work_to_cores(grid, num_rows);
+
+    std::cout << "all cores = " << all_cores.num_cores() << ", busy cores = " << busy_cores.num_cores() << " ["
+              << busy_work_units << "]"
+              << ", lazy cores = " << lazy_cores.num_cores() << " [" << lazy_work_units << "]" << std::endl;
 
     // Device operation does not handle on-the-fly type conversion yet and we ensured that input_dtype == ouptut_dtype
     DataFormat in_df = datatype_to_dataformat_converter(output_dtype);
@@ -174,14 +179,21 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
             .compile_args = compute_kernel_args,
             .defines = defines_kernel_args});
 
-    uint32_t num_cores = single_core_grid.x * single_core_grid.y;
+    std::cout << "num cores = " << num_cores << std::endl;
+    uint32_t start_row = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / single_core_grid.y, i % single_core_grid.y};
+        CoreCoord core = {i / grid.y, i % grid.y};
 
-        uint32_t start_row = 0;
+        uint32_t rows_per_core = 0;
+        if (busy_cores.contains(core)) {
+            rows_per_core = busy_work_units;
+        } else if (lazy_cores.contains(core)) {
+            rows_per_core = lazy_work_units;
+        } else {
+            TT_THROW("Core outside specified core ranges");
+        }
+        std::cout << "core #" << i << "- total rows = " << num_rows << ", rows/core = " << rows_per_core << std::endl;
 
-        uint32_t rows_per_core = busy_work_units;
-        std::cout << "total rows = " << num_rows << ", rows/core = " << rows_per_core << std::endl;
         SetRuntimeArgs(
             program,
             cumsum_reader_handle_id,
@@ -218,6 +230,8 @@ CumSumDeviceOperation::SingleCore::cached_program_t CumSumDeviceOperation::Singl
                 rows_per_core,
                 num_tiles_per_row,
             });
+
+        start_row += rows_per_core;
     }
     return {std::move(program), {}};
 }
