@@ -693,12 +693,12 @@ def test_llama_demo(
         pytest.skip("TG only supports batch 1 and 32")
 
     # Add param for 6U for tsu target range
-    assert not (is_6u or is_tg_cluster), "Not running on TG nor on 6U"
-
     if is_6u:
         galaxy_type = "6U"
     elif is_tg_cluster:
         galaxy_type = "4U"
+    else:
+        raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
 
     mesh_device.enable_async(True)
 
