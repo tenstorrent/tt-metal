@@ -104,8 +104,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto pad_metadata = sliding_window::generate_pad_metadata(config_);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config_);
     auto shard_boundaries = sliding_window::generate_shard_boundaries(config_, op_trace_metadata);
-    auto tensor_metadata = sliding_window::generate_tensor_metadata(
-        pad_metadata, config_, reshard_num_cores_nhw_, is_in_tiled || is_out_tiled_);
+    uint32_t input_shard_height = input_tensor.memory_config().shard_spec->shape[0];
+    auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config_, input_shard_height);
 
     Program program = CreateProgram();
 
@@ -220,7 +220,6 @@ Tensor halo_op(
     uint32_t pad_val,
     bool remote_read,
     bool transpose_mcast,
-    uint32_t reshard_num_cores_nhw,
     const MemoryConfig& output_memory_config,
     bool is_out_tiled,
     bool in_place) {
@@ -235,15 +234,7 @@ Tensor halo_op(
     //       width)
     bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     auto halo_func =
-        [config,
-         pad_val,
-         remote_read,
-         is_block_sharded,
-         transpose_mcast,
-         reshard_num_cores_nhw,
-         output_memory_config,
-         is_out_tiled,
-         in_place](
+        [config, pad_val, remote_read, is_block_sharded, transpose_mcast, output_memory_config, is_out_tiled, in_place](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -282,7 +273,6 @@ Tensor halo_op(
                 .pad_val_ = pad_val,
                 .remote_read_ = remote_read,
                 .transpose_mcast_ = transpose_mcast,
-                .reshard_num_cores_nhw_ = reshard_num_cores_nhw,
                 .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
                 .in_nsticks_per_core_ = in_nsticks_per_core,
                 .output_memory_config_ = output_memory_config,
