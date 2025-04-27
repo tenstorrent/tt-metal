@@ -156,14 +156,6 @@ public:
     // Puts device into reset
     bool close() override;
 
-    // Calls to enable_async are ignored in effort to forcefully disable async for single device use-cases
-    // MeshDevice calls force_enable_async directly avoiding enable_async call for multi-device use-case
-    void enable_async(bool enable) override;
-    void force_enable_async(bool enable);
-    void synchronize() override;
-    WorkExecutorMode get_worker_mode() override;
-    bool is_worker_queue_empty() const override;
-
     void push_work(std::function<void()> work, bool blocking) override;
 
     // Program cache interface. Synchronize with worker worker threads before querying or
@@ -228,8 +220,6 @@ private:
     void get_associated_dispatch_virtual_cores(
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& my_dispatch_cores,
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& other_dispatch_cores);
-
-    void set_worker_mode(const WorkExecutorMode& mode);
 
     void generate_device_bank_to_noc_tables();
 

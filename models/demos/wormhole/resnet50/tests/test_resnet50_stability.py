@@ -34,7 +34,6 @@ def test_resnet_stability(
     weight_dtype,
     model_location_generator,
     test_duration_seconds,
-    enable_async_mode=True,
 ):
     logger.info(f"Running ResNet50 stability test for {test_duration_seconds} seconds")
 
@@ -53,7 +52,6 @@ def test_resnet_stability(
             act_dtype,
             weight_dtype,
             model_location_generator,
-            enable_async_mode=True,
         )
 
         if time.time() - start > test_duration_seconds:

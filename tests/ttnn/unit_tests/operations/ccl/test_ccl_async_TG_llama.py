@@ -19,7 +19,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     QKV_CRS,
     FF1_CRS,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
+from models.demos.llama3_subdevices.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -125,7 +125,6 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 17068032, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
@@ -146,7 +145,6 @@ def test_all_gather_tg_llama(
     layout,
     use_program_cache,
     function_level_defaults,
-    enable_async,
     replication_factor,
     num_iters,
     warmup_iters,
@@ -182,7 +180,6 @@ def test_all_gather_tg_llama(
         ttnn.BufferType.L1,
         use_program_cache,
         function_level_defaults,
-        enable_async=enable_async,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         input_shard_spec=input_shard_spec,
@@ -218,7 +215,6 @@ def test_all_gather_tg_llama(
         (NUM_ITERATIONS, 10),
     ],
 )
-@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "device_params",
@@ -251,7 +247,6 @@ def test_all_reduce_tg_llama(
     output_core_range_set,
     num_iters,
     warmup_iters,
-    enable_async,
     trace_mode,
     use_program_cache,
     function_level_defaults,
@@ -272,7 +267,6 @@ def test_all_reduce_tg_llama(
         output_dtype=output_dtype,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
-        enable_async=enable_async,
         trace_mode=trace_mode,
         validate_all=False,
         profiler=profiler,

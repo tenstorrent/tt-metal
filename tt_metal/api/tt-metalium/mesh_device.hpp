@@ -232,10 +232,6 @@ public:
     void init_command_queue_device() override;
     void init_fabric() override;
     bool close() override;
-    void enable_async(bool enable) override;
-    void synchronize() override;
-    WorkExecutorMode get_worker_mode() override;
-    bool is_worker_queue_empty() const override;
     void push_work(std::function<void()> work, bool blocking = false) override;
     void enable_program_cache() override;
     void disable_and_clear_program_cache() override;

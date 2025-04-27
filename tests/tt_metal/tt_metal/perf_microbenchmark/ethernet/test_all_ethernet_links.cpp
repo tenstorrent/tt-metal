@@ -41,6 +41,8 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
+static uint64_t program_runtime_id = 0;
+
 struct TestParams {
     BenchmarkType benchmark_type;
     uint32_t num_packets;
@@ -325,6 +327,9 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
     for (const auto& link : device_helper.unique_links) {
         auto& sender_program = programs.at(link.sender.chip);
         auto& receiver_program = programs.at(link.receiver.chip);
+
+        sender_program.set_runtime_id(program_runtime_id++);
+        receiver_program.set_runtime_id(program_runtime_id++);
 
         auto sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
         auto receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);

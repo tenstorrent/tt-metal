@@ -32,8 +32,6 @@ from models.utility_functions import skip_for_grayskull
 def test_layernorm_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
 
-    mesh_device.enable_async(True)
-
     model_args = ModelArgs(mesh_device)
     width = model_args.vision_dim
     num_chunks = 4

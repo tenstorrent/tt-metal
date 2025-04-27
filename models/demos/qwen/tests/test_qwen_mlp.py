@@ -43,8 +43,6 @@ def test_qwen_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
-    mesh_device.enable_async(True)
-
     model_args = TtModelArgs(mesh_device)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()

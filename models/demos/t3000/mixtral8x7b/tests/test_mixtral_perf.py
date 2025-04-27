@@ -50,8 +50,6 @@ def test_mixtral_model_perf(
     reset_seeds,
     is_ci_env,
 ):
-    t3k_mesh_device.enable_async(True)
-
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         from tracy import signpost
 
@@ -166,8 +164,6 @@ def test_mixtral_model_with_prefill_perf(
     reset_seeds,
     is_ci_env,
 ):
-    t3k_mesh_device.enable_async(True)
-
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         from tracy import signpost
 

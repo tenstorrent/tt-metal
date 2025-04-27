@@ -75,8 +75,6 @@ void insert_buffer_and_shape_for_device(
     Tensor& tensor_to_modify,
     std::optional<int> buffer_index = std::nullopt);
 
-Tensor copy_borrowed_tensor_in_async_mode(IDevice* worker, const Tensor& tensor);
-
 inline bool is_tensor_on_device(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
 [[deprecated("Use is_tensor_on_device instead")]] inline bool is_tensor_on_device_or_multidevice(
