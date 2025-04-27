@@ -225,7 +225,7 @@ void bind_binary_unary_max_operation(
     py::module& module,
     const binary_operation_t& operation,
     const std::string& description,
-    const std::string& supported_dtype = "BFLOAT16, FLOAT32",
+    const std::string& supported_dtype = "BFLOAT16, FLOAT32, INT32",
     const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
