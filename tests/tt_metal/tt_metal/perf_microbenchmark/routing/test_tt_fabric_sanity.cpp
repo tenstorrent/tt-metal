@@ -49,7 +49,6 @@
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
@@ -606,8 +605,9 @@ typedef struct test_device {
             router_compile_args.push_back(direction);
 
             // initialize the semaphore
+            auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
             tt::llrt::write_hex_vec_to_core(
-                device_handle->id(), router_virtual_cores[i], zero_buf, FABRIC_ROUTER_SYNC_SEM);
+                device_handle->id(), router_virtual_cores[i], zero_buf, fabric_router_sync_sem_addr);
 
             auto kernel = tt_metal::CreateKernel(
                 program_handle,
@@ -623,16 +623,18 @@ typedef struct test_device {
     void wait_for_router_sync() {
         uint32_t master_router_status = 0;
         uint32_t expected_val = router_logical_cores.size();
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         while (expected_val != master_router_status) {
             master_router_status = tt::llrt::read_hex_vec_from_core(
-                device_handle->id(), router_virtual_cores[master_router_idx], FABRIC_ROUTER_SYNC_SEM, 4)[0];
+                device_handle->id(), router_virtual_cores[master_router_idx], fabric_router_sync_sem_addr, 4)[0];
         }
     }
 
     void terminate_router_kernels() {
         std::vector<uint32_t> zero_buf(1, 0);
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         tt::llrt::write_hex_vec_to_core(
-            device_handle->id(), router_virtual_cores[master_router_idx], zero_buf, FABRIC_ROUTER_SYNC_SEM);
+            device_handle->id(), router_virtual_cores[master_router_idx], zero_buf, fabric_router_sync_sem_addr);
     }
 
     std::vector<CoreCoord> select_random_worker_cores(uint32_t count) {
@@ -1705,7 +1707,7 @@ int main(int argc, char **argv) {
 
         uint32_t client_interface_addr = worker_unreserved_base_addr;
         uint32_t client_pull_req_buf_addr =
-            client_interface_addr + sizeof(fabric_pull_client_interface_t) + sizeof(fabric_router_l1_config_t) * 4;
+            client_interface_addr + PULL_CLIENT_INTERFACE_SIZE + sizeof(fabric_router_l1_config_t) * 4;
 
         std::vector<uint32_t> tx_compile_args = {
             data_mode,                         // 0: Data mode. 0 - Packetized Data. 1 Raw Data.

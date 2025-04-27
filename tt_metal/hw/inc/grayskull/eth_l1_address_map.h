@@ -30,7 +30,7 @@ struct address_map {
     static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = 0;
 
     static constexpr std::int32_t ERISC_BARRIER_BASE = 0;
-    static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1;
+    static constexpr std::int32_t MAX_L1_LOADING_ADDR = 1;
 
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE = 0;
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 2064;

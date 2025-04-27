@@ -31,6 +31,21 @@
 #else
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
 #endif
+// TODO: when device specific headers specify number of processors
+// (and hal abstracts them on host), get these from there (same as above for dprint)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+// TODO: Review if this should  be 2 for BH (the number of eth processors)
+// Hardcode to 1 to keep size as before
+#ifdef ARCH_BLACKHOLE
+static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
+#endif
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
+#endif
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = 5;
 #endif
 
 // Messages for host to tell brisc to go
@@ -288,18 +303,6 @@ struct dprint_buf_msg_t {
 // NOC aligment max from BH
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
-// TODO: when device specific headers specify number of processors
-// (and hal abstracts them on host), get these from there (same as above for dprint)
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-#ifdef ARCH_BLACKHOLE
-static constexpr uint32_t PROFILER_RISC_COUNT = 1;
-#else
-static constexpr uint32_t PROFILER_RISC_COUNT = 1;
-#endif
-#else
-static constexpr uint32_t PROFILER_RISC_COUNT = 5;
-#endif
-
 static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 2;
 
 struct profiler_msg_t {
@@ -359,9 +362,10 @@ struct mailboxes_t {
     volatile struct go_msg_t go_message;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
+    struct core_info_msg_t core_info;
+    // Keep profiler last since it's size is dynamic per core type
     uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];
     struct profiler_msg_t profiler;
-    struct core_info_msg_t core_info;
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_hex_vec_to_core().

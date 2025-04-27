@@ -51,6 +51,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] =
         eth_l1_mem::address_map::RETRAIN_COUNT_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] =
+        eth_l1_mem::address_map::RETRAIN_FORCE_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
 
@@ -76,10 +78,10 @@ HalCoreInfoType create_active_eth_mem_map() {
         eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_SYNC_INFO)] =
         eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] =
         eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = sizeof(uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
 
@@ -95,7 +97,11 @@ HalCoreInfoType create_active_eth_mem_map() {
         };
         processor_classes[processor_class_idx] = processor_types;
     }
-
+    // TODO: Review if this should  be 2 (the number of eth processors)
+    // Hardcode to 1 to keep size as before
+    constexpr uint32_t mailbox_size =
+        sizeof(mailboxes_t) - sizeof(profiler_msg_t::buffer) + sizeof(profiler_msg_t::buffer) / PROFILER_RISC_COUNT * 1;
+    static_assert(mailbox_size <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,

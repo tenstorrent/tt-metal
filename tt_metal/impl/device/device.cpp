@@ -14,6 +14,7 @@
 #include <sub_device_types.hpp>
 #include <trace.hpp>
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
 #include <tt_stl/span.hpp>
@@ -962,28 +963,16 @@ void Device::clear_l1_state() {
         }
     }
 
-    // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
-    // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
-    // Clear erisc sync info
-    const auto& hal = MetalContext::instance().hal();
+    // Clear erisc unreserved L1
     for (const auto& eth_core : this->get_active_ethernet_cores()) {
-        static const uint32_t max_l1_loading_size =
-            hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-
-        static uint32_t zero_vec_size = max_l1_loading_size;
-        auto zero_vec_addr = HalL1MemAddrType::UNRESERVED;
-        if (hal.get_eth_fw_is_cooperative()) {
-            zero_vec_size -=
-                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER);
-            zero_vec_addr = HalL1MemAddrType::TILE_HEADER_BUFFER;
-        }
+        static uint32_t zero_vec_size = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
+        auto zero_vec_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
         static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
 
         CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
-        llrt::write_hex_vec_to_core(
-            this->id(), virtual_core, zero_vec, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, zero_vec_addr));
+        llrt::write_hex_vec_to_core(this->id(), virtual_core, zero_vec, zero_vec_addr);
     }
     // TODO: clear idle eriscs as well
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());

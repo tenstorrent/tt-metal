@@ -281,8 +281,7 @@ TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
         .l1_buffer_addr = tt::align(
-            MetalContext::instance().hal().get_dev_addr(
-                HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED),
+            tt::tt_metal::hal::get_erisc_l1_unreserved_base(),
             MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0},
     };
@@ -309,8 +308,7 @@ TEST_F(DispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
         .l1_buffer_addr = tt::align(
-            MetalContext::instance().hal().get_dev_addr(
-                HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED),
+            tt::tt_metal::hal::get_erisc_l1_unreserved_base(),
             MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0},
     };

@@ -134,7 +134,7 @@ private:
     float nan_ = 0.0f;
     float inf_ = 0.0f;
 
-    void initialize_wh();
+    void initialize_wh(bool is_base_routing_fw_enabled);
     void initialize_bh();
 
     // Functions where implementation varies by architecture
@@ -153,7 +153,7 @@ private:
     StackSizeFunc stack_size_func_;
 
 public:
-    Hal(tt::ARCH arch);
+    Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
 
     tt::ARCH get_arch() const { return arch_; }
 
