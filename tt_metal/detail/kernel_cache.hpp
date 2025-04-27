@@ -6,7 +6,6 @@
 
 #include <mutex>
 #include <stdint.h>
-#include <unordered_set>
 #include <unordered_map>
 #include <optional>
 
