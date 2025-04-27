@@ -8,6 +8,10 @@
 #include "noc/noc_parameters.h"
 #include <fabric_host_interface.h>
 
+#if not(defined(KERNEL_BUILD) || defined(FW_BUILD))
+static_assert(false, "tt_fabric_interface.h should only be included in kernel or firmware build");
+#endif
+
 namespace tt::tt_fabric {
 
 typedef struct _endpoint_sync {
@@ -21,18 +25,6 @@ constexpr uint32_t NUM_WR_CMD_BUFS = 4;
 constexpr uint32_t DEFAULT_MAX_NOC_SEND_WORDS = (NOC_MAX_BURST_WORDS * NOC_WORD_BYTES) / PACKET_WORD_SIZE_BYTES;
 constexpr uint32_t DEFAULT_MAX_ETH_SEND_WORDS = 2 * 1024;
 constexpr uint32_t FVC_SYNC_THRESHOLD = 256;
-
-#define ASYNC_WR (0x1 << 0)
-#define ASYNC_WR_RESP (0x1 << 1)
-#define ASYNC_RD (0x1 << 2)
-#define ASYNC_RD_RESP (0x1 << 3)
-#define DSOCKET_WR (0x1 << 4)
-#define SSOCKET_WR (0x1 << 5)
-#define ATOMIC_INC (0x1 << 6)
-#define ATOMIC_READ_INC (0x1 << 7)
-#define SOCKET_OPEN (0x1 << 8)
-#define SOCKET_CLOSE (0x1 << 9)
-#define SOCKET_CONNECT (0x1 << 10)
 
 #define INVALID 0x0
 #define MCAST_ACTIVE 0x1
@@ -325,6 +317,8 @@ typedef struct _gatekeeper_info {
     uint32_t padding[3];
     ctrl_chan_msg_buf gk_msg_buf;
 } gatekeeper_info_t;
+
+static_assert(sizeof(gatekeeper_info_t) == GATEKEEPER_INFO_SIZE);
 
 #define SOCKET_DIRECTION_SEND 1
 #define SOCKET_DIRECTION_RECV 2

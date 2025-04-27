@@ -998,7 +998,6 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
 void configure_2d_fabric_cores(IDevice* device) {
     std::vector<uint32_t> router_zero_buf(1, 0);
 
-    const auto& hal = MetalContext::instance().hal();
     auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
@@ -1010,8 +1009,7 @@ void configure_2d_fabric_cores(IDevice* device) {
                 device->id(), router_chan);
         auto router_logical_core = device->logical_core_from_ethernet_core(virtual_eth_core);
         // initialize the semaphore
-        auto fabric_router_sync_sem_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         detail::WriteToDeviceL1(
             device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
     }
@@ -1046,7 +1044,7 @@ bool check_dateline(
             // Row dateline
             // chip0 is the first row, chip1 is the last row on the same column
             (chip0 < physical_mesh_shape[1] && chip1 >= (physical_mesh_shape[1] * (physical_mesh_shape[0] - 1)) &&
-             chip1 % physical_mesh_shape[1] == 0);
+             chip1 % physical_mesh_shape[1] == chip0);
     }
     return false;
 }
@@ -1069,6 +1067,9 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
         // skip lauching on gateways for TG
         return nullptr;
     }
+
+    const bool is_galaxy =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::GALAXY;
 
     uint32_t corner_chip_connections = 0;
     constexpr uint32_t corner_chip_id = 0;
@@ -1154,6 +1155,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
 
             // since tunneling cores are not guaraneteed to be reserved on the same routing plane, iterate through
             // the ordered eth channels in both directions
+            uint32_t num_links = std::min(eth_chans_dir1.size(), eth_chans_dir2.size());
             while (eth_chans_dir1_it != eth_chans_dir1.end() && eth_chans_dir2_it != eth_chans_dir2.end()) {
                 auto eth_chan_dir1 = *eth_chans_dir1_it;
                 auto eth_chan_dir2 = *eth_chans_dir2_it;
@@ -1162,6 +1164,10 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, F
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
                 edm_builder1.connect_to_downstream_edm(edm_builder2);
                 edm_builder2.connect_to_downstream_edm(edm_builder1);
+
+                if (is_galaxy) {
+                    get_optimal_noc_for_edm(edm_builder1, edm_builder2, num_links, topology);
+                }
 
                 eth_chans_dir1_it++;
                 eth_chans_dir2_it++;

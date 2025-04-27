@@ -47,7 +47,6 @@ def test_grok_model_perf(
     reset_seeds,
 ):
     dtype = ttnn.bfloat8_b
-    t3k_mesh_device.enable_async(True)
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
     model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False)

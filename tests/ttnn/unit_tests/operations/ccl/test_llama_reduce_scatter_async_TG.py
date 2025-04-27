@@ -18,9 +18,11 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     FF1_CRS,
     FF1_CRS_RS_OUT,
     NORM_CRS,
-    check_mesh_tensor_alloc,
 )
 from tracy import signpost
+from models.demos.llama3_subdevices.tt.llama_common import (
+    check_mesh_tensor_alloc,
+)
 
 PACKET_WORKER_CRS = ttnn.CoreRangeSet(
     [
@@ -70,7 +72,6 @@ def run_reduce_scatter_test(
     output_grid=None,
     dtype=ttnn.bfloat8_b,
 ):
-    mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
     num_pages_per_packet = 4
 

@@ -694,8 +694,6 @@ def test_llama_demo(
     if galaxy_type != "6U" and galaxy_type != "4U":
         raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
 
-    mesh_device.enable_async(True)
-
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
