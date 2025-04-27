@@ -35,7 +35,7 @@ TSU_PERF_DROP_LIMIT_COUNT = 20
 TSU_THRESHOLDS = {
     "4U": {1: {"min": 480, "max": 500}, 10: {"min": 195, "max": 215}, 80: {"min": 47, "max": 51}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 555, "max": 580}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
+    "6U": {1: {"min": 570, "max": 580}, 10: {"min": 230, "max": 250}, 80: {"min": 49, "max": 53}},
 }
 
 
@@ -682,8 +682,7 @@ def test_llama_demo(
     is_ci_env,
     reset_seeds,
     request,
-    is_tg_cluster,
-    is_6u,
+    galaxy_type,
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
@@ -692,12 +691,7 @@ def test_llama_demo(
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    # Add param for 6U for tsu target range
-    if is_6u:
-        galaxy_type = "6U"
-    elif is_tg_cluster:
-        galaxy_type = "4U"
-    else:
+    if galaxy_type != "6U" and galaxy_type != "4U":
         raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
 
     mesh_device.enable_async(True)
