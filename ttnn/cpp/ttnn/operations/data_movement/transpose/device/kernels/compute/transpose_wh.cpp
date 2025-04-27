@@ -4,13 +4,15 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/transpose_wh_dest_int32.h"
 
 namespace NAMESPACE {
 void MAIN {
     uint32_t NHtWt = get_arg_val<uint32_t>(0);
 
-    transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     // transpose a row-major block:
     // - assumes the tiles come in in column major order from reader
@@ -20,10 +22,17 @@ void MAIN {
         cb_wait_front(tt::CBIndex::c_0, 1);
         cb_reserve_back(tt::CBIndex::c_16, 1);
 
-        acquire_dst();
-        transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
+        tile_regs_acquire();
+        copy_tile_init(tt::CBIndex::c_0);
+        copy_tile(tt::CBIndex::c_0, 0, 0);
+
+        transpose_wh_dest_int32_init_short();
+        transpose_wh_dest_int32(0);
+        tile_regs_commit();
+
+        tile_regs_wait();
         pack_tile(0, tt::CBIndex::c_16);
-        release_dst();
+        tile_regs_release();
 
         cb_push_back(tt::CBIndex::c_16, 1);
         cb_pop_front(tt::CBIndex::c_0, 1);
