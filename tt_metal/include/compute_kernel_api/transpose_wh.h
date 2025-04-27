@@ -5,10 +5,14 @@
 #pragma once
 
 #include "compute_kernel_api/common.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
 #ifdef TRISC_MATH
+#include "llk_math_common_api.h"
 #include "llk_math_unary_datacopy_api.h"
 #endif
 #ifdef TRISC_UNPACK
+#include "llk_unpack_common_api.h"
 #include "llk_unpack_A_api.h"
 #endif
 
@@ -24,16 +28,28 @@ namespace ckernel {
  */
  // clang-format on
 ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, true, icb)));
+
+#if defined(TRISC_MATH) || defined(TRISC_UNPACK)
+    const std::uint32_t src_format = get_operand_src_format(icb);
+    const bool is_32bit = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
+    const bool within_face_16x16_transpose = !is_32bit;
+
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, within_face_16x16_transpose, icb)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(icb, icb)));
+
+    if (is_32bit) {
+        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb, within_face_16x16_transpose)));
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(true, within_face_16x16_transpose, icb)));
+    } else {
+        UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, false>(icb, within_face_16x16_transpose)));
+        UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, within_face_16x16_transpose)));
+    }
+#endif
 
     PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
-
-    UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(0, true)));
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)));
 }
 
 /**
@@ -41,9 +57,15 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb) {
  * correctly.
  */
 ALWI void transpose_wh_init_short(uint32_t icb) {
-    MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, true, icb)));
+#if defined(TRISC_MATH) || defined(TRISC_UNPACK)
+    const std::uint32_t src_format = get_operand_src_format(icb);
+    const bool is_32bit = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
+    const bool within_face_16x16_transpose = !is_32bit;
 
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)));
+    MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, within_face_16x16_transpose, icb)));
+
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, within_face_16x16_transpose)));
+#endif
 }
 
 // clang-format off
@@ -65,8 +87,18 @@ ALWI void transpose_wh_init_short(uint32_t icb) {
  */
  // clang-format on
 ALWI void transpose_wh_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)));
-    MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(idst)));
+#if defined(TRISC_MATH) || defined(TRISC_UNPACK)
+    if (is_32bit) {
+        copy_tile_init(icb);
+        copy_tile(icb, itile, idst);
+
+        transpose_wh_dest_init_short();
+        transpose_wh_dest<true>(idst);
+    } else {
+        UNPACK((llk_unpack_A<BroadcastType::NONE, false>(icb, itile, false)));
+        MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(idst)));
+    }
+#endif
 }
 
 }  // namespace ckernel
