@@ -230,7 +230,7 @@ std::string Kernel::compute_hash(bool lightweight) const {
     std::string source = this->kernel_src_.source_;
     if (!lightweight && this->kernel_src_.source_type_ == KernelSource::FILE_PATH) {
         std::ifstream file(jit_build_get_absolute_path(this->kernel_src_.source_));
-        TT_ASSERT(file.is_open(), "Failed to open kernel source file: {}", this->kernel_src_.source_);
+        TT_FATAL(file.is_open(), "Failed to open kernel source file: {}", this->kernel_src_.source_);
         std::stringstream buffer;
         buffer << file.rdbuf();
         source = buffer.str();
