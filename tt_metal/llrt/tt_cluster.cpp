@@ -145,12 +145,9 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
 
 bool Cluster::is_base_routing_fw_enabled(ClusterType cluster_type) {
     // Ideally we should get the routing enabled/disabled from a config in L1
-    if (cluster_type == ClusterType::INVALID || cluster_type == ClusterType::N150 ||
-        cluster_type == ClusterType::N300 || cluster_type == ClusterType::T3K || cluster_type == ClusterType::TG) {
-        return true;
-    } else {
-        return false;
-    }
+    return (
+        cluster_type == ClusterType::INVALID || cluster_type == ClusterType::N150 ||
+        cluster_type == ClusterType::N300 || cluster_type == ClusterType::T3K || cluster_type == ClusterType::TG);
 }
 
 Cluster::Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
