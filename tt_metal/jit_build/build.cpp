@@ -31,7 +31,6 @@
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include <umd/device/types/arch.h>
-#include "impl/context/metal_context.hpp"
 
 namespace fs = std::filesystem;
 
