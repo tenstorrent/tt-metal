@@ -32,7 +32,7 @@ ttnn::Tensor permute_impl(
         return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value);
     };
 
-    if (rank > 4 || a.get_dtype() == DataType::INT32) {
+    if (rank > 4) {
         return prim_permute(a);
     }
 
