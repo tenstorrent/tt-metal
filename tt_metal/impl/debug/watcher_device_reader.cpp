@@ -409,8 +409,9 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
         }
     }
 
+    constexpr uint32_t mailbox_read_size = offsetof(mailboxes_t, watcher) + sizeof(watcher_msg_t);
     std::vector<uint32_t> data;
-    data = tt::llrt::read_hex_vec_from_core(device_id, virtual_core.coord, mailbox_addr, sizeof(mailboxes_t));
+    data = tt::llrt::read_hex_vec_from_core(device_id, virtual_core.coord, mailbox_addr, mailbox_read_size);
     mailboxes_t* mbox_data = (mailboxes_t*)(&data[0]);
     // Get the launch message buffer read pointer.
     // For more accurate reporting of launch messages and running kernel ids, dump data from the previous valid

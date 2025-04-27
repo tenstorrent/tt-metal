@@ -89,6 +89,67 @@ inline std::string get_soc_description_file(
 }  // namespace
 namespace tt {
 
+ClusterType Cluster::get_cluster_type_from_cluster_desc(
+    const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
+    if (rtoptions.get_simulator_enabled()) {
+        return ClusterType::INVALID;
+    }
+    if (cluster_desc == nullptr) {
+        return Cluster::get_cluster_type_from_cluster_desc(
+            rtoptions, tt::umd::Cluster::create_cluster_descriptor().get());
+    }
+    ClusterType cluster_type = ClusterType::INVALID;
+    for (const auto& chip_id : cluster_desc->get_all_chips()) {
+        if (cluster_desc->get_board_type(chip_id) == BoardType::GALAXY) {
+            cluster_type = ClusterType::TG;
+            break;
+        }
+    }
+    TT_ASSERT(cluster_desc->get_all_chips().size() > 0, "No chips detected in the cluster");
+    const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
+    bool all_same_board = true;
+    for (const auto& chip_id : cluster_desc->get_all_chips()) {
+        if (cluster_desc->get_board_type(chip_id) != board_type) {
+            all_same_board = false;
+            break;
+        }
+    }
+
+    if (all_same_board) {
+        if (board_type == BoardType::N300) {
+            if (cluster_desc->get_all_chips().size() == 8) {
+                cluster_type = ClusterType::T3K;
+            } else {
+                cluster_type = ClusterType::N300;
+            }
+        } else if (board_type == BoardType::N150) {
+            cluster_type = ClusterType::N150;
+        } else if (board_type == BoardType::P100) {
+            if (cluster_desc->get_all_chips().size() == 1) {
+                cluster_type = ClusterType::P100;
+            }
+        } else if (board_type == BoardType::P150) {
+            if (cluster_desc->get_all_chips().size() == 1) {
+                cluster_type = ClusterType::P150;
+            } else if (cluster_desc->get_all_chips().size() == 2) {
+                cluster_type = ClusterType::P150_X2;
+            } else if (cluster_desc->get_all_chips().size() == 4) {
+                cluster_type = ClusterType::P150_X4;
+            }
+        } else if (board_type == BoardType::UBB) {
+            cluster_type = ClusterType::GALAXY;
+        }
+    }
+    return cluster_type;
+}
+
+bool Cluster::is_base_routing_fw_enabled(ClusterType cluster_type) {
+    // Ideally we should get the routing enabled/disabled from a config in L1
+    return (
+        cluster_type == ClusterType::INVALID || cluster_type == ClusterType::N150 ||
+        cluster_type == ClusterType::N300 || cluster_type == ClusterType::T3K || cluster_type == ClusterType::TG);
+}
+
 Cluster::Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
     ZoneScoped;
     log_info(tt::LogDevice, "Opening user mode device driver");
@@ -135,6 +196,8 @@ BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
 }
 
+bool Cluster::is_base_routing_fw_enabled() const { return Cluster::is_base_routing_fw_enabled(this->cluster_type_); }
+
 void Cluster::generate_cluster_descriptor() {
     // Cluster descriptor yaml not available for Blackhole bring up
     if (this->target_type_ == TargetDevice::Simulator) {
@@ -144,48 +207,8 @@ void Cluster::generate_cluster_descriptor() {
         this->cluster_desc_ = this->mock_cluster_desc_ptr_.get();
     } else {
         this->cluster_desc_ = this->driver_->get_cluster_description();
-        for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
-            if (this->cluster_desc_->get_board_type(chip_id) == BoardType::GALAXY) {
-                this->cluster_type_ = ClusterType::TG;
-                break;
-            }
-        }
-        TT_ASSERT(this->cluster_desc_->get_all_chips().size() > 0, "No chips detected in the cluster");
-        const auto board_type = this->cluster_desc_->get_board_type(*this->cluster_desc_->get_all_chips().begin());
-        bool all_same_board = true;
-        for (const auto& chip_id : this->cluster_desc_->get_all_chips()) {
-            if (this->cluster_desc_->get_board_type(chip_id) != board_type) {
-                all_same_board = false;
-                break;
-            }
-        }
-
-        if (all_same_board) {
-            if (board_type == BoardType::N300) {
-                if (this->cluster_desc_->get_all_chips().size() == 8) {
-                    this->cluster_type_ = ClusterType::T3K;
-                } else {
-                    this->cluster_type_ = ClusterType::N300;
-                }
-            } else if (board_type == BoardType::N150) {
-                this->cluster_type_ = ClusterType::N150;
-            } else if (board_type == BoardType::P100) {
-                if (this->cluster_desc_->get_all_chips().size() == 1) {
-                    this->cluster_type_ = ClusterType::P100;
-                }
-            } else if (board_type == BoardType::P150) {
-                if (this->cluster_desc_->get_all_chips().size() == 1) {
-                    this->cluster_type_ = ClusterType::P150;
-                } else if (this->cluster_desc_->get_all_chips().size() == 2) {
-                    this->cluster_type_ = ClusterType::P150_X2;
-                } else if (this->cluster_desc_->get_all_chips().size() == 4) {
-                    this->cluster_type_ = ClusterType::P150_X4;
-                }
-            } else if (board_type == BoardType::UBB) {
-                this->cluster_type_ = ClusterType::GALAXY;
-            }
-        }
     }
+    this->cluster_type_ = Cluster::get_cluster_type_from_cluster_desc(this->rtoptions_, this->cluster_desc_);
 
     // Use cluster descriptor to map MMIO device id to all devices on the same card (including the MMIO device)
     if (this->target_type_ == TargetDevice::Simulator) {

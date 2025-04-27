@@ -40,7 +40,6 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "umd/device/types/xy_pair.h"
@@ -334,8 +333,8 @@ int main(int argc, char** argv) {
             device_map[test_device_id_l]->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
         uint32_t gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
         uint32_t client_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
-        uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_pull_client_interface_t);
-        uint32_t socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
+        uint32_t client_pull_req_buf_addr = client_interface_addr + PULL_CLIENT_INTERFACE_SIZE;
+        uint32_t socket_info_addr = gk_interface_addr + GATEKEEPER_INFO_SIZE;
         log_info(LogTest, "GK Routing Table Addr = 0x{:08X}", routing_table_addr);
         log_info(LogTest, "GK Info Addr = 0x{:08X}", gk_interface_addr);
         log_info(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
@@ -520,9 +519,10 @@ int main(int argc, char** argv) {
         // increment once handshake with ethernet peer has been completed.
         std::vector<uint32_t> zero_buf(1, 0);
         std::vector<uint32_t> gk_zero_buf(12, 0);
+        auto fabric_router_sync_sem_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
         for (auto [device_id, router_phys_cores] : device_router_map) {
             for (auto phys_core : router_phys_cores) {
-                tt::llrt::write_hex_vec_to_core(device_id, phys_core, zero_buf, FABRIC_ROUTER_SYNC_SEM);
+                tt::llrt::write_hex_vec_to_core(device_id, phys_core, zero_buf, fabric_router_sync_sem_addr);
             }
             tt::llrt::write_hex_vec_to_core(device_id, gk_phys_core, gk_zero_buf, gk_interface_addr);
         }
