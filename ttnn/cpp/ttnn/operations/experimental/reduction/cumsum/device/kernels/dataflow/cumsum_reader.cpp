@@ -46,21 +46,24 @@ void kernel_main() {
 
     fill_cb_with_value(cb_zero, scaler.u);
 
-    for (unsigned i0 = 0; i0 < product_low_dims; i0++) {
-        for (unsigned i1 = 0; i1 < product_high_dims * HtWt; i1++) {
-            for (unsigned j = 0; j < tiles_per_row; j++) {
-                uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, product_low_dims, product_high_dims, HtWt);
+    uint32_t start_row = 0;
+    const uint32_t total_num_rows = product_low_dims * product_high_dims * HtWt;
 
-                cb_reserve_back(cb_out, 1);
+    for (uint32_t i = 0; i < total_num_rows; i++) {
+        uint32_t i0 = i / (product_high_dims * HtWt);
+        uint32_t i1 = i % (product_high_dims * HtWt);
+        for (unsigned j = 0; j < tiles_per_row; j++) {
+            uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, product_low_dims, product_high_dims, HtWt);
 
-                // Read tile
-                uint32_t data_sram_addr = get_write_ptr(cb_out);
-                noc_async_read_tile(tileid, dram_input_addrg, data_sram_addr);
-                noc_async_read_barrier();
+            cb_reserve_back(cb_out, 1);
 
-                // Write tile
-                cb_push_back(cb_out, 1);
-            }
+            // Read tile
+            uint32_t data_sram_addr = get_write_ptr(cb_out);
+            noc_async_read_tile(tileid, dram_input_addrg, data_sram_addr);
+            noc_async_read_barrier();
+
+            // Write tile
+            cb_push_back(cb_out, 1);
         }
     }
 }
