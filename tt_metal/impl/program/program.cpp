@@ -7,6 +7,7 @@
 #include <circular_buffer_types.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
+#include <iostream>
 #include <magic_enum/magic_enum.hpp>
 #include <memory_reporter.hpp>
 #include <persistent_kernel_cache.hpp>
@@ -119,7 +120,8 @@ void GenerateBinaries(IDevice* device, JitBuildOptions &build_options, const std
 #include <fstream>
 #endif
 
-size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint32_t build_key) {
+size_t KernelCompileHash(
+    const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint32_t build_key, bool lightweight) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
@@ -128,7 +130,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
         "{}_{}_{}_{}",
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
-        kernel->compute_hash(),
+        kernel->compute_hash(lightweight),
         tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled());
 
     for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
@@ -1368,23 +1370,33 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
                     this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
 
-                    auto kernel_hash = KernelCompileHash(
+                    // only use the heavy-weight build options if we don't have the value in cache
+                    auto key_hash = KernelCompileHash(
                         kernel,
                         build_options,
-                        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+                        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key,
+                        true);
+                    auto kernel_hash =
+                        detail::HashLookup::inst().get_generated_bin(key_hash).value_or(KernelCompileHash(
+                            kernel,
+                            build_options,
+                            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key,
+                            false));
 
                     const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
 
                     if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
-                        if (not detail::HashLookup::inst().exists(kernel_hash)) {
-                            detail::HashLookup::inst().add(kernel_hash);
+                        if (not detail::HashLookup::inst().exists(key_hash)) {
+                            detail::HashLookup::inst().add(key_hash);
                             detail::HashLookup::inst().add_generated_bin(kernel_hash);
+                            detail::HashLookup::inst().add_key_to_generated_bin(key_hash, kernel_hash);
                         }
-                    } else if (detail::HashLookup::inst().add(kernel_hash)) {
+                    } else if (detail::HashLookup::inst().add(key_hash)) {
                         GenerateBinaries(device, build_options, kernel);
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
+                        detail::HashLookup::inst().add_key_to_generated_bin(key_hash, kernel_hash);
                     }
                     while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
                     }

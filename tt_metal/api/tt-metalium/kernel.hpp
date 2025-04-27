@@ -118,7 +118,7 @@ class Kernel : public JitBuildSettings {
 
     virtual Config config() const = 0;
 
-    std::string compute_hash() const;
+    std::string compute_hash(bool lightweight = true) const;
     virtual void set_build_options(JitBuildOptions &build_options) const {}
     virtual void generate_binaries(IDevice* device, JitBuildOptions &build_options) const = 0;
     uint32_t get_binary_packed_size(IDevice* device, int index) const;

@@ -7,6 +7,8 @@
 #include <mutex>
 #include <stdint.h>
 #include <unordered_set>
+#include <unordered_map>
+#include <optional>
 
 namespace tt::tt_metal::detail {
 struct HashLookup {
@@ -39,16 +41,37 @@ struct HashLookup {
         generated_bins_.insert(khash);
     }
 
+    bool add_key_to_generated_bin(size_t khash, size_t key) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        auto it = map_key_to_generated_bin_.find(key);
+        if (it == map_key_to_generated_bin_.end()) {
+            map_key_to_generated_bin_[key] = khash;
+            return true;
+        }
+        return false;
+    }
+
+    std::optional<size_t> get_generated_bin(size_t key) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        auto it = map_key_to_generated_bin_.find(key);
+        if (it != map_key_to_generated_bin_.end()) {
+            return it->second;
+        }
+        return std::nullopt;
+    }
+
     void clear() {
         std::unique_lock<std::mutex> lock(mutex_);
         hashes_.clear();
         generated_bins_.clear();
+        map_key_to_generated_bin_.clear();
     }
 
 private:
     std::mutex mutex_;
     std::unordered_set<size_t> hashes_;
     std::unordered_set<size_t> generated_bins_;
+    std::unordered_map<size_t, size_t> map_key_to_generated_bin_;
 };
 
 /**

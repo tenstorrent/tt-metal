@@ -226,9 +226,9 @@ std::string ComputeKernel::config_hash() const {
         this->config_.dst_full_sync_en);
 }
 
-std::string Kernel::compute_hash() const {
+std::string Kernel::compute_hash(bool lightweight) const {
     std::string source = this->kernel_src_.source_;
-    if (this->kernel_src_.source_type_ == KernelSource::FILE_PATH) {
+    if (!lightweight && this->kernel_src_.source_type_ == KernelSource::FILE_PATH) {
         std::ifstream file(jit_build_get_absolute_path(this->kernel_src_.source_));
         TT_ASSERT(file.is_open(), "Failed to open kernel source file: {}", this->kernel_src_.source_);
         std::stringstream buffer;
@@ -237,7 +237,7 @@ std::string Kernel::compute_hash() const {
     }
     return fmt::format(
         "{}_{}_{}_{}",
-        std::hash<std::string>{}(this->kernel_src_.source_),
+        std::hash<std::string>{}(source),
         fmt::join(this->compile_time_args_, "_"),
         tt::utils::DefinesHash{}(this->defines_),
         this->config_hash());
