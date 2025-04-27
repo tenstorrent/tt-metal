@@ -30,20 +30,23 @@ void kernel_main() {
     InterleavedAddrGenFast<true> dram_output_addrg = {
         .bank_base_address = output_dram_base_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
-    for (unsigned i0 = 0; i0 < product_low_dims; i0++) {
-        for (unsigned i1 = 0; i1 < product_high_dims * HtWt; i1++) {
-            for (unsigned j = 0; j < tiles_per_row; j++) {
-                uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, product_low_dims, product_high_dims, HtWt);
+    uint32_t start_row = 0;
+    const uint32_t total_num_rows = product_low_dims * product_high_dims * HtWt;
+    for (uint32_t i = start_row; i < total_num_rows; i++) {
+        uint32_t i0 = i / (product_high_dims * HtWt);
+        uint32_t i1 = i % (product_high_dims * HtWt);
 
-                // Read tile from Circularbuffer
-                cb_wait_front(cb_in, 1);
+        for (uint32_t j = 0; j < tiles_per_row; j++) {
+            uint32_t tileid = get_tile_id(i0, i1, j, tiles_per_row, product_low_dims, product_high_dims, HtWt);
 
-                // Write tile
-                noc_async_write_tile(tileid, dram_output_addrg, input_sram_addr);
-                noc_async_write_barrier();
+            // Read tile from Circularbuffer
+            cb_wait_front(cb_in, 1);
 
-                cb_pop_front(cb_in, 1);
-            }
+            // Write tile
+            noc_async_write_tile(tileid, dram_output_addrg, input_sram_addr);
+            noc_async_write_barrier();
+
+            cb_pop_front(cb_in, 1);
         }
     }
 }
